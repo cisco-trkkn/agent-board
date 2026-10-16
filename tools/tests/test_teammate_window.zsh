@@ -4,8 +4,10 @@ tt_setup claude shell
 tt set-hook -g after-split-window "run-shell -b '$H'"
 lead="$(tt display -p -t '=tt:claude' '#{window_index}')"
 win_of() { tt list-windows -t '=tt' -F '#{window_index} #{window_name}' | awk -v n="✦ $1" '$0 ~ n {print $1}' }
-# direct shape: the start command itself carries --agent-name (Claude Code 2.1.301)
-tt split-window -d -t '=tt:claude' "exec sh -c 'sleep 60; :' teammate --agent-name probe-a"
+# direct shape: the start command itself carries --agent-name. Copied from the real pane_start_command
+# of a teammate under Claude Code 2.1.301 (2026-10-16): cd <dir> && env CLAUDECODE=1 … <binary> --agent-id …
+# --agent-name <name> --team-name …; the binary is swapped for a harmless sleeper that keeps the args.
+tt split-window -d -t '=tt:claude' "cd /tmp && env CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 sh -c 'sleep 60; :' --agent-id probe-a@tt --agent-name probe-a --team-name tt --agent-color green --parent-session-id 00000000-0000-0000-0000-000000000000 --agent-type general-purpose --permission-mode auto --model sonnet"
 tt_wait 12 test -n "$(win_of probe-a)"
 check "direct shape gets a window"   test -n "$(win_of probe-a)"
 check "placed after the lead"        test "$(win_of probe-a)" = $(( lead + 1 ))
