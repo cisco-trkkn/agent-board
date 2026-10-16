@@ -779,28 +779,30 @@ function bindAgentMenu(card, items) {
     // keep the browser's own menu (Copy, Paste…) on inputs, links and selected text
     if (e.target.closest("input, textarea, a") || String(getSelection()).length) return;
     e.preventDefault(); openAgentMenu(e.clientX, e.clientY, items(), card); });
-  let lp = null, x0 = 0, y0 = 0;
-  const cancel = () => { clearTimeout(lp); lp = null; };
-  const fire = () => {
-    lp = null;
-    let c = card;
-    if (!c.isConnected) {   // the 2 s rebuild replaced the card mid-press: use the one showing now
-      const k = card.dataset.key;
-      c = k ? document.querySelector(`[data-key="${CSS.escape(k)}"]`) : null;
-      if (!c || !c._menuItems) return;
-    }
-    const its = c._menuItems();
-    if (its.length) openAgentMenu(x0, y0, its, c);
-  };
   card.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse") return;
-    x0 = e.clientX; y0 = e.clientY; cancel();
-    lp = setTimeout(fire, 500);
+    cancelPress();
+    press = { card, x: e.clientX, y: e.clientY, timer: setTimeout(firePress, 500) };
   });
-  card.addEventListener("pointermove", (e) => { if (lp && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
-  card.addEventListener("pointerup", cancel);
-  card.addEventListener("pointercancel", cancel);
 }
+// one long press at a time, at page level: the 2 s rebuild replaces the card under the finger,
+// so release and move events land on the new card and must still cancel the pending press
+let press = null;
+function cancelPress() { if (press) clearTimeout(press.timer); press = null; }
+function firePress() {
+  const p = press; press = null; if (!p) return;
+  let c = p.card;
+  if (!c.isConnected) {   // the rebuild replaced the card mid-press: use the one showing now
+    const k = c.dataset.key;
+    c = k ? document.querySelector(`[data-key="${CSS.escape(k)}"]`) : null;
+    if (!c || !c._menuItems) return;
+  }
+  const its = c._menuItems();
+  if (its.length) openAgentMenu(p.x, p.y, its, c);
+}
+document.addEventListener("pointerup", cancelPress);
+document.addEventListener("pointercancel", cancelPress);
+document.addEventListener("pointermove", (e) => { if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) cancelPress(); });
 document.addEventListener("click", (e) => { if (!agentMenu.contains(e.target)) closeAgentMenu(false); });
 document.addEventListener("contextmenu", (e) => { if (!e.defaultPrevented) closeAgentMenu(false); });
 // only the page and the main column: the Activity drawer and previews auto-scroll on every poll
@@ -940,14 +942,17 @@ function renderArtifacts() {
 }
 
 async function openDoc(path) {
-  const A0 = artFor(session().name), it0 = A0.items.get(path);
-  if (it0 && !A0.versions.get(path)) await trackVersion(session().name, A0, it0);
   docSel = path; docMode = "read"; docSelection = null; docRendered = null;
   document.querySelectorAll(".cbox").forEach((b) => b.remove());
   $("#doc-comment").disabled = true;
-  docBase = artFor(session().name).seen.get(path);   // changes are shown against what was last viewed before opening
+  const name = session().name, A = artFor(name), it = A.items.get(path);
+  docBase = A.seen.get(path);   // changes are shown against what was last viewed before opening
   $("#main").classList.add("with-doc");
-  renderDoc(); renderArtifacts();
+  renderDoc(); renderArtifacts();   // selected at once; renderDoc shows "Loading…" until text arrives
+  if (!it || A.versions.get(path)) return;
+  try { await trackVersion(name, A, it); }
+  catch (e) { if (docSel === path) $("#doc-body").textContent = "Couldn't load this document."; return; }
+  if (docSel === path) renderDoc();
 }
 $("#doc-close").onclick = () => { document.querySelectorAll(".cbox").forEach((b) => b.remove()); docSel = null; docSelection = null; $("#doc-comment").disabled = true; $("#main").classList.remove("with-doc"); renderArtifacts(); };
 for (const b of $("#doc-modes").children) b.onclick = () => { docMode = b.dataset.mode; renderDoc(); };
