@@ -784,6 +784,9 @@ function bindAgentMenu(card, items) {
     cancelPress();
     press = { card, x: e.clientX, y: e.clientY, timer: setTimeout(firePress, 500) };
   });
+  // iOS WebKit sends a touch release to the original (possibly removed) card, never to document
+  card.addEventListener("pointerup", cancelPress);
+  card.addEventListener("pointercancel", cancelPress);
 }
 // one long press at a time, at page level: the 2 s rebuild replaces the card under the finger,
 // so release and move events land on the new card and must still cancel the pending press
