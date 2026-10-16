@@ -19,7 +19,9 @@ split across an agent team by default. They do not want to ask for a team each t
 - Skip the team only for quick questions, explanations or one-line edits. Then say in one line that you
   handled it directly.
 - You coordinate: split the work, assign each teammate a clear deliverable, check their results, and
-  report one combined summary. Avoid doing the teammates' work yourself.
+  report one combined summary that leads with the outcome and cites the evidence. Avoid doing the
+  teammates' work yourself. Brief a teammate with the goal, constraints, files and acceptance criteria;
+  script the steps only for mechanical-tier work.
 - Teammates that edit code must not edit the same files at the same time. Give each one its own files or
   area, or have the implementer make the edits while the others read, test and review.
 - When the task is done, shut the team down so idle teammates don't keep using the user's limits.
@@ -72,12 +74,10 @@ The skills apply whether or not you start a team: a fix you make yourself still 
 `systematic-debugging` and `verification-before-completion`. Invoke each one with the Skill tool; don't just
 follow it from memory.
 
-Settle questions and the design with the user before the team starts. After that the team runs on its own.
-
-Any multi-step work goes through `writing-plans` before the team starts, not only new features. A handoff,
-runbook or spec the user gives you is the input to the plan; it doesn't replace it. Brainstorming is only
-needed when the design is still open. The plan's tasks carry a `modelTier`, so the plugin's model routing
-and its gates apply when teammates or subagents take those tasks.
+Settle questions and the design with the user before the team starts; after that the team runs on its own.
+A handoff, runbook or spec the user gives you is the input to the plan, not a replacement for it. The plan's
+tasks carry a `modelTier`, so the plugin's model routing and its gates apply when teammates or subagents
+take those tasks.
 
 ## Models and effort: tiered by default
 
@@ -115,7 +115,11 @@ permission prompt. Start every teammate's prompt with these rules:
 3. Questions and decisions go to you, the lead, as a message. If an answer can't wait, it makes the
    reasonable choice, notes the assumption, and keeps going.
 4. It reports back with evidence: commands run, their output, files changed, assumptions made.
-5. Run test suites and long builds with `tmux-ctl run tests "<cmd>"` (another directory: `tmux-ctl run -C <dir> tests "<cmd>"`; options always go before the window): it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is busy), in your own worktree (`-C <dir>` before the window to override), and the user sees every run in the Agent Board's Activity drawer. Use your Bash tool for everything else. Never type into the user's own `shell` window.
+5. Run test suites and long builds with `tmux-ctl run [-t secs] [-C dir] tests "<cmd>"` (options before
+   the window): it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is
+   busy), in your own worktree unless `-C` says otherwise, and the user sees every run in the Agent
+   Board's Activity drawer. Use your Bash tool for everything else. Never type into the user's own
+   `shell` window.
 6. Never stop processes with `pkill` or `killall` by name or pattern: patterns match full command lines,
    which carry session names and prompts, so they can kill the lead and the whole team. Kill by PID
    only, the one you started (`$!`) or one you looked up and checked first. A hook blocks patterns that
@@ -123,6 +127,8 @@ permission prompt. Start every teammate's prompt with these rules:
 7. To approve a shutdown request, first load SendMessage's full schema (ToolSearch with query
    `select:SendMessage`; it is a deferred tool), then call it with `message` as a JSON object, not a
    string: `{"to":"team-lead","message":{"type":"shutdown_response","request_id":"<id from the request>","approve":true}}`.
+8. Do not invoke `task-observer` (the session-start protocol is the lead's); put any skill findings in
+   the final report for you to log.
 
 Answer teammates' questions yourself from the plan, the code and sensible defaults. Bring a question to
 the user only when it is truly theirs to decide, and batch such questions into one message.
@@ -151,8 +157,10 @@ The user follows agent runs and commands in the Agent Board's Activity drawer, a
 - `tmux-ctl relay <doc>`: used only by `/handoff`
 
 For long or parallel independent tasks that should keep going after this conversation, use
-`tmux-ctl agent <name> "<task>"`. This starts a worker Claude in its own window and git worktree. Check on
-workers with `tmux-ctl agents`.
+`tmux-ctl agent <name> "<task>"`. This starts a worker Claude in its own window and git worktree. Keep the
+typed task to one line and point it at a brief file for anything longer: the task is typed into the
+window and a long one arrives truncated, leaving the worker never started. Check on workers with
+`tmux-ctl agents`.
 
 ## Controlling other agents in the project
 
