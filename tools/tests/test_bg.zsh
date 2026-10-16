@@ -21,7 +21,7 @@ check "agent recorded"       test "$(jq -sr 'last|.agent' "$r")" = claude
 $C run tests 'print ALL PASS' >/dev/null
 check "zsh summary"          test "$(jq -sr 'last|.summary' "$r")" = "ALL PASS"
 check "list shows bg"        sh -c "$C list | grep -q 'tests .*(bg)'"
-check "read bg"              sh -c "$C read tests 40 | grep -q 'echo hi'"
+check "read bg"              sh -c "$C read tests 40 | grep -qx hi"
 check "send to bg shell"     sh -c "$C send shell 'echo via-send' && sleep 1 && $TT_BIN capture-pane -p -t '=tt-bg:shell' | grep -q via-send"
 # interrupted run: record must not stay at exit:null
 $C run tests 'sleep 30' >/dev/null 2>&1 &

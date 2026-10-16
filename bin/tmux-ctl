@@ -60,7 +60,7 @@ ensure_bg() {
   t has-session -t "=$BG" 2>/dev/null && [[ -n "$(t show-options -qv -t "=$BG:" @tc_bg)" ]] && return
   local root; root="$(git rev-parse --show-toplevel 2>/dev/null)" || root="$PWD"
   # new-session is the atomic gate: only the caller that creates the session finishes setting it up
-  if t new-session -d -s "$BG" -n tests -c "$root" 2>/dev/null; then
+  if t new-session -d -s "$BG" -n tests -x 200 -y 50 -c "$root" 2>/dev/null; then
     t new-window -d -t "=$BG:" -n shell -c "$root"
     t set-option -t "=$BG:" @tc_bg 1      # set last: it marks the session as complete
   else
