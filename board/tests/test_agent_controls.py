@@ -14,8 +14,9 @@ SEP = server.SEP
 class Fake:
     """Sessions -> windows (id, name, agent, teammate). Records every tmux call."""
 
-    def __init__(self, sessions, bg_tagged=True):
+    def __init__(self, sessions, bg_tagged=True, kill_error=None):
         self.sessions, self.bg_tagged, self.calls = sessions, bg_tagged, []
+        self.kill_error = kill_error
 
     def tmux(self, *args, check=False):
         self.calls.append(args)
@@ -23,6 +24,8 @@ class Fake:
             target = args[args.index("-t") + 1]
             sess = target.lstrip("=").rstrip(":")
             return "1\n" if self.bg_tagged and sess.endswith("-bg") and sess in self.sessions else ""
+        if args[0] == "kill-window" and self.kill_error:
+            raise RuntimeError(self.kill_error)
         if args[0] == "list-windows":
             sess = args[args.index("-t") + 1].lstrip("=")
             return "".join(f"{i}{SEP}{n}{SEP}{'1' if a else ''}{SEP}{'1' if t else ''}\n"
@@ -90,6 +93,13 @@ class AgentControlsTest(unittest.TestCase):
             self.act(fake, action="stop_agent", session="proj", window="dup")
         self.assertEqual(fake.kills(), [])
 
+    def test_stop_tmux_failure_propagates_stderr(self):
+        # the real tmux(..., check=True) raises RuntimeError(stderr.strip() or "tmux failed")
+        fake = Fake(WINDOWS, kill_error="can't find window: @4")
+        with self.assertRaisesRegex(RuntimeError, "can't find window: @4"):
+            self.act(fake, action="stop_agent", session="proj", window="fix-login")
+        self.assertEqual(fake.kills(), [("kill-window", "-t", "@4")])
+
     def test_stop_refuses_bad_sessions(self):
         for sess in ("_web-1", "", "a b", "../x"):
             fake = Fake(WINDOWS)
@@ -113,6 +123,18 @@ class AgentControlsTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, f"{name} is not a teammate"):
                 self.act(fake, action="ask_shutdown", session="proj", window=name)
         self.assertEqual(server.COMMENTS.pending("proj"), [])
+
+    def test_ask_shutdown_ambiguous_name_says_so(self):
+        fake = Fake({"proj": [("@3", "✦ dup", False, True), ("@7", "✦ dup", False, True)]})
+        with self.assertRaisesRegex(RuntimeError, "more than one window named ✦ dup; close it from its terminal"):
+            self.act(fake, action="ask_shutdown", session="proj", window="✦ dup")
+        self.assertEqual(server.COMMENTS.pending("proj"), [])
+
+    def test_missing_window_gives_blank_name_not_None(self):
+        for action in ("ask_shutdown", "stop_agent"):
+            with self.assertRaises(RuntimeError) as cm:
+                self.act(Fake(WINDOWS), action=action, session="proj", window=None)
+            self.assertNotIn("None", str(cm.exception), action)
 
     def test_ask_shutdown_refuses_bad_session(self):
         with self.assertRaisesRegex(RuntimeError, "bad session"):

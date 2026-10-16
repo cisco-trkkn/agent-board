@@ -361,9 +361,9 @@ def _act(body):
     if a == "restart_orchestrator":
         return restart_orchestrator(sess, bool(body.get("confirm")))
     if a == "stop_agent":
-        return stop_agent(sess, body.get("window", ""))
+        return stop_agent(sess, str(body.get("window") or ""))
     if a == "ask_shutdown":
-        return ask_shutdown(sess, body.get("window", ""))
+        return ask_shutdown(sess, str(body.get("window") or ""))
     if a in ("save", "comment", "idea") and not NAME_RE.fullmatch(sess):
         raise RuntimeError("bad session")
     if a == "idea":
@@ -415,7 +415,9 @@ def ask_shutdown(sess, name):
     """Ask the lead (through the comment queue) to shut a teammate down; the lead owns its team."""
     _check_project(sess)
     hits = [h for h in _windows_named(sess, name) if h["session"] == sess] if name else []
-    if len(hits) != 1 or not hits[0]["teammate"]:
+    if len(hits) > 1:
+        raise RuntimeError(f"more than one window named {name}; close it from its terminal")
+    if not hits or not hits[0]["teammate"]:
         raise RuntimeError(f"{name} is not a teammate")
     mate = re.sub(r"^✦\s*", "", name).strip()
     COMMENTS.add_line(sess, f"[Board] Please shut down teammate {mate}.")

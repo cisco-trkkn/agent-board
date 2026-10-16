@@ -101,7 +101,7 @@ def _flat(s, limit):
 
 
 class CommentQueue:
-    """Plan comments waiting for the lead, per session. Delivered by typing one line into the claude pane."""
+    """Plan comments and plain [Board] lines (agent-control requests) waiting for the lead, per session. Delivered by typing one line into the claude pane."""
 
     def __init__(self):
         self._lock = threading.Lock()

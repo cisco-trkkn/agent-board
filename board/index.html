@@ -435,6 +435,7 @@ function card(s, w, p) {
   const r = role(s, w, p);
   const c = el("div", "card" + (p.status === "waiting" ? " waiting" : "") + (termKey === key ? " selected" : ""));
   c.tabIndex = -1;
+  c.dataset.key = `${key}:${p.id}`;
   const head = el("div", "card-head");
   head.append(el("div", "avatar " + (r === "teammate" || r === "worker" ? r : p.kind), ICON[p.kind] || "◆"));
   const who = el("div", "who");
@@ -744,7 +745,7 @@ function agentMenuItems(s, w, p) {
 }
 
 const agentMenu = $("#agent-menu");
-let agentMenuFrom = null;
+let agentMenuFrom = null, agentMenuKey = null;
 function openAgentMenu(x, y, items, from) {
   agentMenu.replaceChildren(...items.map((it) => {
     const b = el("button", it.danger ? "danger-item" : null, it.label);
@@ -753,7 +754,7 @@ function openAgentMenu(x, y, items, from) {
     return b;
   }));
   agentMenu.hidden = false;
-  agentMenuFrom = from;
+  agentMenuFrom = from; agentMenuKey = from.dataset.key || null;
   const r = agentMenu.getBoundingClientRect();
   agentMenu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 4)) + "px";
   agentMenu.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 4)) + "px";
@@ -762,11 +763,19 @@ function openAgentMenu(x, y, items, from) {
 function closeAgentMenu(refocus) {
   if (agentMenu.hidden) return;
   agentMenu.hidden = true;
-  if (refocus && agentMenuFrom && agentMenuFrom.isConnected) agentMenuFrom.focus();
-  agentMenuFrom = null;
+  // renderCards replaces every card each poll, so look the card up again by its key
+  if (refocus) {
+    const live = agentMenuKey && document.querySelector(`[data-key="${CSS.escape(agentMenuKey)}"]`);
+    const target = live || (agentMenuFrom && agentMenuFrom.isConnected ? agentMenuFrom : null);
+    if (target) target.focus();
+  }
+  agentMenuFrom = null; agentMenuKey = null;
 }
 function bindAgentMenu(card, items) {
-  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openAgentMenu(e.clientX, e.clientY, items(), card); });
+  card.addEventListener("contextmenu", (e) => {
+    // keep the browser's own menu (Copy, Paste…) on inputs, links and selected text
+    if (e.target.closest("input, textarea, a") || String(getSelection()).length) return;
+    e.preventDefault(); openAgentMenu(e.clientX, e.clientY, items(), card); });
   let lp = null, x0 = 0, y0 = 0;
   const cancel = () => { clearTimeout(lp); lp = null; };
   card.addEventListener("pointerdown", (e) => {
