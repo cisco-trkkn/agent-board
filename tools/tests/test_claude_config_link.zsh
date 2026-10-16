@@ -43,6 +43,23 @@ HOME="$tmp/h" $LINK >"$tmp/out3" 2>&1; rc=$?
 check "link pointing elsewhere is refused"      '[[ $rc == 1 && $(readlink $H/CLAUDE.md) == /elsewhere ]]'
 check "other paths still linked after refusal"  '[[ -L $H/skills/retro ]]'
 
+# existing backup is never clobbered; dir backups don't nest; dangling link refused; symlinked parent refused
+mk_home; print oldbak > "$H/CLAUDE.md.bak-$stamp"; mkdir -p "$H/skills/retro/x"; print d > "$H/skills/retro/x/f"
+mkdir -p "$H/skills/retro.bak-$stamp"; print keep > "$H/skills/retro.bak-$stamp/k"
+HOME="$tmp/h" $LINK >"$tmp/out4" 2>&1; rc=$?
+check "existing backup kept intact"             '[[ $(<$H/CLAUDE.md.bak-$stamp) == oldbak && $(<$H/CLAUDE.md.bak-$stamp.2) == old ]]'
+check "dir backup gets a fresh name, not nested" '[[ $(<$H/skills/retro.bak-$stamp/k) == keep && ! -e $H/skills/retro.bak-$stamp/retro && -f $H/skills/retro.bak-$stamp.2/x/f ]]'
+mk_home; print oldbak > "$H/CLAUDE.md.bak-$stamp"; print b2 > "$H/CLAUDE.md.bak-$stamp.2"
+HOME="$tmp/h" $LINK --dry-run >"$tmp/out5" 2>&1
+check "dry-run names the free backup slot"      'grep -q "CLAUDE.md.bak-$stamp.3" $tmp/out5 && [[ ! -L $H/CLAUDE.md ]]'
+mk_home; rm "$H/CLAUDE.md"; ln -s /nonexistent-target "$H/CLAUDE.md"
+HOME="$tmp/h" $LINK >"$tmp/out6" 2>&1; rc=$?
+check "dangling link elsewhere refused, hint shown" '[[ $rc == 1 && $(readlink $H/CLAUDE.md) == /nonexistent-target ]] && grep -q "remove it" $tmp/out6'
+mk_home; rm -rf "$H/hooks"; mkdir "$tmp/other"; ln -s "$tmp/other" "$H/hooks"
+HOME="$tmp/h" $LINK >"$tmp/out7" 2>&1; rc=$?
+check "symlinked hooks/ parent refused, nothing written through" '[[ $rc == 1 && -z "$(ls $tmp/other)" ]]'
+check "other parents still linked"              '[[ -L $H/skills/retro ]]'
+
 # sync: live settings.json -> repo copy, run from a scratch repo so the real one is untouched
 mk_home; mkdir -p "$tmp/r/bin" "$tmp/r/claude"; cp "$SYNC" "$tmp/r/bin/" 2>/dev/null
 HOME="$tmp/h" "$tmp/r/bin/claude-config-sync" >/dev/null 2>&1
