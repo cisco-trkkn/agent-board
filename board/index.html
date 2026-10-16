@@ -918,7 +918,7 @@ function renderArtifacts() {
     g.open = saved ? saved === "open" : e === A.epoch;
     const sum = el("summary"); sum.append(el("h4", "", `Session ${e + 1}${e === A.epoch ? " (current)" : ""} · ${groups.get(e).length}`));
     g.append(sum);
-    g.addEventListener("toggle", () => { try { localStorage.setItem(openKey(e), g.open ? "open" : "closed"); } catch (err) {} });
+    g.addEventListener("toggle", () => { try { if (g.open === (e === A.epoch)) localStorage.removeItem(openKey(e)); else localStorage.setItem(openKey(e), g.open ? "open" : "closed"); } catch (err) {} });   // keep only choices that differ from the default
     for (const it of groups.get(e).sort((a, b) => b.latest.ts - a.latest.ts)) g.append(artButton(A, it));
     box.append(g);
   }
