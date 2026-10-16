@@ -8,21 +8,15 @@
     "allow": [
       "Bash(tmux-ctl:*)",
       "Bash(git status *)",
-      "Bash(git log *)",
-      "Bash(git diff *)",
-      "Bash(git show *)",
       "Bash(git branch --list *)",
       "Bash(git rev-parse *)",
       "Bash(git worktree list *)",
       "Bash(ls *)",
       "Bash(wc *)",
-      "Bash(python3 -m json.tool *)",
       "Bash(glab mr view *)",
       "Bash(glab mr list *)",
       "Bash(glab ci status *)",
-      "Bash(glab ci view *)",
       "Bash(glab ci list *)",
-      "Bash(agent-ci check *)",
       "Bash(agent-ci status *)",
       "Bash(agent-ci failures *)"
     ],
@@ -36,7 +30,11 @@
       "Bash(terraform destroy*)",
       "Bash(git push*)",
       "Bash(glab mr create*)",
-      "Bash(glab variable*)"
+      "Bash(glab variable*)",
+      "Bash(terraform * apply*)",
+      "Bash(terraform * destroy*)",
+      "Bash(git * push*)",
+      "Bash(gcloud * remove-iam-policy-binding*)"
     ],
     "defaultMode": "auto"
   },
