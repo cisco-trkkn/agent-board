@@ -14,7 +14,11 @@
 #   tmux-ctl send  [-C dir] <win> <text>   type text + Enter into an IDLE shell window, don't wait
 #   tmux-ctl keys  <win> <key>...          raw keys, e.g. C-c to stop something you started
 #   tmux-ctl new   <win> [dir]             open a new shell window
-#   tmux-ctl agent <name> <task>           start a worker Claude in its own worktree + window
+#   tmux-ctl agent <name> [--force] <task> | --brief FILE
+#                                          start a worker Claude in its own worktree + window.
+#                                          The brief needs goal, scope, done-criterion: <8 words is
+#                                          refused unless --brief FILE (contents sent verbatim) or --force;
+#                                          user-config work (~/.claude, hooks, dotfiles...) draws a warning
 #   tmux-ctl tell  <agent> <message>       type a message into a worker's prompt
 #                                          (refused while the worker is waiting on the user)
 #   tmux-ctl agents                        worker status + last lines
@@ -291,10 +295,39 @@ case "$cmd" in
 
   agent)
     name="$1"; shift
-    [[ -n "$name" && -n "$*" ]] || die "usage: tmux-ctl agent <name> <task>"
+    force=0; briefile=""
+    while [[ "$1" == --* ]]; do
+      case "$1" in
+        --force) force=1; shift ;;
+        --brief) [[ -n "$2" ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
+                 briefile="$2"; shift 2 ;;
+        *) die "unknown agent option '$1' (tmux-ctl help)" ;;
+      esac
+    done
+    [[ -n "$name" && ( -n "$briefile" || $# -gt 0 ) ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
+    if [[ -n "$briefile" ]]; then
+      [[ -z "$*" ]] || die "give either --brief FILE or a task on the command line, not both"
+      [[ -r "$briefile" ]] || die "no readable brief file '$briefile'"
+      task="$(<"$briefile")"     # verbatim contents are the task; no length check
+      [[ -n "${task//[[:space:]]/}" ]] || die "brief file '$briefile' is empty"
+    else
+      task="$*"
+      if (( ! force )) && (( ${#${=task}} < 8 )); then
+        print -u2 "tmux-ctl: refusing a ${#${=task}}-word brief — a worker starts with none of your context. Give it goal, scope and a done-criterion, e.g.:
+  Goal: add retry with backoff to the GCS upload in src/upload.py.
+  Scope: only src/upload.py and tests/test_upload.py; do not touch the CLI.
+  Done: 'pytest tests/test_upload.py' passes and a failed upload is retried 3 times.
+Write a longer brief inline, pass it as --brief FILE, or use --force to send this one as is."
+        exit 2
+      fi
+    fi
+    # user-scope work does not belong in a repo worktree worker (non-fatal)
+    if (( ! force )) && print -r -- "$task" | grep -qiE '~/\.claude|\.claude/(settings|skills|hooks|plugins)|settings(\.local)?\.json|global CLAUDE\.md|(^|[^[:alnum:]_])(hooks?|plugins?|skills?|dotfiles?|launchd|launchagents?)([^[:alnum:]_]|$)'; then
+      print -u2 "tmux-ctl: warning: this looks like user-config work (~/.claude, settings, hooks, plugins, skills, global CLAUDE.md, LaunchAgents, dotfiles) — run it in the main session, not a worktree worker (--force silences this)"
+    fi
+    [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN task: $task"; exit 0 }   # test seam: stop before any window is created
     t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"
     root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
-    task="$*"
     t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
     t set-option -w -t "$(target "$name")" @tc_agent 1
     t set-option -w -t "$(target "$name")" automatic-rename off
@@ -359,7 +392,7 @@ case "$cmd" in
     print -r -- "relay scheduled: ${FEEDKEY}:claude restarts with $doc once this turn ends (log: $log)" ;;
 
   ""|-h|--help|help)
-    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

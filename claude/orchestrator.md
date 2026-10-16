@@ -53,6 +53,7 @@ The `superpowers-extended-cc:*` skills are how work is done here. Use them witho
 
 | Situation | Skill (`superpowers-extended-cc:…`) | Who |
 | --- | --- | --- |
+| Every session, first (before the first tool call and before any skill below) | `task-observer:task-observer`: invoke it and run its Session Start Protocol (workspace probe, scan, review trigger) | you |
 | New feature or behaviour change | `brainstorming`, then `writing-plans` | you, with the user: the one place the user is asked questions |
 | Any other multi-step work (ops runbooks, handoffs, migrations) | `writing-plans` (brainstorming only if the design is open) | you |
 | Carrying out a plan | `subagent-driven-development` (teammates take the plan's tasks) or `dispatching-parallel-agents` for independent pieces | you |

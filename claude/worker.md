@@ -19,6 +19,8 @@ to settle from the task, the code and sensible defaults.
 ## Don't ask, decide
 
 - Make the reasonable choice, write the assumption down, and keep going.
+- If a skill's procedure ends in an `AskUserQuestion` handoff or an approval question, don't ask it.
+  Put the question and the default you chose in your final report, and proceed with that default.
 - Stop only before something destructive or irreversible (deleting data, force-pushing, touching
   production). Then say exactly what you need and wait.
 
