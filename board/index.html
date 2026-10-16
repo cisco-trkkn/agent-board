@@ -312,6 +312,7 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
       <section class="activity" id="activity">
         <button class="act-head" id="act-toggle"><b>Activity</b> <span class="fails" id="act-fails"></span><span class="chev">▸</span></button>
         <div class="act-body">
+          <div class="doc-banner" id="act-stale" hidden></div>
           <nav class="tabs"><button data-tab="runs" class="on">Runs</button><button data-tab="cmds">Commands</button><select id="act-agent"><option value="">All agents</option></select></nav>
           <div id="act-runs"></div>
           <div id="act-cmds" hidden></div>
@@ -1108,7 +1109,11 @@ $("#act-agent").onchange = () => { ACT.sig = null; pollActivity(); };
 
 async function pollActivity() {
   const s = session(); if (!s) return;
-  const r = await api(`runs?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
+  const r = await api(`runs?session=${encodeURIComponent(s.name)}`);
+  const stale = $("#act-stale");
+  stale.hidden = r.status !== 404;   // 404 = this server process predates the endpoint
+  if (r.status === 404) stale.textContent = "Server out of date — /api/runs is missing. Restart the board (tmux-dash stop && tmux-dash start).";
+  if (!r.ok) return;
   const runs = (await r.json()).runs || [];
   const failed = runs.filter((x) => x.exit !== null && x.exit !== 0);
   if (ACT.open || !ACT.seeded) failed.forEach((x) => ACT.seenFails.add(x.id));   // failures from before this page load are not news

@@ -39,6 +39,32 @@ ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 
 SEP = "\x1f"
 
+# Stale-server guard: remember when this process started and each module's mtime. On a request
+# (checked at most every RELOAD_EVERY seconds) a changed module makes the process re-exec itself,
+# so a code edit can never keep being served by an old process.
+STARTED = time.time()
+RELOAD_EVERY = 5
+_reload = {"at": time.monotonic(), "mtimes": None}
+
+
+def _module_mtimes():
+    return {f.name: f.stat().st_mtime_ns for f in HERE.glob("*.py")}
+
+
+_reload["mtimes"] = _module_mtimes()
+
+
+def code_changed():
+    """True when a board module changed since startup; rate-limited to one disk scan per RELOAD_EVERY s."""
+    now = time.monotonic()
+    if now - _reload["at"] < RELOAD_EVERY:
+        return False
+    _reload["at"] = now
+    try:
+        return _module_mtimes() != _reload["mtimes"]
+    except OSError:
+        return False
+
 # Every process spawn costs ~0.5s on this Mac (endpoint security scans each exec), so
 # subprocesses run in parallel, worktree info is cached, and concurrent polls share one result.
 POOL = ThreadPoolExecutor(max_workers=12)
@@ -552,6 +578,13 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code, obj):
         self._send(code, json.dumps(obj).encode(), "application/json")
 
+    def handle_one_request(self):
+        super().handle_one_request()
+        if code_changed():   # after the response went out, so the request that noticed still gets answered
+            print("tmux-dash: module changed, re-executing", flush=True)
+            sys.stdout.flush()
+            os.execv(sys.executable, [sys.executable, *sys.argv])
+
     def do_GET(self):
         sub = self._guard()
         if sub is None:
@@ -563,6 +596,8 @@ class Handler(BaseHTTPRequestHandler):
                    f"frame-src http://127.0.0.1:{TTYD_PORT} http://localhost:{TTYD_PORT}; frame-ancestors 'none'")
             self._send(200, html.encode(), "text/html; charset=utf-8",
                        {"Content-Security-Policy": csp, "X-Frame-Options": "DENY"})
+        elif sub == "api/version":
+            self._json(200, {"started": STARTED, "pid": os.getpid()})
         elif sub == "api/state":
             try:
                 self._json(200, state())
