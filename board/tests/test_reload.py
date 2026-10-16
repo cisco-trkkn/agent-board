@@ -76,10 +76,22 @@ class ReloadTest(unittest.TestCase):
             time.sleep(0.5)
             try:
                 second = self.get("api/version")["started"]   # any request is the trigger
-            except Exception:
+            except OSError:
                 pass   # the port is briefly closed while the process re-execs
-        self.assertGreater(second, first, "server kept running old code after a module changed")
+        self.assertGreater(second, first, "server kept running old code after a module changed\n" + (self.tmp / "server.log").read_text())
         self.assertEqual(self.get("api/version")["pid"], self.proc.pid, "re-exec must keep the same pid")
+
+
+    def test_broken_module_keeps_the_old_server_running(self):
+        first = self.get("api/version")["started"]
+        with open(self.app / "activity.py", "a") as f:
+            f.write("\nthis is not python (\n")
+        for _ in range(14):   # well past the 5 s check interval
+            time.sleep(0.5)
+            v = self.get("api/version")
+        self.assertEqual(v["started"], first, "server re-executed into code that does not load")
+        self.assertIsNone(self.proc.poll())
+        self.assertIn("does not load", (self.tmp / "server.log").read_text())
 
 
 @unittest.skipUnless(shutil.which("node"), "node needed to run the page's pollActivity")

@@ -52,17 +52,36 @@ def _module_mtimes():
 
 
 _reload["mtimes"] = _module_mtimes()
+_reload["bad"] = None   # the mtimes of the last state that failed validation, so it is not retried every 5 s
+
+
+def _loads_cleanly():
+    """Trial-compile server.py and import the other modules in a subprocess, so a mid-edit save never replaces a working server."""
+    mods = sorted(f.stem for f in HERE.glob("*.py") if f.name != "server.py")
+    code = ("import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec'); "
+            "import importlib; [importlib.import_module(m) for m in sys.argv[2:]]")
+    r = subprocess.run([sys.executable, "-B", "-c", code, str(HERE / "server.py"), *mods], cwd=str(HERE),
+                       env={**os.environ, "PYTHONPATH": str(HERE)}, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        print("tmux-dash: module changed but does not load; keeping the running server:\n" + r.stderr[-600:], flush=True)
+    return r.returncode == 0
 
 
 def code_changed():
-    """True when a board module changed since startup; rate-limited to one disk scan per RELOAD_EVERY s."""
+    """True when a board module changed since startup and the new code loads; rate-limited to one disk scan per RELOAD_EVERY s."""
     now = time.monotonic()
     if now - _reload["at"] < RELOAD_EVERY:
         return False
     _reload["at"] = now
     try:
-        return _module_mtimes() != _reload["mtimes"]
-    except OSError:
+        cur = _module_mtimes()
+        if cur == _reload["mtimes"] or cur == _reload["bad"]:
+            return False
+        if _loads_cleanly():
+            return True
+        _reload["bad"] = cur
+        return False
+    except (OSError, subprocess.SubprocessError):
         return False
 
 # Every process spawn costs ~0.5s on this Mac (endpoint security scans each exec), so
@@ -581,7 +600,7 @@ class Handler(BaseHTTPRequestHandler):
     def handle_one_request(self):
         super().handle_one_request()
         if code_changed():   # after the response went out, so the request that noticed still gets answered
-            print("tmux-dash: module changed, re-executing", flush=True)
+            print("tmux-dash: module changed, re-executing (in-flight requests on other threads are dropped)", flush=True)
             sys.stdout.flush()
             os.execv(sys.executable, [sys.executable, *sys.argv])
 
