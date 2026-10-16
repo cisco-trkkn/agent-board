@@ -6,7 +6,37 @@
   },
   "permissions": {
     "allow": [
-      "Bash(tmux-ctl:*)"
+      "Bash(tmux-ctl:*)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch --list *)",
+      "Bash(git rev-parse *)",
+      "Bash(git worktree list *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(python3 -m json.tool *)",
+      "Bash(glab mr view *)",
+      "Bash(glab mr list *)",
+      "Bash(glab ci status *)",
+      "Bash(glab ci view *)",
+      "Bash(glab ci list *)",
+      "Bash(agent-ci check *)",
+      "Bash(agent-ci status *)",
+      "Bash(agent-ci failures *)"
+    ],
+    "deny": [
+      "Bash(gcloud * create*)",
+      "Bash(gcloud * delete*)",
+      "Bash(gcloud * update*)",
+      "Bash(gcloud * add-iam-policy-binding*)",
+      "Bash(gcloud * set-iam-policy*)",
+      "Bash(terraform apply*)",
+      "Bash(terraform destroy*)",
+      "Bash(git push*)",
+      "Bash(glab mr create*)",
+      "Bash(glab variable*)"
     ],
     "defaultMode": "auto"
   },
@@ -172,7 +202,7 @@
       "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries prod or production as a whole word or name segment",
       "### User-specific",
       "**Primary use of Claude Code**: software development",
-      "**Trusted repo**: The git repository at /Users/francisco.ruiz/.claude/jobs/318c9a50/tmp/teamtest (its working directory) \u2014 no remotes configured",
+      "**Trusted repo**: The git repositories at /Users/francisco.ruiz/master-gcp-repo and /Users/francisco.ruiz/agent-board (their working directories) \u2014 no remotes configured",
       "**Org-specific CLIs**: None configured"
     ]
   }
