@@ -1,0 +1,13 @@
+{
+ "session_id": "s",
+ "hook_event_name": "PostToolUse",
+ "tool_name": "Bash",
+ "cwd": "/tmp",
+ "tool_input": {
+  "command": "echo a\necho b"
+ },
+ "tool_response": {
+  "stdout": "a\nb",
+  "stderr": ""
+ }
+}

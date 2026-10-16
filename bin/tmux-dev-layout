@@ -1,0 +1,62 @@
+#!/usr/bin/env zsh
+# tmux-dev-layout <session> <root> — idempotently shape a dev session. The user keeps `claude` and a plain
+# `shell`; the agents' tests/shell windows live in the hidden session <project>-bg (see tmux-ctl ensure_bg).
+# Migrates old layouts: moves an idle `tests` window to -bg, closes feed/watch panes, drops status labels.
+# Optional .dev/windows lines `tests: <cmd>` / `shell: <cmd>` run as a watch pane in the -bg window.
+emulate -L zsh
+sess="$1" root="$2"
+[[ -n "$sess" && -n "$root" ]] || { print -u2 "usage: tmux-dev-layout <session> <root>"; exit 0 }
+TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+t() { "$TMUX_BIN" "$@" }
+t has-session -t "=$sess" 2>/dev/null || exit 0
+key="$(t display -p -t "=${sess}:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; key="${key:-$sess}"
+bg="$key-bg"
+has_win() { t list-windows -t "=$1" -F '#{window_name}' 2>/dev/null | grep -qxF -- "$2" }
+SHELLS='(zsh|bash|sh|fish|-zsh|-bash)'
+
+# old layout: feed/watch panes and status labels in the user's windows
+for win in shell tests; do
+  has_win "$sess" "$win" || continue
+  for p in ${(f)"$(t list-panes -t "=${sess}:$win" -F '#{pane_id} #{@tc_role}')"}; do
+    [[ "${p#* }" == (feed|watch) ]] && t kill-pane -t "${p%% *}"
+  done
+  t set-option -wu -t "=${sess}:$win" @tc_label 2>/dev/null
+done
+
+# the hidden agent session (same shape as tmux-ctl ensure_bg); new-session is the atomic gate
+if ! { t has-session -t "=$bg" 2>/dev/null && [[ -n "$(t show-options -qv -t "=${bg}:" @tc_bg)" ]]; }; then
+  if has_win "$sess" tests && [[ "$(t display -p -t "=${sess}:tests" '#{pane_current_command}')" == ${~SHELLS} ]]; then
+    first=shell
+  else
+    first=tests
+  fi
+  if t new-session -d -s "$bg" -n "$first" -c "$root" 2>/dev/null; then
+    if [[ "$first" == shell ]]; then t move-window -s "=${sess}:tests" -t "=${bg}:"
+    else t new-window -d -t "=${bg}:" -n shell -c "$root"; fi
+    t set-option -t "=${bg}:" @tc_bg 1
+  else
+    n=0; while [[ -z "$(t show-options -qv -t "=${bg}:" @tc_bg)" ]] && (( n++ < 40 )); do sleep 0.1; done
+  fi
+fi
+if has_win "$sess" tests; then
+  if [[ "$(t display -p -t "=${sess}:tests" '#{pane_current_command}')" == ${~SHELLS} ]]; then
+    t kill-window -t "=${sess}:tests"
+  else
+    print -u2 "tmux-dev-layout: '${sess}:tests' is busy; left in place (run again when it is idle)"
+  fi
+fi
+has_win "$sess" shell || t new-window -d -t "=${sess}:" -n shell -c "$root"
+
+# optional watch commands, in the -bg windows
+if [[ -r "$root/.dev/windows" ]]; then
+  while IFS= read -r line; do
+    [[ "$line" == [[:space:]]#'#'* || -z "${line//[[:space:]]/}" ]] && continue
+    [[ "$line" =~ '^(tests|shell):[[:space:]]*(.+)$' ]] || continue
+    win="$match[1]" cmd="$match[2]"
+    has_win "$bg" "$win" || continue
+    t list-panes -t "=${bg}:$win" -F '#{@tc_role}' | grep -qx watch && continue
+    wp="$(t split-window -d -h -P -F '#{pane_id}' -t "=${bg}:$win" -c "$root" "zsh -lc ${(q)cmd}")"
+    [[ -n "$wp" ]] && t set-option -p -t "$wp" @tc_role watch
+  done < "$root/.dev/windows"
+fi
+exit 0

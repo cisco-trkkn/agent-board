@@ -1,0 +1,18 @@
+#!/usr/bin/env zsh
+# tmux-web-attach <session> [window] — what tmux-dash's browser terminals run (via ttyd).
+# Attaches through a throw-away *grouped* session, so the browser can sit on a different
+# window than your real terminal without switching it. The view session is destroyed
+# when the browser tab disconnects.
+emulate -L zsh
+TMUX_CMD=("$HOME/.local/bin/tmux" ${(z)TMUX_DASH_TMUX_ARGS})
+sess="$1" win="$2"
+[[ "$sess" =~ '^[A-Za-z0-9._-]+$' ]] || { print "bad session name"; sleep 3; exit 1 }
+[[ -z "$win" || "$win" =~ '^[0-9]+$' ]] || { print "bad window index"; sleep 3; exit 1 }
+"${TMUX_CMD[@]}" has-session -t "=$sess" 2>/dev/null || { print "no tmux session '$sess'"; sleep 3; exit 1 }
+
+view="_web-$$"
+"${TMUX_CMD[@]}" new-session -d -t "=$sess" -s "$view" || exit 1
+[[ -n "$win" ]] && "${TMUX_CMD[@]}" select-window -t "=$view:$win"
+unset TMUX
+# options are set after attaching: destroy-unattached would kill an unattached session at once
+exec "${TMUX_CMD[@]}" attach-session -t "=$view" \; set-option -t "$view" status off \; set-option -t "$view" destroy-unattached on

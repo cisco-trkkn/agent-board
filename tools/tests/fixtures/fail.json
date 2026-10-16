@@ -1,0 +1,10 @@
+{
+ "session_id": "s",
+ "hook_event_name": "PostToolUseFailure",
+ "tool_name": "Bash",
+ "cwd": "/tmp",
+ "tool_input": {
+  "command": "ls -la /nope"
+ },
+ "error": "Exit code 2\nls: /nope: No such file or directory"
+}

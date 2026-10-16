@@ -1,0 +1,365 @@
+#!/usr/bin/env zsh
+# tmux-ctl — let the Claude in a dev session use the other windows of its session.
+#
+#   tmux-ctl list                          windows: name, command, idle/busy, agent/lane flags
+#   tmux-ctl read  <win> [feed|watch] [lines]  last N lines of a window's main pane (default 60),
+#                                          or of its feed/watch pane
+#   tmux-ctl feed  [win] [lines]           tail of the window's feed log (default both, 80 lines)
+#   tmux-ctl run   [-t secs] [-C dir] <win> <cmd>
+#                                          type cmd into an IDLE shell window, wait for it,
+#                                          print its output, exit with its exit code (default 600s).
+#                                          Busy window -> your own lane window <win>·<you>;
+#                                          runs in -C dir (default: your git top level)
+#                                          tests/shell (and lanes) live in the hidden session <project>-bg; runs are recorded for the board's Activity drawer
+#   tmux-ctl send  [-C dir] <win> <text>   type text + Enter into an IDLE shell window, don't wait
+#   tmux-ctl keys  <win> <key>...          raw keys, e.g. C-c to stop something you started
+#   tmux-ctl new   <win> [dir]             open a new shell window
+#   tmux-ctl agent <name> <task>           start a worker Claude in its own worktree + window
+#   tmux-ctl tell  <agent> <message>       type a message into a worker's prompt
+#                                          (refused while the worker is waiting on the user)
+#   tmux-ctl agents                        worker status + last lines
+#   tmux-ctl artifact <path> [--kind K]    show a file in the board's artifacts panel
+#   tmux-ctl idea  <text>                  file an idea for after the plan (never act on it now)
+#   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
+#                                          orchestrator that starts from <doc> (handoff skill only)
+#
+# send/run only type into windows' main pane (the one without @tc_role) at a shell
+# prompt. Targets this pane's session (override: TC_SESSION=<name>).
+emulate -L zsh
+setopt pipefail
+TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
+mkdir -p "$STATE"
+
+die() { print -u2 "tmux-ctl: $*"; exit 2 }
+t()   { "$TMUX_BIN" "$@" }
+
+[[ -n "$TMUX" ]] || die "not inside tmux"
+if [[ -n "$TC_SESSION" ]]; then
+  SESSION="$TC_SESSION"
+elif [[ -n "$TMUX_PANE" ]]; then
+  SESSION="$(t display -p -t "$TMUX_PANE" '#{session_name}')"
+else
+  SESSION="$(t display -p '#{session_name}')"
+fi
+# feed logs are keyed by the canonical session: the group (web-attach views are throwaway grouped sessions)
+FEEDKEY="$(t display -p -t "=$SESSION:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; FEEDKEY="${FEEDKEY:-$SESSION}"
+# a -bg pane belongs to its project: never key state under <project>-bg
+[[ -n "$(t show-options -qv -t "=$SESSION:" @tc_bg 2>/dev/null)" ]] && FEEDKEY="${FEEDKEY%-bg}"
+warn_web_key() {   # state filed under a browser view's name is invisible to the project's board
+  [[ "$FEEDKEY" == _web-* ]] && print -u2 "tmux-ctl: warning: this is a browser view (${FEEDKEY}), not a project — run it from the project's own session or its state is filed under the wrong key"
+}
+MAIN="$SESSION"
+BG="$FEEDKEY-bg"   # hidden session for the agents' tests/shell windows and their lanes (user keeps a plain shell)
+is_bg_win() { [[ "${1%%·*}" == (tests|shell) ]] }
+ensure_bg() {
+  t has-session -t "=$BG" 2>/dev/null && [[ -n "$(t show-options -qv -t "=$BG:" @tc_bg)" ]] && return
+  local root; root="$(git rev-parse --show-toplevel 2>/dev/null)" || root="$PWD"
+  # new-session is the atomic gate: only the caller that creates the session finishes setting it up
+  if t new-session -d -s "$BG" -n tests -c "$root" 2>/dev/null; then
+    t new-window -d -t "=$BG:" -n shell -c "$root"
+    t set-option -t "=$BG:" @tc_bg 1      # set last: it marks the session as complete
+  else
+    local n=0; while [[ -z "$(t show-options -qv -t "=$BG:" @tc_bg)" ]] && (( n++ < 40 )); do sleep 0.1; done
+  fi
+}
+# use_win <win>: point $SESSION at the session that holds <win>
+use_win() { if is_bg_win "$1"; then ensure_bg; SESSION="$BG"; else SESSION="$MAIN"; fi }
+# lock_win <win>: one typist per window at a time (idle check + two-step send-keys must not interleave)
+lock_win() {
+  local d="$STATE/lock-${FEEDKEY}-${1//\//_}" n=0 owner
+  until mkdir "$d" 2>/dev/null; do
+    owner="$(<"$d/pid" 2>/dev/null)"
+    if [[ -n "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$d"; continue; fi   # stale
+    (( n++ >= 300 )) && { rm -rf "$d"; continue }    # 30s: never wedge forever
+    sleep 0.1
+  done
+  print -r -- "$$" > "$d/pid"
+  LOCKD="$d"      # set only once WE hold it, so a killed waiter never removes someone else's lock
+}
+# settle_win <pane> <run-id> <base>: after Enter, return as soon as the line has started: rc written,
+# pane busy, or history_size+cursor_y moved past <base> (the newline was consumed). Capped at ~1s.
+settle_win() {
+  local n=0 hs cy
+  while (( n++ < 10 )); do
+    [[ -n "$2" && -f "$STATE/$2.rc" ]] && return
+    [[ "$(t display -p -t "$1" '#{pane_current_command}')" != ${~SHELLS} ]] && return
+    hs="$(t display -p -t "$1" '#{history_size}')"; cy="$(t display -p -t "$1" '#{cursor_y}')"
+    (( ${hs:-0} + ${cy:-0} > ${3:-0} )) && return
+    sleep 0.1
+  done
+}
+unlock_win() { [[ -n "$LOCKD" && "$(<"$LOCKD/pid" 2>/dev/null)" == "$$" ]] && rm -rf "$LOCKD"; LOCKD= }
+main_pane() { t list-panes -t "=$SESSION:$1" -F '#{pane_id} #{@tc_role}' 2>/dev/null | awk '$2==""{print $1; exit}' }
+role_pane() { t list-panes -t "=$SESSION:$1" -F '#{pane_id} #{@tc_role}' 2>/dev/null | awk -v r="$2" '$2==r{print $1; exit}' }
+target() { local p; p="$(main_pane "$1")"; print -r -- "${p:-=$SESSION:$1}" }
+SHELLS='(zsh|bash|sh|fish|-zsh|-bash)'
+
+exists() {
+  t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$1" ||
+    die "no window '$1' in session '$SESSION' (try: tmux-ctl list)"
+}
+is_idle() { [[ "$(t display -p -t "$(target "$1")" '#{pane_current_command}')" == ${~SHELLS} ]] }
+need_idle() {
+  is_idle "$1" || die "window '$1' is busy running '$(t display -p -t "$(target "$1")" '#{pane_current_command}')' — read it, wait, or ask the user"
+}
+is_agent() { [[ "$(t show-options -wqv -t "$(target "$1")" @tc_agent)" == 1 ]] }
+trim() { sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' }
+
+zmodload zsh/datetime
+# summarize <logfile>: "42 passed, 1 failed" (pytest-style) or "ALL PASS"/"N FAILED" (tmux-tools runners)
+summarize() {
+  local s
+  s="$(grep -oE '[0-9]+ (passed|failed|errors?|skipped)' "$1" | tail -4 | paste -sd, - | sed 's/,/, /g')"
+  [[ -z "$s" ]] && s="$(grep -oE '^(ALL PASS|[0-9]+ FAILED)$' "$1" | tail -1)"
+  print -r -- "$s"
+}
+# run_record <exit|null> <duration> <summary>: append one record for the current run
+run_record() {
+  jq -nc --arg id "$id" --argjson ts "$t0" --arg agent "$(caller)" --arg win "$win" --arg session "$SESSION" \
+    --arg cmd "$cmdtext" --arg cwd "$cdir" --argjson exit "$1" --argjson duration "$2" --arg log "$logf" --arg summary "$3" \
+    '{id:$id,ts:$ts,agent:$agent,win:$win,session:$session,cmd:$cmd,cwd:$cwd,exit:$exit,duration:$duration,log:$log,summary:$summary}' \
+    >> "$STATE/runs-$FEEDKEY.jsonl"
+}
+caller() {
+  local pw=""; [[ -n "$TMUX_PANE" ]] && pw="$(t display -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)"
+  pw="${pw#✦ }"; print -r -- "${pw:-claude}"
+}
+# pick_win: sets $win to the window to type into — <win> if its main pane is idle, else the caller's lane
+pick_win() {
+  local base="$1" lane
+  if is_idle "$base"; then win="$base"; return; fi
+  lane="$base·$(caller)"
+  if ! t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$lane"; then
+    t new-window -d -t "=$SESSION:" -n "$lane" -c "$(t display -p -t "$(target "$base")" '#{pane_current_path}')"
+    t set-option -w -t "=$SESSION:$lane" @tc_lane 1
+    t set-option -w -t "=$SESSION:$lane" automatic-rename off
+  fi
+  need_idle "$lane"
+  t set-option -w -t "=$SESSION:$lane" @tc_lane_used "$EPOCHSECONDS"
+  print -u2 "tmux-ctl: '$base' is busy — using lane $lane"
+  win="$lane"
+}
+reap_lanes() {
+  local name used
+  for name in ${(f)"$(t list-windows -t "=$SESSION" -F '#{?#{==:#{@tc_lane},1},#{window_name},}' 2>/dev/null)"}; do
+    [[ -z "$name" ]] && continue
+    is_idle "$name" || continue
+    used="$(t show-options -wqv -t "=$SESSION:$name" @tc_lane_used)"
+    [[ -n "$used" ]] || continue
+    (( EPOCHSECONDS - used > 900 )) && t kill-window -t "=$SESSION:$name"
+  done
+}
+# parse_opts: consumes -t secs / -C dir (any order) from "$@" into $timeout, $cdir, leaves rest in $rest
+parse_opts() {
+  local k
+  timeout=600; cdir=""; rest=()
+  while [[ "$1" == (-t|-C) ]]; do
+    [[ -n "$2" ]] || die "option $1 needs a value"
+    k="$1"; if [[ "$k" == -t ]]; then timeout="$2"; else cdir="$2"; fi; shift 2
+  done
+  rest=("$@")
+  if [[ -z "$cdir" ]]; then cdir="$(git rev-parse --show-toplevel 2>/dev/null)" || cdir="$PWD"; fi
+}
+# wrap_cd <win> <cmd>: runs in $cdir via a subshell when that differs from the pane's cwd
+wrap_cd() {
+  local pp; pp="$(t display -p -t "$(target "$1")" '#{pane_current_path}')"
+  if [[ "${cdir:A}" != "${pp:A}" ]]; then print -r -- "( cd ${(q)cdir} || exit 2; $2 )"; else print -r -- "$2"; fi
+}
+
+cmd="$1"; shift 2>/dev/null
+# _done runs when a lane's command ends (the lane looks idle then); help needs no tmux
+if [[ "$cmd" != (_done|help|-h|--help|"") ]]; then
+  for SESSION in "$MAIN" "$BG"; do t has-session -t "=$SESSION" 2>/dev/null && reap_lanes; done
+  SESSION="$MAIN"
+fi
+case "$cmd" in
+  list)
+    list_session() {
+    for name in ${(f)"$(t list-windows -t "=$SESSION" -F '#{window_name}')"}; do
+      IFS='|' read -r idx bell agent lane <<< "$(t display -p -t "=$SESSION:$name" '#{window_index}|#{window_bell_flag}|#{@tc_agent}|#{@tc_lane}')"
+      mp="$(main_pane "$name")"
+      IFS='|' read -r pcmd dir <<< "$(t display -p -t "${mp:-=$SESSION:$name}" '#{pane_current_command}|#{pane_current_path}')"
+      state=busy; [[ "$pcmd" == ${~SHELLS} ]] && state=idle
+      [[ "$bell" == 1 ]] && state="$state,needs-user"
+      lanetag=; [[ "$lane" == 1 ]] && lanetag="  (lane)"
+      print -r -- "$idx  $name  [$state]  cmd=$pcmd${agent:+  (worker agent)}$lanetag  $dir"
+    done
+    }
+    list_session
+    if t has-session -t "=$BG" 2>/dev/null; then
+      SESSION="$BG"; list_session | sed 's/$/  (bg)/'; SESSION="$MAIN"
+    fi ;;
+
+  read)
+    [[ -n "$1" ]] || die "usage: tmux-ctl read <win> [feed|watch] [lines]"
+    win="$1"; shift; use_win "$win"; exists "$win"
+    pane="$(target "$win")"
+    if [[ "$1" == (feed|watch) ]]; then
+      pane="$(role_pane "$win" "$1")"; [[ -n "$pane" ]] || die "window '$win' has no $1 pane"
+      shift
+    fi
+    t capture-pane -p -J -t "$pane" -S "-${1:-60}" | trim ;;
+
+  feed)
+    n="${2:-80}"
+    if [[ -n "$1" ]]; then
+      f="$STATE/feed-$FEEDKEY-$1.log"; if [[ -f "$f" ]]; then tail -n "$n" "$f"; fi
+    else
+      for w in tests shell; do
+        print -r -- "── $w ──"; if [[ -f "$STATE/feed-$FEEDKEY-$w.log" ]]; then tail -n "$n" "$STATE/feed-$FEEDKEY-$w.log"; fi
+      done
+    fi ;;
+
+  run)
+    parse_opts "$@"; set -- "${rest[@]}"
+    win="$1"; shift
+    [[ -n "$win" && -n "$*" ]] || die "usage: tmux-ctl run [-t secs] [-C dir] <win> <cmd>"
+    use_win "$win"; exists "$win"
+    trap 'unlock_win; exit 143' INT TERM HUP; trap unlock_win EXIT
+    lock_win "$win"; pick_win "$win"
+    id="$$-$RANDOM"; rm -f "$STATE/$id.rc"
+    cmdtext="$*"; t0=$EPOCHSECONDS; logf="$STATE/logs/$FEEDKEY/$id.log"; mkdir -p "${logf:h}"
+    run_record null 0 ""
+    trap 'unlock_win; run_record 143 $(( EPOCHSECONDS - t0 )) "interrupted"; exit 143' INT TERM HUP   # replaced below once there is a pane to capture
+    tgt="$(target "$win")"
+    hs="$(t display -p -t "$tgt" '#{history_size}')"; cy="$(t display -p -t "$tgt" '#{cursor_y}')"
+    start=$(( ${${hs:-0}//[^0-9]/} + ${${cy:-0}//[^0-9]/} ))
+    # what the run printed so far, saved so an interrupted or timed-out run still has a log
+    savelog() {
+      local h; h="$(t display -p -t "$tgt" '#{history_size}' 2>/dev/null)"; h="${${h:-0}//[^0-9]/}"
+      t capture-pane -p -J -t "$tgt" -S $(( start - h )) 2>/dev/null | awk -v m="@@TCSTART-$id" 'f{print} $0==m{f=1}' | trim > "$logf"
+      : > "$STATE/$id.gone"      # _done sees this and drops the late exit code instead of leaving an .rc behind
+    }
+    trap 'unlock_win; savelog; run_record 143 $(( EPOCHSECONDS - t0 )) "interrupted"; exit 143' INT TERM HUP
+    # the typed line prints a start marker (split in the source so the echo of the line can't match it)
+    t send-keys -t "$tgt" -l -- "printf '@@TC%s\\n' START-$id; $(wrap_cd "$win" "$*") ; ~/.local/bin/tmux-ctl _done $id \$?"
+    t send-keys -t "$tgt" Enter
+    settle_win "$tgt" "$id" "$start"; unlock_win
+    ticks=0
+    while [[ ! -f "$STATE/$id.rc" ]]; do
+      sleep 0.5
+      (( ++ticks > timeout * 2 )) && { savelog; run_record 124 $(( EPOCHSECONDS - t0 )) "timeout"; print -u2 "tmux-ctl: still running after ${timeout}s — check: tmux-ctl read $win"; exit 124; }
+    done
+    rm -f "$STATE/$id.gone"
+    rc="$(<"$STATE/$id.rc")"; rm -f "$STATE/$id.rc"
+    [[ "$rc" == <-> ]] || rc=1      # never feed a garbled exit code to jq/exit
+    [[ "$win" != "${win%·*}" ]] && t set-option -w -t "=$SESSION:$win" @tc_lane_used "$EPOCHSECONDS" 2>/dev/null
+    hist="$(t display -p -t "$tgt" '#{history_size}')"; hist="${${hist:-0}//[^0-9]/}"
+    out="$(t capture-pane -p -J -t "$tgt" -S $(( start - hist )) | awk -v m="@@TCSTART-$id" 'f{print} $0==m{f=1}' | trim | sed '$d')"   # last line = the shell prompt again
+    print -r -- "$out" > "$logf"
+    run_record "$rc" $(( EPOCHSECONDS - t0 )) "$(summarize "$logf")"
+    trap - INT TERM HUP     # only now: the final record is written
+    print -r -- "$out"
+    print -r -- "[exit $rc]"
+    exit "$rc" ;;
+
+  _relay_failed)   # detached relay failed: tell the user, keep the doc
+    first="$(grep -m1 . "$1" 2>/dev/null)"; first="${first#relay failed: }"
+    msg="relay failed: ${first:-no output} — doc kept at $2; manual: claude-orchestrator 'Read $2 and continue from where the previous session left off.' (log: $1)"
+    print -r -- "$msg" > "$STATE/relay-failed-${3:-$FEEDKEY}.txt"
+    for c in ${(f)"$(t list-clients -F '#{client_name}' 2>/dev/null)"}; do t display-message -c "$c" -d 0 -- "${${msg//\#/##}//\%/%%}"; done ;;
+
+  _done)   # called by the target shell when a `run` command finishes
+    [[ -e "$STATE/$1.gone" ]] && { rm -f "$STATE/$1.gone"; exit 0 }   # the run gave up (timeout/interrupt): nobody will read this
+    print -r -- "$2" > "$STATE/$1.rc.tmp.$$" && mv "$STATE/$1.rc.tmp.$$" "$STATE/$1.rc" ;;   # atomic: run never reads a half-written file
+
+  send)
+    parse_opts "$@"; set -- "${rest[@]}"
+    win="$1"; shift
+    [[ -n "$win" && -n "$*" ]] || die "usage: tmux-ctl send [-C dir] <win> <text>"
+    use_win "$win"; exists "$win"
+    trap 'unlock_win; exit 143' INT TERM HUP; trap unlock_win EXIT
+    lock_win "$win"; pick_win "$win"
+    stgt="$(target "$win")"
+    shs="$(t display -p -t "$stgt" '#{history_size}')"; scy="$(t display -p -t "$stgt" '#{cursor_y}')"
+    sbase=$(( ${${shs:-0}//[^0-9]/} + ${${scy:-0}//[^0-9]/} ))
+    t send-keys -t "$stgt" -l -- "$(wrap_cd "$win" "$*")"
+    t send-keys -t "$stgt" Enter
+    settle_win "$stgt" "" "$sbase"; unlock_win ;;
+
+  keys)
+    win="$1"; shift
+    [[ -n "$win" && -n "$*" ]] || die "usage: tmux-ctl keys <win> <key>..."
+    use_win "$win"; exists "$win"
+    is_agent "$win" && die "'$win' is a worker agent — use 'tmux-ctl tell', and leave its prompts to the user"
+    t send-keys -t "$(target "$win")" "$@" ;;
+
+  new)
+    [[ -n "$1" ]] || die "usage: tmux-ctl new <win> [dir]"
+    t new-window -d -t "=$SESSION:" -n "$1" -c "${2:-$PWD}" ;;
+
+  agent)
+    name="$1"; shift
+    [[ -n "$name" && -n "$*" ]] || die "usage: tmux-ctl agent <name> <task>"
+    t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"
+    root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
+    task="$*"
+    t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
+    t set-option -w -t "$(target "$name")" @tc_agent 1
+    t set-option -w -t "$(target "$name")" automatic-rename off
+    # worker rules (superpowers skills, decide instead of asking) ride along as a system prompt
+    rules=""; [[ -r "$HOME/.claude/worker.md" ]] && rules=' --append-system-prompt-file ~/.claude/worker.md'
+    t send-keys -t "$(target "$name")" -l -- "claude -w ${(q)name} -n ${(q)name}${rules} ${(q)task}"
+    t send-keys -t "$(target "$name")" Enter
+    print -r -- "started worker '$name' in window $SESSION:$name (worktree .claude/worktrees/$name)" ;;
+
+  tell)
+    name="$1"; shift
+    [[ -n "$name" && -n "$*" ]] || die "usage: tmux-ctl tell <agent> <message>"
+    exists "$name"
+    is_agent "$name" || die "'$name' is not a worker agent window"
+    is_idle "$name" && die "worker '$name' has exited (window is back at a shell prompt) — read it, or start a new one"
+    [[ "$(t display -p -t "$(target "$name")" '#{window_bell_flag}')" == 1 ]] &&
+      die "'$name' is waiting on the user (permission prompt or question) — tell the user, don't answer it"
+    t capture-pane -p -J -t "$(target "$name")" -S -25 |
+      grep -qiE 'Do you want to|Would you like to|\(y/n\)|❯ *1\. *Yes|Allow this|Press Enter to continue' &&
+      die "'$name' is showing a prompt for the user — tell the user, don't answer it"
+    t send-keys -t "$(target "$name")" -l -- "$*"
+    sleep 0.2
+    t send-keys -t "$(target "$name")" Enter ;;
+
+  agents)
+    found=0
+    for name in ${(f)"$(t list-windows -t "=$SESSION" -F '#{?#{==:#{@tc_agent},1},#{window_name},}')"}; do
+      [[ -z "$name" ]] && continue; found=1
+      state=working
+      [[ "$(t display -p -t "$(target "$name")" '#{window_bell_flag}')" == 1 ]] && state="WAITING ON USER"
+      is_idle "$name" && state="exited (back at shell prompt)"
+      print -r -- "── $name: $state"
+      t capture-pane -p -J -t "$(target "$name")" -S -15 | grep -v '^[[:space:]]*$' | tail -8 | sed 's/^/   /'
+    done
+    (( found )) || print "no worker agents in session '$SESSION'" ;;
+
+  artifact)
+    [[ -n "$1" ]] || die "usage: tmux-ctl artifact <path> [--kind plan|spec|handoff|report|other]"
+    p="${1:A}"; shift; k=other
+    [[ "$1" == --kind && -n "$2" ]] && k="$2"
+    [[ -f "$p" ]] || die "no file '$p'"
+    warn_web_key
+    "$HOME/.claude/hooks/artifact-register.sh" --path "$p" --kind "$k" --project "$FEEDKEY"
+    print -r -- "registered $p ($k)" ;;
+
+  idea)
+    [[ -n "$*" ]] || die "usage: tmux-ctl idea <text>"
+    python3 -I "$HOME/.local/share/tmux-dash/ideas.py" add --project "$FEEDKEY" -- "$*" ;;
+
+  relay)
+    [[ -n "$1" ]] || die "usage: tmux-ctl relay <handoff-doc> [--old-session <id>]"
+    doc="${1:A}"; shift; old=""
+    [[ "$1" == --old-session && -n "$2" ]] && old="$2"
+    [[ -f "$doc" ]] || die "no handoff doc '$doc'"
+    warn_web_key
+    log="$STATE/relay-$FEEDKEY.log"
+    sock="$(t display -p '#{socket_path}')"
+    # detached: the lead that asked for the relay must finish its turn before its pane is replaced
+    # tmux format-expands run-shell strings: '#' -> '##' in every interpolated argument
+    h() { print -r -- "${1//\#/##}" }
+    t run-shell -b "python3 -I $(h ${(q)HOME})/.local/share/tmux-dash/relay.py --session $(h ${(q)FEEDKEY}) --doc $(h ${(q)doc}) --old-session $(h ${(q)old}) --state $(h ${(q)STATE}) --socket $(h ${(q)sock}) > $(h ${(q)log}) 2>&1 || $(h ${(q)${0:A}}) _relay_failed $(h ${(q)log}) $(h ${(q)doc}) $(h ${(q)FEEDKEY})"
+    print -r -- "relay scheduled: ${FEEDKEY}:claude restarts with $doc once this turn ends (log: $log)" ;;
+
+  ""|-h|--help|help)
+    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//' ;;
+
+  *) die "unknown command '$cmd' (tmux-ctl help)" ;;
+esac

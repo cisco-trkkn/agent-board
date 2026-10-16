@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+# tmux-session-closed <session-name> — session-closed hook: delete a project's per-session state
+# (artifacts manifest, lineage, run records + logs, feeds, relay notices) once the project is gone.
+# Never touches ~/.claude/ideas. Exact file names only. Registered in ~/.tmux.conf.
+emulate -L zsh
+n="$1"
+[[ "$n" =~ '^[A-Za-z0-9_-][A-Za-z0-9._-]*$' ]] || exit 0
+[[ "$n" == _web-* || "$n" == *-bg ]] && exit 0
+T="${TC_TMUX:-$HOME/.local/bin/tmux}"
+STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
+[[ -d "$STATE" ]] || exit 0
+# the project still lives if any session (a grouped view too) belongs to this canonical name
+live="$("$T" list-sessions -F '#{session_name}'$'\t''#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)" || exit 0   # cannot ask the server (shutting down?): delete nothing
+for row in ${(f)live}; do
+  [[ "${row%%$'\t'*}" == "$n" || "${row#*$'\t'}" == "$n" ]] && exit 0
+done
+rm -f -- "$STATE/artifacts-$n.jsonl" "$STATE/lineage-$n.jsonl" "$STATE/runs-$n.jsonl" \
+  "$STATE/feed-$n-tests.log" "$STATE/feed-$n-shell.log" "$STATE/relay-$n.log" "$STATE/relay-failed-$n.txt"
+[[ -d "$STATE/logs/$n" ]] && rm -rf -- "$STATE/logs/$n"
+exit 0
