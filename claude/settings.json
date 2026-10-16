@@ -1,0 +1,179 @@
+{
+  "env": {
+    "NODE_EXTRA_CA_CERTS": "/Users/francisco.ruiz/.certs/netskope-bundle.pem",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "TASK_OBSERVER_WORKSPACE": "/Users/francisco.ruiz/.task-observer"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(tmux-ctl:*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "model": "opus",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ~/.claude/hooks/task-observer-session-start.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/revise-claude-md-nudge.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"/Users/francisco.ruiz/agent-board/claude/hooks/superpowers-hook.sh\" stop-revalidate-user-gates.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash \"/Users/francisco.ruiz/agent-board/claude/hooks/superpowers-hook.sh\" stop-wait-guard.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/context-size-guard.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/bash-mirror.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|Artifact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/artifact-register.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/Users/francisco.ruiz/agent-board/claude/hooks/superpowers-hook.sh\" post-task-complete-revalidate.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/bash-mirror.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/kill-guard.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "enableWorkflows": false,
+  "workflowKeywordTriggerEnabled": false,
+  "enabledPlugins": {
+    "superpowers-extended-cc@superpowers-extended-cc-marketplace": true,
+    "design@synced": false,
+    "engineering@synced": false,
+    "modern-web-guidance@synced": false,
+    "cc-plugin-plugin-authoring@builtin": false,
+    "hive@synced": false,
+    "gitlab@anthropic-plugin-directory": true,
+    "claude-security@anthropic-plugin-directory": true,
+    "claude-md-management@anthropic-plugin-directory": true
+  },
+  "extraKnownMarketplaces": {
+    "superpowers-extended-cc-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "pcvelz/superpowers"
+      }
+    }
+  },
+  "feedbackDrafts": "notify",
+  "askUserQuestionTimeout": "never",
+  "timeFormat": "12-hour",
+  "theme": "auto",
+  "editorMode": "normal",
+  "preferredNotifChannel": "terminal_bell",
+  "autoCompactEnabled": true,
+  "precomputeCompactionEnabled": true,
+  "switchModelsOnFlag": true,
+  "autoContinueAtUsageLimit": false,
+  "terminalProgressBarEnabled": true,
+  "teammateMode": "auto",
+  "crossSessionInbound": "accept",
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
+  "autoMode": {
+    "environment": [
+      "### Org-wide",
+      "**Organization**: None configured",
+      "**Cloud provider(s)**: None configured",
+      "**Repository visibility**: Not queryable here (no git remotes configured for this repo) \u2014 assume private unless shown otherwise",
+      "**Internal sharing / snippet hosting**: None configured \u2014 treat public paste/gist services as outside the trust boundary",
+      "**Secrets management**: None configured",
+      "**Default / protected branches**: unknown \u2014 origin/HEAD unset, no remotes configured",
+      "**CI/CD deploy targets**: None configured",
+      "**Network posture**: None configured",
+      "**Host containment**: None configured \u2014 assume Claude Code runs on an ordinary developer machine or CI runner with open internet",
+      "**Source control**: The trusted repo only (no remotes configured) \u2014 no additional orgs configured",
+      "**Trusted internal domains**: None configured",
+      "**Trusted cloud buckets**: None configured",
+      "**Key internal services**: None configured",
+      "**Internal package registry**: None configured",
+      "**Sensitive data locations & audiences**: any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material; preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar",
+      "**Data retention / declassification**: None configured",
+      "**Sensitive remote targets**: any namespace, host, or container whose name carries prod or production as a whole word or name segment",
+      "**Protected deployment namespaces / environments**: None configured \u2014 fall back to the Sensitive remote targets heuristic",
+      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries prod or production as a whole word or name segment",
+      "### User-specific",
+      "**Primary use of Claude Code**: software development",
+      "**Trusted repo**: The git repository at /Users/francisco.ruiz/.claude/jobs/318c9a50/tmp/teamtest (its working directory) \u2014 no remotes configured",
+      "**Org-specific CLIs**: None configured"
+    ]
+  }
+}

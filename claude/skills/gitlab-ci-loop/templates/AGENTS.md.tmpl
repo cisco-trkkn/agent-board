@@ -1,0 +1,30 @@
+<!-- gitlab-ci-loop:start (managed by the gitlab-ci-loop skill; re-run bootstrap to update) -->
+## Agent CI loop (GitLab)
+
+Agents working in this repo iterate against GitLab CI with `agent-ci`
+(from the `gitlab-ci-loop` Claude skill; config in `.agent-ci.yml`).
+
+**Loop**
+1. `agent-ci start <topic>` — work on `{{PREFIX}}<topic>`, cut from `{{INTEGRATION}}`.
+2. Edit, then `agent-ci check` until local checks pass.
+3. Commit (clear, conventional messages), then `agent-ci cycle`:
+   local checks → push → MR into `{{INTEGRATION}}` → watch pipeline → print failed job logs.
+4. Red? Fix the root cause from the printed logs, commit, `agent-ci cycle` again.
+   Stop after {{MAX_ROUNDS}} red rounds (exit code 5) and summarize for the user.
+5. Green? Run `agent-ci finish -m "<summary>"` in the background: it squashes, sets the final MR title,
+   then waits (read-only) for the user to merge and runs the post-merge diagnosis automatically.
+   Report the MR URL right away; report the post-merge result when the command completes.
+6. After the merge, the target can still fail (fanout stages run only there). `finish` runs
+   `agent-ci postmerge` for you (or run `agent-ci postmerge --mr <iid>` / `agent-ci follow --mr <iid>`;
+   read-only): it follows fanout pipelines named in job logs and groups failures by root cause. Check the
+   attempt log, then fix with `agent-ci start <topic> --base staging` (if allowed in `mr_targets`), and log what
+   you tried with `agent-ci postmerge --note`. Exit code 5 means stop and report. Infra/IAM failures: read-only
+   GCP diagnosis only; never apply.
+
+**Guardrails**
+- Never push to {{PROTECTED}}; `agent-ci` refuses anyway. Never force-push outside `{{PREFIX}}*`.
+- Never trigger deploy/apply/rollout/onboard/offboard pipelines or run `terraform apply`
+  unless the user explicitly asks. Dry-runs and plans are fine.
+- Never commit secrets, tokens or `.agent-ci/` (local cache).
+- Prefer fixing code over weakening checks; don't edit CI rules just to get green.
+<!-- gitlab-ci-loop:end -->
