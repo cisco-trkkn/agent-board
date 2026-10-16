@@ -61,6 +61,7 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; back
 .menu button:hover, .menu button:focus-visible { background: var(--panel-2); outline: none; }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
 .menu .danger-item { color: var(--red); }
+.ctx-menu { position: fixed; right: auto; top: 0; left: 0; z-index: 30; }
 .jump { position: sticky; top: 0; z-index: 4; display: flex; gap: 4px; padding: 6px 0; background: var(--bg); }
 .jump a { padding: 4px 10px; border-radius: 999px; color: var(--muted); text-decoration: none; font-size: 12px; }
 .jump a:hover { background: var(--panel-2); }
@@ -357,6 +358,7 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
   <div class="row"><button value="cancel" formnovalidate>Cancel</button><button class="danger" value="ok">Close project</button></div>
 </form></dialog>
 
+<div class="menu ctx-menu" id="agent-menu" role="menu" hidden></div>
 <div class="toasts" id="toasts"></div>
 
 <script>
@@ -432,6 +434,7 @@ function card(s, w, p) {
   const key = `${s.name}:${w.index}`;
   const r = role(s, w, p);
   const c = el("div", "card" + (p.status === "waiting" ? " waiting" : "") + (termKey === key ? " selected" : ""));
+  c.tabIndex = -1;
   const head = el("div", "card-head");
   head.append(el("div", "avatar " + (r === "teammate" || r === "worker" ? r : p.kind), ICON[p.kind] || "◆"));
   const who = el("div", "who");
@@ -448,18 +451,7 @@ function card(s, w, p) {
   const open = el("button", null, termKey === key ? "Viewing" : "Open terminal");
   open.onclick = () => openTerm(s, w);
   acts.append(open);
-  if (w.name === "claude" && p.kind === "claude") {
-    const rs = el("button", null, "Restart orchestrator");
-    rs.onclick = () => {
-      const mates = s.windows.filter((x) => x.teammate).length;
-      const busy = p.status === "working" || p.status === "waiting";
-      const msg = `Restart the orchestrator in ${s.name}? This ends the current Claude session in the claude window and starts a fresh claude-orchestrator.`
-        + (busy ? ` It is still ${p.status === "working" ? "working" : "waiting on you"}.` : "")
-        + (mates ? ` ${mates} teammate window${mates === 1 ? "" : "s"} it started will keep running.` : "");
-      if (confirm(msg)) action({ action: "restart_orchestrator", session: s.name, confirm: true });
-    };
-    acts.append(rs);
-  }
+  if (agentMenuItems(s, w, p).length) bindAgentMenu(c, () => agentMenuItems(s, w, p));
 
   const formKey = `${key}:${p.id}`;
   const form = el("div", "inline-form" + (openForms.has(formKey) ? " open" : ""));
@@ -723,6 +715,77 @@ projMenu.addEventListener("click", () => setMenu(false));   // runs after the it
 projMenu.addEventListener("keydown", (e) => {
   const items = [...projMenu.querySelectorAll("button")], i = items.indexOf(document.activeElement);
   if (e.key === "Escape") { e.preventDefault(); setMenu(false); menuBtn.focus(); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+});
+
+// agent cards: right-click (or a long press on touch) opens a role-specific menu at the pointer
+function restartOrchestrator(s, p) {
+  const mates = s.windows.filter((x) => x.teammate).length;
+  const busy = p.status === "working" || p.status === "waiting";
+  const msg = `Restart the orchestrator in ${s.name}? This ends the current Claude session in the claude window and starts a fresh claude-orchestrator.`
+    + (busy ? ` It is still ${p.status === "working" ? "working" : "waiting on you"}.` : "")
+    + (mates ? ` ${mates} teammate window${mates === 1 ? "" : "s"} it started will keep running.` : "");
+  if (confirm(msg)) action({ action: "restart_orchestrator", session: s.name, confirm: true });
+}
+
+function agentMenuItems(s, w, p) {
+  if (w.name === "claude" && p.kind === "claude")
+    return [{ label: "Restart orchestrator…", danger: true, run: () => restartOrchestrator(s, p) }];
+  const r = role(s, w, p);
+  if (r === "worker")
+    return [{ label: "Shut down worker…", danger: true, run: () => {
+      if (confirm(`Shut down ${w.name}? Its window closes. Its worktree and branch stay in Worktrees for cleanup.`))
+        action({ action: "stop_agent", session: s.name, window: w.name });
+    } }];
+  if (r === "teammate")
+    return [{ label: "Ask lead to shut down…", run: () => action({ action: "ask_shutdown", session: s.name, window: w.name }) }];
+  return [];
+}
+
+const agentMenu = $("#agent-menu");
+let agentMenuFrom = null;
+function openAgentMenu(x, y, items, from) {
+  agentMenu.replaceChildren(...items.map((it) => {
+    const b = el("button", it.danger ? "danger-item" : null, it.label);
+    b.setAttribute("role", "menuitem");
+    b.onclick = () => { closeAgentMenu(false); it.run(); };
+    return b;
+  }));
+  agentMenu.hidden = false;
+  agentMenuFrom = from;
+  const r = agentMenu.getBoundingClientRect();
+  agentMenu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 4)) + "px";
+  agentMenu.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 4)) + "px";
+  agentMenu.querySelector("button").focus();
+}
+function closeAgentMenu(refocus) {
+  if (agentMenu.hidden) return;
+  agentMenu.hidden = true;
+  if (refocus && agentMenuFrom && agentMenuFrom.isConnected) agentMenuFrom.focus();
+  agentMenuFrom = null;
+}
+function bindAgentMenu(card, items) {
+  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openAgentMenu(e.clientX, e.clientY, items(), card); });
+  let lp = null, x0 = 0, y0 = 0;
+  const cancel = () => { clearTimeout(lp); lp = null; };
+  card.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse") return;
+    x0 = e.clientX; y0 = e.clientY; cancel();
+    lp = setTimeout(() => { lp = null; openAgentMenu(x0, y0, items(), card); }, 500);
+  });
+  card.addEventListener("pointermove", (e) => { if (lp && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
+  card.addEventListener("pointerup", cancel);
+  card.addEventListener("pointercancel", cancel);
+}
+document.addEventListener("click", (e) => { if (!agentMenu.contains(e.target)) closeAgentMenu(false); });
+document.addEventListener("contextmenu", (e) => { if (!e.defaultPrevented) closeAgentMenu(false); });
+// only the page and the main column: the Activity drawer and previews auto-scroll on every poll
+$("#main").addEventListener("scroll", () => closeAgentMenu(false));
+window.addEventListener("scroll", () => closeAgentMenu(false));
+agentMenu.addEventListener("keydown", (e) => {
+  const items = [...agentMenu.querySelectorAll("button")], i = items.indexOf(document.activeElement);
+  if (e.key === "Escape") { e.preventDefault(); closeAgentMenu(true); }
   else if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length].focus(); }
   else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
 });
