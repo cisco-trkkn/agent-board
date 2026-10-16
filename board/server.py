@@ -192,6 +192,8 @@ def worktrees(path):
             cur["path"] = line[9:]
         elif line.startswith("branch refs/heads/"):
             cur["branch"] = line[18:]
+        elif line.startswith("locked"):
+            cur["locked"] = line[7:] or "locked"
         elif not line and cur:
             blocks.append(cur)
             cur = {}
@@ -214,7 +216,7 @@ def worktrees(path):
         age = ages.get(br) if br else git(b["path"], "log", "-1", "--format=%cr").stdout.strip()
         items.append({"path": b["path"], "name": Path(b["path"]).name, "branch": br,
                       "dirty": bool(d.result().stdout.strip()), "merged": bool(br) and br in merged_set,
-                      "age": age or ""})
+                      "age": age or "", "locked": b.get("locked")})
     return {"repo": main, "current": current, "base": base, "items": items}
 
 
@@ -318,16 +320,7 @@ def _act(body):
         return run_script([TMUX_CTL, "send", body["window"], body["text"]], extra_env={"TC_SESSION": sess}) or "sent"
     if a == "remove_worktree":
         wt = session_worktree(sess, body["path"])
-        r = git(wt["repo"], "worktree", "remove", wt["item"]["path"])
-        if r.returncode != 0:
-            raise RuntimeError((r.stderr or r.stdout).strip() or "git refused (uncommitted changes?)")
-        msg = f"removed worktree {wt['item']['name']}"
-        br = wt["item"].get("branch")
-        if br:
-            d = git(wt["repo"], "branch", "-d", br)
-            msg += f"; deleted branch {br}" if d.returncode == 0 else f"; kept branch {br} (not merged)"
-        git(wt["repo"], "worktree", "prune")
-        return msg
+        return remove_agent_worktree(wt["repo"], wt["item"])
     if a == "dev":
         path = os.path.expanduser(body["path"].strip())
         if not os.path.isdir(path):
@@ -462,6 +455,55 @@ def restart_orchestrator(sess, confirm):
     msg = f"{verb} orchestrator in {sess}:claude"
     if mates:
         msg += f", {mates} teammate window{'s' if mates != 1 else ''} from the old one {'are' if mates != 1 else 'is'} still open"
+    return msg
+
+
+CLAUDE_LOCK = re.compile(r"^claude \S+ .+ \(pid (\d+)( start .+)?\)$")
+
+
+def claude_lock_owner(reason):
+    m = CLAUDE_LOCK.match(reason or "")
+    return int(m.group(1)) if m else None
+
+
+def proc_args(pid):
+    r = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def lock_is_stale(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        pass   # alive, owned by someone else
+    return "claude" not in proc_args(pid).lower()   # alive but not Claude: the pid was reused
+
+
+def remove_agent_worktree(repo, item):
+    path, reason, note = item["path"], item.get("locked"), ""
+    if reason:
+        pid = claude_lock_owner(reason)
+        if pid is None:
+            raise RuntimeError(f"locked by something other than Claude ({reason}); unlock it yourself")
+        if not lock_is_stale(pid):
+            raise RuntimeError(f"in use by a running Claude session (pid {pid})")
+        git(repo, "worktree", "unlock", path)
+        forget_worktrees()
+        note = f"unlocked stale lock (pid {pid}); "
+    r = git(repo, "worktree", "remove", path)
+    if r.returncode != 0:
+        if reason:
+            git(repo, "worktree", "lock", "--reason", reason, path)
+        raise RuntimeError((r.stderr or r.stdout).strip() or "git refused (uncommitted changes?)")
+    msg = f"{note}removed worktree {item['name']}"
+    br = item.get("branch")
+    if br:
+        d = git(repo, "branch", "-d", br)
+        msg += f"; deleted branch {br}" if d.returncode == 0 else f"; kept branch {br} (not merged)"
+    git(repo, "worktree", "prune")
+    forget_worktrees()
     return msg
 
 

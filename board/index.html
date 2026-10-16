@@ -198,6 +198,8 @@ dialog .row[hidden] { display: none; }   /* .row sets display:flex, which would 
 .side.collapsed .side-head { padding: 10px 4px; justify-content: center; }
 .side-head b { flex: 1; }
 .side-body { overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; }
+.art-group summary { cursor: pointer; }
+.art-group summary h4 { display: inline; }
 .art-group h4 { margin: 4px 4px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .art { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; background: none; }
 .art:hover, .art.sel { background: var(--panel-2); border-color: var(--border); }
@@ -772,16 +774,28 @@ function closeAgentMenu(refocus) {
   agentMenuFrom = null; agentMenuKey = null;
 }
 function bindAgentMenu(card, items) {
+  card._menuItems = items;
   card.addEventListener("contextmenu", (e) => {
     // keep the browser's own menu (Copy, Paste…) on inputs, links and selected text
     if (e.target.closest("input, textarea, a") || String(getSelection()).length) return;
     e.preventDefault(); openAgentMenu(e.clientX, e.clientY, items(), card); });
   let lp = null, x0 = 0, y0 = 0;
   const cancel = () => { clearTimeout(lp); lp = null; };
+  const fire = () => {
+    lp = null;
+    let c = card;
+    if (!c.isConnected) {   // the 2 s rebuild replaced the card mid-press: use the one showing now
+      const k = card.dataset.key;
+      c = k ? document.querySelector(`[data-key="${CSS.escape(k)}"]`) : null;
+      if (!c || !c._menuItems) return;
+    }
+    const its = c._menuItems();
+    if (its.length) openAgentMenu(x0, y0, its, c);
+  };
   card.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse") return;
     x0 = e.clientX; y0 = e.clientY; cancel();
-    lp = setTimeout(() => { lp = null; openAgentMenu(x0, y0, items(), card); }, 500);
+    lp = setTimeout(fire, 500);
   });
   card.addEventListener("pointermove", (e) => { if (lp && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
   card.addEventListener("pointerup", cancel);
@@ -831,7 +845,7 @@ $("#form-project").addEventListener("submit", async (e) => {
 // ── artifacts panel: page-lifetime state per session (cleared by reload) ──
 const KIND_ICON = { plan: "▤", spec: "◇", handoff: "⇄", report: "▦", published: "↗", other: "•" };
 const ART = {};
-const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(), seen: new Map(), loadedAt: Date.now() / 1000, first: true, epoch: 0, plan: null, startedFrom: null, comments: [] });
+const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(), seen: new Map(), loadedAt: Date.now() / 1000, epoch: 0, plan: null, startedFrom: null, comments: [] });
 let docBase = null, docSel = null, docMode = "read", docSelection = null, docRendered = null;
 if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", (n) => { if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); } });
 const api = (path) => fetch(`${API}/${path}`, { cache: "no-store" });
@@ -854,13 +868,10 @@ async function pollArtifacts() {
   const r = await api(`artifacts?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
   const d = await r.json();
   Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [] });
-  for (const it of d.items) {
-    const key = it.url || it.path;
-    const seed = A.first && (it.latest.epoch === d.epoch || it.path === d.active_plan || it.path === d.started_from);
-    if (A.items.has(key) || seed || it.latest.ts >= A.loadedAt) A.items.set(key, it);
-  }
-  A.first = false;
-  for (const it of A.items.values()) if (!it.url) await trackVersion(s.name, A, it);
+  for (const it of d.items) A.items.set(it.url || it.path, it);
+  // only recent items are fetched each poll; older ones load their text when opened
+  const hot = (it) => it.path === A.plan || it.latest.epoch === d.epoch || it.latest.ts >= A.loadedAt || it.path === docSel;
+  for (const it of A.items.values()) if (!it.url && hot(it)) await trackVersion(s.name, A, it);
   renderArtifacts();
   if (docSel && docMode !== "edit") {   // keep the reader's text selection: re-render only on a real change
     const sel = getSelection(), selecting = sel && !sel.isCollapsed && $("#doc-body").contains(sel.anchorNode);
@@ -899,7 +910,9 @@ function renderArtifacts() {
   if (plan) {
     pin.append(el("div", "art-group"), artButton(A, plan));
     pin.firstChild.append(el("h4", "", "Plan"));
-    if (A.comments.length) pin.append(el("div", "pending", `${A.comments.length} comment${A.comments.length > 1 ? "s" : ""} waiting for the lead`));
+  }
+  if (A.comments.length) pin.append(el("div", "pending", `${A.comments.length} comment${A.comments.length > 1 ? "s" : ""} waiting for the lead`));
+  if (plan) {
     const vs = A.versions.get(A.plan);
     const txt = vs && vs[vs.length - 1].text;
     if (txt && /- \[x\]/i.test(txt) && !/- \[ \]/.test(txt)) pin.append(el("div", "pending", `Plan done · ${window.ideasOpen || 0} ideas ready for next steps`));
@@ -912,16 +925,23 @@ function renderArtifacts() {
     groups.get(e).push(it);
   }
   const box = $("#art-groups"); box.replaceChildren();
+  const openKey = (e) => `dash.art.${s.name}.${e}`;
   for (const e of [...groups.keys()].sort((a, b) => b - a)) {
-    const g = el("div", "art-group");
-    g.append(el("h4", "", `Session ${e + 1}${e === A.epoch ? " (current)" : ""}`));
+    const g = el("details", "art-group");
+    let saved = null; try { saved = localStorage.getItem(openKey(e)); } catch (err) {}
+    g.open = saved ? saved === "open" : e === A.epoch;
+    const sum = el("summary"); sum.append(el("h4", "", `Session ${e + 1}${e === A.epoch ? " (current)" : ""} · ${groups.get(e).length}`));
+    g.append(sum);
+    g.addEventListener("toggle", () => { try { if (g.open === (e === A.epoch)) localStorage.removeItem(openKey(e)); else localStorage.setItem(openKey(e), g.open ? "open" : "closed"); } catch (err) {} });   // keep only choices that differ from the default
     for (const it of groups.get(e).sort((a, b) => b.latest.ts - a.latest.ts)) g.append(artButton(A, it));
     box.append(g);
   }
   if (!A.items.size) box.append(el("div", "pending", "No artifacts yet in this session."));
 }
 
-function openDoc(path) {
+async function openDoc(path) {
+  const A0 = artFor(session().name), it0 = A0.items.get(path);
+  if (it0 && !A0.versions.get(path)) await trackVersion(session().name, A0, it0);
   docSel = path; docMode = "read"; docSelection = null; docRendered = null;
   document.querySelectorAll(".cbox").forEach((b) => b.remove());
   $("#doc-comment").disabled = true;

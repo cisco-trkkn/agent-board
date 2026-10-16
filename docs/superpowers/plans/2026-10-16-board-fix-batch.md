@@ -47,7 +47,7 @@
 
 **Steps:**
 
-- [ ] **Step 1: Server test (guards the contract the client now relies on).** Add to `board/tests/test_artifacts.py`, following that file's existing manifest fixture helpers (read them first; reuse its setup for `TMPDIR`/state dir):
+- [x] **Step 1: Server test (guards the contract the client now relies on).** Add to `board/tests/test_artifacts.py`, following that file's existing manifest fixture helpers (read them first; reuse its setup for `TMPDIR`/state dir):
 
 ```python
     def test_summary_returns_items_from_every_epoch(self):
@@ -60,7 +60,7 @@
 
 Run it; it should already PASS (the bug is client-side). If the file has no such helper, write the jsonl entries directly in the same shape as the existing tests do.
 
-- [ ] **Step 2: Admit every item.** In `pollArtifacts`, replace the seed lines:
+- [x] **Step 2: Admit every item.** In `pollArtifacts`, replace the seed lines:
 
 ```js
   for (const it of d.items) A.items.set(it.url || it.path, it);
@@ -70,7 +70,7 @@ Run it; it should already PASS (the bug is client-side). If the file has no such
 
 Remove `first` from `artFor` and the `A.first = false;` line. Keep `loadedAt` (used by `hot`).
 
-- [ ] **Step 3: Lazy load on open.** Make `openDoc` fetch before rendering when no version is cached:
+- [x] **Step 3: Lazy load on open.** Make `openDoc` fetch before rendering when no version is cached:
 
 ```js
 async function openDoc(path) {
@@ -82,7 +82,7 @@ async function openDoc(path) {
 
 Check every caller of `openDoc` still works with an async function (they ignore its return value).
 
-- [ ] **Step 4: Collapsible groups.** In `renderArtifacts`, build each group as a `<details>`:
+- [x] **Step 4: Collapsible groups.** In `renderArtifacts`, build each group as a `<details>`:
 
 ```js
   const openKey = (e) => `dash.art.${s.name}.${e}`;
@@ -100,9 +100,9 @@ Check every caller of `openDoc` still works with an async function (they ignore 
 
 Add CSS next to the existing `.art-group` rules so `summary` has no default marker clash and `h4` stays inline (`summary h4 { display: inline; }`). The panel re-renders every 2 s; because `g.open` comes from `localStorage` each time, a toggle survives re-render.
 
-- [ ] **Step 5: Browser check on real state.** Restart the board (tell the lead first), reload, check the acceptance criteria on `master-gcp-repo`, and check the browser console has no errors.
+- [x] **Step 5: Browser check on real state.** Restart the board (tell the lead first), reload, check the acceptance criteria on `master-gcp-repo`, and check the browser console has no errors.
 
-- [ ] **Step 6: Commit** `fix(board): list every artifact after a reload, older sessions collapsed`.
+- [x] **Step 6: Commit** `fix(board): list every artifact after a reload, older sessions collapsed`.
 
 ```json:metadata
 {"files": ["board/index.html", "board/tests/test_artifacts.py"], "verifyCommand": "python3 -m unittest board.tests.test_artifacts -v", "acceptanceCriteria": ["every d.items entry rendered", "older epochs collapsed via details, state persisted", "trackVersion only for hot items, lazy on open", "summary test covers epochs 0-2", "real master-gcp-repo reload lists fable-first-run and layout-navigation items"], "modelTier": "standard"}
@@ -123,7 +123,7 @@ Add CSS next to the existing `.art-group` rules so `summary` has no default mark
 
 **Steps:**
 
-- [ ] **Step 1:** Move the line out of `if (plan)`:
+- [x] **Step 1:** Move the line out of `if (plan)`:
 
 ```js
   const plan = A.plan && A.items.get(A.plan);
@@ -139,8 +139,8 @@ Add CSS next to the existing `.art-group` rules so `summary` has no default mark
   }
 ```
 
-- [ ] **Step 2:** Run the Verify console check (the next poll overwrites the stub; run it right after a poll).
-- [ ] **Step 3: Commit** `fix(board): show queued comments without a pinned plan`.
+- [x] **Step 2:** Run the Verify console check (the next poll overwrites the stub; run it right after a poll).
+- [x] **Step 3: Commit** `fix(board): show queued comments without a pinned plan`.
 
 ```json:metadata
 {"files": ["board/index.html"], "verifyCommand": "browser console check of #pin-plan", "acceptanceCriteria": ["line shows with comments and no plan", "line unchanged with plan"], "modelTier": "mechanical"}
@@ -162,8 +162,8 @@ Add CSS next to the existing `.art-group` rules so `summary` has no default mark
 
 **Steps:**
 
-- [ ] **Step 1:** Check the card element has `dataset.key` set where it is built (search for `dataset.key` near line 430-455; `openAgentMenu` already reads `from.dataset.key`). If it is not set, set it from the existing `key` variable.
-- [ ] **Step 2:** Change `bindAgentMenu`:
+- [x] **Step 1:** Check the card element has `dataset.key` set where it is built (search for `dataset.key` near line 430-455; `openAgentMenu` already reads `from.dataset.key`). If it is not set, set it from the existing `key` variable.
+- [x] **Step 2:** Change `bindAgentMenu`:
 
 ```js
 function bindAgentMenu(card, items) {
@@ -191,8 +191,8 @@ function bindAgentMenu(card, items) {
 ```
 
 If the new card's `_menuItems()` returns an empty list, do not open (guard: `const its = c._menuItems(); if (its.length) openAgentMenu(x0, y0, its, c);`).
-- [ ] **Step 3:** Run the Verify browser check; capture evidence.
-- [ ] **Step 4: Commit** `fix(board): long press after a card rebuild uses the current card`.
+- [x] **Step 3:** Run the Verify browser check; capture evidence.
+- [x] **Step 4: Commit** `fix(board): long press after a card rebuild uses the current card`.
 
 ```json:metadata
 {"files": ["board/index.html"], "verifyCommand": "browser long-press with forced rebuild", "acceptanceCriteria": ["card._menuItems stored", "disconnected card resolves current card by data-key", "missing card or empty items opens nothing"], "modelTier": "mechanical"}
@@ -219,7 +219,7 @@ If the new card's `_menuItems()` returns an empty list, do not open (guard: `con
 
 **Steps:**
 
-- [ ] **Step 1: Failing tests.** Create `board/tests/test_worktree_lock.py`, loading `server.py` the way `board/tests/test_agent_controls.py` does (`importlib.util.spec_from_file_location`, `TMUX_DASH_TOKEN` env). Fixture: `tempfile` repo, `git init -b main`, one commit, `git worktree add <repo>/.claude/worktrees/w1 -b w1`. Dead pid: start `subprocess.Popen(["true"])`, `wait()` it, use its pid. Live non-Claude pid: `subprocess.Popen(["sleep", "30"])` (kill it in tearDown by that object). Live Claude pid: patch `server.lock_is_stale`'s `ps` lookup by patching `server.proc_args` (define it in Step 3) to return `"/usr/bin/claude -w w1"` for the sleep pid. Cases:
+- [x] **Step 1: Failing tests.** Create `board/tests/test_worktree_lock.py`, loading `server.py` the way `board/tests/test_agent_controls.py` does (`importlib.util.spec_from_file_location`, `TMUX_DASH_TOKEN` env). Fixture: `tempfile` repo, `git init -b main`, one commit, `git worktree add <repo>/.claude/worktrees/w1 -b w1`. Dead pid: start `subprocess.Popen(["true"])`, `wait()` it, use its pid. Live non-Claude pid: `subprocess.Popen(["sleep", "30"])` (kill it in tearDown by that object). Live Claude pid: patch `server.lock_is_stale`'s `ps` lookup by patching `server.proc_args` (define it in Step 3) to return `"/usr/bin/claude -w w1"` for the sleep pid. Cases:
   1. `claude_lock_owner` parses both formats; returns None for `"manual hold"` and `"claude"`.
   2. dead pid, clean tree → `server.action(...)`/the remove helper removes it; `git worktree list` no longer shows w1.
   3. live Claude pid → RuntimeError containing "in use"; still locked.
@@ -230,9 +230,9 @@ If the new card's `_menuItems()` returns an empty list, do not open (guard: `con
 
   Call the removal through a function you can test without a tmux session: factor the body of the `remove_worktree` action into `remove_agent_worktree(repo, item)` and have the action call it with `session_worktree(...)` results. Run: `python3 -m unittest board.tests.test_worktree_lock -v` → FAIL (names missing).
 
-- [ ] **Step 2: Parse the lock in `worktrees()`.** In the porcelain loop add `elif line.startswith("locked"): cur["locked"] = line[7:] or "locked"` and put `"locked": b.get("locked")` in each item.
+- [x] **Step 2: Parse the lock in `worktrees()`.** In the porcelain loop add `elif line.startswith("locked"): cur["locked"] = line[7:] or "locked"` and put `"locked": b.get("locked")` in each item.
 
-- [ ] **Step 3: Rule and removal.**
+- [x] **Step 3: Rule and removal.**
 
 ```python
 CLAUDE_LOCK = re.compile(r"^claude \S+ .+ \(pid (\d+)( start .+)?\)$")
@@ -286,9 +286,9 @@ def remove_agent_worktree(repo, item):
 
 The action becomes: `wt = session_worktree(sess, body["path"]); return remove_agent_worktree(wt["repo"], wt["item"])`. Check `session_worktree` returns an item built by `worktrees()` (so `locked` is present); if it reads the cache, call `forget_worktrees()` first so the lock state is fresh.
 
-- [ ] **Step 4:** Run the tests → PASS. Run the full board suite.
+- [x] **Step 4:** Run the tests → PASS. Run the full board suite.
 
-- [ ] **Step 5: Cleanup script.** In `bin/tmux-agent-cleanup`, track `locked` in the porcelain loop (`locked*) lk="${line#locked}"; lk="${lk# }"` and reset it with `wt` and `br`), carry it as a 7th tab field, and replace the remove block:
+- [x] **Step 5: Cleanup script.** In `bin/tmux-agent-cleanup`, track `locked` in the porcelain loop (`locked*) lk="${line#locked}"; lk="${lk# }"` and reset it with `wt` and `br`), carry it as a 7th tab field, and replace the remove block:
 
 ```zsh
   lk="$(print -r -- "$row" | cut -f7)"
@@ -313,9 +313,9 @@ The action becomes: `wt = session_worktree(sess, body["path"]); return remove_ag
 
 Do not name any variable `path` (zsh). Check `kill -0` on a pid owned by another user returns non-zero with "operation not permitted": treat that as alive (`kill -0 "$pid" 2>&1 | grep -q 'not permitted'`), matching the Python rule.
 
-- [ ] **Step 6:** Manual check of the script against a scratch repo with a stale lock (dead pid) and one with `manual hold`: the first is removed, the second kept with its reason printed. Paste the output in the report.
+- [x] **Step 6:** Manual check of the script against a scratch repo with a stale lock (dead pid) and one with `manual hold`: the first is removed, the second kept with its reason printed. Paste the output in the report.
 
-- [ ] **Step 7: Commit** `fix(board): Remove clears a stale Claude worktree lock; cleanup reports git's error`.
+- [x] **Step 7: Commit** `fix(board): Remove clears a stale Claude worktree lock; cleanup reports git's error`.
 
 ```json:metadata
 {"files": ["board/server.py", "bin/tmux-agent-cleanup", "board/tests/test_worktree_lock.py"], "verifyCommand": "python3 -m unittest board.tests.test_worktree_lock -v", "acceptanceCriteria": ["claude_lock_owner parses both reason formats, None otherwise", "lock_is_stale: dead or non-claude alive pid", "worktrees items carry locked", "stale claude lock unlocked then plain remove", "live claude lock refused", "non-claude lock refused", "dirty tree refused and re-locked", "cleanup script same rule and real git error"], "modelTier": "standard"}
@@ -341,12 +341,12 @@ Do not name any variable `path` (zsh). Check `kill -0` on a pid owned by another
 
 **Steps:**
 
-- [ ] **Step 1: Probe (RED).** Write `<scratchpad>/probe-bg.zsh` that sources `tools/tests/lib.zsh` (it creates a scratch tmux server with `-f /dev/null` and its own `TC_STATE`; never use the user's server), runs `tt_setup claude shell`, then `$C run tests true`, then loops 20× `$C run tests 'echo hi' >/dev/null; $C read tests 40 | grep -q 'echo hi' || (( miss++ ))`, prints `miss=$miss`, and calls `tt_done`. Run it with `C=$PWD/bin/tmux-ctl` (check how `test_bg.zsh` picks `TC_CTL` and pass the repo copy the same way). Expected: `miss` > 0.
-- [ ] **Step 2:** In `bin/tmux-ctl` `ensure_bg`: `t new-session -d -s "$BG" -n tests -x 200 -y 50 -c "$root"`.
-- [ ] **Step 3:** In `tools/tests/test_bg.zsh` line 24: `check "read bg" sh -c "$C read tests 40 | grep -qx hi"`.
-- [ ] **Step 4:** Re-run the probe with the new grep (`grep -qx hi`): expect `miss=0`. Also run it with the old grep after the `-x 200` change and record the result (informational).
-- [ ] **Step 5:** Run the full tmux suite through `tmux-ctl run tests "zsh tools/tests/run-all.zsh"`.
-- [ ] **Step 6: Commit** `fix(tmux-ctl): wide bg session; test_bg reads output, not the typed line`.
+- [x] **Step 1: Probe (RED).** Write `<scratchpad>/probe-bg.zsh` that sources `tools/tests/lib.zsh` (it creates a scratch tmux server with `-f /dev/null` and its own `TC_STATE`; never use the user's server), runs `tt_setup claude shell`, then `$C run tests true`, then loops 20× `$C run tests 'echo hi' >/dev/null; $C read tests 40 | grep -q 'echo hi' || (( miss++ ))`, prints `miss=$miss`, and calls `tt_done`. Run it with `C=$PWD/bin/tmux-ctl` (check how `test_bg.zsh` picks `TC_CTL` and pass the repo copy the same way). Expected: `miss` > 0.
+- [x] **Step 2:** In `bin/tmux-ctl` `ensure_bg`: `t new-session -d -s "$BG" -n tests -x 200 -y 50 -c "$root"`.
+- [x] **Step 3:** In `tools/tests/test_bg.zsh` line 24: `check "read bg" sh -c "$C read tests 40 | grep -qx hi"`.
+- [x] **Step 4:** Re-run the probe with the new grep (`grep -qx hi`): expect `miss=0`. Also run it with the old grep after the `-x 200` change and record the result (informational).
+- [x] **Step 5:** Run the full tmux suite through `tmux-ctl run tests "zsh tools/tests/run-all.zsh"`.
+- [x] **Step 6: Commit** `fix(tmux-ctl): wide bg session; test_bg reads output, not the typed line`.
 
 ```json:metadata
 {"files": ["bin/tmux-ctl", "tools/tests/test_bg.zsh"], "verifyCommand": "zsh tools/tests/run-all.zsh", "acceptanceCriteria": ["warm probe misses on unfixed code", "read bg greps output line", "bg session 200x50", "warm probe 20/20 after", "run-all passes"], "modelTier": "standard"}

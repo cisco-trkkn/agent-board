@@ -2,6 +2,7 @@
 # tmux-agent-cleanup [dir] — pick finished Claude agent worktrees to remove.
 # Only touches worktrees under .claude/worktrees/. Never forces:
 #   - a worktree with uncommitted changes is kept (git refuses to remove it)
+#   - a locked worktree is removed only if its Claude lock is stale (dead or reused pid)
 #   - its branch is deleted only if already merged (git branch -d)
 emulate -L zsh
 FZF_BIN="$HOME/.local/bin/fzf"
@@ -16,11 +17,12 @@ base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo ma
 current="$(git branch --show-current)"
 
 rows=()
-wt="" br=""
+wt="" br="" lk=""
 while IFS= read -r line; do
   case "$line" in
     worktree\ *) wt="${line#worktree }" ;;
     branch\ *)   br="${line#branch refs/heads/}" ;;
+    locked*)     lk="${line#locked}"; lk="${lk# }"; [[ -z "$lk" ]] && lk="locked" ;;
     "")
       if [[ "$wt" == */.claude/worktrees/* ]]; then
         state="clean"
@@ -32,9 +34,9 @@ while IFS= read -r line; do
           fi
         fi
         age="$(git -C "$wt" log -1 --format=%cr 2>/dev/null)"
-        rows+=("$wt	${wt:t}	${br:-detached}	$merged	$state	$age")
+        rows+=("$wt	${wt:t}	${br:-detached}	$merged	$state	$age	$lk")
       fi
-      wt="" br="" ;;
+      wt="" br="" lk="" ;;
   esac
 done < <(git worktree list --porcelain; echo)
 
@@ -53,14 +55,27 @@ for row in "${picked[@]}"; do
   path_="${row%%	*}"
   branch="$(print -r -- "$row" | cut -f3)"
   print "\n› ${path_:t}"
-  if git worktree remove "$path_"; then
+  lk="$(print -r -- "$row" | cut -f7)"
+  if [[ -n "$lk" ]]; then
+    if [[ "$lk" =~ '^claude [^ ]+ .+ \(pid ([0-9]+)( start .+)?\)$' ]]; then
+      pid="$match[1]"
+      if { kill -0 "$pid" 2>&1 | grep -q 'not permitted'; } || { kill -0 "$pid" 2>/dev/null && ps -o args= -p "$pid" | grep -qi claude; }; then
+        print "  kept (in use by a running Claude session, pid $pid)"; continue
+      fi
+      git worktree unlock "$path_" && print "  unlocked stale lock (pid $pid)"
+    else
+      print "  kept (locked: $lk)"; continue
+    fi
+  fi
+  if err="$(git worktree remove "$path_" 2>&1)"; then
     print "  removed worktree"
     if [[ "$branch" != detached ]]; then
       git branch -d "$branch" >/dev/null 2>&1 && print "  deleted branch $branch" \
         || print "  kept branch $branch (not merged — delete it yourself if you're sure)"
     fi
   else
-    print "  kept (has uncommitted changes)"
+    [[ -n "$lk" ]] && git worktree lock --reason "$lk" "$path_"
+    print "  kept: $err"
   fi
 done
 git worktree prune
