@@ -93,6 +93,16 @@ class SummaryTest(Base):
         self.assertEqual(len(q.pending("p")), 1)   # still queued
         self.assertEqual(q.deliver("p", "%1", "claude", "ready", lambda p, t: sent.append(t), input_has_text=lambda pane: False), 1)
 
+    def test_summary_returns_items_from_every_epoch(self):
+        # the client now lists everything the server returns, so the server must not drop old epochs
+        rows = [{"ts": 10 + e, "path": f"/x/{n}", "kind": "plan", "agent": "claude", "hash": "", "url": "", "epoch": e}
+                for e, n in enumerate(["old-plan.md", "mid-spec.md", "new-plan.md"])]
+        (self.state / "artifacts-m.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (self.state / "lineage-m.jsonl").write_text(json.dumps({"ts": 10.5}) + "\n" + json.dumps({"ts": 11.5}) + "\n")
+        s = artifacts.summary("m")
+        self.assertEqual(s["epoch"], 2)
+        self.assertEqual(sorted(it["latest"]["epoch"] for it in s["items"]), [0, 1, 2])
+
     def test_empty_project(self):
         s = artifacts.summary("none")
         self.assertEqual((s["epoch"], s["items"], s["active_plan"], s["started_from"]), (0, [], None, None))
