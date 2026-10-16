@@ -898,7 +898,9 @@ function renderArtifacts() {
   if (plan) {
     pin.append(el("div", "art-group"), artButton(A, plan));
     pin.firstChild.append(el("h4", "", "Plan"));
-    if (A.comments.length) pin.append(el("div", "pending", `${A.comments.length} comment${A.comments.length > 1 ? "s" : ""} waiting for the lead`));
+  }
+  if (A.comments.length) pin.append(el("div", "pending", `${A.comments.length} comment${A.comments.length > 1 ? "s" : ""} waiting for the lead`));
+  if (plan) {
     const vs = A.versions.get(A.plan);
     const txt = vs && vs[vs.length - 1].text;
     if (txt && /- \[x\]/i.test(txt) && !/- \[ \]/.test(txt)) pin.append(el("div", "pending", `Plan done · ${window.ideasOpen || 0} ideas ready for next steps`));
