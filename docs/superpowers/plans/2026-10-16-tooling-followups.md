@@ -337,9 +337,9 @@ Record the output in the report. Remove the worktree and repo afterwards: `git -
 
 **Steps:**
 
-- [ ] **Step 1:** Merge (finishing-a-development-branch). Then spawn a teammate named `probe` whose only job is to reply "ready" and wait for shutdown.
-- [ ] **Step 2:** Record `list-windows`, send it a shutdown request, and confirm the window is gone.
-- [ ] **Step 3:** Split check as above. Kill only the pane id you created.
+- [x] **Step 1:** Merge (finishing-a-development-branch). Then spawn a teammate named `probe` whose only job is to reply "ready" and wait for shutdown.
+- [x] **Step 2:** Record `list-windows`, send it a shutdown request, and confirm the window is gone.
+- [x] **Step 3:** Split check as above. Kill only the pane id you created.
 
 ```json:metadata
 {"files": [], "verifyCommand": "tmux list-windows -t <session> -F '#{window_index} #{window_name}'", "acceptanceCriteria": ["real teammate gets its own window after the lead", "manual split stays"], "modelTier": "mechanical"}

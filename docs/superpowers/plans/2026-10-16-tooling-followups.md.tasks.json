@@ -37,7 +37,7 @@
     {
       "id": 6,
       "subject": "Task 6: Live check after merge (lead)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** After the branch is merged into `main` (live install), a teammate spawned by the lead opens as its own `\u2726 <name>` window, and a manual split in the lead's window stays put.\n\n**Files:**\n- none (verification only)\n\n**Acceptance Criteria:**\n- [ ] Real state: in this `dev` session, after the merge, spawning a short-lived teammate with the Agent tool produces a window `\u2726 <name>` right after the `claude` window (`tmux list-windows` output recorded). The teammate is then shut down and its window closes.\n- [ ] A manual split of the lead's window (`tmux split-window -d -t <lead window>`) stays in that window; then close that split pane by its id.\n\n**Verify:** `tmux list-windows -t <session> -F '#{window_index} #{window_name}'` shows `\u2726 <name>` after `claude`.\n\nSteps: see docs/superpowers/plans/2026-10-16-tooling-followups.md, Task 6.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"tmux list-windows -t <session> -F '#{window_index} #{window_name}'\", \"acceptanceCriteria\": [\"real teammate gets its own window after the lead\", \"manual split stays\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         1,
@@ -48,5 +48,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-16T16:01:09.691411"
+  "lastUpdated": "2026-10-16T16:07:07.798850"
 }
