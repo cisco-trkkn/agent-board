@@ -203,5 +203,24 @@
       "**Trusted repo**: The git repositories at /Users/francisco.ruiz/master-gcp-repo and /Users/francisco.ruiz/agent-board (their working directories) \u2014 no remotes configured",
       "**Org-specific CLIs**: None configured"
     ]
+  },
+  "skillOverrides": {
+    "anthropic-skills:built-in-browser": "off",
+    "anthropic-skills:codebase-design": "off",
+    "anthropic-skills:computer-use": "off",
+    "anthropic-skills:docx": "off",
+    "anthropic-skills:domain-modeling": "off",
+    "anthropic-skills:gcp-development": "off",
+    "anthropic-skills:google-workspace": "off",
+    "anthropic-skills:grill-with-docs": "off",
+    "anthropic-skills:grilling": "off",
+    "anthropic-skills:import-memory": "off",
+    "anthropic-skills:improve-codebase-architecture": "off",
+    "anthropic-skills:learn": "off",
+    "anthropic-skills:morning": "off",
+    "anthropic-skills:pptx": "name-only",
+    "anthropic-skills:terraform-gcp": "off",
+    "anthropic-skills:where-to-run": "off",
+    "anthropic-skills:xlsx": "off"
   }
 }

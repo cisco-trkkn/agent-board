@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude_ai_Claude_Docs__guide",
+      "mcp__claude_ai_Claude_Docs__read",
+      "Read(//Users/francisco.ruiz/.agents/skills/handoff/**)"
+    ]
+  },
+  "spinnerTipsEnabled": false,
+  "outputStyle": "Concise"
+}
