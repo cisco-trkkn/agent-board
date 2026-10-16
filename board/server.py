@@ -360,6 +360,10 @@ def _act(body):
         return f"closed project {sess}; its worktrees and branches are still on disk"
     if a == "restart_orchestrator":
         return restart_orchestrator(sess, bool(body.get("confirm")))
+    if a == "stop_agent":
+        return stop_agent(sess, body.get("window", ""))
+    if a == "ask_shutdown":
+        return ask_shutdown(sess, body.get("window", ""))
     if a in ("save", "comment", "idea") and not NAME_RE.fullmatch(sess):
         raise RuntimeError("bad session")
     if a == "idea":
@@ -370,6 +374,52 @@ def _act(body):
         COMMENTS.add(sess, body["path"], body.get("anchor", ""), body.get("quote", ""), body.get("note", ""))
         return "comment queued for the lead"
     raise RuntimeError(f"unknown action {a!r}")
+
+
+def _check_project(sess):
+    if not NAME_RE.fullmatch(sess or "") or sess.startswith("_web-"):
+        raise RuntimeError("bad session")
+
+
+def _windows_named(sess, name):
+    """Windows named exactly `name` in the project session and its tagged -bg session."""
+    found = []
+    targets = [sess]
+    if tmux("show-options", "-qv", "-t", f"={sess}-bg:", "@tc_bg").strip():
+        targets.append(f"{sess}-bg")
+    for t in targets:
+        out = tmux("list-windows", "-t", f"={t}", "-F",
+                   f"#{{window_id}}{SEP}#{{window_name}}{SEP}#{{@tc_agent}}{SEP}#{{@tc_teammate}}")
+        for line in out.splitlines():
+            f = line.split(SEP)
+            if len(f) == 4 and f[1] == name:
+                found.append({"session": t, "id": f[0], "agent": f[2] == "1", "teammate": f[3] == "1"})
+    return found
+
+
+def stop_agent(sess, name):
+    """Close one worker window (tagged @tc_agent by tmux-ctl agent), by window id. Its worktree stays."""
+    _check_project(sess)
+    hits = _windows_named(sess, name) if name else []
+    if not hits:
+        raise RuntimeError(f"no worker window named {name}")
+    if len(hits) > 1:
+        raise RuntimeError(f"more than one window named {name}; close it from its terminal")
+    if not hits[0]["agent"]:
+        raise RuntimeError(f"{name} is not a worker")
+    tmux("kill-window", "-t", hits[0]["id"], check=True)
+    return f"shut down worker {name}; its worktree and branch are still in Worktrees"
+
+
+def ask_shutdown(sess, name):
+    """Ask the lead (through the comment queue) to shut a teammate down; the lead owns its team."""
+    _check_project(sess)
+    hits = [h for h in _windows_named(sess, name) if h["session"] == sess] if name else []
+    if len(hits) != 1 or not hits[0]["teammate"]:
+        raise RuntimeError(f"{name} is not a teammate")
+    mate = re.sub(r"^✦\s*", "", name).strip()
+    COMMENTS.add_line(sess, f"[Board] Please shut down teammate {mate}.")
+    return f"asked the lead to shut down {mate}"
 
 
 def restart_orchestrator(sess, confirm):

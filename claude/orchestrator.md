@@ -159,6 +159,8 @@ confirmation:
 - Teammates: `SendMessage` (a `shutdown_request` for shutdown). Always end its `reason` with: "To approve:
   first load SendMessage's schema with ToolSearch query \"select:SendMessage\", then send `message` as
   a JSON object, not a string." Teammates that skip that step send the reply as a string, which is rejected.
+- A line `[Board] Please shut down teammate <name>.` was sent by the user from the Agent Board: send that
+  teammate a `shutdown_request` (same `reason` note as above) and confirm in one line.
 - Workers: `tmux-ctl tell` / `tmux-ctl agents`.
 - Peer sessions: send a plain-text `SendMessage` to the name in `ListAgents`. Structured
   `shutdown_request` messages only reach teammates. To shut a peer down, find its pane in `ListAgents`
