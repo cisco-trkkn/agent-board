@@ -1,0 +1,36 @@
+#!/usr/bin/env zsh
+# claude-config-link [--dry-run] — symlink the tracked claude/ config into ~/.claude.
+# Per path: absent -> link; regular file/dir -> back up as F.bak-YYYYMMDD, then link;
+# link to this repo -> leave; link elsewhere -> refuse (exit 1, other paths still processed).
+# settings.json is never linked (Claude Code writes it); use claude-config-sync.
+emulate -L zsh
+repo="${0:A:h:h}"; src="$repo/claude"; live="$HOME/.claude"
+# The live install points at the main checkout (see CLAUDE.md), even when this script runs from a worktree.
+gc="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && main="${gc:h}" || main="$repo"
+dry=0; [[ "$1" == --dry-run ]] && dry=1
+stamp="$(date +%Y%m%d)"; rc=0
+
+link_one() {   # link_one <repo file/dir> <live path>
+  local from="$1" to="$2" cur
+  if [[ -L "$to" ]]; then
+    cur="$(readlink "$to")"
+    if [[ "$cur" == "$from" ]]; then print -r -- "ok      $to"; return; fi
+    print -ru2 -- "REFUSE  $to is a link to $cur, not $from"; rc=1; return
+  fi
+  if [[ -e "$to" ]]; then
+    if (( dry )); then print -r -- "would backup $to -> $to.bak-$stamp"; else mv "$to" "$to.bak-$stamp"; print -r -- "backup  $to -> $to.bak-$stamp"; fi
+  fi
+  if (( dry )); then print -r -- "would link   $to -> $from"
+  else mkdir -p "${to:h}" && ln -s "$from" "$to" && print -r -- "link    $to -> $from"; fi
+}
+
+for e in "$src"/*(N); do
+  name="${e:t}"; e="$main/claude/$name"   # link target in the main checkout; names come from this tree
+  case "$name" in
+    settings.json) print -r -- "skip    $live/settings.json (regular file; use claude-config-sync)" ;;
+    hooks|agents)  for f in "$src/$name"/*(N); do link_one "$main/claude/$name/${f:t}" "$live/$name/${f:t}"; done ;;
+    skills)        for f in "$src/$name"/*(N/); do link_one "$main/claude/$name/${f:t}" "$live/skills/${f:t}"; done ;;
+    *)             link_one "$e" "$live/$name" ;;
+  esac
+done
+exit $rc

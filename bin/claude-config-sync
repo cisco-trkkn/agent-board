@@ -1,0 +1,9 @@
+#!/usr/bin/env zsh
+# claude-config-sync — copy the live ~/.claude/settings.json into this repo's claude/settings.json
+# (settings.json stays a regular file because Claude Code rewrites it), then show what changed.
+emulate -L zsh
+repo="${0:A:h:h}"; live="$HOME/.claude/settings.json"; dest="$repo/claude/settings.json"
+[[ -f "$live" && ! -L "$live" ]] || { print -ru2 -- "claude-config-sync: $live is not a regular file"; exit 1; }
+cp "$live" "$dest" || exit 1
+git -C "$repo" diff --stat -- claude/settings.json 2>/dev/null
+print -r -- "synced $live -> $dest"
