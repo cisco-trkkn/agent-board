@@ -10,7 +10,7 @@ FZF_BIN="${FZF_BIN:-$HOME/.local/bin/fzf}"
 dir="${1:-$PWD}"
 main_wt="$(git -C "$dir" worktree list --porcelain 2>/dev/null | awk 'NR==1{print $2}')"
 if [[ -z "$main_wt" ]]; then
-  print "Not inside a git repo: $dir"; read -k1 "?Press any key…"; exit 1
+  print "Not inside a git repo: $dir"; [[ -t 0 ]] && read -k1 "?Press any key…"; exit 1
 fi
 cd "$main_wt"
 base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo main)"
@@ -41,7 +41,7 @@ while IFS= read -r line; do
 done < <(git worktree list --porcelain; echo)
 
 if (( ${#rows} == 0 )); then
-  print "No Claude agent worktrees in $main_wt — nothing to clean up."; read -k1 "?Press any key…"; exit 0
+  print "No Claude agent worktrees in $main_wt — nothing to clean up."; [[ -t 0 ]] && read -k1 "?Press any key…"; exit 0
 fi
 
 picked=("${(@f)$(print -l -- "${rows[@]}" |
@@ -79,4 +79,5 @@ for row in "${picked[@]}"; do
   fi
 done
 git worktree prune
-read -k1 "?Done. Press any key…"
+[[ -t 0 ]] && read -k1 "?Done. Press any key…"
+exit 0
