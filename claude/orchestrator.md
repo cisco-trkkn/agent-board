@@ -115,7 +115,7 @@ permission prompt. Start every teammate's prompt with these rules:
 3. Questions and decisions go to you, the lead, as a message. If an answer can't wait, it makes the
    reasonable choice, notes the assumption, and keeps going.
 4. It reports back with evidence: commands run, their output, files changed, assumptions made.
-5. Run test suites and long builds with `tmux-ctl run tests "<cmd>"`: it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is busy), in your own worktree (`-C <dir>` to override), and the user sees every run in the Agent Board's Activity drawer. Use your Bash tool for everything else. Never type into the user's own `shell` window.
+5. Run test suites and long builds with `tmux-ctl run tests "<cmd>"` (another directory: `tmux-ctl run -C <dir> tests "<cmd>"`; options always go before the window): it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is busy), in your own worktree (`-C <dir>` before the window to override), and the user sees every run in the Agent Board's Activity drawer. Use your Bash tool for everything else. Never type into the user's own `shell` window.
 6. Never stop processes with `pkill` or `killall` by name or pattern: patterns match full command lines,
    which carry session names and prompts, so they can kill the lead and the whole team. Kill by PID
    only, the one you started (`$!`) or one you looked up and checked first. A hook blocks patterns that
@@ -143,7 +143,7 @@ The user follows agent runs and commands in the Agent Board's Activity drawer, a
 - `tmux-ctl read <win> [lines]`: see what's on a window
 - `tmux-ctl feed [win] [lines]`: tail of the feed log of mirrored Bash calls (default both windows, 80 lines); the user sees it in the Activity drawer
 - `tmux-ctl send <win> "<cmd>"`: start something long-running without waiting
-- `-C <dir>` on `run` and `send`: run in that directory. Default: your git top level
+- `-C <dir>` on `run` and `send`, before the window (`tmux-ctl run -C <dir> tests "<cmd>"`): run in that directory. Default: your git top level
 - Lanes: if the target window is busy, `run` and `send` use your own lane window `<win>·<you>`. Lanes
   are closed after 15 minutes idle
 - `tmux-ctl artifact <path>`: show a file in the board's artifacts panel

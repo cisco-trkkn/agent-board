@@ -2,7 +2,8 @@
 # tmux-teammate-window — give each Claude agent-team teammate its own tmux window.
 #
 # Run by the after-split-window hook in ~/.tmux.conf. Claude Code opens a teammate as a split
-# pane beside its lead (started as `cat`, then the teammate's `claude --agent-name <name> …`).
+# pane beside its lead. Older versions start it as `cat` and respawn it into `claude --agent-name
+# <name> …`; 2.1.301 starts it directly as `cd <dir> && env … claude --agent-name <name> …`.
 # This moves that pane into its own window "✦ <name>", placed after the lead's window and any
 # teammate windows already there. The pane keeps its id, so Claude still reaches the teammate,
 # and the window closes when Claude shuts the teammate down. Other splits are left alone.
@@ -10,15 +11,18 @@ emulate -L zsh
 setopt extendedglob
 T="$HOME/.local/bin/tmux"
 
-# Called with a pane id: wait for that pane to show its teammate name, then move it.
+# Called with a pane id (and the teammate name, when the start command already gave it): else wait
+# for that pane to show its teammate name, then move it.
 if [[ -n "$1" ]]; then
-  pane="$1" name=""
+  pane="$1" name="${2:-}"
+  if [[ -z "$name" ]]; then
   for i in {1..40}; do               # up to ~10s for Claude to start the teammate
     tty="$("$T" display -p -t "$pane" '#{pane_tty}' 2>/dev/null)" || exit 0   # gone; re-read: a respawn gets a new tty
     args="$(ps -t "${tty#/dev/}" -o args= 2>/dev/null)"
     if [[ "$args" =~ "--agent-name '?([A-Za-z0-9_-]+)" ]]; then name="$match[1]"; break; fi
     sleep 0.25
   done
+  fi
   [[ -n "$name" ]] || exit 0        # not a teammate after all
 
   # insert after the lead's window, behind teammate windows that already follow it
@@ -35,9 +39,12 @@ if [[ -n "$1" ]]; then
   exit 0
 fi
 
-# Called by the hook: find new teammate panes (started as `cat`, still sharing a window).
+# Called by the hook: find new teammate panes still sharing a window. Older Claude starts them
+# as `cat` and respawns; 2.1.301 starts them directly as `claude … --agent-name <name> …`.
 for line in ${(f)"$("$T" list-panes -a -F '#{pane_id} #{window_panes} #{?#{@tc_teammate},1,0} #{pane_start_command}')"}; do
   read -r id panes flag cmd <<< "$line"
-  [[ "$cmd" == (cat|\"cat\") && "$panes" -gt 1 && "$flag" != 1 ]] || continue
-  "$0" "$id" &!
+  [[ "$panes" -gt 1 && "$flag" != 1 ]] || continue
+  if [[ "$cmd" =~ "--agent-name '?([A-Za-z0-9_-]+)" ]]; then "$0" "$id" "$match[1]" &!
+  elif [[ "$cmd" == (cat|\"cat\") ]]; then "$0" "$id" &!
+  fi
 done

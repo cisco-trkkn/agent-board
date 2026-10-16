@@ -218,6 +218,7 @@ case "$cmd" in
   run)
     parse_opts "$@"; set -- "${rest[@]}"
     win="$1"; shift
+    [[ "$1" == (-t|-C) ]] && die "options go before the window: tmux-ctl run [-t secs] [-C dir] <win> <cmd>"
     [[ -n "$win" && -n "$*" ]] || die "usage: tmux-ctl run [-t secs] [-C dir] <win> <cmd>"
     use_win "$win"; exists "$win"
     trap 'unlock_win; exit 143' INT TERM HUP; trap unlock_win EXIT
@@ -271,6 +272,7 @@ case "$cmd" in
   send)
     parse_opts "$@"; set -- "${rest[@]}"
     win="$1"; shift
+    [[ "$1" == (-t|-C) ]] && die "options go before the window: tmux-ctl send [-t secs] [-C dir] <win> <cmd>"
     [[ -n "$win" && -n "$*" ]] || die "usage: tmux-ctl send [-C dir] <win> <text>"
     use_win "$win"; exists "$win"
     trap 'unlock_win; exit 143' INT TERM HUP; trap unlock_win EXIT

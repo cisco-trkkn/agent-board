@@ -51,8 +51,8 @@
 
 **Steps:**
 
-- [ ] **Step 1: Seam check.** The hook calls `$HOME/.local/bin/tmux` with no `-L`, so it reaches whichever server `$TMUX` names. Under `run-shell` from the scratch server, `$TMUX` is the scratch socket. Confirm this in Step 3's RED run (no window appears on the user's server). If it doesn't hold, add `T="${TC_TMUX:-$HOME/.local/bin/tmux}"` and export `TC_TMUX` in the test.
-- [ ] **Step 2: Failing test.** Create `tools/tests/test_teammate_window.zsh`:
+- [x] **Step 1: Seam check.** The hook calls `$HOME/.local/bin/tmux` with no `-L`, so it reaches whichever server `$TMUX` names. Under `run-shell` from the scratch server, `$TMUX` is the scratch socket. Confirm this in Step 3's RED run (no window appears on the user's server). If it doesn't hold, add `T="${TC_TMUX:-$HOME/.local/bin/tmux}"` and export `TC_TMUX` in the test.
+- [x] **Step 2: Failing test.** Create `tools/tests/test_teammate_window.zsh`:
 
 ```zsh
 source "${0:A:h}/lib.zsh"
@@ -83,7 +83,7 @@ tt_done
 
 Adapt the `sh -c … --agent-name` form if `ps -o args=` doesn't show it. The check is that the args or the start command carry `--agent-name probe-x`, as Claude's do. Run it: `zsh tools/tests/test_teammate_window.zsh`. Expected: "direct shape gets a window" FAILs, and "cat shape" passes or fails depending on the respawn path. Check `~/.local/bin/tmux ls` is unchanged before and after.
 
-- [ ] **Step 3: Implement.** In the hook branch at the bottom of `bin/tmux-teammate-window`:
+- [x] **Step 3: Implement.** In the hook branch at the bottom of `bin/tmux-teammate-window`:
 
 ```zsh
 # Called by the hook: find new teammate panes still sharing a window. Older Claude starts them
@@ -99,8 +99,8 @@ done
 
 In the pane branch, take an optional name: `pane="$1" name="${2:-}"`. Skip the polling loop when `name` is already set: wrap the loop in `if [[ -z "$name" ]]; then … fi`. Update the header comment to describe both shapes.
 
-- [ ] **Step 4:** Run the test → `ALL PASS`. Run it 3 times (the hook is async). Run `TC_CTL=$PWD/bin/tmux-ctl zsh tools/tests/run-all.zsh` through `tmux-ctl run -C <worktree> tests "…"`.
-- [ ] **Step 5: Commit** `fix(tmux): teammate panes started directly as claude get their own window`.
+- [x] **Step 4:** Run the test → `ALL PASS`. Run it 3 times (the hook is async). Run `TC_CTL=$PWD/bin/tmux-ctl zsh tools/tests/run-all.zsh` through `tmux-ctl run -C <worktree> tests "…"`.
+- [x] **Step 5: Commit** `fix(tmux): teammate panes started directly as claude get their own window`.
 
 ```json:metadata
 {"files": ["bin/tmux-teammate-window", "tools/tests/test_teammate_window.zsh"], "verifyCommand": "zsh tools/tests/test_teammate_window.zsh", "acceptanceCriteria": ["accepts cat or --agent-name start commands with guards", "name from start command, ps fallback", "direct shape test", "cat-respawn shape test", "plain split stays", "second teammate ordered after first", "tests use the real after-split-window hook path"], "modelTier": "standard"}
@@ -121,7 +121,7 @@ In the pane branch, take an optional name: `pane="$1" name="${2:-}"`. Skip the p
 
 **Steps:**
 
-- [ ] **Step 1:** Replace line 2 and line 15:
+- [x] **Step 1:** Replace line 2 and line 15:
 
 ```zsh
 live_tt() { "$TT_BIN" ls -F '#{session_name}' 2>/dev/null | grep -E '^tt(-|$)' }   # only names the harness could create
@@ -133,8 +133,8 @@ check "live server untouched"    test "$(live_tt)" = "$live_before"
 ```
 
 `live_tt` is defined before `tt_setup`. At line 15, `TMUX` is unset, so `$TT_BIN ls` talks to the default (live) server, as before.
-- [ ] **Step 2:** Run it 3 times → `ALL PASS`.
-- [ ] **Step 3: Commit** `test(harness): live-server check looks only at harness sessions`.
+- [x] **Step 2:** Run it 3 times → `ALL PASS`.
+- [x] **Step 3: Commit** `test(harness): live-server check looks only at harness sessions`.
 
 ```json:metadata
 {"files": ["tools/tests/test_harness.zsh"], "verifyCommand": "zsh tools/tests/test_harness.zsh", "acceptanceCriteria": ["compares only tt/tt-* session names", "passes while live windows change"], "modelTier": "mechanical"}
@@ -159,8 +159,8 @@ check "live server untouched"    test "$(live_tt)" = "$live_before"
 
 **Steps:**
 
-- [ ] **Step 1: Reproduce** (systematic-debugging) on a scratch server via `lib.zsh`: `TC_CTL=<worktree>/bin/tmux-ctl`, then `$C run tests -C "$TT_DIR" 'true'; echo "status=$?"`, and `$C run tests 'false'; echo "status=$?"`. Record the output. One teammate saw `[exit 0]` and another saw exit 127 for the misplaced `-C`. Find out which is real before changing the exit path.
-- [ ] **Step 2: Failing test** `tools/tests/test_ctl_opts.zsh`:
+- [x] **Step 1: Reproduce** (systematic-debugging) on a scratch server via `lib.zsh`: `TC_CTL=<worktree>/bin/tmux-ctl`, then `$C run tests -C "$TT_DIR" 'true'; echo "status=$?"`, and `$C run tests 'false'; echo "status=$?"`. Record the output. One teammate saw `[exit 0]` and another saw exit 127 for the misplaced `-C`. Find out which is real before changing the exit path.
+- [x] **Step 2: Failing test** `tools/tests/test_ctl_opts.zsh`:
 
 ```zsh
 source "${0:A:h}/lib.zsh"
@@ -180,16 +180,16 @@ tt_done
 ```
 
 Run → the first checks FAIL.
-- [ ] **Step 3: Implement.** In both `run` and `send`, right after `win="$1"; shift`:
+- [x] **Step 3: Implement.** In both `run` and `send`, right after `win="$1"; shift`:
 
 ```zsh
     [[ "$1" == (-t|-C) ]] && die "options go before the window: tmux-ctl $cmd [-t secs] [-C dir] <win> <cmd>"
 ```
 
 Use the variable that holds the subcommand name in this script (read how `die` and the `case` are written), and make sure `die` exits 2. Check: `grep -n '^die()' bin/tmux-ctl`. If Step 1 found a wrong exit report, fix it at its source and keep the `false` check.
-- [ ] **Step 4:** Docs: in `claude/orchestrator.md`, rule 5 becomes ``Run test suites and long builds with `tmux-ctl run tests "<cmd>"` (another directory: `tmux-ctl run -C <dir> tests "<cmd>"`; options always go before the window)``, keeping the rest of the sentence. Lines 142/146 get the same order.
-- [ ] **Step 5:** Run the test → `ALL PASS`, then the full tmux suite with `TC_CTL` set.
-- [ ] **Step 6: Commit** `fix(tmux-ctl): refuse options after the window name`.
+- [x] **Step 4:** Docs: in `claude/orchestrator.md`, rule 5 becomes ``Run test suites and long builds with `tmux-ctl run tests "<cmd>"` (another directory: `tmux-ctl run -C <dir> tests "<cmd>"`; options always go before the window)``, keeping the rest of the sentence. Lines 142/146 get the same order.
+- [x] **Step 5:** Run the test → `ALL PASS`, then the full tmux suite with `TC_CTL` set.
+- [x] **Step 6: Commit** `fix(tmux-ctl): refuse options after the window name`.
 
 ```json:metadata
 {"files": ["bin/tmux-ctl", "claude/orchestrator.md", "tools/tests/test_ctl_opts.zsh"], "verifyCommand": "TC_CTL=$PWD/bin/tmux-ctl zsh tools/tests/test_ctl_opts.zsh", "acceptanceCriteria": ["options after window exit 2, nothing typed", "-C before window works", "misreported exit reproduced and fixed if real", "orchestrator.md shows the correct order"], "modelTier": "standard"}
@@ -215,7 +215,7 @@ Use the variable that holds the subcommand name in this script (read how `die` a
 
 **Steps:**
 
-- [ ] **Step 1:** Replace the press handling in `bindAgentMenu` (keep the `contextmenu` listener and `card._menuItems = items;`):
+- [x] **Step 1:** Replace the press handling in `bindAgentMenu` (keep the `contextmenu` listener and `card._menuItems = items;`):
 
 ```js
   card.addEventListener("pointerdown", (e) => {
@@ -245,7 +245,7 @@ document.addEventListener("pointermove", (e) => { if (press && Math.hypot(e.clie
 ```
 
 Remove the old `lp`, `x0`, `y0`, `cancel` and `fire` and the per-card `pointermove`/`pointerup`/`pointercancel` listeners.
-- [ ] **Step 2:** Replace `openDoc`:
+- [x] **Step 2:** Replace `openDoc`:
 
 ```js
 async function openDoc(path) {
@@ -264,9 +264,9 @@ async function openDoc(path) {
 ```
 
 Check `trackVersion` returns without throwing on `!r.ok`. A non-OK response leaves "Loading…" and the next poll retries, because `hot()` includes `docSel`. That's acceptable. Only a network error throws.
-- [ ] **Step 3:** Run the Verify browser checks (a)–(d) on your own board: `TMUX_DASH_TOKEN=bb$RANDOM TMUX_DASH_PORT=7710 TMUX_DASH_TTYD_PORT=7701 python3 board/server.py &`. Kill only that PID. Don't click agent-menu items: they stop agents.
-- [ ] **Step 4:** `python3 -m unittest discover -s board/tests` → OK.
-- [ ] **Step 5: Commit** `fix(board): long press cancels on any release; openDoc selects before loading`.
+- [x] **Step 3:** Run the Verify browser checks (a)–(d) on your own board: `TMUX_DASH_TOKEN=bb$RANDOM TMUX_DASH_PORT=7710 TMUX_DASH_TTYD_PORT=7701 python3 board/server.py &`. Kill only that PID. Don't click agent-menu items: they stop agents.
+- [x] **Step 4:** `python3 -m unittest discover -s board/tests` → OK.
+- [x] **Step 5: Commit** `fix(board): long press cancels on any release; openDoc selects before loading`.
 
 ```json:metadata
 {"files": ["board/index.html"], "verifyCommand": "browser checks (a)-(d) on a worktree board at :7710", "acceptanceCriteria": ["module-level press timer cancelled by document pointerup/cancel/move", "rebuilt card resolution kept", "openDoc selects first, renders only if still selected, error line on failure"], "modelTier": "mechanical"}
@@ -295,7 +295,7 @@ Check `trackVersion` returns without throwing on `!r.ok`. A non-OK response leav
 
 **Steps:**
 
-- [ ] **Step 1: Capture** (side-effecting: starts a short Claude session; isolate it in a temp repo, and check afterwards that the temp repo and its `.claude/worktrees/lockprobe` are removed):
+- [x] **Step 1: Capture** (side-effecting: starts a short Claude session; isolate it in a temp repo, and check afterwards that the temp repo and its `.claude/worktrees/lockprobe` are removed):
 
 ```zsh
 r="$(mktemp -d)"; git -C "$r" init -qb main && git -C "$r" commit -q --allow-empty -m init
@@ -305,9 +305,9 @@ wait $cp; print -r -- "seen: ${seen:-none observed}"; git -C "$r" worktree list 
 ```
 
 Record the output in the report. Remove the worktree and repo afterwards: `git -C "$r" worktree remove -f` only for this temp repo's `lockprobe` worktree, then `rm -rf "$r"`.
-- [ ] **Step 2:** Update the fixture strings in `test_worktree_lock.py` per the acceptance criteria. Run the Python tests.
-- [ ] **Step 3: Seam.** In `bin/tmux-agent-cleanup`, change line `FZF_BIN="$HOME/.local/bin/fzf"` to `FZF_BIN="${FZF_BIN:-$HOME/.local/bin/fzf}"`.
-- [ ] **Step 4: Test.** Write `tools/tests/test_agent_cleanup.zsh`:
+- [x] **Step 2:** Update the fixture strings in `test_worktree_lock.py` per the acceptance criteria. Run the Python tests.
+- [x] **Step 3: Seam.** In `bin/tmux-agent-cleanup`, change line `FZF_BIN="$HOME/.local/bin/fzf"` to `FZF_BIN="${FZF_BIN:-$HOME/.local/bin/fzf}"`.
+- [x] **Step 4: Test.** Write `tools/tests/test_agent_cleanup.zsh`:
   - It needs no tmux server, but sources `lib.zsh` for `check`/`tt_done`. Use its own `mktemp -d` and an `EXIT` trap that removes the dir and kills the PIDs it started.
   - Stub fzf: a script that `cat`s its stdin (all rows selected).
   - Build the four worktrees under `<repo>/.claude/worktrees/` with `git worktree add`, and lock them with `git worktree lock --reason`.
@@ -315,8 +315,8 @@ Record the output in the report. Remove the worktree and repo afterwards: `git -
   - Live Claude pid: a script named `claude-fake` running `sleep 60`.
   - Dirty tree: write an untracked file.
   - Run `FZF_BIN=<stub> zsh <worktree>/bin/tmux-agent-cleanup <repo> </dev/null`, capture the output, then check `git worktree list --porcelain` and the output per the acceptance criteria.
-- [ ] **Step 5:** Run both checks, then the full suites.
-- [ ] **Step 6: Commit** `test(cleanup): real lock fixture and a committed tmux-agent-cleanup test`.
+- [x] **Step 5:** Run both checks, then the full suites.
+- [x] **Step 6: Commit** `test(cleanup): real lock fixture and a committed tmux-agent-cleanup test`.
 
 ```json:metadata
 {"files": ["board/tests/test_worktree_lock.py", "bin/tmux-agent-cleanup", "tools/tests/test_agent_cleanup.zsh"], "verifyCommand": "zsh tools/tests/test_agent_cleanup.zsh && python3 -m unittest board.tests.test_worktree_lock -v", "acceptanceCriteria": ["real lock capture attempted and recorded", "fixture uses captured line or documents why not", "FZF_BIN overridable", "cleanup test covers dead, live claude, manual, dirty", "no leftover processes or dirs"], "modelTier": "standard"}
