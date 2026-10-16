@@ -220,6 +220,40 @@ class CommentTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             artifacts.CommentQueue().add("p", "/a.md", "", "", "  ")
 
+    def test_add_line_is_sent_verbatim_in_order(self):
+        q = artifacts.CommentQueue()
+        q.add("p", "/r/plan.md", "", "", "note")
+        q.add_line("p", "[Board] Please shut down teammate py.")
+        sent = []
+        self.assertEqual(q.deliver("p", "%1", "claude", "ready", lambda p, t: sent.append(t)), 2)
+        self.assertEqual(sent, ["[Plan comment] plan.md: — note", "[Board] Please shut down teammate py."])
+
+    def test_add_line_held_while_busy(self):
+        q = artifacts.CommentQueue()
+        q.add_line("p", "[Board] x")
+        sent = []
+        self.assertEqual(q.deliver("p", "%1", "claude", "waiting", lambda p, t: sent.append(t)), 0)
+        self.assertEqual(q.deliver("p", "%1", "shell", "idle", lambda p, t: sent.append(t)), 0)
+        self.assertEqual(q.deliver("p", "%1", "claude", "ready", lambda p, t: sent.append(t), input_has_text=lambda pane: True), 0)
+        self.assertEqual(sent, [])
+        self.assertEqual(q.deliver("p", "%1", "claude", "ready", lambda p, t: sent.append(t), input_has_text=lambda pane: False), 1)
+        self.assertEqual(sent, ["[Board] x"])
+
+    def test_add_line_dedupes_while_queued(self):
+        q = artifacts.CommentQueue()
+        q.add_line("p", "[Board] x")
+        q.add_line("p", "[Board] x")
+        self.assertEqual(len(q.pending("p")), 1)
+        q.add_line("other", "[Board] x")
+        self.assertEqual(len(q.pending("other")), 1)
+
+    def test_add_line_flattens_and_rejects_empty(self):
+        q = artifacts.CommentQueue()
+        c = q.add_line("p", "[Board]\x1b x\n y")
+        self.assertEqual(artifacts.CommentQueue.line(c), "[Board] x y")
+        with self.assertRaises(ValueError):
+            q.add_line("p", " \x00 ")
+
 
 if __name__ == "__main__":
     unittest.main()

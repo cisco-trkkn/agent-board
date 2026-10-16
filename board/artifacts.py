@@ -117,12 +117,28 @@ class CommentQueue:
             self._items.setdefault(sess, []).append(c)
         return c
 
+    def add_line(self, sess, text):
+        """Queue one literal line for the lead (board requests). A line already waiting is not queued twice."""
+        text = _flat(text, 2000)
+        if not text:
+            raise ValueError("empty line")
+        with self._lock:
+            items = self._items.setdefault(sess, [])
+            for c in items:
+                if c.get("text") == text:
+                    return c
+            c = {"id": uuid.uuid4().hex[:8], "text": text, "ts": time.time()}
+            items.append(c)
+        return c
+
     def pending(self, sess):
         with self._lock:
             return list(self._items.get(sess, []))
 
     @staticmethod
     def line(c):
+        if "text" in c:
+            return c["text"]
         where = f" § {c['anchor']}" if c["anchor"] else ""
         quote = f' "{c["quote"]}"' if c["quote"] else ""
         return f"[Plan comment] {_flat(Path(c['path']).name, 120)}{where}:{quote} — {c['note']}"
