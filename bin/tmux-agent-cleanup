@@ -5,7 +5,7 @@
 #   - a locked worktree is removed only if its Claude lock is stale (dead or reused pid)
 #   - its branch is deleted only if already merged (git branch -d)
 emulate -L zsh
-FZF_BIN="$HOME/.local/bin/fzf"
+FZF_BIN="${FZF_BIN:-$HOME/.local/bin/fzf}"
 
 dir="${1:-$PWD}"
 main_wt="$(git -C "$dir" worktree list --porcelain 2>/dev/null | awk 'NR==1{print $2}')"

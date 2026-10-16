@@ -13,9 +13,13 @@ spec = importlib.util.spec_from_file_location("tmux_dash_server_lock", SERVER)
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 
-# Formats written by the Claude 2.1.301 binary (flake-and-locks.md, Issue B). No live
-# Claude worktree lock existed when this was written, so these are not copied from a live one.
-WITH_START = "claude session {n} (pid {pid} start 1760000000)"
+# WITH_START was captured from a real lock: Claude Code 2.1.301, 2026-10-16, via
+# `claude -w lockprobe -p "reply ok"` in a temp repo; `git worktree list --porcelain` showed
+#   locked claude session lockprobe (pid 99047 start Fri Oct 16 19:12:53 2026)
+# (pid and name substituted below). Note `start` is a date string, not an epoch.
+# NO_START is not captured: it is the binary-derived form without a start time
+# (flake-and-locks.md, Issue B); the live lock above always carried a start.
+WITH_START = "claude session {n} (pid {pid} start Fri Oct 16 19:12:53 2026)"
 NO_START = "claude session {n} (pid {pid})"
 
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
