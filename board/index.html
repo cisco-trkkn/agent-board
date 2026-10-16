@@ -774,16 +774,28 @@ function closeAgentMenu(refocus) {
   agentMenuFrom = null; agentMenuKey = null;
 }
 function bindAgentMenu(card, items) {
+  card._menuItems = items;
   card.addEventListener("contextmenu", (e) => {
     // keep the browser's own menu (Copy, Paste…) on inputs, links and selected text
     if (e.target.closest("input, textarea, a") || String(getSelection()).length) return;
     e.preventDefault(); openAgentMenu(e.clientX, e.clientY, items(), card); });
   let lp = null, x0 = 0, y0 = 0;
   const cancel = () => { clearTimeout(lp); lp = null; };
+  const fire = () => {
+    lp = null;
+    let c = card;
+    if (!c.isConnected) {   // the 2 s rebuild replaced the card mid-press: use the one showing now
+      const k = card.dataset.key;
+      c = k ? document.querySelector(`[data-key="${CSS.escape(k)}"]`) : null;
+      if (!c || !c._menuItems) return;
+    }
+    const its = c._menuItems();
+    if (its.length) openAgentMenu(x0, y0, its, c);
+  };
   card.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse") return;
     x0 = e.clientX; y0 = e.clientY; cancel();
-    lp = setTimeout(() => { lp = null; openAgentMenu(x0, y0, items(), card); }, 500);
+    lp = setTimeout(fire, 500);
   });
   card.addEventListener("pointermove", (e) => { if (lp && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
   card.addEventListener("pointerup", cancel);
