@@ -333,9 +333,10 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
     t set-option -w -t "$(target "$name")" @tc_agent 1
     t set-option -w -t "$(target "$name")" automatic-rename off
+    # workers never see the end-of-session CLAUDE.md nudge (it asks an absent user a question)
     # worker rules (superpowers skills, decide instead of asking) ride along as a system prompt
     rules=""; [[ -r "$HOME/.claude/worker.md" ]] && rules=' --append-system-prompt-file ~/.claude/worker.md'
-    t send-keys -t "$(target "$name")" -l -- "claude -w ${(q)name} -n ${(q)name}${rules} ${(q)task}"
+    t send-keys -t "$(target "$name")" -l -- "CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker claude -w ${(q)name} -n ${(q)name}${rules} ${(q)task}"
     t send-keys -t "$(target "$name")" Enter
     print -r -- "started worker '$name' in window $SESSION:$name (worktree .claude/worktrees/$name)" ;;
 
