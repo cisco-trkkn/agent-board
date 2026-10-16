@@ -7,9 +7,12 @@ PROMPT_FILE="$HOME/.claude/orchestrator.md"
 # retitles the session per task). Pass your own -n/--name to override.
 NAME_ARGS=(--name orchestrator)
 (( ${@[(I)-n|--name|--name=*]} )) && NAME_ARGS=()
+# The lead runs on Opus; frontier teammates get Fable through model routing. Pass --model to override.
+MODEL_ARGS=(--model opus)
+(( ${@[(I)--model|--model=*]} )) && MODEL_ARGS=()
 if [[ -r "$PROMPT_FILE" ]]; then
-  exec claude "${NAME_ARGS[@]}" --append-system-prompt-file "$PROMPT_FILE" "$@"
+  exec claude "${NAME_ARGS[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$PROMPT_FILE" "$@"
 else
   print -u2 "claude-orchestrator: $PROMPT_FILE missing, starting plain claude"
-  exec claude "${NAME_ARGS[@]}" "$@"
+  exec claude "${NAME_ARGS[@]}" "${MODEL_ARGS[@]}" "$@"
 fi

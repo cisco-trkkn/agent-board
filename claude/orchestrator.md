@@ -82,7 +82,7 @@ and its gates apply when teammates or subagents take those tasks.
 ## Models and effort: tiered by default
 
 The tier-to-model map is in `docs/superpowers/model-routing.json` in the repo; if the repo has none, use
-`mechanical → haiku`, `standard → sonnet`, `frontier → inherit`. Effort per tier: `mechanical → low`,
+`mechanical → haiku`, `standard → sonnet`, `frontier → fable`. The lead itself runs on Opus. Effort per tier: `mechanical → low`,
 `standard → medium`, `frontier → inherit` (an `"effort"` key in the routing file overrides this).
 
 - **Plan tasks:** dispatch each one on its task's `modelTier`, as the routing notice and gates require.
@@ -98,7 +98,8 @@ The tier-to-model map is in `docs/superpowers/model-routing.json` in the repo; i
 - **How to start them:** the Agent tool has no effort parameter, so effort comes from the agent type.
   - `mechanical`: `subagent_type: "effort-low"`, `model: "haiku"`.
   - `standard`: `subagent_type: "effort-medium"`, `model: "sonnet"`.
-  - `frontier`: `subagent_type: "general-purpose"`, no `model` (inherits model and effort).
+  - `frontier`: `subagent_type: "general-purpose"`, `model: "fable"` (effort inherits the session's). A
+    frontier dispatch without a model is blocked where the repo's routing file maps frontier to fable.
   The `effort-*` definitions are in `~/.claude/agents/` and pin effort only, so always pass the model.
 - **Escalation:** if a teammate or task outgrows its tier, start it again one tier higher (and update the
   task's `modelTier` if it is a plan task). Raise the tier, not the effort. Never move a tier down silently.
