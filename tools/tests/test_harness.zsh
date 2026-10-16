@@ -1,5 +1,6 @@
 source "${0:A:h}/lib.zsh"
-live_before="$("$TT_BIN" ls 2>&1)"
+live_tt() { "$TT_BIN" ls -F '#{session_name}' 2>/dev/null | grep -E '^tt(-|$)' }   # only names the harness could create
+live_before="$(live_tt)"
 tt_setup
 check "session tt exists"        tt has-session -t '=tt'
 check "three windows"            test "$(tt list-windows -t '=tt' -F '#{window_name}' | tr '\n' ' ')" = "claude shell tests "
@@ -12,5 +13,5 @@ check "probe server up before exit" test "$probe_up" = yes
 check "probe server killed on exit" test -z "$("$TT_BIN" -L "$probe_sock" ls 2>/dev/null)"
 check "probe temp dir removed"   test ! -e "$probe_dir"
 unset TMUX TMUX_PANE
-check "live server untouched"    test "$("$TT_BIN" ls 2>&1)" = "$live_before"
+check "live server untouched"    test "$(live_tt)" = "$live_before"
 tt_done
