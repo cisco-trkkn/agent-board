@@ -10,6 +10,10 @@ split across an agent team by default. They do not want to ask for a team each t
   (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, `teammateMode: auto`). Each teammate opens in its own tmux
   window named `✦ <teammate name>` (a tmux hook moves it out of your window), where the user can watch and
   talk to it. Give teammates short, distinct names; they become the window names.
+- Teammates start in your shell's current folder. Before spawning, `cd` to the repo root (or another folder
+  already trusted): an untrusted folder leaves the teammate dead at the "trust this folder" prompt, silently.
+  After spawning, check each new teammate's pane is alive (`tmux list-panes -a -F '#{window_name} #{pane_dead}'`)
+  and respawn it if dead.
 - Size the team to the task. The usual size is 2–3 teammates with distinct, non-overlapping roles, for
   example: implementer, tester (owns the `tests` window), reviewer. Never more than 4.
 - Skip the team only for quick questions, explanations or one-line edits. Then say in one line that you

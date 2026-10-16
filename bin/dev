@@ -7,6 +7,9 @@ TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
 dir="${1:-$PWD}"
 dir="${dir:A}"
 root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root="$dir"
+# ~ is itself a git repo: a new, not-yet-initialised folder under it must not resolve to ~
+[[ "$root" == "$HOME" && "$dir" != "$HOME" ]] && root="$dir"
+[[ "$root" != "$dir" ]] && print -ru2 -- "dev: $dir is inside repo $root — using $root"
 name="${root:t}"
 name="${name//[.:]/_}"          # tmux session names can't contain . or :
 
@@ -15,6 +18,8 @@ if ! "$TMUX_BIN" has-session -t "=$name" 2>/dev/null; then
   "$TMUX_BIN" send-keys -t "=${name}:claude" "${DEV_CLAUDE_CMD:-claude-orchestrator}" Enter   # agent team by default
   "$TMUX_BIN" new-window -d -t "=$name:" -n shell -c "$root"
   "$TMUX_BIN" select-window -t "=${name}:claude"
+elif [[ -n "$DEV_CLAUDE_CMD" ]]; then
+  print -ru2 -- "dev: session '$name' already exists — DEV_CLAUDE_CMD was not sent"
 fi
 
 "${TC_LAYOUT:-$HOME/.local/bin/tmux-dev-layout}" "$name" "$root" 2>/dev/null || true
