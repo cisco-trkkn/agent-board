@@ -267,7 +267,10 @@ def session_path(sess):
 
 def project_repo(sess):
     """The project's main checkout, even when its lead pane sits in a worktree."""
-    r = git(session_path(sess), "rev-parse", "--path-format=absolute", "--git-common-dir")
+    path = next((x.get("path") for x in state()["sessions"] if x["name"] == sess), None)  # as /api/state computes it
+    if not path:
+        raise RuntimeError(f"no session '{sess}'")
+    r = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if r.returncode != 0:
         raise RuntimeError(f"{sess} is not in a git repo")
     return str(Path(r.stdout.strip()).parent)

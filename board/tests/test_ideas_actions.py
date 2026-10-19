@@ -65,8 +65,21 @@ class ActionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.system(f"git -C '{d}' init -q && git -C '{d}' commit -q --allow-empty -m i")
             os.system(f"git -C '{d}' worktree add -q '{d}/.claude/worktrees/w' -b w")
-            with mock.patch.object(server, "session_path", return_value=f"{d}/.claude/worktrees/w"):
+            st = {"sessions": [{"name": "p", "path": f"{d}/.claude/worktrees/w"}]}
+            with mock.patch.object(server, "state", return_value=st):
                 self.assertEqual(os.path.realpath(server.project_repo("p")), os.path.realpath(d))
+
+    def test_project_repo_uses_state_path_not_active_window(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as elsewhere:
+            os.system(f"git -C '{d}' init -q && git -C '{d}' commit -q --allow-empty -m i")
+            st = {"sessions": [{"name": "p", "path": d}, {"name": "nopath", "path": None},
+                               {"name": "nogit", "path": elsewhere}]}
+            with mock.patch.object(server, "state", return_value=st), \
+                 mock.patch.object(server, "session_path", return_value=elsewhere):
+                self.assertEqual(os.path.realpath(server.project_repo("p")), os.path.realpath(d))
+                for s in ("nopath", "nogit", "missing"):
+                    with self.assertRaises(RuntimeError):
+                        server.project_repo(s)
 
     def test_stale_is_409(self):
         httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
