@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -232,6 +233,23 @@ class MoveTest(Base):
         self.assertNotIn(str(self.doc), [i["path"] for i in artifacts.summary("p")["items"]])
         with self.assertRaises(FileNotFoundError):
             artifacts.read("p", str(self.doc))
+
+    def test_move_with_the_real_hook_and_an_other_kind_plan(self):
+        if not os.access(artifacts.HOOK, os.X_OK):
+            self.skipTest("artifact-register.sh is not installed")
+        doc = self.src / "docs/superpowers/plans/2026-10-19-real.md"
+        doc.write_text("# Real\n")
+        env = {**os.environ, "TC_STATE": str(self.state)}
+        subprocess.run([str(artifacts.HOOK), "--path", str(doc), "--kind", "other", "--project", "p"],
+                       env=env, check=True, capture_output=True, timeout=20)
+        real = os.path.realpath(doc)   # the hook resolves symlinks (/var -> /private/var)
+        item = next(i for i in artifacts.summary("p")["items"] if os.path.realpath(i["path"]) == real)
+        self.assertEqual(item["kind"], "other")
+        with mock.patch.dict(os.environ, {"TC_STATE": str(self.state)}):
+            artifacts.move("p", item["path"], "t", os.path.realpath(self.src), os.path.realpath(self.dst))
+        new = os.path.realpath(self.dst / "docs/superpowers/plans/2026-10-19-real.md")
+        self.assertEqual([os.path.realpath(i["path"]) for i in artifacts.summary("t")["items"]], [new])
+        self.assertNotIn(real, [os.path.realpath(i["path"]) for i in artifacts.summary("p")["items"]])
 
     def test_move_without_sidecar(self):
         self.side.unlink()
