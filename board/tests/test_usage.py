@@ -1,4 +1,7 @@
 from datetime import datetime, timezone
+import importlib.util
+import threading, urllib.error, urllib.request
+from unittest import mock
 import importlib, json, os, shutil, sqlite3, sys, tempfile, time, unittest
 from pathlib import Path
 
@@ -477,6 +480,201 @@ class ReportTest(unittest.TestCase):
         usds = [x["usd"] for x in self.report()["by_role"]]
         self.assertEqual(usds, sorted(usds, reverse=True))
         self.assertEqual(self.report()["by_role"][0]["key"], "worker")
+
+
+def recent_line(rid, sess="s1", **kw):
+    return line(rid, sess=sess, ts=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), **kw)
+
+
+class IndexerTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.root = self.tmp / "projects"
+        self.p = self.root / "proj"; self.p.mkdir(parents=True)
+        self.db = self.tmp / "u.sqlite"
+        self.ix = usage.Indexer(self.root, self.db, alerts_path=self.tmp / "none.json")
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.addCleanup(self.ix.close)
+        self.old = self.p / "old.jsonl"; self.old.write_text(line("o", sess="so"))
+        self.new = self.p / "new.jsonl"; self.new.write_text(recent_line("n", sess="sn"))
+        os.utime(self.old, (1000, 1000))
+        self.sub = self.p / "sn" / "subagents" / "agent-x.jsonl"; self.sub.parent.mkdir(parents=True)
+        self.sub.write_text(recent_line("z", sess="sn"))
+        os.utime(self.sub, (2000, 2000))
+
+    def test_scan_ingests_newest_first_including_subagents(self):
+        seen, real = [], usage.ingest
+        def spy(conn, path):
+            seen.append(Path(path).name); return real(conn, path)
+        with mock.patch.object(usage, "ingest", spy):
+            self.ix.scan()
+        self.assertEqual(seen[0], "new.jsonl")
+        self.assertEqual(seen[-1], "old.jsonl")
+        self.assertEqual(sorted(seen), ["agent-x.jsonl", "new.jsonl", "old.jsonl"])
+
+    def test_progress_done_equals_total_after_pass(self):
+        self.assertEqual(self.ix.progress(), {"done": 0, "total": 0})
+        self.ix.scan()
+        pr = self.ix.progress()
+        self.assertGreater(pr["total"], 0)
+        self.assertEqual(pr["done"], pr["total"])
+
+    def test_snapshot_refreshed_each_scan(self):
+        self.assertEqual(self.ix.snapshot(), [])
+        self.ix.scan()
+        self.assertEqual([e["session_id"] for e in self.ix.snapshot()], ["sn"])
+
+    def test_exception_is_stored_and_next_pass_clears_it(self):
+        real, calls = usage.ingest, []
+        def flaky(conn, path):
+            calls.append(path)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return real(conn, path)
+        with mock.patch.object(usage, "ingest", flaky):
+            self.ix.scan()
+            self.assertIn("boom", self.ix.error)
+            self.assertEqual(len(calls), 3)      # the pass went on to the other files
+            self.ix.scan()
+        self.assertIsNone(self.ix.error)
+        self.assertEqual(self.ix.progress()["done"], self.ix.progress()["total"])
+
+    def test_bad_thresholds_warning_is_kept(self):
+        bad = self.tmp / "alerts.json"; bad.write_text("{nope")
+        ix = usage.Indexer(self.root, self.tmp / "u2.sqlite", alerts_path=bad)
+        self.addCleanup(ix.close)
+        ix.scan()
+        self.assertTrue(ix.warning)
+
+    def test_start_runs_thread_and_stop_ends_it(self):
+        self.ix.start(interval=0.05)
+        for _ in range(100):
+            if self.ix.progress()["total"]:
+                break
+            time.sleep(0.05)
+        self.assertGreater(self.ix.progress()["total"], 0)
+        self.ix.stop()
+        self.assertFalse(self.ix.thread.is_alive())
+
+
+class CardAlertsTest(unittest.TestCase):
+    AL = [{"kind": "context", "label": "ctx 90%", "detail": "d"}]
+
+    def sess(self):
+        return {"name": "p", "path": "/r", "windows": [
+            {"name": "claude", "teammate": False, "worker": False, "panes": [{"id": "%1", "path": "/r"}]},
+            {"name": "\u2726 mate", "teammate": True, "worker": False, "panes": [{"id": "%2", "path": "/r"}]},
+            {"name": "w1", "teammate": False, "worker": True, "panes": [{"id": "%3", "path": "/r/.claude/worktrees/w1"}]},
+        ]}
+
+    def live(self, **kw):
+        e = {"session_id": "x", "name": "n", "agent_name": None, "cwd": "/r", "alerts": self.AL}
+        e.update(kw); return e
+
+    def test_teammate_window_matches_agent_name(self):
+        s = self.sess(); usage.card_alerts([s], [self.live(agent_name="mate", cwd="/elsewhere")])
+        self.assertEqual(s["usage_alerts"], {"%2": self.AL})
+
+    def test_worker_pane_matches_cwd(self):
+        s = self.sess(); usage.card_alerts([s], [self.live(cwd="/r/.claude/worktrees/w1")])
+        self.assertEqual(s["usage_alerts"], {"%3": self.AL})
+
+    def test_claude_window_matches_newest_no_agent_session_in_repo(self):
+        s = self.sess()
+        live = [self.live(session_id="newest-mate", agent_name="mate", alerts=[]),
+                self.live(session_id="lead-new", alerts=self.AL), self.live(session_id="lead-old", alerts=[])]
+        usage.card_alerts([s], live)
+        self.assertEqual(s["usage_alerts"], {"%1": self.AL})
+
+    def test_unmatched_session_has_no_badge_but_counts(self):
+        s = self.sess(); usage.card_alerts([s], [self.live(cwd="/r/.claude/worktrees/gone")])
+        self.assertEqual(s["usage_alerts"], {})
+        self.assertEqual(s["usage_alert_count"], 1)
+
+    def test_no_alerts_and_no_live(self):
+        s = self.sess(); usage.card_alerts([s], [])
+        self.assertEqual((s["usage_alerts"], s["usage_alert_count"]), ({}, 0))
+
+    def test_other_projects_sessions_do_not_count(self):
+        s = self.sess(); usage.card_alerts([s], [self.live(cwd="/other")])
+        self.assertEqual(s["usage_alert_count"], 0)
+
+
+class UsageApiTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.env = {k: os.environ.get(k) for k in ("TC_STATE", "USAGE_ROOT", "TMUX_DASH_TOKEN")}
+        os.environ["TC_STATE"] = str(self.tmp / "state"); os.environ["USAGE_ROOT"] = str(self.tmp / "projects")
+        os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")
+        spec = importlib.util.spec_from_file_location("tmux_dash_server_usage", HERE / "server.py")
+        self.server = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.server)
+        self.assertIsNone(self.server.INDEXER)     # importing must not start the indexer
+        self.httpd = self.server.ThreadingHTTPServer(("127.0.0.1", 0), self.server.Handler)
+        port = self.httpd.server_address[1]
+        self.hosts = mock.patch.object(self.server, "ALLOWED_HOSTS", {f"127.0.0.1:{port}"}); self.hosts.start()
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True); self.thread.start()
+        self.base = f"http://127.0.0.1:{port}/{self.server.TOKEN}"
+    def tearDown(self):
+        self.httpd.shutdown(); self.httpd.server_close(); self.thread.join(5); self.hosts.stop()
+        for k, v in self.env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp)
+    def get(self, path):
+        try:
+            with urllib.request.urlopen(f"{self.base}/{path}", timeout=5) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, e.read().decode()
+            finally:
+                e.close()
+    def seed(self):
+        src = self.tmp / "p" / "s1.jsonl"; src.parent.mkdir()
+        src.write_text(recent_line("a", inp=1_000_000, out=0, cwd="/r"))
+        conn = usage.connect(usage.db_path()); usage.ingest(conn, src); conn.close()
+
+    def test_bad_session_name_is_400(self):
+        self.assertEqual(self.get("api/usage?session=..bad")[0], 400)
+
+    def test_unknown_session_is_404(self):
+        with mock.patch.object(self.server, "state", return_value={"sessions": []}):
+            code, body = self.get("api/usage?session=p")
+        self.assertEqual((code, json.loads(body)["error"]), (404, "no such session"))
+
+    def test_usage_returns_report_for_session_repo(self):
+        self.seed()
+        with mock.patch.object(self.server, "state", return_value={"sessions": [{"name": "p", "path": "/r"}]}):
+            code, body = self.get("api/usage?session=p")
+        d = json.loads(body)
+        self.assertEqual(code, 200)
+        self.assertAlmostEqual(d["headline"]["month"], 4.0)
+        for k in ("alerts", "live", "daily", "by_role", "by_model", "by_branch", "warning", "indexing", "index_error"):
+            self.assertIn(k, d)
+        self.assertIsNone(d["indexing"])    # no indexer in tests
+
+    def test_usage_other_repo_is_empty(self):
+        self.seed()
+        with mock.patch.object(self.server, "state", return_value={"sessions": [{"name": "q", "path": "/elsewhere"}]}):
+            d = json.loads(self.get("api/usage?session=q")[1])
+        self.assertEqual(d["headline"]["month"], 0)
+
+    def test_feed_endpoint_is_gone(self):
+        self.assertEqual(self.get("api/feed?session=p")[0], 404)
+
+    def test_build_state_uses_snapshot_not_sqlite(self):
+        fake = mock.Mock(); fake.snapshot.return_value = [{"session_id": "x", "name": "n", "agent_name": None, "cwd": "/r",
+                                                             "alerts": [{"kind": "context", "label": "l", "detail": "d"}]}]
+        S = self.server.SEP
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", ""])
+        with mock.patch.object(self.server, "INDEXER", fake), mock.patch.object(self.server, "tmux", return_value=row), \
+             mock.patch.object(self.server, "pane_text", return_value=[]), mock.patch.object(self.server, "cached_worktrees", return_value=[]), \
+             mock.patch.object(usage, "connect", side_effect=AssertionError("sqlite on the state path")):
+            s = self.server.build_state()["sessions"][0]
+        self.assertEqual(s["usage_alerts"], {"%1": fake.snapshot.return_value[0]["alerts"]})
+        self.assertEqual(s["usage_alert_count"], 1)
 
 
 if __name__ == "__main__":

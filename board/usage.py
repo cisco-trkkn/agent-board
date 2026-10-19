@@ -3,6 +3,8 @@ import json
 import os
 import re
 import sqlite3
+import threading
+import time
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 
@@ -303,3 +305,120 @@ def _branch_key(r):
     if "/.claude/worktrees/" in cwd:
         return cwd.split("/.claude/worktrees/", 1)[1].split("/")[0]
     return "(none)"
+
+
+class Indexer:
+    """Keeps the sqlite index current and an in-memory snapshot of live sessions.
+
+    One sqlite connection, created lazily and used only by the thread that scans.
+    """
+
+    def __init__(self, root, db, alerts_path=None):
+        self.root, self.db = Path(root), Path(db)
+        self.alerts_path = alerts_path or ALERTS_PATH
+        self.error = None
+        self.warning = None
+        self.thread = None
+        self._conn = None
+        self._lock = threading.Lock()
+        self._snapshot = []
+        self._progress = {"done": 0, "total": 0}
+        self._stop = threading.Event()
+
+    def files(self):
+        found = list(self.root.glob("*/*.jsonl")) + list(self.root.glob("*/*/subagents/*.jsonl"))
+        stamped = []
+        for p in found:
+            try:
+                st = p.stat()
+            except OSError:   # vanished between glob and stat
+                continue
+            stamped.append((st.st_mtime, st.st_size, p))
+        return sorted(stamped, key=lambda t: t[0], reverse=True)
+
+    def scan(self):
+        """One pass, newest file first. A failing file is recorded in `error`; the pass goes on."""
+        error = None
+        files = self.files()
+        with self._lock:
+            self._progress = {"done": 0, "total": sum(sz for _, sz, _ in files)}
+        try:
+            if self._conn is None:
+                self._conn = connect(self.db)
+            for _, size, p in files:
+                try:
+                    ingest(self._conn, p)
+                except Exception as e:   # noqa: BLE001 - one bad file must not stop the pass
+                    error = f"{p.name}: {type(e).__name__}: {e}"
+                with self._lock:
+                    self._progress["done"] += size
+            prices = load_prices()
+            th, self.warning = thresholds(self.alerts_path)
+            live = live_sessions(self._conn, prices, th, time.time())
+            with self._lock:
+                self._snapshot = live
+        except Exception as e:   # noqa: BLE001
+            error = f"{type(e).__name__}: {e}"
+        self.error = error
+
+    def progress(self):
+        with self._lock:
+            return dict(self._progress)
+
+    def snapshot(self):
+        with self._lock:
+            return list(self._snapshot)
+
+    def start(self, interval=5.0):
+        def loop():
+            while not self._stop.is_set():
+                self.scan()
+                self._stop.wait(interval)
+        self.thread = threading.Thread(target=loop, name="usage-indexer", daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self.thread:
+            self.thread.join(10)
+
+    def close(self):
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+
+def card_alerts(sessions, live):
+    """Attach usage alerts to board cards: s["usage_alerts"] = {pane id: [alerts]}, s["usage_alert_count"].
+
+    `live` is newest-first (live_sessions order). Rules: a teammate window "✦ <name>" matches the session whose
+    agent_name is <name>; a worker pane matches by cwd == pane path; the `claude` window's first pane matches the
+    newest session without agent_name whose cwd is the repo. The count covers every live session in the project,
+    matched or not, so it equals the number of alerts the Usage tab lists.
+    """
+    for s in sessions:
+        repo = s.get("path") or ""
+        badges = {}
+        for w in s.get("windows", []):
+            panes = w.get("panes") or []
+            if not panes:
+                continue
+            hit = None
+            if w.get("teammate"):
+                name = re.sub(r"^\u2726\s*", "", w.get("name", ""))
+                hit = next((e for e in live if e.get("agent_name") == name), None)
+                target = panes[0]
+            elif w.get("worker"):
+                for pane in panes:
+                    hit = next((e for e in live if e.get("cwd") == pane.get("path")), None)
+                    if hit:
+                        target = pane
+                        break
+            elif w.get("name") == "claude":
+                hit = next((e for e in live if not e.get("agent_name") and e.get("cwd") == repo), None)
+                target = panes[0]
+            if hit and hit.get("alerts"):
+                badges[target["id"]] = hit["alerts"]
+        s["usage_alerts"] = badges
+        s["usage_alert_count"] = sum(len(e.get("alerts") or []) for e in live if repo and in_project(e.get("cwd"), repo))
+    return sessions
