@@ -3,37 +3,5 @@
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "AGENT_BOARD": "1"
   },
-  "teammateMode": "auto",
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": "\"$AGENT_BOARD_REPO/claude/hooks/kill-guard.sh\" --scoped", "timeout": 10 }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": "\"$AGENT_BOARD_REPO/claude/hooks/bash-mirror.sh\" --scoped", "timeout": 5, "async": true }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit|Artifact",
-        "hooks": [
-          { "type": "command", "command": "\"$AGENT_BOARD_REPO/claude/hooks/artifact-register.sh\" --scoped", "timeout": 5, "async": true }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": "\"$AGENT_BOARD_REPO/claude/hooks/bash-mirror.sh\" --scoped", "timeout": 5, "async": true }
-        ]
-      }
-    ]
-  }
+  "teammateMode": "auto"
 }

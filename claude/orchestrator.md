@@ -26,7 +26,7 @@ split across an agent team by default. They do not want to ask for a team each t
 
 ## Starting from a handoff
 
-If your first prompt says to read a handoff doc (`~/.claude/handoffs/…`), read it first. If it has a **Team** section, start the team again before anything else:
+If your first prompt says to read a handoff doc (`~/.local/state/agent-board/handoffs/…`, or `~/.claude/handoffs/…` for older ones), read it first. If it has a **Team** section, start the team again before anything else:
 - Respawn every teammate with the same name, role and tier (see "Models and effort").
 - Start each teammate's prompt with the usual teammate rules, then its checkpoint note from the doc: task, files, progress, next step, assumptions.
 - A teammate marked `no checkpoint` gets its captured output, and is told to re-check the state of its files before continuing.
@@ -57,7 +57,7 @@ The `superpowers-extended-cc:*` skills are how work is done here. Use them witho
 
 | Situation | Skill (`superpowers-extended-cc:…`) | Who |
 | --- | --- | --- |
-| Every session, first (before the first tool call and before any skill below) | `task-observer:task-observer`: invoke it and run its Session Start Protocol (workspace probe, scan, review trigger) | you |
+| Every session, first (before the first tool call and before any skill below) | If installed: `task-observer:task-observer`: invoke it and run its Session Start Protocol (workspace probe, scan, review trigger) | you |
 | New feature or behaviour change | `brainstorming`, then `writing-plans` | you, with the user: the one place the user is asked questions |
 | Any other multi-step work (ops runbooks, handoffs, migrations) | `writing-plans` (brainstorming only if the design is open) | you |
 | Carrying out a plan | `subagent-driven-development` (teammates take the plan's tasks) or `dispatching-parallel-agents` for independent pieces | you |
@@ -66,7 +66,7 @@ The `superpowers-extended-cc:*` skills are how work is done here. Use them witho
 | Review | `requesting-code-review`; acting on findings: `receiving-code-review` | reviewer; implementer |
 | Before saying anything works or is done | `verification-before-completion` | everyone |
 | Finishing a branch | `finishing-a-development-branch`; it asks the user how to integrate | you |
-| The user asked to push, open or update an MR, merge, or check a pipeline | `gitlab-ci-loop` (not a superpowers skill): push, watch the pipeline, read failed jobs, fix until green. Only after the user asked; never push to `main`/`master` | you |
+| The user asked to push, open or update an MR, merge, or check a pipeline | If installed: `gitlab-ci-loop` (not a superpowers skill): push, watch the pipeline, read failed jobs, fix until green. Only after the user asked; never push to `main`/`master` | you |
 
 The skills apply whether or not you start a team: a fix you make yourself still goes through
 `systematic-debugging` and `verification-before-completion`. Invoke each one with the Skill tool; don't just
@@ -100,7 +100,7 @@ The tier-to-model map is in `docs/superpowers/model-routing.json` in the repo; i
   - `standard`: `subagent_type: "effort-medium"`, `model: "sonnet"`.
   - `frontier`: `subagent_type: "general-purpose"`, `model: "fable"` (effort inherits the session's). A
     frontier dispatch without a model is blocked where the repo's routing file maps frontier to fable.
-  The `effort-*` definitions are in `~/.claude/agents/` and pin effort only, so always pass the model.
+  The `effort-*` definitions ship in the agent-board plugin (`claude/plugin/agents/`) and pin effort only, so always pass the model.
 - **Escalation:** if a teammate or task outgrows its tier, start it again one tier higher (and update the
   task's `modelTier` if it is a plan task). Raise the tier, not the effort. Never move a tier down silently.
 
@@ -136,7 +136,7 @@ the user only when it is truly theirs to decide, and batch such questions into o
 | `shell` | the user's own terminal. Never type into it |
 | `<project>-bg` (hidden session) | the agents' `tests` and `shell` windows and their lanes, driven only through `tmux-ctl` |
 
-The user follows agent runs and commands in the Agent Board's Activity drawer, and plans, specs, handoffs and reports in its artifacts panel. Drive `tests` and `shell` with `tmux-ctl` (full reference: the tmux-orchestrator skill); those names resolve to `<project>-bg`:
+The user follows agent runs and commands in the Agent Board's Activity drawer, and plans, specs, handoffs and reports in its artifacts panel. Drive `tests` and `shell` with `tmux-ctl` (full reference: the `agent-board:tmux-orchestrator` skill); those names resolve to `<project>-bg`:
 
 - `tmux-ctl list`: windows, idle/busy
 - `tmux-ctl run tests "<cmd>"`: run, wait, get the output and exit code
@@ -148,7 +148,7 @@ The user follows agent runs and commands in the Agent Board's Activity drawer, a
   are closed after 15 minutes idle
 - `tmux-ctl artifact <path>`: show a file in the board's artifacts panel
 - `tmux-ctl idea "<text>"`: file an idea for later
-- `tmux-ctl relay <doc>`: used only by `/handoff`
+- `tmux-ctl relay <doc>`: used only by `agent-board:handoff`
 
 For long or parallel independent tasks that should keep going after this conversation, use
 `tmux-ctl agent <name> "<task>"`. This starts a worker Claude in its own window and git worktree. Check on

@@ -52,5 +52,7 @@ check "kill-guard: both registrations -> 1 block"    test $n = 1
 S="$R/claude/settings.json"
 check "settings.json exists"                         test -f "$S"
 check "settings.json has no absolute path"           test -z "$(grep -E '/(Users|home)/' "$S" 2>/dev/null)"
-check "settings.json hooks pass --scoped"            test "$(grep -c -- '--scoped' "$S" 2>/dev/null)" -ge 3
+HJ="$R/claude/plugin/hooks/hooks.json"   # hook registration lives in the plugin now
+check "hooks.json hooks pass --scoped"               test "$(grep -c -- '--scoped' "$HJ" 2>/dev/null)" -ge 4
+check "hooks.json has no absolute path"              test -z "$(grep -E '/(Users|home)/' "$HJ" 2>/dev/null)"
 tt_done
