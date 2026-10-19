@@ -512,12 +512,27 @@ class IndexerTest(unittest.TestCase):
         self.assertEqual(seen[-1], "old.jsonl")
         self.assertEqual(sorted(seen), ["agent-x.jsonl", "new.jsonl", "old.jsonl"])
 
-    def test_progress_done_equals_total_after_pass(self):
+    def test_progress_counts_bytes_during_first_pass_then_is_none(self):
         self.assertEqual(self.ix.progress(), {"done": 0, "total": 0})
+        mid, real = [], usage.ingest
+        def spy(conn, path):
+            r = real(conn, path); mid.append(self.ix.progress()); return r
+        with mock.patch.object(usage, "ingest", spy):
+            self.ix.scan()
+        self.assertEqual(len(mid), 3)
+        self.assertTrue(all(m["total"] > 0 for m in mid))
+        self.assertLess(mid[0]["done"], mid[0]["total"])        # the first file is not everything
+        self.assertGreater(mid[-1]["done"], mid[0]["done"])     # bytes accumulate as files finish
+        self.assertEqual([m["done"] for m in mid], sorted(m["done"] for m in mid))
+        self.assertIsNone(self.ix.progress())                   # complete: nothing to report any more
+
+    def test_progress_stays_none_on_later_passes(self):
         self.ix.scan()
-        pr = self.ix.progress()
-        self.assertGreater(pr["total"], 0)
-        self.assertEqual(pr["done"], pr["total"])
+        seen, real = [], usage.ingest
+        with mock.patch.object(usage, "ingest", lambda c, p: (seen.append(self.ix.progress()), real(c, p))[1]):
+            self.ix.scan()
+        self.assertTrue(seen and all(x is None for x in seen))
+        self.assertIsNone(self.ix.progress())
 
     def test_snapshot_refreshed_each_scan(self):
         self.assertEqual(self.ix.snapshot(), [])
@@ -537,7 +552,7 @@ class IndexerTest(unittest.TestCase):
             self.assertEqual(len(calls), 3)      # the pass went on to the other files
             self.ix.scan()
         self.assertIsNone(self.ix.error)
-        self.assertEqual(self.ix.progress()["done"], self.ix.progress()["total"])
+        self.assertIsNone(self.ix.progress())
 
     def test_bad_thresholds_warning_is_kept(self):
         bad = self.tmp / "alerts.json"; bad.write_text("{nope")
@@ -549,10 +564,10 @@ class IndexerTest(unittest.TestCase):
     def test_start_runs_thread_and_stop_ends_it(self):
         self.ix.start(interval=0.05)
         for _ in range(100):
-            if self.ix.progress()["total"]:
+            if self.ix.snapshot():
                 break
             time.sleep(0.05)
-        self.assertGreater(self.ix.progress()["total"], 0)
+        self.assertTrue(self.ix.snapshot())
         self.ix.stop()
         self.assertFalse(self.ix.thread.is_alive())
 

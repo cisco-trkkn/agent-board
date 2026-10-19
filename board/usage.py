@@ -324,6 +324,7 @@ class Indexer:
         self._snapshot = []
         self._progress = {"done": 0, "total": 0}
         self._stop = threading.Event()
+        self._first_pass_done = False
 
     def files(self):
         found = list(self.root.glob("*/*.jsonl")) + list(self.root.glob("*/*/subagents/*.jsonl"))
@@ -341,7 +342,8 @@ class Indexer:
         error = None
         files = self.files()
         with self._lock:
-            self._progress = {"done": 0, "total": sum(sz for _, sz, _ in files)}
+            if not self._first_pass_done:
+                self._progress = {"done": 0, "total": sum(sz for _, sz, _ in files)}
         try:
             if self._conn is None:
                 self._conn = connect(self.db)
@@ -351,19 +353,23 @@ class Indexer:
                 except Exception as e:   # noqa: BLE001 - one bad file must not stop the pass
                     error = f"{p.name}: {type(e).__name__}: {e}"
                 with self._lock:
-                    self._progress["done"] += size
+                    if self._progress is not None:
+                        self._progress["done"] += size
             prices = load_prices()
             th, self.warning = thresholds(self.alerts_path)
             live = live_sessions(self._conn, prices, th, time.time())
             with self._lock:
                 self._snapshot = live
+                self._first_pass_done = True
+                self._progress = None   # backfill is over: later passes are cheap and must not flicker the UI
         except Exception as e:   # noqa: BLE001
             error = f"{type(e).__name__}: {e}"
         self.error = error
 
     def progress(self):
+        """{done, total} bytes during the first pass, None once it has completed."""
         with self._lock:
-            return dict(self._progress)
+            return dict(self._progress) if self._progress is not None else None
 
     def snapshot(self):
         with self._lock:
