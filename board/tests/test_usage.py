@@ -678,6 +678,57 @@ class CardAlertsTest(unittest.TestCase):
         self.assertEqual(s["usage_alert_count"], 0)
 
 
+class CardLabelsTest(unittest.TestCase):
+    def sess(self):
+        return CardAlertsTest.sess(self)
+
+    def live(self, **kw):
+        e = {"session_id": "x", "name": "n", "role": "lead", "model": "claude-sonnet-5-5", "effort": "medium",
+             "agent_name": None, "cwd": "/r", "alerts": []}
+        e.update(kw); return e
+
+    def test_teammate_label(self):
+        s = self.sess()
+        out = usage.card_labels([s], [self.live(role="teammate", agent_name="mate", model="claude-haiku-5-5", effort="low",
+                                                cwd="/r/.claude/worktrees/x")])
+        want = {"role": "teammate", "model": "haiku", "effort": "low", "label": "✦ mate · haiku·low"}
+        self.assertEqual(s["usage_labels"]["%2"], want)
+        self.assertEqual(out["%2"], want)
+
+    def test_lead_label(self):
+        s = self.sess(); usage.card_labels([s], [self.live(model="claude-opus-5-5", effort="high")])
+        self.assertEqual(s["usage_labels"]["%1"]["label"], "claude · opus·high")
+
+    def test_worker_label_uses_window_name(self):
+        s = self.sess(); usage.card_labels([s], [self.live(role="worker", cwd="/r/.claude/worktrees/w1")])
+        self.assertEqual(s["usage_labels"]["%3"]["label"], "w1 · sonnet·med")
+
+    def test_effort_abbreviations(self):
+        for eff, ab in [("low", "low"), ("medium", "med"), ("high", "high"), ("max", "max"), ("xhigh", "xhigh")]:
+            s = self.sess(); usage.card_labels([s], [self.live(effort=eff)])
+            self.assertEqual(s["usage_labels"]["%1"]["effort"], ab, eff)
+
+    def test_no_effort_drops_suffix(self):
+        s = self.sess(); usage.card_labels([s], [self.live(effort=None)])
+        self.assertEqual(s["usage_labels"]["%1"]["label"], "claude · sonnet")
+        self.assertEqual(s["usage_labels"]["%1"]["effort"], "")
+
+    def test_unmatched_agent_windows_map_to_none(self):
+        s = self.sess(); out = usage.card_labels([s], [])
+        self.assertEqual(out, {"%1": None, "%2": None, "%3": None})
+        self.assertEqual(s["usage_labels"], {})
+
+    def test_non_agent_window_not_returned(self):
+        s = self.sess(); s["windows"].append({"name": "shell", "teammate": False, "worker": False, "panes": [{"id": "%4", "path": "/r"}]})
+        self.assertNotIn("%4", usage.card_labels([s], [self.live()]))
+
+    def test_same_name_teammate_in_other_project_gets_no_label(self):
+        a, b = self.sess(), self.sess(); a["path"] = "/a"; b["path"] = "/b"
+        usage.card_labels([a, b], [self.live(role="teammate", agent_name="mate", cwd="/b/.claude/worktrees/x")])
+        self.assertNotIn("%2", a["usage_labels"])
+        self.assertIn("%2", b["usage_labels"])
+
+
 class UsageApiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
