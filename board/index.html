@@ -327,6 +327,8 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
   <p>Starts Claude in its own window and git worktree (<code>claude -w</code>), so it can't collide with other agents.</p>
   <textarea id="agent-task" rows="4" placeholder="What should it do?" required></textarea>
   <input id="agent-name" placeholder="Name (optional, taken from the task if empty)" pattern="[A-Za-z0-9._-]{1,40}">
+  <div class="row"><label>Model <select id="agent-model"><option value="haiku">haiku</option><option value="sonnet" selected>sonnet</option><option value="opus">opus</option><option value="fable">fable</option></select></label>
+  <label>Effort <select id="agent-effort"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label></div>
   <div class="row"><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start agent</button></div>
 </form></dialog>
 
@@ -598,7 +600,8 @@ $("#btn-agent").onclick = () => { if (!session()) return toast("Open a project f
 $("#form-agent").addEventListener("submit", async (e) => {
   if (e.submitter && e.submitter.value !== "ok") return;
   e.preventDefault();
-  const ok = await action({ action: "agent", session: session().name, name: $("#agent-name").value, task: $("#agent-task").value });
+  const ok = await action({ action: "agent", session: session().name, name: $("#agent-name").value, task: $("#agent-task").value,
+    model: $("#agent-model").value, effort: $("#agent-effort").value });
   if (ok) { $("#dlg-agent").close(); $("#form-agent").reset(); }
 });
 const pathIn = $("#project-path"), acList = $("#ac-list");

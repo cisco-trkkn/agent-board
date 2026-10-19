@@ -3,6 +3,7 @@
 # session's tests/shell feed log. Silent, always exits 0.
 # Entry header: `── HH:MM:SS · <agent> · <cwd> · exit N · @<epoch>` (the epoch orders entries across midnight).
 emulate -L zsh
+source "${${(%):-%x}:A:h:h:h}/tools/lib/tc-env.zsh" 2>/dev/null || exit 0   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
 zmodload zsh/datetime
 [[ -n "$TMUX" && -n "$TMUX_PANE" ]] || exit 0
 {
@@ -63,7 +64,7 @@ sys.stdout.write("\0".join([kind, first, cwd, str(code), tail]))
   winarr=("${(@f)wins}")
   # feeds are written for dev sessions: the agents' window lives in <project>-bg (or, before migration, here)
   "$T" has-session -t "=$canon-bg" 2>/dev/null || (( ${winarr[(Ie)$kind]} )) || exit 0
-  STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"; mkdir -p "$STATE"
+  STATE="$TC_STATE_DIR"; mkdir -p "$STATE"
   log="$STATE/feed-$canon-$kind.log"
   if [[ -f "$log" ]] && (( $(wc -c < "$log") > 2097152 )); then
     tail -c 1048576 "$log" > "$log.tmp.$$" && mv "$log.tmp.$$" "$log"

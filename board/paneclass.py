@@ -11,12 +11,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-SHELLS = {"zsh", "bash", "sh", "fish", "-zsh", "-bash"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
+import tc_env  # noqa: E402
+
+SHELLS = tc_env.SHELLS
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")
-WAITING_RE = re.compile(
-    r"Do you want to|Would you like to|\(y/n\)|❯\s*1\.\s*Yes|Allow this|Press Enter to continue|Enter to confirm",
-    re.I,
-)
+WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
 WORKING_RE = re.compile(r"esc to interrupt", re.I)
 SEP = "\x1f"
 

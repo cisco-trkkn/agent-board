@@ -3,11 +3,12 @@
 # (artifacts manifest, lineage, run records + logs, feeds, relay notices) once the project is gone.
 # Never touches ~/.claude/ideas. Exact file names only. Registered in ~/.tmux.conf.
 emulate -L zsh
+source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
 n="$1"
 [[ "$n" =~ '^[A-Za-z0-9_-][A-Za-z0-9._-]*$' ]] || exit 0
 [[ "$n" == _web-* || "$n" == *-bg ]] && exit 0
 T="${TC_TMUX:-$HOME/.local/bin/tmux}"
-STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
+STATE="$TC_STATE_DIR"
 [[ -d "$STATE" ]] || exit 0
 # the project still lives if any session (a grouped view too) belongs to this canonical name
 live="$("$T" list-sessions -F '#{session_name}'$'\t''#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)" || exit 0   # cannot ask the server (shutting down?): delete nothing

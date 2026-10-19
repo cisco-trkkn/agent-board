@@ -29,6 +29,8 @@ class ReloadTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.app = self.tmp / "app"
         shutil.copytree(BOARD, self.app, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        (self.tmp / "tools").mkdir()   # tc_env.py parses ../tools/lib/tc-env.zsh, so the copy keeps the repo layout
+        shutil.copytree(BOARD.parent / "tools" / "lib", self.tmp / "tools" / "lib")
         self.port = free_port()
         env = {**os.environ, "TMUX_DASH_TOKEN": TOKEN, "TMUX_DASH_PORT": str(self.port),
                "TMUX_DASH_TTYD_PORT": str(free_port()), "TC_STATE": str(self.tmp / "state"),

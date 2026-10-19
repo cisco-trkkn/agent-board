@@ -15,8 +15,9 @@
 #   tmux-ctl send  [-C dir] <win> <text>   type text + Enter into an IDLE shell window, don't wait
 #   tmux-ctl keys  <win> <key>...          raw keys, e.g. C-c to stop something you started
 #   tmux-ctl new   <win> [dir]             open a new shell window
-#   tmux-ctl agent <name> [--force] <task> | --brief FILE
+#   tmux-ctl agent <name> [--force] [--model M] [--effort E] <task> | --brief FILE
 #                                          start a worker Claude in its own worktree + window.
+#                                          --model haiku|sonnet|opus|fable (default sonnet), --effort low|medium|high|xhigh (default medium)
 #                                          The brief needs goal, scope, done-criterion: <8 words is
 #                                          refused unless --brief FILE (contents sent verbatim) or --force;
 #                                          user-config work (~/.claude, hooks, dotfiles...) draws a warning
@@ -32,8 +33,9 @@
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
 emulate -L zsh
 setopt pipefail
+source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
 TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
-STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
+STATE="$TC_STATE_DIR"
 mkdir -p "$STATE"
 
 die() { print -u2 "tmux-ctl: $*"; exit 2 }
@@ -88,7 +90,7 @@ settle_win() {
   local n=0 hs cy
   while (( n++ < 10 )); do
     [[ -n "$2" && -f "$STATE/$2.rc" ]] && return
-    [[ "$(t display -p -t "$1" '#{pane_current_command}')" != ${~SHELLS} ]] && return
+    [[ "$(t display -p -t "$1" '#{pane_current_command}')" != ${~TC_SHELLS} ]] && return
     hs="$(t display -p -t "$1" '#{history_size}')"; cy="$(t display -p -t "$1" '#{cursor_y}')"
     (( ${hs:-0} + ${cy:-0} > ${3:-0} )) && return
     sleep 0.1
@@ -98,13 +100,12 @@ unlock_win() { [[ -n "$LOCKD" && "$(<"$LOCKD/pid" 2>/dev/null)" == "$$" ]] && rm
 main_pane() { t list-panes -t "=$SESSION:$1" -F '#{pane_id} #{@tc_role}' 2>/dev/null | awk '$2==""{print $1; exit}' }
 role_pane() { t list-panes -t "=$SESSION:$1" -F '#{pane_id} #{@tc_role}' 2>/dev/null | awk -v r="$2" '$2==r{print $1; exit}' }
 target() { local p; p="$(main_pane "$1")"; print -r -- "${p:-=$SESSION:$1}" }
-SHELLS='(zsh|bash|sh|fish|-zsh|-bash)'
 
 exists() {
   t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$1" ||
     die "no window '$1' in session '$SESSION' (try: tmux-ctl list)"
 }
-is_idle() { [[ "$(t display -p -t "$(target "$1")" '#{pane_current_command}')" == ${~SHELLS} ]] }
+is_idle() { [[ "$(t display -p -t "$(target "$1")" '#{pane_current_command}')" == ${~TC_SHELLS} ]] }
 need_idle() {
   is_idle "$1" || die "window '$1' is busy running '$(t display -p -t "$(target "$1")" '#{pane_current_command}')' — read it, wait, or ask the user"
 }
@@ -215,7 +216,7 @@ case "$cmd" in
       IFS='|' read -r idx bell agent lane <<< "$(t display -p -t "=$SESSION:$name" '#{window_index}|#{window_bell_flag}|#{@tc_agent}|#{@tc_lane}')"
       mp="$(main_pane "$name")"
       IFS='|' read -r pcmd dir <<< "$(t display -p -t "${mp:-=$SESSION:$name}" '#{pane_current_command}|#{pane_current_path}')"
-      state=busy; [[ "$pcmd" == ${~SHELLS} ]] && state=idle
+      state=busy; [[ "$pcmd" == ${~TC_SHELLS} ]] && state=idle
       [[ "$bell" == 1 ]] && state="$state,needs-user"
       lanetag=; [[ "$lane" == 1 ]] && lanetag="  (lane)"
       print -r -- "$idx  $name  [$state]  cmd=$pcmd${agent:+  (worker agent)}$lanetag  $dir"
@@ -331,12 +332,16 @@ case "$cmd" in
 
   agent)
     name="$1"; shift
-    force=0; briefile=""
+    force=0; briefile=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"
     while [[ "$1" == --* ]]; do
       case "$1" in
         --force) force=1; shift ;;
         --brief) [[ -n "$2" ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
                  briefile="$2"; shift 2 ;;
+        --model)  (( ${TC_MODELS[(Ie)$2]} )) || die "--model needs one of: ${TC_MODELS}"
+                  model="$2"; shift 2 ;;
+        --effort) (( ${TC_EFFORTS[(Ie)$2]} )) || die "--effort needs one of: ${TC_EFFORTS}"
+                  effort="$2"; shift 2 ;;
         *) die "unknown agent option '$1' (tmux-ctl help)" ;;
       esac
     done
@@ -361,7 +366,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     if (( ! force )) && print -r -- "$task" | grep -qiE '~/\.claude|\.claude/(settings|skills|hooks|plugins)|settings(\.local)?\.json|global CLAUDE\.md|(^|[^[:alnum:]_])(hooks?|plugins?|skills?|dotfiles?|launchd|launchagents?)([^[:alnum:]_]|$)'; then
       print -u2 "tmux-ctl: warning: this looks like user-config work (~/.claude, settings, hooks, plugins, skills, global CLAUDE.md, LaunchAgents, dotfiles) — run it in the main session, not a worktree worker (--force silences this)"
     fi
-    [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN task: $task"; exit 0 }   # test seam: stop before any window is created
+    [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; exit 0 }   # test seam: stop before any window is created
     t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"
     root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
     t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
@@ -370,7 +375,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     # workers never see the end-of-session CLAUDE.md nudge (it asks an absent user a question)
     # worker rules (superpowers skills, decide instead of asking) ride along as a system prompt
     rules=""; [[ -r "$HOME/.claude/worker.md" ]] && rules=' --append-system-prompt-file ~/.claude/worker.md'
-    t send-keys -t "$(target "$name")" -l -- "CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker claude -w ${(q)name} -n ${(q)name}${rules} ${(q)task}"
+    t send-keys -t "$(target "$name")" -l -- "CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker claude --model $model --effort $effort -w ${(q)name} -n ${(q)name}${rules} ${(q)task}"
     t send-keys -t "$(target "$name")" Enter
     print -r -- "started worker '$name' in window $SESSION:$name (worktree .claude/worktrees/$name)" ;;
 
@@ -383,7 +388,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     [[ "$(t display -p -t "$(target "$name")" '#{window_bell_flag}')" == 1 ]] &&
       die "'$name' is waiting on the user (permission prompt or question) — tell the user, don't answer it"
     t capture-pane -p -J -t "$(target "$name")" -S -25 |
-      grep -qiE 'Do you want to|Would you like to|\(y/n\)|❯ *1\. *Yes|Allow this|Press Enter to continue' &&
+      grep -qiE -- "$TC_PROMPT_RE" &&
       die "'$name' is showing a prompt for the user — tell the user, don't answer it"
     t send-keys -t "$(target "$name")" -l -- "$*"
     sleep 0.2

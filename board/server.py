@@ -29,6 +29,7 @@ TMUX_CTL = str(BIN / "tmux-ctl")
 DEV = str(BIN / "dev")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text  # noqa: E402,F401
 import activity, artifacts, dirs, ideas, relay  # noqa: E402
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -423,7 +424,12 @@ def _act(body):
             name = agent_name(sess, task)
         elif not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", name):
             raise RuntimeError("agent name: letters, digits, . _ - only")
-        return run_script([TMUX_CTL, "agent", name, task], cwd=session_path(sess), extra_env={"TC_SESSION": sess})
+        model, effort = body.get("model") or tc_env.DEFAULT_MODEL, body.get("effort") or tc_env.DEFAULT_EFFORT
+        if model not in tc_env.MODELS:
+            raise RuntimeError(f"model: one of {', '.join(tc_env.MODELS)}")
+        if effort not in tc_env.EFFORTS:
+            raise RuntimeError(f"effort: one of {', '.join(tc_env.EFFORTS)}")
+        return run_script([TMUX_CTL, "agent", name, "--model", model, "--effort", effort, task], cwd=session_path(sess), extra_env={"TC_SESSION": sess})
     if a == "tell":
         return run_script([TMUX_CTL, "tell", body["window"], body["text"]], extra_env={"TC_SESSION": sess}) or "sent"
     if a == "send":

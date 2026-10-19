@@ -5,7 +5,8 @@
 # Appends {ts,path,kind,agent,hash,url,session_id,epoch} to $STATE/artifacts-<project>.jsonl.
 # epoch = lines in $STATE/lineage-<project>.jsonl (one per handoff relay). Silent; always exits 0.
 emulate -L zsh
-STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
+source "${${(%):-%x}:A:h:h:h}/tools/lib/tc-env.zsh" 2>/dev/null || exit 0   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
+STATE="$TC_STATE_DIR"
 TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
 {
   apath= kind= agent= project= manual=0
