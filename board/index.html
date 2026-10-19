@@ -72,6 +72,8 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; back
 .live { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
 .live.off i { background: var(--red); }
+.offline-banner { background: var(--red-soft); color: var(--red); border-bottom: 1px solid var(--red); padding: 6px 16px; font-size: 13px; text-align: center; }
+.offline-banner[hidden] { display: none; }
 
 .attention { display: none; margin: 14px 20px 0; padding: 10px 14px; border-radius: 10px;
   background: var(--amber-soft); color: var(--amber); font-weight: 600; align-items: center; gap: 10px; }
@@ -304,6 +306,7 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
       </div>
     </div>
   </header>
+  <div class="offline-banner" id="offline-banner" role="status" hidden>Board server unreachable — retrying</div>
 
   <div class="attention" id="attention"><span id="attention-text"></span><button id="attention-go">Show me</button></div>
 
@@ -628,16 +631,21 @@ for (const g of document.querySelectorAll(".grip")) g.addEventListener("pointerd
 
 function render() { renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
 
+function setOffline(off) {
+  $("#live").classList.toggle("off", off); $("#live span").textContent = off ? "offline" : "live";
+  $("#offline-banner").hidden = !off;
+}
 async function refresh() {
   try {
     const r = await fetch(`${API}/state`, { cache: "no-store" });
     data = await r.json();
-    $("#live").classList.remove("off"); $("#live span").textContent = "live";
-  } catch (e) { $("#live").classList.add("off"); $("#live span").textContent = "offline"; return; }
+  } catch (e) { setOffline(true); return false; }
+  setOffline(false);
   if (!session() && data.sessions[0]) current = data.sessions[0].name;
   const n = (session() || {}).usage_alert_count || 0;
   $("#act-alerts").textContent = n ? `${n} alert${n === 1 ? "" : "s"}` : "";
   render();
+  return true;
 }
 
 $("#btn-agent").onclick = () => { if (!session()) return toast("Open a project first", true); $("#dlg-agent").showModal(); $("#agent-task").focus(); };
@@ -1426,7 +1434,13 @@ function sortableTable(rows, cols, key) {
 
 // poll 2s after the previous answer, so a slow server never gets a pile of requests
 // (finally: a render error must not stop the polling)
-(async function poll() { try { await refresh(); await pollArtifacts(); await pollIdeas(); await pollActivity(); } catch (e) { console.error(e); } finally { setTimeout(poll, 2000); } })();
+const loggedErrors = new Set();   // log each distinct error once, not every 2 s
+function logOnce(e) { const k = String((e && e.message) || e); if (!loggedErrors.has(k)) { loggedErrors.add(k); console.error(e); } }
+(async function poll() {
+  try { if (await refresh()) { await pollArtifacts(); await pollIdeas(); await pollActivity(); } }
+  catch (e) { if (e instanceof TypeError && /fetch/i.test(e.message)) setOffline(true); else logOnce(e); }
+  finally { setTimeout(poll, 2000); }
+})();
 </script>
 </body>
 </html>
