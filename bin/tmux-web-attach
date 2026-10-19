@@ -4,7 +4,7 @@
 # window than your real terminal without switching it. The view session is destroyed
 # when the browser tab disconnects.
 emulate -L zsh
-TMUX_CMD=("$HOME/.local/bin/tmux" ${(z)TMUX_DASH_TMUX_ARGS})
+source "${0:A:h}/_tc_bins.zsh"; TMUX_CMD=("${TC_TMUX_CMD[@]}")   # the board's server (tmux-dash passes TMUX_DASH_TMUX_ARGS)
 sess="$1" win="$2"
 [[ "$sess" =~ '^[A-Za-z0-9._-]+$' ]] || { print "bad session name"; sleep 3; exit 1 }
 [[ -z "$win" || "$win" =~ '^[0-9]+$' ]] || { print "bad window index"; sleep 3; exit 1 }

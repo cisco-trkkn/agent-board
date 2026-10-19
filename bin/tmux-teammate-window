@@ -9,7 +9,7 @@
 # and the window closes when Claude shuts the teammate down. Other splits are left alone.
 emulate -L zsh
 setopt extendedglob
-T="$HOME/.local/bin/tmux"
+source "${0:A:h}/_tc_bins.zsh"; T=tc_tmux      # the resolved tmux command: the server this hook fires on
 
 # Called with a pane id (and the teammate name, when the start command already gave it): else wait
 # for that pane to show its teammate name, then move it.

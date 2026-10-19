@@ -2,7 +2,7 @@
 # dev [dir] — open (or reattach to) a tmux session for a project.
 # Windows: 1 claude · 2 shell (yours). Agent windows live in the hidden session <name>-bg.  Run it again and it just reattaches.
 emulate -L zsh
-TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+source "${0:A:h}/_tc_bins.zsh"
 
 dir="${1:-$PWD}"
 dir="${dir:A}"
@@ -13,11 +13,11 @@ root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root="$dir"
 name="${root:t}"
 name="${name//[.:]/_}"          # tmux session names can't contain . or :
 
-if ! "$TMUX_BIN" has-session -t "=$name" 2>/dev/null; then
-  "$TMUX_BIN" new-session -d -s "$name" -n claude -c "$root"
-  "$TMUX_BIN" send-keys -t "=${name}:claude" "${DEV_CLAUDE_CMD:-claude-orchestrator}" Enter   # agent team by default
-  "$TMUX_BIN" new-window -d -t "=$name:" -n shell -c "$root"
-  "$TMUX_BIN" select-window -t "=${name}:claude"
+if ! tc_tmux has-session -t "=$name" 2>/dev/null; then
+  tc_tmux new-session -d -s "$name" -n claude -c "$root"
+  tc_tmux send-keys -t "=${name}:claude" "${DEV_CLAUDE_CMD:-claude-orchestrator}" Enter   # agent team by default
+  tc_tmux new-window -d -t "=$name:" -n shell -c "$root"
+  tc_tmux select-window -t "=${name}:claude"
 elif [[ -n "$DEV_CLAUDE_CMD" ]]; then
   print -ru2 -- "dev: session '$name' already exists — DEV_CLAUDE_CMD was not sent"
 fi
@@ -27,9 +27,9 @@ fi
 if [[ -n "$DEV_NO_ATTACH" ]]; then        # used by tmux-dash: create only
   print -r -- "session '$name' ready"
 elif [[ -n "$DEV_CLIENT" ]]; then
-  exec "$TMUX_BIN" switch-client -c "$DEV_CLIENT" -t "=$name"
+  exec "${TC_TMUX_CMD[@]}" switch-client -c "$DEV_CLIENT" -t "=$name"
 elif [[ -n "$TMUX" ]]; then
-  exec "$TMUX_BIN" switch-client -t "=$name"
+  exec "${TC_TMUX_CMD[@]}" switch-client -t "=$name"
 else
-  exec "$TMUX_BIN" attach-session -t "=$name"
+  exec "${TC_TMUX_CMD[@]}" attach-session -t "=$name"
 fi

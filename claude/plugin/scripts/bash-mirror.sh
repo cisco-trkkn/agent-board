@@ -56,15 +56,18 @@ sys.stdout.write("\0".join([kind, first, cwd, str(code), tail]))
   parts=("${(@0)fields}")
   kind=$parts[1] first=$parts[2] cwd=$parts[3] code=$parts[4] tail=$parts[5]
   [[ -n "$kind" ]] || exit 0
-  T="${TC_TMUX:-$HOME/.local/bin/tmux}"
-  info="$("$T" display -p -t "$TMUX_PANE" '#{session_name}'$'\t''#{window_name}'$'\t''#{?session_group,#{session_group},#{session_name}}')" || exit 0
+  # tmux: the repo's resolver; if the plugin was copied away from its repo, the server this pane is on
+  RES="${0:A:h:h:h:h}/bin/_tc_bins.zsh"
+  if [[ -r "$RES" ]]; then source "$RES"; T=tc_tmux
+  else T=("${TC_TMUX:-${commands[tmux]:-$HOME/.local/bin/tmux}}" -S "${TMUX%%,*}"); fi
+  info="$("${T[@]}" display -p -t "$TMUX_PANE" '#{session_name}'$'\t''#{window_name}'$'\t''#{?session_group,#{session_group},#{session_name}}')" || exit 0
   session="${info%%$'\t'*}" rest="${info#*$'\t'}"
   caller="${rest%%$'\t'*}" canon="${rest#*$'\t'}"
   caller="${caller#✦ }"
-  wins="$("$T" list-windows -t "=$session" -F '#{window_name}')" || exit 0
+  wins="$("${T[@]}" list-windows -t "=$session" -F '#{window_name}')" || exit 0
   winarr=("${(@f)wins}")
   # feeds are written for dev sessions: the agents' window lives in <project>-bg (or, before migration, here)
-  "$T" has-session -t "=$canon-bg" 2>/dev/null || (( ${winarr[(Ie)$kind]} )) || exit 0
+  "${T[@]}" has-session -t "=$canon-bg" 2>/dev/null || (( ${winarr[(Ie)$kind]} )) || exit 0
   STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"; mkdir -p "$STATE"
   log="$STATE/feed-$canon-$kind.log"
   if [[ -f "$log" ]] && (( $(wc -c < "$log") > 2097152 )); then

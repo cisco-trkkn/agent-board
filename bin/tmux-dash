@@ -9,6 +9,8 @@
 #
 # Everything listens on 127.0.0.1 only and needs the secret token in the URL.
 emulate -L zsh
+source "${0:A:h}/_tc_bins.zsh"
+export TMUX_DASH_TMUX_ARGS="$(tc_tmux_args_str)"   # server.py and ttyd's tmux-web-attach read the same server
 STATE="$HOME/.local/state/tmux-dash"
 APP="$HOME/.local/share/tmux-dash"
 PORT="${TMUX_DASH_PORT:-7700}"

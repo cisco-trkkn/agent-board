@@ -6,9 +6,9 @@ source "${0:A:h}/_ab_claude.zsh"
 export PATH="$(ab_path)" AGENT_BOARD_REPO="$AB_REPO"
 # teammates inherit the tmux session environment, not this shell's exports (see the teammate-config-inheritance spec)
 if [[ -n "$TMUX" ]]; then
-  TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
-  "$TMUX_BIN" set-environment AGENT_BOARD_REPO "$AB_REPO" 2>/dev/null
-  "$TMUX_BIN" set-environment PATH "$PATH" 2>/dev/null
+  source "${0:A:h}/_tc_bins.zsh"
+  tc_tmux set-environment AGENT_BOARD_REPO "$AB_REPO" 2>/dev/null
+  tc_tmux set-environment PATH "$PATH" 2>/dev/null
 fi
 AB_ARGS=(${(z)$(ab_claude_args)})
 PROMPT_FILE="$HOME/.claude/orchestrator.md"

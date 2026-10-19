@@ -12,7 +12,6 @@ Actions go through the same tested scripts as the tmux shortcuts (tmux-ctl, git)
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 import threading
@@ -23,12 +22,12 @@ from pathlib import Path
 
 HOME = Path.home()
 BIN = HOME / ".local" / "bin"
-TMUX = [str(BIN / "tmux")] + shlex.split(os.environ.get("TMUX_DASH_TMUX_ARGS", ""))
 TMUX_CTL = str(BIN / "tmux-ctl")
 DEV = str(BIN / "dev")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text  # noqa: E402,F401
+from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, tmux_cmd  # noqa: E402,F401
+TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
 import activity, artifacts, dirs, ideas, relay, usage  # noqa: E402
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 

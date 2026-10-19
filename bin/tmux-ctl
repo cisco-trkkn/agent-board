@@ -31,12 +31,12 @@
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
 emulate -L zsh
 setopt pipefail
-TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+source "${0:A:h}/_tc_bins.zsh"
 STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
 mkdir -p "$STATE"
 
 die() { print -u2 "tmux-ctl: $*"; exit 2 }
-t()   { "$TMUX_BIN" "$@" }
+t()   { tc_tmux "$@" }
 
 [[ -n "$TMUX" ]] || die "not inside tmux"
 if [[ -n "$TC_SESSION" ]]; then

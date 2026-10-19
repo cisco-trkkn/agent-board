@@ -6,7 +6,10 @@
 # epoch = lines in $STATE/lineage-<project>.jsonl (one per handoff relay). Silent; always exits 0.
 emulate -L zsh
 STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
-TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+# tmux: the repo's resolver; if the plugin was copied away from its repo, the server this pane is on
+RES="${0:A:h:h:h:h}/bin/_tc_bins.zsh"
+if [[ -r "$RES" ]]; then source "$RES"; TMUX_BIN=tc_tmux
+else TMUX_BIN=("${TC_TMUX:-${commands[tmux]:-$HOME/.local/bin/tmux}}"); [[ -n "$TMUX" ]] && TMUX_BIN+=(-S "${TMUX%%,*}"); fi
 {
   apath= kind= agent= project= manual=0 scoped=0
   while (( $# )); do
@@ -23,11 +26,11 @@ TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
   (( manual || scoped )) || [[ "$AGENT_BOARD" != 1 ]] || exit 0
   if [[ -z "$project" ]]; then
     [[ -n "$TMUX" && -n "$TMUX_PANE" ]] || exit 0
-    project="$("$TMUX_BIN" display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}')" || exit 0
+    project="$("${TMUX_BIN[@]}" display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}')" || exit 0
   fi
   [[ "$project" =~ '^[A-Za-z0-9._-]+$' ]] || exit 0
   if [[ -z "$agent" ]]; then
-    [[ -n "$TMUX_PANE" ]] && agent="$("$TMUX_BIN" display -p -t "$TMUX_PANE" '#{window_name}')"
+    [[ -n "$TMUX_PANE" ]] && agent="$("${TMUX_BIN[@]}" display -p -t "$TMUX_PANE" '#{window_name}')"
     agent="${agent#✦ }"; agent="${agent:-claude}"
   fi
   mkdir -p "$STATE"
