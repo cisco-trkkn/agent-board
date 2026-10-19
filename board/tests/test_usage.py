@@ -78,19 +78,78 @@ class IngestTest(unittest.TestCase):
         self.f.write_text(full)
         self.assertEqual(usage.ingest(self.conn, self.f), 1)
 
-    def test_truncated_file_is_reread_without_duplicates(self):
+    def test_truncated_file_is_reread_from_zero(self):
         self.f.write_text(line("a") + line("b"))
         usage.ingest(self.conn, self.f)
-        self.f.write_text(line("a"))
-        usage.ingest(self.conn, self.f)
-        self.assertEqual(self.count(), 2)   # rows are upserted, never deleted
+        self.f.write_text(line("c"))   # shorter than before, new row
+        self.assertEqual(usage.ingest(self.conn, self.f), 1)
+        self.assertIn(("c",), self.conn.execute("select request_id from calls").fetchall())
 
     def test_replaced_file_new_inode_is_reread(self):
         self.f.write_text(line("a"))
         usage.ingest(self.conn, self.f)
-        tmp = self.f.with_suffix(".new"); tmp.write_text(line("a") + line("c")); os.replace(tmp, self.f)
+        tmp = self.f.with_suffix(".new"); tmp.write_text(line("c")); os.replace(tmp, self.f)   # same size, new inode
+        self.assertEqual(usage.ingest(self.conn, self.f), 1)
+        self.assertIn(("c",), self.conn.execute("select request_id from calls").fetchall())
+
+    def test_rewrite_between_offset_and_size_with_partial_pending(self):
+        a, b = line("a"), line("b")
+        self.f.write_text(a + b[:-10])           # offset = len(a), size = len(a) + len(b) - 10
         usage.ingest(self.conn, self.f)
+        c = line("ccc")
+        self.assertTrue(len(a) <= len(c) < len(a) + len(b) - 10)
+        self.f.write_text(c)                     # same inode, size shrank below the stored size but not below offset
+        usage.ingest(self.conn, self.f)
+        self.assertIn(("ccc",), self.conn.execute("select request_id from calls").fetchall())
+
+    def test_complete_line_then_partial_then_completed(self):
+        a, b = line("a"), line("b")
+        self.f.write_text(a + b[:-10])
+        self.assertEqual(usage.ingest(self.conn, self.f), 1)
+        self.assertEqual(self.conn.execute("select offset from files").fetchone()[0], len(a.encode()))
+        self.f.write_text(a + b)
+        self.assertEqual(usage.ingest(self.conn, self.f), 1)
         self.assertEqual(self.count(), 2)
+        self.assertEqual(self.conn.execute("select offset from files").fetchone()[0], len((a + b).encode()))
+
+    def test_bad_lines_accumulate_then_reset_on_reread(self):
+        bad = lambda: self.conn.execute("select bad_lines from files").fetchone()[0]
+        self.f.write_text(line("a") + "{bad\n")
+        usage.ingest(self.conn, self.f)
+        with self.f.open("a") as h: h.write("{bad2\n" + line("b"))
+        usage.ingest(self.conn, self.f)
+        self.assertEqual(bad(), 2)
+        self.f.write_text("{x\n")               # shrinks: re-read from 0, counter starts over
+        usage.ingest(self.conn, self.f)
+        self.assertEqual(bad(), 1)
+
+    def test_non_object_json_lines_are_bad_lines(self):
+        self.f.write_text("[1, 2]\nnull\n" + line("a"))
+        self.assertEqual(usage.ingest(self.conn, self.f), 1)
+        self.assertEqual(self.conn.execute("select bad_lines from files").fetchone()[0], 2)
+        self.assertEqual(usage.ingest(self.conn, self.f), 0)
+
+    def test_fallback_key_is_per_file_and_stable_on_reread(self):
+        self.f.write_text(line(None) + line(None))
+        sub = self.tmp / "p" / "s1" / "subagents" / "agent-x.jsonl"; sub.parent.mkdir(parents=True)
+        sub.write_text(line(None))                # same session, same offset 0 as the parent's first line
+        usage.ingest(self.conn, self.f); usage.ingest(self.conn, sub)
+        self.assertEqual(self.count(), 3)
+        tmp = self.f.with_suffix(".new"); tmp.write_text(line(None) + line(None)); os.replace(tmp, self.f)   # new inode, re-read from 0
+        usage.ingest(self.conn, self.f)
+        self.assertEqual(self.count(), 3)
+
+    def test_empty_file(self):
+        self.f.write_text("")
+        self.assertEqual(usage.ingest(self.conn, self.f), 0)
+        self.assertEqual(self.conn.execute("select size, offset from files").fetchone(), (0, 0))
+        self.f.write_text(line("a"))
+        self.assertEqual(usage.ingest(self.conn, self.f), 1)
+
+    def test_connect_creates_tables_in_wal(self):
+        names = {r[0] for r in self.conn.execute("select name from sqlite_master where type='table'")}
+        self.assertLessEqual({"calls", "cost_state", "files"}, names)
+        self.assertEqual(self.conn.execute("pragma journal_mode").fetchone()[0], "wal")
 
     def test_duplicate_request_id_stored_once_last_wins(self):
         self.f.write_text(line("a", out=5) + line("a", out=99))

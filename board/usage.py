@@ -76,7 +76,7 @@ def ingest(conn, path):
     st = p.stat()
     prev = conn.execute("select inode, size, offset, bad_lines from files where path=?", (str(p),)).fetchone()
     offset, bad = 0, 0
-    if prev and prev[0] == st.st_ino and st.st_size >= prev[2]:
+    if prev and prev[0] == st.st_ino and st.st_size >= prev[1]:
         if st.st_size == prev[1]:
             return 0
         offset, bad = prev[2], prev[3]
@@ -89,6 +89,8 @@ def ingest(conn, path):
     for raw in data[:end].splitlines(keepends=True):
         try:
             d = json.loads(raw)
+            if not isinstance(d, dict):
+                raise ValueError("not an object")
         except ValueError:
             bad += 1
             pos += len(raw)
@@ -99,7 +101,7 @@ def ingest(conn, path):
         else:
             r = row_from_line(d, sub)
             if r:
-                r["request_id"] = r["request_id"] or f"{r['session_id']}:{pos}"
+                r["request_id"] = r["request_id"] or f"{p}:{pos}"
                 rows.append(tuple(r[c] for c in COLS))
         pos += len(raw)
     with conn:
