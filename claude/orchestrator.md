@@ -141,7 +141,7 @@ The user follows agent runs and commands in the Agent Board's Activity drawer, a
 - `tmux-ctl list`: windows, idle/busy
 - `tmux-ctl run tests "<cmd>"`: run, wait, get the output and exit code
 - `tmux-ctl read <win> [lines]`: see what's on a window
-- `tmux-ctl feed [win] [lines]`: tail of the feed log of mirrored Bash calls (default both windows, 80 lines); the user sees it in the Activity drawer
+- `tmux-ctl feed [win] [lines]`: tail of the feed log of mirrored Bash calls (default both windows, 80 lines); the board's Activity drawer no longer shows it (it has Usage and Runs tabs), so read it here
 - `tmux-ctl send <win> "<cmd>"`: start something long-running without waiting
 - `-C <dir>` on `run` and `send`, before the window (`tmux-ctl run -C <dir> tests "<cmd>"`): run in that directory. Default: your git top level
 - Lanes: if the target window is busy, `run` and `send` use your own lane window `<win>·<you>`. Lanes

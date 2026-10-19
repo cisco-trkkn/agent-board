@@ -54,17 +54,18 @@ A usage line without `requestId` is keyed `<sessionId>:<line offset>`. When
 | --- | --- | --- | --- | --- |
 | Fable 5.1 / 5 | 10 | 50 | 0.25 | 1M |
 | Opus 5.5 | 4 | 20 | 0.20 | 1M |
-| Opus 5 / 4.8 / 4.7 / 4.6 | 5 | 25 | (calibrate) | 1M |
-| Sonnet 5.5 | 2 | 10 | 0.20 | 1M |
-| Sonnet 5 | 2 | 10 | (calibrate) | 1M |
-| Sonnet 4.6 | 3 | 15 | (calibrate) | 1M |
-| Haiku 5.5 | 0.10 | 0.50 | (calibrate) | 1M |
-| Haiku 4.5 | 1 | 5 | (calibrate) | 200K |
+| Opus 5 / 4.8 / 4.7 / 4.6 | 5 | 25 | 0.25 (family ratio) | 1M |
+| Sonnet 5.5 | 2 | 10 | 0.10 (fitted, 67 sessions) | 1M |
+| Sonnet 5 | 2 | 10 | 0.10 (family ratio) | 1M |
+| Sonnet 4.6 | 3 | 15 | 0.15 (family ratio) | 1M |
+| Haiku 5.5 | 0.10 | 0.50 | 0.01 (fitted) | 1M |
+| Haiku 4.5 | 1 | 5 | 0.10 (family ratio) | 200K |
 
-Cache-write rates and the cache-read rates marked "calibrate" are **not assumed**. They are fitted
+Cache rates are **not assumed**. Rows marked "fitted" were fitted
 during implementation against captured cost-state records (sum of `calls` per session and model
 vs. `modelUsage[model].costUSD`). The test keeps them within 1%. Model ids are matched exactly,
 after stripping a trailing `[1m]` and a date suffix.
+Models with no fixture of their own take their family's fitted ratios (cache read 0.05x input for opus and sonnet, 0.1x for haiku; 1h write 2x input; 5m write 1.25x input, unfitted) and carry `_calibrated: false` in `prices.json`.
 
 **Cost.** `cost(row) = Σ tokens × rate / 1e6`. An unknown model is **unpriced**: cost `null`,
 shown as "unpriced", never $0. Aggregates report `unpriced_calls` alongside the dollar sum.

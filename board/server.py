@@ -29,7 +29,7 @@ DEV = str(BIN / "dev")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text  # noqa: E402,F401
-import activity, artifacts, dirs, ideas, relay  # noqa: E402
+import activity, artifacts, dirs, ideas, relay, usage  # noqa: E402
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 
 TOKEN = os.environ["TMUX_DASH_TOKEN"]
@@ -108,6 +108,7 @@ def vendor_file(name):
 
 
 COMMENTS = artifacts.CommentQueue()
+INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
 NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")   # the same rule as ideas.py
 
 
@@ -173,6 +174,7 @@ def build_state():
         s["worktrees"] = cached_worktrees(s["path"])
     out.sort(key=lambda s: (not s["attached"], s["name"]))
     deliver_comments(out)
+    usage.card_alerts(out, INDEXER.snapshot() if INDEXER else [])
     return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}}
 
 
@@ -643,11 +645,32 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, txt.encode(), "text/plain; charset=utf-8")
             except (FileNotFoundError, ValueError):
                 self._json(404, {"error": "no log (still running?)"})
-        elif sub == "api/feed":
+        elif sub == "api/usage":
             try:
-                self._json(200, {"feed": activity.feed(project_arg(q))})
+                sess = project_arg(q)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
+                return
+            try:
+                path = next((x["path"] for x in state().get("sessions", []) if x["name"] == sess and x.get("path")), None)
+            except Exception:  # tmux not running: no sessions
+                path = None
+            if path is None:
+                self._json(404, {"error": "no such session"})
+                return
+            conn = None   # per request: the indexer's connection belongs to its thread
+            try:
+                conn = usage.connect(usage.db_path())
+                th, warn = usage.thresholds()
+                r = usage.report(conn, path, usage.load_prices(), th, time.time())
+            except Exception as e:  # sqlite locked or corrupt, bad prices.json: say so instead of dropping the connection
+                self._json(500, {"error": str(e) or type(e).__name__})
+                return
+            finally:
+                if conn is not None:
+                    conn.close()
+            self._json(200, {**r, "warning": warn, "indexing": INDEXER.progress() if INDEXER else None,
+                             "index_error": INDEXER.error if INDEXER else None})
         elif sub == "api/artifact":
             try:
                 self._json(200, artifacts.read(project_arg(q), (q.get("path") or [""])[0]))
@@ -693,5 +716,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    INDEXER = usage.Indexer(usage.root(), usage.db_path())
+    INDEXER.start()
     print(f"tmux-dash on http://127.0.0.1:{PORT}/{TOKEN}/", flush=True)
     srv.serve_forever()

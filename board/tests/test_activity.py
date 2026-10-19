@@ -35,8 +35,6 @@ class ActivityTest(unittest.TestCase):
             {"id": "evil", "ts": 5, "exit": 0, "log": "/etc/hosts", "cmd": "x"},
         ]
         (self.state / "runs-p.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
-        (self.state / "feed-p-tests.log").write_text(
-            "── 14:02:01 · impl · ~/r · exit 0\n$ pytest -q\n3 passed\n\n── 14:03:00 · panel · ~/r · exit 1\n$ make\nboom\n\n")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -52,34 +50,6 @@ class ActivityTest(unittest.TestCase):
         for bad in ("nope", "evil"):
             with self.assertRaises(FileNotFoundError):
                 activity.log_text("p", bad)
-
-    def test_feed_wrapped_log_keeps_newest(self):
-        # a log that spans midnight: yesterday 23:xx entries sit BEFORE today's 02:xx ones
-        (self.state / "feed-w-shell.log").write_text(
-            "── 23:50:00 · a · ~/r · exit 0 · @1000\n$ old1\n\n"
-            "── 23:59:00 · a · ~/r · exit 0 · @1060\n$ old2\n\n"
-            "── 00:10:00 · a · ~/r · exit 0 · @1100\n$ new1\n\n"
-            "── 02:52:16 · a · ~/r · exit 0 · @1200\n$ new2\n\n")
-        got = activity.feed("w", limit=2)
-        self.assertEqual([b["cmd"] for b in got], ["new1", "new2"])
-        self.assertEqual(got[-1]["epoch"], 1200)
-
-    def test_feed_merges_windows_by_epoch(self):
-        (self.state / "feed-m-tests.log").write_text("── 23:00:00 · a · ~/r · exit 0 · @10\n$ t1\n\n── 01:00:00 · a · ~/r · exit 0 · @30\n$ t2\n\n")
-        (self.state / "feed-m-shell.log").write_text("── 23:30:00 · a · ~/r · exit 0 · @20\n$ s1\n\n")
-        self.assertEqual([b["cmd"] for b in activity.feed("m")], ["t1", "s1", "t2"])
-
-    def test_feed_old_lines_without_epoch_keep_append_order(self):
-        (self.state / "feed-o-shell.log").write_text(
-            "── 23:50:00 · a · ~/r · exit 0\n$ o1\n\n── 00:10:00 · a · ~/r · exit 0\n$ o2\n\n"
-            "── 02:00:00 · a · ~/r · exit 0 · @500\n$ n1\n\n")
-        self.assertEqual([b["cmd"] for b in activity.feed("o")], ["o1", "o2", "n1"])
-
-    def test_feed_blocks(self):
-        got = activity.feed("p")
-        self.assertEqual([(b["agent"], b["exit"], b["cmd"]) for b in got], [("impl", 0, "pytest -q"), ("panel", 1, "make")])
-        self.assertEqual(got[0]["tail"], "3 passed")
-        self.assertEqual(got[0]["win"], "tests")
 
 
 class HideBgTest(unittest.TestCase):
@@ -108,7 +78,6 @@ class RunsEndpointTest(unittest.TestCase):
         (logs / "r2.log").write_text("make output\n")
         recs[1]["log"] = str(logs / "r2.log")
         (Path(self.tmp.name) / "runs-p.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
-        (Path(self.tmp.name) / "feed-p-tests.log").write_text("── 14:02:01 · impl · ~/r · exit 0\n$ pytest -q\n3 passed\n\n")
         self.ideas_dir = tempfile.TemporaryDirectory()
         os.environ["TC_IDEAS_DIR"] = self.ideas_dir.name
         self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -149,12 +118,6 @@ class RunsEndpointTest(unittest.TestCase):
     def test_log_known_and_unknown(self):
         self.assertEqual(self.get("api/log?session=p&id=r2"), (200, "make output\n"))
         self.assertEqual(self.get("api/log?session=p&id=nope")[0], 404)
-
-    def test_feed_blocks(self):
-        code, body = self.get("api/feed?session=p")
-        blocks = json.loads(body)["feed"]
-        self.assertEqual(code, 200)
-        self.assertEqual([(b["agent"], b["exit"], b["cmd"], b["tail"]) for b in blocks], [("impl", 0, "pytest -q", "3 passed")])
 
     def test_idea_post_then_list(self):
         req = urllib.request.Request(f"{self.base}/api/action", method="POST", headers={"X-Dash-Token": server.TOKEN},
