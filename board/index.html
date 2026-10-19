@@ -880,8 +880,8 @@ async function pollArtifacts() {
   Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
   const keep = new Set(d.items.map((it) => it.url || it.path));   // a moved document leaves the manifest view
-  for (const k of [...A.items.keys()]) if (!keep.has(k)) A.items.delete(k);
-  if (docSel && !keep.has(docSel)) $("#doc-close").onclick();
+  for (const k of [...A.items.keys()]) if (!keep.has(k)) { A.items.delete(k); A.versions.delete(k); A.seen.delete(k); }
+  if (docSel && !keep.has(docSel)) { $("#doc-close").onclick(); toast("The open document moved to another project"); }
   // only recent items are fetched each poll; older ones load their text when opened
   const hot = (it) => it.path === A.plan || it.latest.epoch === d.epoch || it.latest.ts >= A.loadedAt || it.path === docSel;
   for (const it of A.items.values()) if (!it.url && hot(it)) await trackVersion(s.name, A, it);
