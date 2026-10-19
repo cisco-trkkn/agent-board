@@ -2,6 +2,23 @@
 
 Every customization point, from least to most invasive. Read [ARCHITECTURE.md](ARCHITECTURE.md) first if you plan to change code.
 
+**Keep it scoped.** Everything below should apply only to agent-board sessions. Put Claude Code settings in `~/.config/agent-board/claude-settings.json` (loaded with `--settings` by the `claude-orchestrator` wrapper), never in `~/.claude/settings.json`. Put tmux settings in `~/.config/agent-board/tmux.conf`. Don't install agent-board skills or agents into `~/.claude/skills` or `~/.claude/agents`. See [INSTALL.md](INSTALL.md#what-this-install-changes-on-your-machine).
+
+## 0. The agent-board settings file
+
+`~/.config/agent-board/claude-settings.json` is an ordinary Claude Code settings file that only agent-board leads load. Anything you want only for agent-board sessions goes here. It is additive: your user, project and local settings still apply underneath it.
+
+```json
+{
+  "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1", "AGENT_BOARD": "1" },
+  "teammateMode": "auto",
+  "permissions": { "allow": ["Bash(tmux-ctl:*)"] },
+  "hooks": { "…": "the three agent-board hooks from INSTALL.md §4, plus your own" }
+}
+```
+
+Examples: allow `tmux-ctl` without prompts in agent-board sessions only (above); add a hook that only makes sense for agent teams. To use another file for one project, start that project's lead with it: `DEV_CLAUDE_CMD="$HOME/agent-board/bin/claude-orchestrator --settings ~/my/other.json" dev ~/code/proj`.
+
 ## 1. Environment variables
 
 | Variable | Default | Read by | Effect |
@@ -19,7 +36,7 @@ Every customization point, from least to most invasive. Read [ARCHITECTURE.md](A
 | `TMUX_DASH_TTYD_PORT` | `7701` | `tmux-dash`, `server.py` | ttyd port. |
 | `TMUX_DASH_TMUX_ARGS` | empty | `server.py`, `tmux-web-attach`, `paneclass.py` | Extra tmux arguments, e.g. `-L work` to point the board at a non-default tmux server. |
 | `TMUX_DASH_PAGE` | `index.html` | `server.py` | Serve another HTML file from `board/` (a fork of the UI, an experiment). |
-| `TMUX_DASH_DEBUG` | unset | `server.py` | Log every request to `~/.local/state/tmux-dash/server.log`. |
+| `TMUX_DASH_DEBUG` | unset | `server.py` | Log every request to stderr, which `tmux-dash` sends to `~/.local/state/tmux-dash/server.log`. |
 | `FZF_BIN` | `~/.local/bin/fzf` | `tmux-agent-cleanup` | fzf binary. |
 | `SUPERPOWERS_PLUGIN_ROOT` | auto-discovered | `superpowers-hook.sh` | Pin which superpowers-extended-cc install the optional hooks run. |
 
@@ -68,14 +85,16 @@ Changes apply to the next Claude started; restart a lead from the board (Restart
 To use different rules for one project without editing the shared files, start the lead yourself:
 
 ```zsh
-DEV_CLAUDE_CMD="claude --append-system-prompt-file ~/my-rules/lead.md" dev ~/code/proj
+DEV_CLAUDE_CMD="claude --settings ~/.config/agent-board/claude-settings.json --append-system-prompt-file ~/my-rules/lead.md" dev ~/code/proj
 ```
 
-`claude-orchestrator` defaults to `--model opus` and `--name orchestrator`. Pass `--model`/`--name` to override, e.g. `DEV_CLAUDE_CMD="claude-orchestrator --model sonnet"`.
+Keep the `--settings` flag when you bypass `claude-orchestrator`, or the lead loses agent teams and the hooks. `DEV_CLAUDE_CMD` applies only when `dev` creates the session; Restart orchestrator and `/handoff` always start `claude-orchestrator`.
+
+`claude-orchestrator` defaults to `--model opus` and `--name orchestrator`. Pass `--model`/`--name` to override, e.g. `DEV_CLAUDE_CMD="claude-orchestrator --model sonnet"`. The extra arguments go through the wrapper too.
 
 ## 4. tmux key bindings and hooks
 
-All bindings live in your `~/.tmux.conf` (see [INSTALL.md §4](INSTALL.md#4-tmux-configuration)); rebind freely. The scripts they call:
+Bindings and hooks go in `~/.config/agent-board/tmux.conf`, which your `~/.tmux.conf` sources (see [INSTALL.md §5](INSTALL.md#5-tmux)). tmux bindings and hooks are server-wide, so choose keys you don't already use. The scripts you can bind:
 
 | Script | Bind it to… |
 | --- | --- |
@@ -152,6 +171,26 @@ Feed size: the log is trimmed to its last 1 MB when it passes 2 MB; the tail kep
 - Lanes close after 900 s idle (`reap_lanes` in `bin/tmux-ctl`).
 - `tmux-agent-cleanup` and the board treat a branch as safe to delete when it is merged into the current branch or `origin/HEAD` (fallback `main`).
 
-## 8. Theme
+## 8. Tunable constants
 
-The fzf colours in `tmux-jump` and `tmux-agent-cleanup` and the ttyd terminal theme in `tmux-dash` use Catppuccin Mocha as literal values in each file. The board page has its own light palette as CSS custom properties (`--bg`, `--panel`, `--accent`, …) at the top of `board/index.html`. There is no shared theme file.
+Values that are literals in the code today. Change them in place, and add or adjust a test.
+
+| Value | Default | Where |
+| --- | --- | --- |
+| `tmux-ctl run` timeout | 600 s (`-t secs` per call) | `parse_opts` in `bin/tmux-ctl` |
+| Lane idle reap | 900 s | `reap_lanes` in `bin/tmux-ctl` |
+| Minimum brief length | 8 words | `agent` case in `bin/tmux-ctl` |
+| Teammate name wait | ~10 s (40 × 0.25 s) | `bin/tmux-teammate-window` |
+| State cache / worktree cache | 1.5 s / 30 s | `STATE_TTL`, `WT_TTL` in `board/server.py` |
+| Capture thread pool | 12 | `POOL` in `board/server.py` |
+| Runs shown / log bytes served | 100 / 512 KB | `runs()`, `log_text()` in `board/activity.py` |
+| Feed entries shown | 200 | `feed()` in `board/activity.py` |
+| Recent projects kept | 10 | `RECENT_MAX` in `board/dirs.py` |
+| Folder listing cap | 500 | `CAP` in `board/dirs.py` |
+| Relay wait | 2 s poll, 120 s cap | `wait_turn_end()` in `board/relay.py` |
+| Feed log size | trim at 2 MB to the last 1 MB; 12 output lines per entry | `claude/hooks/bash-mirror.sh` |
+| Project names | `[A-Za-z0-9_-][A-Za-z0-9._-]*` | `NAME_RE` in `board/server.py`, `board/ideas.py` |
+
+## 9. Theme
+
+The fzf colours in `tmux-jump` and `tmux-agent-cleanup` and the ttyd terminal theme in `tmux-dash` use Catppuccin Mocha as literal values in each file. The board page has its own palette as CSS custom properties (`--bg`, `--panel`, `--accent`, …) at the top of `board/index.html`: a light set, and a dark set under `prefers-color-scheme: dark`. There is no shared theme file.

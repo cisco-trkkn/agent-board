@@ -16,27 +16,36 @@ The tmux `dev` orchestration toolkit and the Agent Board web UI, for running tea
 | [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md) | every knob: environment variables, `.dev/windows`, model routing, lead/worker rules, key bindings, board UI, hook rules |
 | [docs/superpowers/](docs/superpowers/) | design specs and implementation plans for each feature, including the [planned installability refactors](docs/superpowers/plans/2026-10-19-installability-refactors.md) |
 
+## Doesn't touch your existing Claude Code setup
+
+The install in [docs/INSTALL.md](docs/INSTALL.md) is scoped to agent-board:
+- **Claude Code:** it never edits `~/.claude/settings.json` and installs no global skills or agents. agent-board's settings and hooks live in `~/.config/agent-board/claude-settings.json`, which only agent-board leads load (`claude --settings`).
+- **tmux:** the one tmux-wide change is two hooks, sourced from `~/.config/agent-board/tmux.conf`.
+
+The remaining gaps (worker hooks, teammate inheritance, shipping the skills, a dedicated tmux server) are listed in INSTALL.md and planned in the [installability plan](docs/superpowers/plans/2026-10-19-installability-refactors.md). That plan has not been applied.
+
 ## Quick start (macOS)
 
 ```zsh
 brew install tmux ttyd fzf jq
+gh auth login          # the repo is private
 git clone https://github.com/cisco-trkkn/agent-board.git ~/agent-board
-# then follow docs/INSTALL.md §1–5 (symlinks, ~/.tmux.conf block, ~/.claude/settings.json hooks)
+# then follow docs/INSTALL.md steps 2–6
 dev ~/code/my-repo     # project session with the lead
 tmux-dash              # the board in your browser
 ```
 
 ## Repo path → live path
 
-The live install is a set of symlinks into this checkout:
+The install is a set of symlinks into this checkout:
 
 | Repo path | Live path |
 | --- | --- |
 | `board/` | `~/.local/share/tmux-dash` |
 | `tools/` | `~/.local/share/tmux-tools` |
-| `bin/<script>` | `~/.local/bin/<script>` |
-| `claude/orchestrator.md`, `claude/worker.md` | `~/.claude/orchestrator.md`, `~/.claude/worker.md` |
-| `claude/hooks/<hook>` | `~/.claude/hooks/<hook>` |
+| `bin/<script>` | `~/.local/bin/<script>` (`claude-orchestrator` is a wrapper that adds `--settings`) |
+| `claude/orchestrator.md`, `claude/worker.md` | `~/.claude/orchestrator.md`, `~/.claude/worker.md` (read only by agent-board's launchers) |
+| `claude/hooks/<hook>` | `~/.claude/hooks/<hook>` (registered only in the agent-board settings file) |
 
 The checked-out branch is what runs. Restart the board after server changes: `tmux-dash stop && tmux-dash start`.
 

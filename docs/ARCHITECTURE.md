@@ -66,7 +66,7 @@ flowchart LR
 
 1. **`dev [dir]`** resolves the git top level (a non-repo folder under a home-directory repo stays itself), derives the session name and, if no session exists, creates it with window `claude` running `${DEV_CLAUDE_CMD:-claude-orchestrator}` and window `shell`. It then runs `tmux-dev-layout` and attaches (or `switch-client` when already inside tmux; `DEV_NO_ATTACH=1` only creates, which the board uses).
 2. **`tmux-dev-layout <session> <root>`** is idempotent. It migrates old layouts (moves an idle `tests` window into `-bg`, kills feed/watch panes, drops labels), creates `<project>-bg` atomically (`new-session` is the lock; latecomers wait for `@tc_bg`), and adds optional watch panes from `<root>/.dev/windows`.
-3. **`claude-orchestrator`** runs `claude --name orchestrator --model opus --append-system-prompt-file ~/.claude/orchestrator.md "$@"`. Passing your own `--name` or `--model` overrides the defaults.
+3. **`claude-orchestrator`** runs `claude --name orchestrator --model opus --append-system-prompt-file ~/.claude/orchestrator.md "$@"`. Passing your own `--name` or `--model` overrides the defaults. In the scoped install, `~/.local/bin/claude-orchestrator` is a wrapper that adds `--settings ~/.config/agent-board/claude-settings.json` (agent teams, `teammateMode`, hooks) and then calls the repo script.
 4. The lead splits work into teammates or workers (see below). The user watches in tmux or on the board.
 5. **Closing** the session (board "Close project", or `tmux kill-session`) fires the `session-closed` hook. `tmux-session-closed` checks that no session or grouped view of that name is left, then deletes that project's state files. It never touches `~/.claude/ideas/`, and it never runs for `_web-*` or `*-bg` names.
 
@@ -121,13 +121,15 @@ Design points:
 
 ## Agent teams and workers
 
-**Teammates.** With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and `teammateMode: auto`, Claude Code spawns teammates as split panes next to the lead. The tmux `after-split-window` hook runs `tmux-teammate-window`, which finds panes whose start command carries `--agent-name <name>` (or older Claude's placeholder `cat`, waiting up to 10 s for the respawn) and `break-pane`s each into a window `✦ <name>`, placed after the lead and any teammate windows already there. The pane id is kept, so Claude still reaches it.
+**Teammates.** With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and `teammateMode: auto` (from the agent-board settings file), Claude Code spawns teammates as split panes next to the lead. The tmux `after-split-window` hook runs `tmux-teammate-window`, which finds panes whose start command carries `--agent-name <name>` (or older Claude's placeholder `cat`, waiting up to 10 s for the respawn) and `break-pane`s each into a window `✦ <name>`, placed after the lead and any teammate windows already there. The pane id is kept, so Claude still reaches it.
 
 **Workers.** `tmux-ctl agent` creates a window tagged `@tc_agent`, then types `claude -w <name> -n <name> --append-system-prompt-file ~/.claude/worker.md '<task>'`. `-w` makes Claude create and lock its own worktree under `.claude/worktrees/<name>`. Worktrees are removed later with `Ctrl-a W` (`tmux-agent-cleanup`) or the board's Worktrees list. Both refuse to force: a dirty worktree is kept, a lock is cleared only when its Claude pid is dead or reused, and a branch is deleted only if merged (`git branch -d`).
 
 **Rules.** `claude/orchestrator.md` makes the lead build a team by default (2–3 teammates, never more than 4), run work through the superpowers skills, route models by tier (`mechanical → haiku`, `standard → sonnet`, `frontier → fable`, overridable in `docs/superpowers/model-routing.json`), never answer an agent's permission prompt, and never push or merge without being asked. `claude/worker.md` makes a worker plan, test and review on its own, decide instead of asking, and finish with a commit and a report.
 
 ## Hooks
+
+The hooks are registered in an agent-board-only settings file (`~/.config/agent-board/claude-settings.json`), which the `claude-orchestrator` wrapper passes with `claude --settings`. They therefore run only in agent-board leads, never in the user's other Claude Code sessions (see [INSTALL.md §4](INSTALL.md#4-claude-code-settings-for-agent-board-sessions-only); workers and teammates are a known gap). Each script is also a no-op outside a tmux pane, except `kill-guard.sh`.
 
 | Hook (event, matcher) | Script | Writes | Notes |
 | --- | --- | --- | --- |
