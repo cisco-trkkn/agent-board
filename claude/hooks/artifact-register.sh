@@ -5,7 +5,12 @@
 # Appends {ts,path,kind,agent,hash,url,session_id,epoch} to $STATE/artifacts-<project>.jsonl.
 # epoch = lines in $STATE/lineage-<project>.jsonl (one per handoff relay). Silent; always exits 0.
 emulate -L zsh
-source "${${(%):-%x}:A:h:h:h}/tools/lib/tc-env.zsh" 2>/dev/null || exit 0   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
+_tcenv="${${(%):-%x}:A:h:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
+source "$_tcenv" 2>/dev/null || {   # never fail the Claude call, but say so: stderr plus a log in $TMPDIR
+  _m="${${(%):-%x}:t}: cannot load $_tcenv: Activity feed / artifacts are off"
+  print -u2 -r -- "$_m"; print -r -- "$(date +%FT%T) $_m" >> "${${TMPDIR:-/tmp}%/}/tmux-ctl-hook-errors.log" 2>/dev/null
+  exit 0
+}
 STATE="$TC_STATE_DIR"
 TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
 {
