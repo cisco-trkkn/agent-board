@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime, time as dtime, timedelta
@@ -96,7 +97,7 @@ def ingest(conn, path):
             d = json.loads(raw)
             if not isinstance(d, dict):
                 raise ValueError("not an object")
-        except ValueError:
+        except (ValueError, RecursionError):   # not JSON, or nested too deep to parse
             bad += 1
             pos += len(raw)
             continue
@@ -157,10 +158,10 @@ def _valid_threshold(default, v):
     return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
 
 
-def thresholds(path=ALERTS_PATH):
+def thresholds(path=None):
     """(alert thresholds, warning or None). A missing file is the defaults; a bad one is the defaults plus a warning."""
     th = dict(DEFAULT_ALERTS)
-    p = Path(path)
+    p = Path(ALERTS_PATH if path is None else path)
     if not p.exists():
         return th, None
     try:
@@ -325,6 +326,13 @@ class Indexer:
         self._progress = {"done": 0, "total": 0}
         self._stop = threading.Event()
         self._first_pass_done = False
+        self._logged = set()
+
+    def _log_once(self, where, e):
+        key = (str(where), f"{type(e).__name__}: {e}")
+        if key not in self._logged:   # a broken file must not repeat itself every 5 s
+            self._logged.add(key)
+            print(f"usage indexer: {where}: {key[1]}", file=sys.stderr, flush=True)
 
     def files(self):
         found = list(self.root.glob("*/*.jsonl")) + list(self.root.glob("*/*/subagents/*.jsonl"))
@@ -352,6 +360,7 @@ class Indexer:
                     ingest(self._conn, p)
                 except Exception as e:   # noqa: BLE001 - one bad file must not stop the pass
                     error = f"{p.name}: {type(e).__name__}: {e}"
+                    self._log_once(p, e)
                 with self._lock:
                     if self._progress is not None:
                         self._progress["done"] += size
@@ -364,6 +373,7 @@ class Indexer:
                 self._progress = None   # backfill is over: later passes are cheap and must not flicker the UI
         except Exception as e:   # noqa: BLE001
             error = f"{type(e).__name__}: {e}"
+            self._log_once(self.root, e)
         self.error = error
 
     def progress(self):
@@ -404,6 +414,7 @@ def card_alerts(sessions, live):
     """
     for s in sessions:
         repo = s.get("path") or ""
+        mine = [e for e in live if repo and in_project(e.get("cwd"), repo)]   # every rule looks only at this project's sessions
         badges = {}
         for w in s.get("windows", []):
             panes = w.get("panes") or []
@@ -412,19 +423,19 @@ def card_alerts(sessions, live):
             hit = None
             if w.get("teammate"):
                 name = re.sub(r"^\u2726\s*", "", w.get("name", ""))
-                hit = next((e for e in live if e.get("agent_name") == name), None)
+                hit = next((e for e in mine if e.get("agent_name") == name), None)
                 target = panes[0]
             elif w.get("worker"):
                 for pane in panes:
-                    hit = next((e for e in live if not e.get("agent_name") and e.get("cwd") == pane.get("path")), None)
+                    hit = next((e for e in mine if not e.get("agent_name") and e.get("cwd") == pane.get("path")), None)
                     if hit:
                         target = pane
                         break
             elif w.get("name") == "claude":
-                hit = next((e for e in live if not e.get("agent_name") and e.get("cwd") == repo), None)
+                hit = next((e for e in mine if not e.get("agent_name") and e.get("cwd") == repo), None)
                 target = panes[0]
             if hit and hit.get("alerts"):
                 badges[target["id"]] = hit["alerts"]
         s["usage_alerts"] = badges
-        s["usage_alert_count"] = sum(len(e.get("alerts") or []) for e in live if repo and in_project(e.get("cwd"), repo))
+        s["usage_alert_count"] = sum(len(e.get("alerts") or []) for e in mine)
     return sessions

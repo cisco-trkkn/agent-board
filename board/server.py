@@ -658,12 +658,17 @@ class Handler(BaseHTTPRequestHandler):
             if path is None:
                 self._json(404, {"error": "no such session"})
                 return
-            conn = usage.connect(usage.db_path())   # per request: the indexer's connection belongs to its thread
+            conn = None   # per request: the indexer's connection belongs to its thread
             try:
+                conn = usage.connect(usage.db_path())
                 th, warn = usage.thresholds()
                 r = usage.report(conn, path, usage.load_prices(), th, time.time())
+            except Exception as e:  # sqlite locked or corrupt, bad prices.json: say so instead of dropping the connection
+                self._json(500, {"error": str(e) or type(e).__name__})
+                return
             finally:
-                conn.close()
+                if conn is not None:
+                    conn.close()
             self._json(200, {**r, "warning": warn, "indexing": INDEXER.progress() if INDEXER else None,
                              "index_error": INDEXER.error if INDEXER else None})
         elif sub == "api/artifact":

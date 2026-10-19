@@ -127,6 +127,11 @@ class IngestTest(unittest.TestCase):
         usage.ingest(self.conn, self.f)
         self.assertEqual(bad(), 1)
 
+    def test_deeply_nested_json_line_is_a_bad_line(self):
+        self.f.write_text("[" * 200000 + "\n" + line("a"))
+        self.assertEqual(usage.ingest(self.conn, self.f), 1)
+        self.assertEqual(self.conn.execute("select bad_lines from files").fetchone()[0], 1)
+
     def test_non_object_json_lines_are_bad_lines(self):
         self.f.write_text("[1, 2]\nnull\n" + line("a"))
         self.assertEqual(usage.ingest(self.conn, self.f), 1)
@@ -246,6 +251,12 @@ class ThresholdsTest(unittest.TestCase):
         th, warn = usage.thresholds(self.p)
         self.assertEqual(th, usage.DEFAULT_ALERTS)
         self.assertIsNone(warn)
+
+    def test_thresholds_default_path_follows_module_alerts_path(self):
+        self.p.write_text("{nope")
+        with mock.patch.object(usage, "ALERTS_PATH", self.p):
+            th, warn = usage.thresholds()
+        self.assertTrue(warn)
 
     def test_thresholds_partial_override(self):
         self.p.write_text('{"burn_per_hour": 2}')
@@ -546,13 +557,32 @@ class IndexerTest(unittest.TestCase):
             if len(calls) == 1:
                 raise RuntimeError("boom")
             return real(conn, path)
-        with mock.patch.object(usage, "ingest", flaky):
+        import contextlib, io
+        with mock.patch.object(usage, "ingest", flaky), contextlib.redirect_stderr(io.StringIO()):
             self.ix.scan()
             self.assertIn("boom", self.ix.error)
             self.assertEqual(len(calls), 3)      # the pass went on to the other files
             self.ix.scan()
         self.assertIsNone(self.ix.error)
         self.assertIsNone(self.ix.progress())
+
+    def test_index_errors_are_logged_once_per_file_and_message(self):
+        import contextlib, io
+        real, state = usage.ingest, {"n": 0}
+        def flaky(conn, path):
+            if Path(path).name == "old.jsonl":
+                state["n"] += 1
+                raise RuntimeError("boom" if state["n"] < 4 else "different")
+            return real(conn, path)
+        err = io.StringIO()
+        with mock.patch.object(usage, "ingest", flaky), contextlib.redirect_stderr(err):
+            for _ in range(3):
+                self.ix.scan()
+            first = err.getvalue()
+            self.ix.scan()
+        self.assertEqual(first.count("boom"), 1)
+        self.assertIn(str(self.old), first)
+        self.assertEqual(err.getvalue().count("different"), 1)
 
     def test_bad_thresholds_warning_is_kept(self):
         bad = self.tmp / "alerts.json"; bad.write_text("{nope")
@@ -572,6 +602,16 @@ class IndexerTest(unittest.TestCase):
         self.assertFalse(self.ix.thread.is_alive())
 
 
+class UsageSumTest(unittest.TestCase):
+    def test_root_without_transcripts_exits_2(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run([sys.executable, str(HERE.parent / "tools" / "usage-sum.py"), "--repo", "/r", "--root", d],
+                               capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no .jsonl", r.stderr)
+
+
 class CardAlertsTest(unittest.TestCase):
     AL = [{"kind": "context", "label": "ctx 90%", "detail": "d"}]
 
@@ -587,12 +627,25 @@ class CardAlertsTest(unittest.TestCase):
         e.update(kw); return e
 
     def test_teammate_window_matches_agent_name(self):
-        s = self.sess(); usage.card_alerts([s], [self.live(agent_name="mate", cwd="/elsewhere")])
+        s = self.sess(); usage.card_alerts([s], [self.live(agent_name="mate", cwd="/r/.claude/worktrees/elsewhere")])
         self.assertEqual(s["usage_alerts"], {"%2": self.AL})
 
     def test_worker_pane_matches_cwd(self):
         s = self.sess(); usage.card_alerts([s], [self.live(cwd="/r/.claude/worktrees/w1")])
         self.assertEqual(s["usage_alerts"], {"%3": self.AL})
+
+    def test_teammate_with_same_name_in_another_project_does_not_badge(self):
+        a, b = self.sess(), self.sess()
+        a["path"] = "/a"; b["path"] = "/b"
+        usage.card_alerts([a, b], [self.live(agent_name="mate", cwd="/b/.claude/worktrees/x", alerts=self.AL)])
+        self.assertEqual((a["usage_alerts"], a["usage_alert_count"]), ({}, 0))
+        self.assertEqual((b["usage_alerts"], b["usage_alert_count"]), ({"%2": self.AL}, 1))
+
+    def test_worker_and_lead_cards_are_scoped_to_their_project(self):
+        a = self.sess(); a["path"] = "/a"
+        a["windows"][2]["panes"][0]["path"] = "/b/.claude/worktrees/w1"     # a worker pane sitting in another repo's worktree
+        usage.card_alerts([a], [self.live(cwd="/b/.claude/worktrees/w1", alerts=self.AL), self.live(cwd="/a", session_id="lead", alerts=[])])
+        self.assertEqual(a["usage_alerts"], {})
 
     def test_worker_pane_ignores_teammate_session_sharing_its_cwd(self):
         s = self.sess(); wt = "/r/.claude/worktrees/w1"
@@ -631,6 +684,7 @@ class UsageApiTest(unittest.TestCase):
         self.env = {k: os.environ.get(k) for k in ("TC_STATE", "USAGE_ROOT", "TMUX_DASH_TOKEN")}
         os.environ["TC_STATE"] = str(self.tmp / "state"); os.environ["USAGE_ROOT"] = str(self.tmp / "projects")
         os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")
+        alerts = mock.patch.object(usage, "ALERTS_PATH", self.tmp / "no-alerts.json"); alerts.start(); self.addCleanup(alerts.stop)   # never read the real ~/.claude file
         spec = importlib.util.spec_from_file_location("tmux_dash_server_usage", HERE / "server.py")
         self.server = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.server)
         self.assertIsNone(self.server.INDEXER)     # importing must not start the indexer
@@ -685,6 +739,25 @@ class UsageApiTest(unittest.TestCase):
         with mock.patch.object(self.server, "state", return_value={"sessions": [{"name": "q", "path": "/elsewhere"}]}):
             d = json.loads(self.get("api/usage?session=q")[1])
         self.assertEqual(d["headline"]["month"], 0)
+
+    def test_usage_failure_is_500_and_connection_closed(self):
+        conns = []
+        real = usage.connect
+        def spy(*a, **k):
+            c = real(*a, **k); conns.append(c); return c
+        with mock.patch.object(self.server, "state", return_value={"sessions": [{"name": "p", "path": "/r"}]}), \
+             mock.patch.object(usage, "connect", spy), mock.patch.object(usage, "report", side_effect=RuntimeError("boom")):
+            code, body = self.get("api/usage?session=p")
+        self.assertEqual((code, json.loads(body)), (500, {"error": "boom"}))
+        self.assertEqual(len(conns), 1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            conns[0].execute("select 1")
+
+    def test_usage_connect_failure_is_500(self):
+        with mock.patch.object(self.server, "state", return_value={"sessions": [{"name": "p", "path": "/r"}]}), \
+             mock.patch.object(usage, "connect", side_effect=sqlite3.OperationalError("locked")):
+            code, body = self.get("api/usage?session=p")
+        self.assertEqual((code, json.loads(body)["error"]), (500, "locked"))
 
     def test_feed_endpoint_is_gone(self):
         self.assertEqual(self.get("api/feed?session=p")[0], 404)

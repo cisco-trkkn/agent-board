@@ -46,6 +46,9 @@ def main():
     start = window_start(a.days)
     calls = {}   # request id -> latest line seen for it
     files = glob.glob(os.path.join(a.root, "**", "*.jsonl"), recursive=True)
+    if not files:
+        print(f"usage-sum: no .jsonl files under {a.root}", file=sys.stderr)
+        return 2
     for path in sorted(files, key=os.path.getmtime):   # older files first, so a newer line wins
         with open(path, "rb") as fh:
             pos = 0
