@@ -484,10 +484,12 @@ function btn(label, formKey, form, input) {
   return b;
 }
 
+let cardsStale = false;   // a render was skipped while an input had focus: the next poll must render even if nothing changed
 function renderCards() {
   const s = session(), agents = $("#agents"), cards = $("#cards");
   // keep focus while typing: don't rebuild if an input inside the cards is focused
-  if ((agents.contains(document.activeElement) || cards.contains(document.activeElement)) && document.activeElement.tagName === "INPUT") return;
+  if ((agents.contains(document.activeElement) || cards.contains(document.activeElement)) && document.activeElement.tagName === "INPUT") { cardsStale = true; return; }
+  cardsStale = false;
   agents.replaceChildren(); cards.replaceChildren(); $("#agent-count").textContent = "";
   if (!s) { cards.append(el("div", "empty", "Nothing to show yet.")); return; }
   $("#sess-path").textContent = s.path || "";
@@ -580,11 +582,14 @@ for (const g of document.querySelectorAll(".grip")) g.addEventListener("pointerd
 function render() { renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
 
 async function refresh() {
+  let p;
   try {
-    const r = await fetch(`${API}/state`, { cache: "no-store" });
-    data = await r.json();
+    p = await pollJSON("state");
+    if (!p.ok) throw new Error(`HTTP ${p.status}`);
     $("#live").classList.remove("off"); $("#live span").textContent = "live";
   } catch (e) { $("#live").classList.add("off"); $("#live span").textContent = "offline"; return; }
+  if (!p.changed && !cardsStale) return;   // 304: the DOM already shows this state
+  data = p.json;
   if (!session() && data.sessions[0]) current = data.sessions[0].name;
   render();
 }
@@ -855,6 +860,17 @@ const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(),
 let docBase = null, docSel = null, docMode = "read", docSelection = null, docRendered = null;
 if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", (n) => { if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); } });
 const api = (path) => fetch(`${API}/${path}`, { cache: "no-store" });
+// Polled endpoints carry an ETag; an unchanged answer is a 304 with no body, and the last body is reused.
+const POLL = new Map();   // url -> { etag, json }
+async function pollJSON(path) {
+  const url = `${API}/${path}`, last = POLL.get(url);
+  const r = await fetch(url, { cache: "no-store", headers: last ? { "If-None-Match": last.etag } : {} });
+  if (r.status === 304 && last) return { ok: true, status: 200, changed: false, json: last.json };
+  if (!r.ok) return { ok: false, status: r.status, changed: true, json: null };
+  const json = await r.json(), etag = r.headers.get("ETag");
+  if (etag) POLL.set(url, { etag, json });
+  return { ok: true, status: r.status, changed: true, json };
+}
 async function post(body) {
   const r = await fetch(`${API}/action`, { method: "POST", headers: { "Content-Type": "application/json", "X-Dash-Token": TOKEN }, body: JSON.stringify(body) });
   return { status: r.status, j: await r.json().catch(() => ({})) };
@@ -871,8 +887,8 @@ $("#side-toggle").textContent = $("#side").classList.contains("collapsed") ? "�
 async function pollArtifacts() {
   const s = session(); if (!s) return;
   const A = artFor(s.name);
-  const r = await api(`artifacts?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const d = p.json;
   Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
   // only recent items are fetched each poll; older ones load their text when opened
@@ -1071,8 +1087,8 @@ $("#doc-comment").onclick = () => {
 window.ideasOpen = 0;
 async function pollIdeas() {
   const s = session(); if (!s) return;
-  const r = await api(`ideas?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const d = p.json;
   window.ideasOpen = d.open;
   const box = $("#ideas-box");
   if (!box.dataset.built) {
@@ -1109,12 +1125,12 @@ $("#act-agent").onchange = () => { ACT.sig = null; pollActivity(); };
 
 async function pollActivity() {
   const s = session(); if (!s) return;
-  const r = await api(`runs?session=${encodeURIComponent(s.name)}`);
+  const p = await pollJSON(`runs?session=${encodeURIComponent(s.name)}`);
   const stale = $("#act-stale");
-  stale.hidden = r.status !== 404;   // 404 = this server process predates the endpoint
-  if (r.status === 404) stale.textContent = "Server out of date — /api/runs is missing. Restart the board (tmux-dash stop && tmux-dash start).";
-  if (!r.ok) return;
-  const runs = (await r.json()).runs || [];
+  stale.hidden = p.status !== 404;   // 404 = this server process predates the endpoint
+  if (p.status === 404) stale.textContent = "Server out of date — /api/runs is missing. Restart the board (tmux-dash stop && tmux-dash start).";
+  if (!p.ok) return;
+  const runs = p.json.runs || [];   // on 304 the last body; the sig below decides whether anything is rebuilt
   const failed = runs.filter((x) => x.exit !== null && x.exit !== 0);
   if (ACT.open || !ACT.seeded) failed.forEach((x) => ACT.seenFails.add(x.id));   // failures from before this page load are not news
   ACT.seeded = true;
@@ -1168,8 +1184,8 @@ function renderRuns(s, runs) {
 }
 
 async function renderCmds(s) {
-  const r = await api(`feed?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const feed = (await r.json()).feed || [];
+  const p = await pollJSON(`feed?session=${encodeURIComponent(s.name)}`); if (!p.ok) return;
+  const feed = p.json.feed || [];
   const sel = $("#act-agent"), want = sel.value;
   const agents = [...new Set(feed.map((b) => b.agent))].sort();
   if (document.activeElement !== sel && sel.dataset.agents !== agents.join("\u0001")) {   // never rebuild a focused (possibly open) dropdown

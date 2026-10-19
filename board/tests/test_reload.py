@@ -100,20 +100,24 @@ class StaleBannerTest(unittest.TestCase):
         html = (BOARD / "index.html").read_text()
         m = re.search(r"^async function pollActivity\(\) \{.*?^\}\n", html, re.S | re.M)
         self.assertIsNotNone(m, "pollActivity not found in index.html")
+        pj = re.search(r"^async function pollJSON\(path\) \{.*?^\}\n", html, re.S | re.M)
+        self.assertIsNotNone(pj, "pollJSON not found in index.html")
         js = """
 const els = {};
 const $ = (id) => els[id] || (els[id] = {textContent: "", hidden: true, classList: {toggle() {}}});
 const session = () => ({name: "s"});
 const ACT = {open: false, seeded: false, seenFails: new Set()};
-const api = async () => ({ok: false, status: 404});
+const API = "", POLL = new Map();
+const fetch = async () => ({ok: false, status: 404, headers: {get: () => null}});   // an old server: no /api/runs
 const renderRuns = () => {}, renderCmds = async () => {};
+%s
 %s
 pollActivity().then(() => {
   const b = els["#act-stale"];
   if (!b || b.hidden || !/restart/i.test(b.textContent)) { console.log("NO BANNER", JSON.stringify(b)); process.exit(1); }
   console.log("banner:", b.textContent);
 });
-""" % m.group(0)
+""" % (pj.group(0), m.group(0))
         r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 

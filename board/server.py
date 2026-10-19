@@ -9,6 +9,7 @@ the Host header must be 127.0.0.1/localhost (blocks DNS rebinding); state-changi
 need the token in an X-Dash-Token header too (blocks cross-site form posts).
 Actions go through the same tested scripts as the tmux shortcuts (tmux-ctl, git).
 """
+import hashlib
 import json
 import os
 import re
@@ -23,7 +24,7 @@ from pathlib import Path
 
 HOME = Path.home()
 BIN = HOME / ".local" / "bin"
-TMUX = [str(BIN / "tmux")] + shlex.split(os.environ.get("TMUX_DASH_TMUX_ARGS", ""))
+TMUX = [os.environ.get("TC_TMUX") or str(BIN / "tmux")] + shlex.split(os.environ.get("TMUX_DASH_TMUX_ARGS", ""))
 TMUX_CTL = str(BIN / "tmux-ctl")
 DEV = str(BIN / "dev")
 HERE = Path(__file__).resolve().parent
@@ -118,12 +119,67 @@ def run_script(args, cwd=None, extra_env=None, timeout=30):
     return out
 
 
-def pane_text(target, lines=40):
-    txt = tmux("capture-pane", "-p", "-J", "-t", target, "-S", f"-{lines}")
+LINES = 40   # rows captured per pane: the classifier reads the last 12, the preview the last 10 non-empty
+MARK = SEP + "\x1e"   # pane boundary in a chained capture; capture-pane -p never emits control characters
+
+
+def _rows(txt):
     rows = [l.rstrip() for l in txt.splitlines()]
     while rows and not rows[-1]:
         rows.pop()
     return rows
+
+
+def pane_text(target, lines=LINES):
+    return _rows(tmux("capture-pane", "-p", "-J", "-t", target, "-S", f"-{lines}"))
+
+
+def _capture_cmd(ids):
+    """`display -p <marker> ; capture-pane -p ; ...` for every pane, to chain into one tmux exec."""
+    cmd = []
+    for p in ids:
+        cmd += [";", "display-message", "-p", "-t", p, MARK + "#{pane_id}",
+                ";", "capture-pane", "-p", "-J", "-t", p, "-S", f"-{LINES}"]
+    return cmd
+
+
+def _split_captures(txt):
+    out = {}
+    for chunk in txt.split(MARK)[1:]:
+        pid, _, body = chunk.partition("\n")
+        if pid:
+            out[pid] = _rows(body)
+    return out
+
+
+def capture_panes(ids):
+    """{pane_id: rows} for all ids in ONE tmux exec. A pane that vanished since it was listed aborts the sequence
+    (tmux stops at the failing command), so whatever is missing from the output is captured on its own afterwards."""
+    ids = list(dict.fromkeys(ids))
+    out = {}
+    if not ids:
+        return out
+    out.update(_split_captures(tmux(*_capture_cmd(ids)[1:])))
+    missing = [p for p in ids if p not in out]
+    for p, rows in zip(missing, POOL.map(pane_text, missing)):
+        out[p] = rows
+    return out
+
+
+# One tmux exec per build: list-panes chained with the captures of the panes the previous build saw. The exec is
+# the cost (20-50 ms on this Mac), not the capture output (15 chained captures cost the same as one), so this beats
+# "list, then capture only the panes with new activity" (2 execs) and leaves no staleness question: every pane is
+# re-read every build. Panes that appeared since the last build are captured in one more chained exec.
+_last = {"windows": {},   # session -> {window_name: window_index}, every session (also -bg), from the last build
+         "panes": []}     # pane ids of the last build
+
+
+def window_index(sess, win):
+    try:
+        state()   # refresh the map when the cached state is older than STATE_TTL
+    except Exception:
+        pass
+    return _last["windows"].get(sess, {}).get(win)
 
 
 def preview(rows, n=10):
@@ -194,12 +250,21 @@ def build_state():
         "#{pane_current_command}", "#{pane_current_path}", "#{pane_active}", "#{window_active}",
         "#{@tc_teammate}", "#{@tc_bg}",
     ])
-    panes = [f for f in (l.split(SEP) for l in tmux("list-panes", "-a", "-F", fmt).splitlines())
-             if len(f) == 15 and not f[0].startswith("_web-") and f[14] != "1"]
-    captures = POOL.map(lambda f: pane_text(f[7]), panes)
+    listing, _, captured = tmux("list-panes", "-a", "-F", fmt, *_capture_cmd(_last["panes"])).partition(MARK)
+    every = [f for f in (l.split(SEP) for l in listing.splitlines()) if len(f) == 15]
+    windows = {}
+    for f in every:
+        windows.setdefault(f[0], {})[f[3]] = int(f[2])
+    _last["windows"] = windows
+    panes = [f for f in every if not f[0].startswith("_web-") and f[14] != "1"]
+    ids = list(dict.fromkeys(f[7] for f in panes))
+    rows_by = _split_captures(MARK + captured) if captured else {}
+    rows_by.update(capture_panes([p for p in ids if p not in rows_by]))   # new since the last build, or after an abort
+    _last["panes"] = ids
     sessions = {}
-    for f, rows in zip(panes, captures):
+    for f in panes:
         sess, attached, widx, wname, bell, agent, pidx, pid, title, cmd, path, pact, wact, mate = f[:14]
+        rows = rows_by[pid]
         s = sessions.setdefault(sess, {"name": sess, "attached": attached != "0", "windows": {}, "path": None})
         w = s["windows"].setdefault(widx, {
             "index": int(widx), "name": wname, "bell": bell == "1",
@@ -594,8 +659,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _json(self, code, obj):
-        self._send(code, json.dumps(obj).encode(), "application/json")
+    def _json(self, code, obj, etag=False):
+        data = json.dumps(obj).encode()
+        if not etag or code != 200:
+            return self._send(code, data, "application/json")
+        # polled endpoints: an unchanged answer is a 304 with no body, so the page skips parsing and rendering
+        tag = '"%s"' % hashlib.blake2b(data, digest_size=12).hexdigest()
+        if self.headers.get("If-None-Match") == tag:
+            self.send_response(304)
+            self.send_header("ETag", tag)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self._send(200, data, "application/json", {"ETag": tag})
 
     def handle_one_request(self):
         super().handle_one_request()
@@ -619,13 +695,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"started": STARTED, "pid": os.getpid()})
         elif sub == "api/state":
             try:
-                self._json(200, state())
+                self._json(200, state(), etag=True)
             except Exception as e:  # tmux server not running, etc.
-                self._json(200, {"sessions": [], "error": str(e), "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}})
+                self._json(200, {"sessions": [], "error": str(e), "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}}, etag=True)
         elif sub == "api/artifacts":
             try:
                 sess = project_arg(q)
-                self._json(200, {**artifacts.summary(sess), "comments": COMMENTS.pending(sess)})
+                self._json(200, {**artifacts.summary(sess), "comments": COMMENTS.pending(sess)}, etag=True)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
         elif sub.startswith("vendor/"):
@@ -637,21 +713,17 @@ class Handler(BaseHTTPRequestHandler):
         elif sub == "api/ideas":
             try:
                 sess = project_arg(q)
-                self._json(200, {"ideas": ideas.load(sess), "open": ideas.open_count(sess)})
+                self._json(200, {"ideas": ideas.load(sess), "open": ideas.open_count(sess)}, etag=True)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
         elif sub == "api/runs":
             try:
                 sess = project_arg(q)
                 rs = activity.runs(sess)
-                idx = {}
-                for r in rs:
+                for r in rs:   # "Open live" for a running run: its window index from the state build's own list-panes, no exec
                     if r.get("exit") is None and r.get("session"):
-                        if r["session"] not in idx:
-                            idx[r["session"]] = dict(l.split(SEP, 1) for l in tmux(
-                                "list-windows", "-t", f"={r['session']}", "-F", f"#{{window_name}}{SEP}#{{window_index}}").splitlines() if SEP in l)
-                        r["window_index"] = idx[r["session"]].get(r.get("win"))
-                self._json(200, {"runs": rs})
+                        r["window_index"] = window_index(r["session"], r.get("win"))
+                self._json(200, {"runs": rs}, etag=True)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
         elif sub == "api/log":
@@ -662,7 +734,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(404, {"error": "no log (still running?)"})
         elif sub == "api/feed":
             try:
-                self._json(200, {"feed": activity.feed(project_arg(q))})
+                self._json(200, {"feed": activity.feed(project_arg(q))}, etag=True)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
         elif sub == "api/artifact":
