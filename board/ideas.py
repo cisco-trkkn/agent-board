@@ -4,6 +4,7 @@
 Each idea is "- [ ] YYYY-MM-DD HH:MM · text" with detail as indented lines; [x] = taken up
 (followed by "→ <spec>"), [-] = dropped. Ideas are never deleted. Every writer appends under an
 exclusive lock on <file>.lock. Agents do not read this file while a plan is running.
+The board can edit, drop/restore and move ideas; a move appends to the target and marks the source "[-] … → moved to <target>".
 
   ideas.py add --project P [--detail D] -- TEXT
   ideas.py list --project P
@@ -19,6 +20,11 @@ from pathlib import Path
 
 LINE_RE = re.compile(r"^- \[( |x|-)\] (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · (.*)$")
 STATUS = {" ": "open", "x": "taken", "-": "dropped"}
+MOVED_RE = re.compile(r" → moved to ([A-Za-z0-9_-][A-Za-z0-9._-]*)$")
+
+
+class Stale(ValueError):
+    """The key no longer names exactly one idea: the file changed since it was loaded."""
 
 
 def ideas_dir():
@@ -31,15 +37,10 @@ def ideas_path(project):
     return ideas_dir() / f"{project}.md"
 
 
-def add(project, text, detail="", now=None):
-    text = " ".join(str(text).split())
-    if not text:
-        raise ValueError("empty idea")
+def _append(project, first, detail_lines):
     p = ideas_path(project)
     p.parent.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(now))
-    first = f"- [ ] {stamp} · {text}"
-    entry = first + "\n" + "".join(f"  {l.strip()}\n" for l in str(detail).splitlines() if l.strip())
+    entry = first + "\n" + "".join(f"  {l}\n" for l in detail_lines)
     with open(f"{p}.lock", "w") as lk:
         fcntl.lockf(lk, fcntl.LOCK_EX)
         new = not p.exists() or p.stat().st_size == 0
@@ -47,7 +48,92 @@ def add(project, text, detail="", now=None):
             if new:
                 f.write(f"# Ideas: {project}\n\n")
             f.write(entry)
+
+
+def _clean_detail(detail):
+    return [l.strip() for l in str(detail).splitlines() if l.strip()]
+
+
+def add(project, text, detail="", now=None):
+    text = " ".join(str(text).split())
+    if not text:
+        raise ValueError("empty idea")
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(now))
+    first = f"- [ ] {stamp} · {text}"
+    _append(project, first, _clean_detail(detail))
     return first
+
+
+def _rewrite(project, key, change):
+    """Under the lock, find the one idea whose key matches and replace it (first line + detail)
+    with change(box, ts, raw_text, detail_lines) -> (first_line, detail_lines)."""
+    p = ideas_path(project)
+    with open(f"{p}.lock", "w") as lk:
+        fcntl.lockf(lk, fcntl.LOCK_EX)
+        lines = p.read_text().splitlines(keepends=True) if p.exists() else []
+        hits = [i for i, l in enumerate(lines)
+                if (m := LINE_RE.match(l.rstrip("\n"))) and f"{m[2]} · {m[3]}" == key]
+        if len(hits) != 1:
+            raise Stale("the idea changed since you loaded it")
+        i = j = hits[0]
+        j += 1
+        while j < len(lines) and lines[j].startswith("  ") and lines[j].strip():
+            j += 1
+        m = LINE_RE.match(lines[i].rstrip("\n"))
+        first, detail = change(m[1], m[2], m[3], [l.strip() for l in lines[i + 1:j]])
+        lines[i:j] = [first + "\n"] + [f"  {d}\n" for d in detail]
+        tmp = p.with_name(f".{p.name}.tmp")
+        tmp.write_text("".join(lines))
+        os.replace(tmp, p)
+        return first
+
+
+def edit(project, key, text, detail=""):
+    text = " ".join(str(text).split())
+    if not text:
+        raise ValueError("empty idea")
+    new_detail = _clean_detail(detail)
+
+    def change(box, ts, raw, old):
+        if box != " ":
+            raise ValueError("only open ideas can be edited")
+        return f"- [ ] {ts} · {text}", new_detail
+    return _rewrite(project, key, change)[6:]
+
+
+def set_status(project, key, status):
+    flip = {"dropped": (" ", "-"), "open": ("-", " ")}
+    if status not in flip:
+        raise ValueError(f"bad status {status!r}")
+    want, to = flip[status]
+
+    def change(box, ts, raw, detail):
+        if box != want:
+            raise ValueError(f"the idea is {STATUS[box]}")
+        if to == " " and MOVED_RE.search(raw):
+            raise ValueError("a moved idea cannot be restored here; restore it in the project it moved to")
+        return f"- [{to}] {ts} · {raw}", detail
+    return _rewrite(project, key, change)
+
+
+def move(project, key, target):
+    ideas_path(target)   # validates the name
+    if target == project:
+        raise ValueError("the idea is already in that project")
+    got = [i for i in load(project) if i["key"] == key]
+    if len(got) != 1:
+        raise Stale("the idea changed since you loaded it")
+    idea = got[0]
+    if idea["status"] != "open":
+        raise ValueError("only open ideas can be moved")
+    # append first: a failure before the source is marked leaves a duplicate, never a lost idea
+    _append(target, f"- [ ] {idea['ts']} · {idea['text']}", idea["detail"].splitlines())
+
+    def change(box, ts, raw, detail):
+        if box != " ":
+            raise Stale("the idea changed since you loaded it")
+        return f"- [-] {ts} · {raw} → moved to {target}", detail
+    return _rewrite(project, key, change)
 
 
 def load(project):
@@ -58,7 +144,9 @@ def load(project):
     for line in p.read_text().splitlines():
         m = LINE_RE.match(line)
         if m:
-            out.append({"status": STATUS[m[1]], "ts": m[2], "text": m[3], "detail": ""})
+            mv = MOVED_RE.search(m[3]) if m[1] == "-" else None
+            out.append({"status": STATUS[m[1]], "ts": m[2], "text": m[3][:mv.start()] if mv else m[3],
+                        "detail": "", "key": f"{m[2]} · {m[3]}", "moved_to": mv[1] if mv else ""})
         elif out and line.startswith("  ") and line.strip():
             d = out[-1]["detail"]
             out[-1]["detail"] = f"{d}\n{line.strip()}" if d else line.strip()
