@@ -31,6 +31,12 @@ check "plain split stays"            test "$(tt list-panes -t '=tt:claude' | wc 
 check "--hook ignores other panes"   test -z "$(win_of stray-a)$(win_of stray-b)$(win_of stray-c)"
 "$H" --hook; tt_wait 12 test -n "$(win_of stray-a)"
 check "--hook without a pane scans"  test -n "$(win_of stray-a)"
-"$H"; tt_wait 12 test -n "$(win_of stray-b)"
-check "bare call scans"              test -n "$(win_of stray-b)"
+# the --hook scan above moved every stray; wait for that, then make a fresh one for the bare call
+tt_wait 12 test -n "$(win_of stray-b)" -a -n "$(win_of stray-c)"
+tt set-hook -gu after-split-window       # so the split hook can't move it: only the bare call may
+stray other4 stray-d
+sleep 1
+check "fresh stray not yet moved"    test -z "$(win_of stray-d)"
+"$H"; tt_wait 12 test -n "$(win_of stray-d)"
+check "bare call scans"              test -n "$(win_of stray-d)"
 tt_done
