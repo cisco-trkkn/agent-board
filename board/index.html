@@ -241,6 +241,9 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
 .ideas-list { display: flex; flex-direction: column; gap: 4px; }
 .idea { font-size: 13px; padding: 4px 8px; border-radius: 8px; background: var(--panel-2); }
 .idea small { color: var(--muted); display: block; }
+.idea.dropped { opacity: .55; }
+.idea input, .idea textarea { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+.ideas-dropped { font-size: 12px; color: var(--muted); display: block; margin-top: 6px; }
 </style>
 <script src="vendor/marked.min.js"></script><script src="vendor/purify.min.js"></script>
 </head>
@@ -904,6 +907,10 @@ function artButton(A, it) {
   if (!it.url && vs && A.seen.get(it.path) !== vs[vs.length - 1].hash) b.append(el("span", "dot"));
   b.title = it.url || it.path;
   b.onclick = () => it.url ? window.open(it.url, "_blank", "noopener") : openDoc(it.path);
+  if (it.path && /\/docs\/superpowers\/(plans|specs)\//.test(it.path) && !/\/\.claude\/worktrees\//.test(it.path)) {
+    b.dataset.key = "art:" + it.path;
+    bindAgentMenu(b, () => otherProjects().map((p) => ({ label: `Move to ${p}`, run: () => moveDoc(it.path, p) })));
+  }
   return b;
 }
 
@@ -1068,6 +1075,55 @@ $("#doc-comment").onclick = () => {
 
 // ── ideas box ──
 window.ideasOpen = 0;
+let ideaEditing = null, ideaShowDropped = false;
+try { ideaShowDropped = localStorage.getItem("dash.ideas.dropped") === "1"; } catch (e) {}
+
+// open projects other than the current one, for the "Move to" items
+function otherProjects() {
+  const me = session().name;
+  return (data.sessions || []).map((s) => s.name).filter((n) => n !== me && !n.startsWith("_web-"));
+}
+function ideaMenuItems(i) {
+  const s = session().name;
+  if (i.status === "dropped") return i.moved_to ? [] : [{ label: "Restore", run: () => ideaPost({ action: "idea_status", session: s, key: i.key, status: "open" }) }];
+  return [
+    { label: "Edit", run: () => editIdea(i) },
+    { label: "Drop", danger: true, run: () => ideaPost({ action: "idea_status", session: s, key: i.key, status: "dropped" }) },
+    ...otherProjects().map((p) => ({ label: `Move to ${p}`, run: () => ideaPost({ action: "idea_move", session: s, key: i.key, target: p }) })),
+  ];
+}
+async function ideaPost(body) {
+  const { status, j } = await post(body);
+  toast(j.message || (status === 200 ? "Done" : status === 409 ? "the idea changed since you loaded it" : "Failed"), status !== 200);
+  pollIdeas();
+  return status === 200;
+}
+function editIdea(i) {
+  const row = document.querySelector(`[data-key="${CSS.escape("idea:" + i.key)}"]`); if (!row) return;
+  ideaEditing = i.key;
+  const inp = el("input"); inp.value = i.text;
+  const det = el("textarea"); det.rows = 2; det.value = i.detail || "";
+  const save = el("button", "", "Save"), cancel = el("button", "", "Cancel");
+  const done = () => { ideaEditing = null; pollIdeas(); };
+  const doSave = async () => {
+    if (!inp.value.trim()) return;
+    const { status, j } = await post({ action: "idea_edit", session: session().name, key: i.key, text: inp.value, detail: det.value });
+    toast(j.message || (status === 200 ? "Saved" : status === 409 ? "the idea changed since you loaded it" : "Failed"), status !== 200);
+    done();
+  };
+  inp.onkeydown = (e) => { if (e.key === "Enter") doSave(); else if (e.key === "Escape") done(); };
+  det.onkeydown = (e) => { if (e.key === "Escape") done(); };
+  save.onclick = doSave; cancel.onclick = done;
+  row.replaceChildren(inp, det, save, cancel);
+  inp.focus();
+}
+async function moveDoc(path, target) {
+  if (!confirm(`Move ${path.split("/").pop()} to ${target}? It is left uncommitted in both repos.`)) return;
+  const { status, j } = await post({ action: "artifact_move", session: session().name, path, target });
+  toast(j.message || (status === 200 ? "Moved" : "Failed"), status !== 200);
+  pollArtifacts();
+}
+
 async function pollIdeas() {
   const s = session(); if (!s) return;
   const r = await api(`ideas?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
@@ -1085,14 +1141,23 @@ async function pollIdeas() {
       toast(status === 200 ? "Noted for later" : (j.message || "Failed"), status !== 200);
       if (status === 200) { inp.value = ""; det.value = ""; pollIdeas(); }
     };
-    box.append(inp, det, el("div", "ideas-list"));
+    const lab = el("label", "ideas-dropped"), cb = el("input"); cb.type = "checkbox"; cb.id = "ideas-show-dropped"; cb.checked = ideaShowDropped;
+    cb.onchange = () => { ideaShowDropped = cb.checked; try { localStorage.setItem("dash.ideas.dropped", cb.checked ? "1" : "0"); } catch (e) {} pollIdeas(); };
+    lab.append(cb, " Show dropped");
+    box.append(inp, det, el("div", "ideas-list"), lab);
   }
   box.querySelector(".art-group").replaceChildren(el("h4", "", `Ideas · ${d.open}`));
+  if (ideaEditing) return;   // don't rebuild the row being edited
   const list = box.querySelector(".ideas-list"); list.replaceChildren();
-  for (const i of d.ideas.filter((i) => i.status === "open").slice(-20).reverse()) {
-    const row = el("div", "idea", i.text); row.append(el("small", "", i.ts + (i.detail ? " · " + i.detail.split("\n")[0] : "")));
+  const addRow = (i, cls) => {
+    const row = el("div", cls, i.text); row.dataset.key = "idea:" + i.key;
+    const meta = i.ts + (i.moved_to ? " · → " + i.moved_to : "") + (i.detail ? " · " + i.detail.split("\n")[0] : "");
+    row.append(el("small", "", meta));
+    bindAgentMenu(row, () => ideaMenuItems(i));
     list.append(row);
-  }
+  };
+  for (const i of d.ideas.filter((i) => i.status === "open").slice(-20).reverse()) addRow(i, "idea");
+  if (ideaShowDropped) for (const i of d.ideas.filter((i) => i.status === "dropped").reverse()) addRow(i, "idea dropped");
 }
 
 // ── activity drawer ──
