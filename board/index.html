@@ -231,6 +231,7 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
 .activity.open .chev { transform: rotate(90deg); }
 .act-body { display: none; max-height: 38vh; overflow: auto; padding: 0 12px 12px; }
 .activity.open .act-body { display: block; }
+.activity.open.tab-usage .act-body { max-height: 70vh; }
 .fails:empty, .alerts:empty { display: none; }
 .alerts { color: var(--amber); background: var(--amber-soft); border-radius: 999px; font-size: 11px; font-weight: 600; padding: 1px 8px; }
 .activity .tabs { flex: none; margin-bottom: 8px; }
@@ -242,6 +243,7 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
 .usage-head .cap { color: var(--muted); font-size: 12px; }
 .usage-note { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
 .usage h4 { margin: 14px 0 6px; font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.usage-more { background: none; border: 0; padding: 2px 0; color: var(--accent); font-size: 12px; }
 .usage-alert { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 12.5px; }
 .alert-badge { border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .alert-badge.amber { background: var(--amber-soft); color: var(--amber); }
@@ -1216,11 +1218,12 @@ async function pollIdeas() {
 }
 
 // ── activity drawer ──
-const ACT = { open: false, tab: "usage", seenFails: new Set(), openLogs: new Set(), logs: new Map(), sig: null, sort: {} };
+const ACT = { open: false, tab: "usage", seenFails: new Set(), openLogs: new Set(), logs: new Map(), sig: null, sort: {}, alertsOpen: false };
 try { if (localStorage.getItem("dash.actTab") === "runs") ACT.tab = "runs"; } catch (e) {}
 function showActTab() {
   for (const x of $("#activity nav").querySelectorAll("button")) x.classList.toggle("on", x.dataset.tab === ACT.tab);
   $("#act-usage").hidden = ACT.tab !== "usage"; $("#act-runs").hidden = ACT.tab !== "runs";
+  $("#activity").classList.toggle("tab-usage", ACT.tab === "usage");   // the Usage tab gets a taller drawer body
 }
 showActTab();
 $("#act-toggle").onclick = () => { ACT.sig = null; ACT.open = !ACT.open; $("#activity").classList.toggle("open", ACT.open); pollActivity(); };
@@ -1296,7 +1299,8 @@ async function renderUsage(s) {
   const sig = "u:" + JSON.stringify(d);   // rebuild only when the data changed, so sort order and scroll survive polls
   if (sig === ACT.sig) return;
   ACT.sig = sig;
-  const box = $("#act-usage"); box.replaceChildren();
+  const box = $("#act-usage"), body = $(".act-body"), keepTop = body.scrollTop;   // a rebuild must not throw the reader back to the top
+  box.replaceChildren();
   if (d.indexing && d.indexing.done < d.indexing.total)
     box.append(el("div", "usage-note", `indexing… ${Math.round(100 * d.indexing.done / d.indexing.total)}%`));
   if (d.index_error) box.append(el("div", "usage-note", `index error: ${d.index_error}`));
@@ -1306,6 +1310,7 @@ async function renderUsage(s) {
     el("h4", null, "By model"), sortableTable(d.by_model, [["key", "Model"], ["usd", "$", usd], ["calls", "Calls"],
       ["cache_share", "Cache share", (v) => `${Math.round(100 * (v || 0))}%`]], "model"),
     el("h4", null, "By branch / worktree"), sortableTable(d.by_branch, [["key", "Branch"], ["usd", "$", usd], ["calls", "Calls"]], "branch"));
+  body.scrollTop = keepTop;
 }
 
 function usageHeadline(d) {
@@ -1324,9 +1329,15 @@ function usageAlerts(d) {
   const box = el("div");
   if (d.warning) box.append(el("div", "usage-note", d.warning));
   if (!d.alerts.length) box.append(el("div", "usage-note", "No alerts."));
-  for (const a of d.alerts) {
+  const shown = ACT.alertsOpen ? d.alerts : d.alerts.slice(0, 5);
+  for (const a of shown) {
     const row = el("div", "usage-alert"), b = el("span", "alert-badge " + alertColor(a.kind), a.label); b.title = a.detail;
     row.append(b, el("b", null, a.session), el("span", null, a.detail)); box.append(row);
+  }
+  if (d.alerts.length > 5) {   // long lists would push the tables out of view: show five, expand in place
+    const more = el("button", "usage-more", ACT.alertsOpen ? "show fewer" : `+${d.alerts.length - 5} more`);
+    more.onclick = () => { ACT.alertsOpen = !ACT.alertsOpen; ACT.sig = null; pollActivity(); };
+    box.append(more);
   }
   return box;
 }
