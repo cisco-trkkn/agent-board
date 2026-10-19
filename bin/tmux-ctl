@@ -327,15 +327,17 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     if (( ! force )) && print -r -- "$task" | grep -qiE '~/\.claude|\.claude/(settings|skills|hooks|plugins)|settings(\.local)?\.json|global CLAUDE\.md|(^|[^[:alnum:]_])(hooks?|plugins?|skills?|dotfiles?|launchd|launchagents?)([^[:alnum:]_]|$)'; then
       print -u2 "tmux-ctl: warning: this looks like user-config work (~/.claude, settings, hooks, plugins, skills, global CLAUDE.md, LaunchAgents, dotfiles) — run it in the main session, not a worktree worker (--force silences this)"
     fi
-    [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN task: $task"; exit 0 }   # test seam: stop before any window is created
+    source "${0:A:h}/_ab_claude.zsh"
+    rules=""; [[ -r "$HOME/.claude/worker.md" ]] && rules=' --append-system-prompt-file ~/.claude/worker.md'
+    line="PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
+    [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; exit 0 }   # test seam: stop before any window is created
     t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"
     root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
     t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
     t set-option -w -t "$(target "$name")" @tc_agent 1
     t set-option -w -t "$(target "$name")" automatic-rename off
-    # worker rules (superpowers skills, decide instead of asking) ride along as a system prompt
-    rules=""; [[ -r "$HOME/.claude/worker.md" ]] && rules=' --append-system-prompt-file ~/.claude/worker.md'
-    t send-keys -t "$(target "$name")" -l -- "claude -w ${(q)name} -n ${(q)name}${rules} ${(q)task}"
+    # worker rules (superpowers skills, decide instead of asking) ride along as a system prompt (built above in $line)
+    t send-keys -t "$(target "$name")" -l -- "$line"
     t send-keys -t "$(target "$name")" Enter
     print -r -- "started worker '$name' in window $SESSION:$name (worktree .claude/worktrees/$name)" ;;
 

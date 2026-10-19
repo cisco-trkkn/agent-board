@@ -66,6 +66,9 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(sk[0], ("send-keys", "-t", "%5", "-l", "--",
                                  "claude-orchestrator 'Read /d.md and continue from where the previous session left off.'"))
         self.assertEqual(sk[1], ("send-keys", "-t", "%5", "Enter"))
+        # the session flags come from claude-orchestrator itself, never from the typed text
+        self.assertNotIn("--settings", sk[0][-1])
+        self.assertTrue(sk[0][-1].startswith("claude-orchestrator "))
         self.assertLess(fake.names().index("respawn-pane"), fake.names().index("send-keys"))
 
     def test_busy_leaves_pane_alone(self):

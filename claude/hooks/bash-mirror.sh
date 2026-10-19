@@ -4,6 +4,8 @@
 # Entry header: `── HH:MM:SS · <agent> · <cwd> · exit N · @<epoch>` (the epoch orders entries across midnight).
 emulate -L zsh
 zmodload zsh/datetime
+# dedupe: the scoped registration (--scoped) covers agent-board sessions; the legacy global one defers to it
+[[ "$1" == --scoped || "$AGENT_BOARD" != 1 ]] || exit 0
 [[ -n "$TMUX" && -n "$TMUX_PANE" ]] || exit 0
 {
   payload="$(cat)"

@@ -8,16 +8,19 @@ emulate -L zsh
 STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
 TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
 {
-  apath= kind= agent= project= manual=0
+  apath= kind= agent= project= manual=0 scoped=0
   while (( $# )); do
     case "$1" in
       --path)    apath="$2"; manual=1; shift 2 ;;
+      --scoped)  scoped=1; shift ;;
       --kind)    kind="$2"; shift 2 ;;
       --agent)   agent="$2"; shift 2 ;;
       --project) project="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
+  # dedupe: the scoped registration covers agent-board sessions; the legacy global one defers (manual --path always runs)
+  (( manual || scoped )) || [[ "$AGENT_BOARD" != 1 ]] || exit 0
   if [[ -z "$project" ]]; then
     [[ -n "$TMUX" && -n "$TMUX_PANE" ]] || exit 0
     project="$("$TMUX_BIN" display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}')" || exit 0

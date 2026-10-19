@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash): refuse pkill/killall whose pattern matches a running Claude Code process.
 # A broad `pkill -f` once killed the dev orchestrator and its whole team. Fail-open on any error.
+# dedupe: the scoped registration (--scoped) covers agent-board sessions; the legacy global one defers to it
+[[ "$1" == --scoped || "$AGENT_BOARD" != 1 ]] || exit 0
 input=$(cat) || exit 0
 exec python3 -I - "$input" <<'PY'
 import json, os, re, shlex, subprocess, sys
