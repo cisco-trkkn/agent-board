@@ -7,7 +7,7 @@
 **Goal:** Engineers who already use Claude Code and tmux can install agent-board with one command, and nothing it installs changes their other Claude Code or tmux sessions. Every agent-board setting, hook, skill, agent type and tmux hook applies only to sessions agent-board starts.
 
 **Architecture:**
-- **Claude Code.** Every Claude that agent-board starts (lead, worker, relay, board restart) is launched with `--settings <repo>/claude/settings.json` and `--plugin-dir <repo>/claude/plugin`. The settings file carries agent teams and the `AGENT_BOARD=1` marker. The plugin carries the hooks, skills and agent types. Hooks also exit early unless `AGENT_BOARD=1`.
+- **Claude Code.** Every Claude that agent-board starts (lead, worker, relay, board restart) is launched with `--settings <repo>/claude/settings.json` and `--plugin-dir <repo>/claude/plugin`. The settings file carries agent teams and the `AGENT_BOARD=1` marker. The plugin carries the hooks, skills and agent types. Hooks registered the old global way step aside in agent-board sessions, so each hook runs exactly once.
 - **tmux.** agent-board gets its own tmux server (`-L agent-board -f <repo>/config/tmux.conf`), so its hooks, bindings and options never reach the user's tmux server.
 - **Files.** Scripts find their files relative to the repo and find tools on `PATH`. The only install footprint is one `agent-board` command, plus state under `~/.local/state/agent-board/`.
 
@@ -48,38 +48,42 @@ Today's install and its interference with an existing setup:
 **Goal:** Find out whether a teammate spawned by a lead started with `--settings S --plugin-dir P` gets S's hooks and P's hooks, skills and agents. Record the answer and the fallback the next tasks use.
 
 **Files:**
-- Create: `docs/superpowers/specs/2026-10-xx-teammate-config-inheritance.md`
+- Create: `docs/superpowers/specs/2026-10-20-teammate-config-inheritance.md` (use the execution date in the name)
 
 **Acceptance Criteria:**
 - [ ] The doc has the sections `## Setup`, `## Observations`, `## Answer`, `## Fallback chosen`.
 - [ ] Observations cite captured evidence for each of: the teammate pane's `pane_start_command` (copied with `tmux display -p -t <pane> '#{pane_start_command}'`); a marker file written by a `PreToolUse` hook from S, fired by a teammate tool call; and the same from a hook in P.
 - [ ] The answer is one of: "inherits both", "inherits only env", "inherits nothing". The fallback for that answer is named concretely (for example: hooks are registered in the plugin and gated on `AGENT_BOARD=1` because env is inherited; or, if nothing is inherited, the `after-split-window` handler respawns the teammate with the flags added).
 
-**Verify:** `grep -c '^## ' docs/superpowers/specs/2026-10-xx-teammate-config-inheritance.md` → `4`
+**Verify:** `grep -c '^## ' docs/superpowers/specs/2026-10-20-teammate-config-inheritance.md` → `4`
 
 ```json:metadata
-{"files": ["docs/superpowers/specs/2026-10-xx-teammate-config-inheritance.md"], "verifyCommand": "grep -c '^## ' docs/superpowers/specs/2026-10-xx-teammate-config-inheritance.md", "acceptanceCriteria": ["four required sections", "pane_start_command and hook-marker evidence for S and P", "answer is one of three values with a concrete fallback"], "modelTier": "frontier"}
+{"files": ["docs/superpowers/specs/2026-10-20-teammate-config-inheritance.md"], "verifyCommand": "grep -c '^## ' docs/superpowers/specs/2026-10-20-teammate-config-inheritance.md", "acceptanceCriteria": ["four required sections", "pane_start_command and hook-marker evidence for S and P", "answer is one of three values with a concrete fallback"], "modelTier": "frontier"}
 ```
 
 ---
 
 ### Task 2: Every launcher passes the agent-board session config
 
-**Goal:** The lead, workers, relay and board restart all start Claude with `--settings <repo>/claude/settings.json`, and the hooks do nothing unless `AGENT_BOARD=1`. This closes the "workers have no hooks" gap and makes the user's wrapper from INSTALL.md §4 unnecessary.
+**Goal:** The lead, workers, relay and board restart all start Claude with `--settings <repo>/claude/settings.json` and with `<repo>/bin` on `PATH`. Hooks run exactly once per tool call, whether they are registered the scoped way, the legacy global way, or both. This closes the "workers have no hooks" gap and makes the user's wrapper from INSTALL.md §4 unnecessary.
 
 **Files:**
-- Create: `claude/settings.json` (`env`: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, `AGENT_BOARD=1`; `teammateMode: auto`; no hooks, which move to the plugin in Task 3)
-- Create: `bin/_ab_claude.zsh` (sourced helper: `ab_claude_args` prints the flags)
-- Modify: `bin/claude-orchestrator`, `bin/tmux-ctl` (`agent` case), `board/relay.py` (`respawn`)
-- Modify: `claude/hooks/kill-guard.sh`, `claude/hooks/bash-mirror.sh`, `claude/hooks/artifact-register.sh` (hook mode exits 0 unless `AGENT_BOARD=1`; the manual `--path` mode stays ungated)
+- Create: `claude/settings.json` (`env`: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, `AGENT_BOARD=1`; `teammateMode: auto`; the three hooks as `"$AGENT_BOARD_REPO/claude/hooks/<name>.sh" --scoped`, with the shell expanding the variable when the hook runs; no absolute paths; Task 3 moves the hooks into the plugin)
+- Create: `bin/_ab_claude.zsh` (sourced helper: `ab_claude_args` prints the flags; `ab_path` prints `<repo>/bin:$PATH`)
+- Modify: `bin/claude-orchestrator` (exports `PATH="$(ab_path)"` and adds the flags), `bin/tmux-ctl` (`agent` case: typed line is `PATH=… claude -w … <flags> …`), `board/relay.py` (`respawn`)
+- Modify: `claude/hooks/kill-guard.sh`, `claude/hooks/bash-mirror.sh`, `claude/hooks/artifact-register.sh`. The dedupe rule: run when called with `--scoped`. Without `--scoped` (the legacy global registration), exit 0 if `AGENT_BOARD=1`, because the scoped registration covers that session, and otherwise run as today. The manual `--path` mode of `artifact-register.sh` always runs.
 - Test: `tools/tests/test_prompt_argv.zsh` (extend), `tools/tests/test_hook_gate.zsh`, `board/tests/test_relay.py` (extend)
 
 **Acceptance Criteria:**
-- [ ] `claude-orchestrator` execs `claude … --settings <repo>/claude/settings.json …`, where `<repo>` is `${0:A:h:h}` (checked with a stub `claude` on `PATH` that prints its argv).
-- [ ] `TC_AGENT_DRYRUN=1 tmux-ctl agent w --force "a b"` prints a command line containing `--settings <repo>/claude/settings.json`.
+- [ ] `claude-orchestrator` execs `claude … --settings <repo>/claude/settings.json …` with `<repo>/bin` first on `PATH`, where `<repo>` is `${0:A:h:h}`. Checked with a stub `claude` on `PATH` that prints its argv and `$PATH`.
+- [ ] `TC_AGENT_DRYRUN=1 tmux-ctl agent w --force "a b"` prints a command line containing `--settings <repo>/claude/settings.json` and `PATH=<repo>/bin:`.
 - [ ] `relay.respawn()` still types `claude-orchestrator …`, so the flags come from `claude-orchestrator` itself. `test_relay.py` asserts the typed text is unchanged.
-- [ ] Each hook fed a real fixture from `tools/tests/fixtures/` without `AGENT_BOARD` writes nothing and exits 0; with `AGENT_BOARD=1` it behaves as before (the existing hook tests run with `AGENT_BOARD=1` exported).
-- [ ] `artifact-register.sh --path F` (used by `tmux-ctl artifact` and board saves) still records without `AGENT_BOARD`.
+- [ ] On real fixtures from `tools/tests/fixtures/`, `bash-mirror.sh` writes exactly one feed entry in each of these cases:
+  - `--scoped` with `AGENT_BOARD=1`;
+  - no flag without `AGENT_BOARD` (legacy);
+  - both registrations firing, simulated as two calls: no flag and `--scoped`, with `AGENT_BOARD=1`.
+  `artifact-register.sh` writes exactly one manifest line in the same cases, and kill-guard blocks exactly once.
+- [ ] `artifact-register.sh --path F` (used by `tmux-ctl artifact` and board saves) records regardless of `AGENT_BOARD`.
 
 **Verify:** `zsh tools/tests/test_hook_gate.zsh && zsh tools/tests/test_prompt_argv.zsh && python3 -m unittest board.tests.test_relay` → `ALL PASS`, `ALL PASS`, `OK`
 
@@ -90,17 +94,18 @@ Today's install and its interference with an existing setup:
 - [ ] **Step 3: Implement.** `bin/_ab_claude.zsh`:
 
 ```zsh
-# _ab_claude.zsh — sourced. The flags every agent-board Claude starts with.
+# _ab_claude.zsh — sourced. The flags and PATH every agent-board Claude starts with.
 AB_REPO="${${(%):-%x}:A:h:h}"
 ab_claude_args() { print -r -- "--settings ${(q)AB_REPO}/claude/settings.json" }
+ab_path() { print -r -- "$AB_REPO/bin:$PATH" }
 ```
 
-`claude-orchestrator` sources it and adds `${(z)$(ab_claude_args)}` before `"$@"`. In `tmux-ctl agent`, the typed line becomes `claude -w … -n … $(ab_claude_args)${rules} ${(q)task}`. Each hook starts with `[[ "$AGENT_BOARD" == 1 ]] || exit 0`; in `artifact-register.sh` that line comes after argument parsing and applies only when `manual=0`.
+`claude-orchestrator` sources it, runs `export PATH="$(ab_path)" AGENT_BOARD_REPO="$AB_REPO"`, and adds `${(z)$(ab_claude_args)}` before `"$@"`. In `tmux-ctl agent`, the typed line becomes `PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude -w … -n … $(ab_claude_args)${rules} ${(q)task}`. Each hook starts with the dedupe rule from Files; in `artifact-register.sh` that check comes after argument parsing and applies only when `manual=0`. Whether `AGENT_BOARD_REPO` reaches teammates is part of Task 1's evidence. If it doesn't, Task 3's plugin (`${CLAUDE_PLUGIN_ROOT}`) is the path that covers teammates.
 - [ ] **Step 4: Run both suites** → pass.
 - [ ] **Step 5: Commit** — `feat(claude): agent-board session config on every launcher; hooks gated on AGENT_BOARD`, with your harness's attribution trailer.
 
 ```json:metadata
-{"files": ["claude/settings.json", "bin/_ab_claude.zsh", "bin/claude-orchestrator", "bin/tmux-ctl", "board/relay.py", "claude/hooks/kill-guard.sh", "claude/hooks/bash-mirror.sh", "claude/hooks/artifact-register.sh", "tools/tests/test_prompt_argv.zsh", "tools/tests/test_hook_gate.zsh", "board/tests/test_relay.py"], "verifyCommand": "zsh tools/tests/test_hook_gate.zsh && zsh tools/tests/test_prompt_argv.zsh && python3 -m unittest board.tests.test_relay", "acceptanceCriteria": ["claude-orchestrator passes --settings <repo>/claude/settings.json", "tmux-ctl agent passes the same", "relay still types claude-orchestrator", "hooks no-op without AGENT_BOARD=1, unchanged with it", "manual artifact registration ungated"], "modelTier": "standard"}
+{"files": ["claude/settings.json", "bin/_ab_claude.zsh", "bin/claude-orchestrator", "bin/tmux-ctl", "board/relay.py", "claude/hooks/kill-guard.sh", "claude/hooks/bash-mirror.sh", "claude/hooks/artifact-register.sh", "tools/tests/test_prompt_argv.zsh", "tools/tests/test_hook_gate.zsh", "board/tests/test_relay.py"], "verifyCommand": "zsh tools/tests/test_hook_gate.zsh && zsh tools/tests/test_prompt_argv.zsh && python3 -m unittest board.tests.test_relay", "acceptanceCriteria": ["claude-orchestrator passes --settings <repo>/claude/settings.json with <repo>/bin first on PATH", "tmux-ctl agent passes the same and PATH", "relay still types claude-orchestrator", "each hook fires exactly once for scoped, legacy and both registrations", "manual artifact registration always runs"], "modelTier": "standard"}
 ```
 
 ---
@@ -111,7 +116,8 @@ ab_claude_args() { print -r -- "--settings ${(q)AB_REPO}/claude/settings.json" }
 
 **Files:**
 - Create: `claude/plugin/.claude-plugin/plugin.json` (`{"name": "agent-board", "version": "0.1.0", "description": "…"}`)
-- Create: `claude/plugin/hooks/hooks.json` (the three hooks, commands as `${CLAUDE_PLUGIN_ROOT}/../hooks/<name>.sh`)
+- Create: `claude/plugin/hooks/hooks.json` (the three hooks, commands as `"${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh" --scoped`)
+- Move: `claude/hooks/{kill-guard,bash-mirror,artifact-register}.sh` → `claude/plugin/scripts/`. `claude/hooks/<name>.sh` stays as a git-tracked relative symlink to the new location, so the legacy `~/.claude/hooks` links and `board/artifacts.py` keep working. The plugin is then self-contained even if Claude Code copies it into a cache. The hook registration moves out of `claude/settings.json` into `hooks.json`.
 - Create: `claude/plugin/skills/tmux-orchestrator/SKILL.md`, `claude/plugin/skills/handoff/SKILL.md` (+ its `agents/`), copied from the author's live copies with home paths replaced by `~`, and with `~/.claude/handoffs` replaced by the Task 6 state path
 - Create: `claude/plugin/agents/effort-{low,medium,high}.md`
 - Modify: `bin/_ab_claude.zsh` (add `--plugin-dir ${AB_REPO}/claude/plugin`)
@@ -121,7 +127,7 @@ ab_claude_args() { print -r -- "--settings ${(q)AB_REPO}/claude/settings.json" }
 **Acceptance Criteria:**
 - [ ] `claude plugin validate claude/plugin` exits 0, if that subcommand exists in the installed version. Otherwise `python3 -c` loads `plugin.json` and `hooks.json` as JSON.
 - [ ] `grep -rn '/Users/' claude/` returns nothing.
-- [ ] A headless probe (`claude -p --model haiku $(ab_claude_args) "…"` in a scratch git repo, with a probe hook variant writing a marker) shows the plugin's hook fired. A plain `claude -p` in the same folder shows it did not.
+- [ ] A headless probe (`claude -p --model haiku $(ab_claude_args) "…"` in a scratch git repo, with a probe hook variant writing a marker) shows the plugin's hook fired. A plain `claude -p` in the same folder shows it did not. The probe passes with the plugin directory copied elsewhere and loaded from the copy, which proves it has no `..` paths.
 - [ ] Every skill and agent name in `claude/orchestrator.md` and `claude/worker.md` is shipped in the plugin, comes from superpowers-extended-cc, or is marked "If installed".
 
 **Verify:** `zsh tools/tests/test_plugin.zsh` → `ALL PASS`
@@ -152,12 +158,15 @@ ab_claude_args() { print -r -- "--settings ${(q)AB_REPO}/claude/settings.json" }
 - One resolver decides the tmux command for every caller: `bin/` scripts, hook scripts, `board/server.py`, `board/paneclass.py`, `tmux-web-attach`, and commands run from inside the server by `run-shell` and hooks. `TC_TMUX` / `TMUX_DASH_TMUX_ARGS` remain as overrides.
 - `config/tmux.conf` holds the `after-split-window` and `session-closed` hooks, `monitor-bell`, `bell-action`, the passthrough and extended-keys settings, and the bindings from INSTALL.md §5. It must not `source` the user's `~/.tmux.conf`. An optional `~/.config/agent-board/tmux.local.conf` is sourced if present, for personal bindings.
 - Attaching works from inside and outside the user's own tmux. Inside, `dev` must not nest silently: it switches the client when it is on the agent-board server, and otherwise tells the user the attach command (or opens a new terminal tab where possible).
-- The author's existing sessions on the default server keep working until migrated: a server without `@ab_server` set is treated as legacy and still found by the board for one release.
+- The author's existing sessions on the default server keep working until migrated. Resolver precedence: `TC_TMUX` → `$TMUX`'s socket when set (a command running inside any tmux server talks to that server) → `-L agent-board`. Only commands started outside tmux (`dev`, `tmux-dash`) pick the dedicated server.
+- Consider doing this in two commits: the resolver with socket detection first, then the dedicated server and `config/tmux.conf`.
 
 **Acceptance Criteria:**
 - [ ] After `dev <scratch repo>` and a teammate split (simulated as in `test_teammate_window.zsh`), `tmux -L default show-hooks -g` and `tmux -L default list-keys` print the same as before the run (diffed).
 - [ ] `tmux -L agent-board show-hooks -g` lists both hooks.
 - [ ] The board lists sessions on the agent-board server, and its terminals attach to them.
+- [ ] Legacy: with a session on a separate private socket standing in for the user's default server, and `$TMUX` pointing at it, `tmux-ctl run tests "echo ok"`, `tmux-teammate-window` and `bash-mirror.sh` all act on that server, not on `-L agent-board`.
+- [ ] Nesting: `dev <repo>` run from a pane on a different tmux server does not attach inside it. It prints the attach command (`tmux -L agent-board attach -t <name>`) and exits 0. Run from a pane on the agent-board server, it switches the client.
 - [ ] All existing zsh tests pass with the harness's private socket standing in for `-L agent-board`.
 
 **Verify:** `zsh tools/tests/test_dedicated_server.zsh` → `ALL PASS`
@@ -209,12 +218,12 @@ case "$1" in
 esac
 ```
 
-  Agents keep calling `tmux-ctl` by name: `claude/settings.json` (Task 2) adds `<repo>/bin` to `PATH` for agent-board sessions only, through its `env` block.
+  Agents keep calling `tmux-ctl` by name: the launchers put `<repo>/bin` first on `PATH` (Task 2's `ab_path`), and teammates and their Bash calls inherit it. Settings `env` values are not shell-expanded, so the settings file is never used for `PATH`.
 - [ ] **Step 4: Run both suites** → pass.
 - [ ] **Step 5: Commit** — `refactor(bin): repo-relative paths and a single agent-board command`, with your harness's attribution trailer.
 
 ```json:metadata
-{"files": ["bin/agent-board", "bin/_tc_bins.zsh", "bin/tmux-ctl", "bin/tmux-dash", "bin/dev", "bin/claude-orchestrator", "board/server.py", "board/artifacts.py", "claude/settings.json", "tools/tests/test_repo_paths.zsh", "board/tests/test_artifacts.py"], "verifyCommand": "zsh tools/tests/test_repo_paths.zsh", "acceptanceCriteria": ["no live-layout paths outside documented legacy fallbacks", "tmux-ctl run and agent work with an empty HOME", "agent-board dispatcher runs each subcommand", "both suites pass"], "modelTier": "standard"}
+{"files": ["bin/agent-board", "bin/_tc_bins.zsh", "bin/tmux-ctl", "bin/tmux-dash", "bin/dev", "bin/claude-orchestrator", "board/server.py", "board/artifacts.py", "tools/tests/test_repo_paths.zsh", "board/tests/test_artifacts.py"], "verifyCommand": "zsh tools/tests/test_repo_paths.zsh", "acceptanceCriteria": ["no live-layout paths outside documented legacy fallbacks", "tmux-ctl run and agent work with an empty HOME", "agent-board dispatcher runs each subcommand", "both suites pass"], "modelTier": "standard"}
 ```
 
 ---
@@ -240,6 +249,9 @@ esac
   - leaves every other key and line byte-identical (diffed against the seed minus the removed lines);
   - prints each change it made.
 - [ ] `install.sh` never writes under `~/.claude/` except in `--migrate`.
+- [ ] `--repo DIR` makes `install.sh` treat `DIR` as the agent-board checkout instead of its own location, so a dry run from a worktree can judge the live `~/agent-board` links.
+- [ ] Ideas: with only `~/.claude/ideas/p.md` present, `ideas.load("p")` returns its items. The first write creates `~/.local/state/agent-board/ideas/p.md` with the old items plus the new one, and leaves `~/.claude/ideas/p.md` byte-identical. `TC_IDEAS_DIR` still wins over both.
+- [ ] Handoffs: `artifact-register.sh` gives kind `handoff` to a `.md` under `~/.local/state/agent-board/handoffs/` and still to one under `~/.claude/handoffs/` (`test_artifact_hook.zsh` has one case each).
 
 **Verify:** `zsh tools/tests/test_install.zsh && python3 -m unittest discover -s tools/tests -p 'test_*.py'` → `ALL PASS`, `OK`
 
@@ -333,11 +345,12 @@ esac
 - [ ] **Scratch, seeded:**
   - Setup: a scratch `HOME` holds a user's own `~/.claude/settings.json` (with an unrelated hook), `~/.claude/skills/x/SKILL.md`, `~/.claude/agents/y.md`, a `~/.tmux.conf` with its own `after-split-window` hook, and a running default tmux server on a private socket name.
   - Run: `install.sh`, then `agent-board dev <scratch repo>` (`DEV_NO_ATTACH=1`, a stub `claude`), a `tmux-ctl run tests "echo ok"`, and a simulated teammate split.
-  - Pass: `sha256sum` of every file under the seeded `~/.claude` and `~/.tmux.conf` is unchanged; the user server's `show-hooks -g` and `list-keys` match their pre-run capture; the run printed `ok` and `[exit 0]`.
+  - Pass: `shasum -a 256` of every file under the seeded `~/.claude`, of `~/.tmux.conf` and of `~/.zshrc` is unchanged; `~/.local/bin` holds only `agent-board` plus what was seeded; the user server's `show-hooks -g` and `list-keys` match their pre-run capture; the run printed `ok` and `[exit 0]`.
+- [ ] **Plain session unaffected:** where `claude` is available, a plain `claude -p --model haiku` run in the scratch repo with a seeded user `UserPromptSubmit` probe hook fires only the user's hook. No agent-board hook marker appears.
 - [ ] **Scratch, aged:** the same `HOME` gets a `TC_STATE` seeded with yesterday's `runs-<repo>.jsonl` and a feed log with two agents' entries spanning midnight. `activity.runs()` and `activity.feed()` return them in order next to the new run.
-- [ ] **Real state, read-only:** `./install.sh --migrate --dry-run` against the real `HOME` prints exactly the agent-board entries of the author's install (the three hook commands, 10 `~/.local/bin` links, the 2 rules links, 3 hook links, 2 tmux hook lines) and nothing else. The output is saved in the task report and diffed against that expected list.
+- [ ] **Real state, read-only:** `./install.sh --repo ~/agent-board --migrate --dry-run` (from any checkout) against the real `HOME` prints exactly the agent-board entries of the author's install (the three hook commands, 10 `~/.local/bin` links, the 2 rules links, 3 hook links, 2 tmux hook lines) and nothing else. The output is saved in the task report and diffed against that expected list.
 
-**Verify:** `zsh tools/tests/test_e2e_isolation.zsh` → `ALL PASS`; `./install.sh --migrate --dry-run | diff - tools/tests/fixtures/expected-migrate-plan.txt` → no output
+**Verify:** `zsh tools/tests/test_e2e_isolation.zsh` → `ALL PASS`; `./install.sh --repo ~/agent-board --migrate --dry-run | diff - tools/tests/fixtures/expected-migrate-plan.txt` → no output
 
 **Steps:**
 
@@ -377,4 +390,4 @@ esac
 
 ## Order and dependencies
 
-Task 1 → Task 2 → Task 3. Task 4 → Task 5 → Task 6 → Task 9. Task 7 is independent. Task 8 follows Task 6. Task 10 is last. Tasks 2 and 3 apply Task 1's answer; if it is "inherits nothing", Task 3 Step 3's fallback applies.
+Task 1 → 2 → 3 → 4 → 5 → 6 → 9, one chain, because Tasks 2–6 all edit `bin/tmux-ctl`, `bin/claude-orchestrator` and the hook scripts. Task 7 is independent. Task 8 follows Task 6. Task 10 is last. Tasks 2 and 3 apply Task 1's answer; if it is "inherits nothing", Task 3 Step 3's fallback applies.

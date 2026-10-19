@@ -14,12 +14,17 @@ There is no installer yet. Installing means cloning the repo, linking a few file
 | --- | --- | --- |
 | `~/.claude/settings.json` | **none** | none |
 | `~/.claude/skills/`, `~/.claude/agents/` | **none** | none |
+| `~/.zshrc` | one `PATH` line, only if `~/.local/bin` isn't on your `PATH` already | `~/.local/bin` goes first on `PATH` in every new shell. Skip it and add the folder yourself if you'd rather it go last |
+| `~/.local/bin/{tmux,ttyd,fzf}` | symlinks to your own installed binaries, only where missing | none: they point to the same binaries |
 | `~/.local/bin/` | symlinks: `dev`, `tmux-ctl`, `tmux-dash`, … and a `claude-orchestrator` wrapper | none. These are new command names, and step 3 checks for clashes first |
 | `~/.local/share/tmux-dash`, `~/.local/share/tmux-tools` | symlinks into the repo | none |
-| `~/.claude/orchestrator.md`, `~/.claude/worker.md`, `~/.claude/hooks/{artifact-register,bash-mirror,kill-guard}.sh` | symlinks into the repo | none. Claude Code never reads these on its own; only agent-board's launchers and its settings file do |
+| `~/.claude/orchestrator.md`, `~/.claude/worker.md`, `~/.claude/hooks/{artifact-register,bash-mirror,kill-guard,superpowers-hook}.sh` | symlinks into the repo (and `~/.claude/hooks/` itself if missing) | none. Claude Code never reads these on its own; only agent-board's launchers and its settings file do |
 | `~/.config/agent-board/` | new: `claude-settings.json`, `tmux.conf` | none. Only agent-board sessions load them |
 | `~/.tmux.conf` | one `source-file` line | tmux-wide; see [step 5](#5-tmux) for exactly what it changes |
+| your running tmux server | the two agent-board hooks, loaded once in step 5 | the same as the `~/.tmux.conf` row |
 | `~/.claude/ideas/`, `~/.claude/handoffs/` | created on first use | none |
+
+> **Followed an earlier version of this guide, or copied the author's setup?** If `~/.claude/settings.json` already registers `bash-mirror.sh`, `artifact-register.sh` or `kill-guard.sh`, remove those entries first. Otherwise they run twice in agent-board sessions, and they still run in all your other sessions.
 
 ## 1. Prerequisites
 
@@ -57,9 +62,11 @@ These link to the same binaries already on your `PATH`, so your own `tmux` keeps
 Put `~/.local/bin` on your `PATH` if it isn't already, and reload:
 
 ```zsh
-[[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+[[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
+
+agent-board types `claude-orchestrator` and `tmux-ctl` into tmux panes, which resolve them through **the pane shell's `PATH`**. If tmux's `default-shell` is bash or fish, put `~/.local/bin` on `PATH` in that shell's profile too.
 
 ## 3. Clone and link
 
@@ -82,6 +89,8 @@ for t in $targets; do
   [[ -e $t || -L $t ]] && [[ "$(readlink $t)" != "$REPO"/* ]] && print "EXISTS: $t"
 done
 ```
+
+On a re-run, `EXISTS: ~/.local/bin/claude-orchestrator` is expected once that path holds the step 4 wrapper.
 
 `dev` is the name most likely to clash. The board calls `~/.local/bin/dev` by that exact path, so it has to be this one.
 
@@ -145,12 +154,16 @@ EOF
 Now make every agent-board lead start with that file. `dev`, the board's Restart orchestrator and the `/handoff` relay all start the lead by typing `claude-orchestrator`, so a wrapper with that name covers all three:
 
 ```zsh
-cat > ~/.local/bin/claude-orchestrator <<'EOF'
+REPO=~/agent-board
+# remove any old link first: writing through a link into the repo would overwrite the repo's own launcher
+[[ -L ~/.local/bin/claude-orchestrator ]] && rm ~/.local/bin/claude-orchestrator
+cat > ~/.local/bin/claude-orchestrator <<EOF
 #!/usr/bin/env zsh
 # agent-board lead: repo launcher + agent-board-only settings
-exec ~/agent-board/bin/claude-orchestrator --settings ~/.config/agent-board/claude-settings.json "$@"
+exec ${REPO}/bin/claude-orchestrator --settings \$HOME/.config/agent-board/claude-settings.json "\$@"
 EOF
 chmod +x ~/.local/bin/claude-orchestrator
+cat ~/.local/bin/claude-orchestrator      # check: the exec line names your repo path
 ```
 
 What each hook does for the lead:
@@ -175,7 +188,15 @@ What each hook does for the lead:
 
 ## 5. tmux
 
-agent-board needs two tmux hooks. A tmux hook is server-wide, so this is the one change that reaches outside agent-board. Put them in their own file:
+agent-board needs two tmux hooks. A tmux hook is server-wide, so this is the one change that reaches outside agent-board.
+
+First check whether you already use these hooks:
+
+```zsh
+tmux show-hooks -g 2>/dev/null | grep -E '^(after-split-window|session-closed)'
+```
+
+If that prints nothing, use the file below as is. If it prints a hook of yours, change that line's `set-hook -g` to `set-hook -ga`, so agent-board's hook is added next to yours instead of replacing it.
 
 ```zsh
 cat > ~/.config/agent-board/tmux.conf <<'EOF'
@@ -184,14 +205,15 @@ set-hook -g after-split-window 'run-shell -b "~/.local/bin/tmux-teammate-window"
 # agent-board: delete a project's agent-board state files when its session closes
 set-hook -g session-closed 'run-shell -b "~/.local/bin/tmux-session-closed #{q:hook_session_name}"'
 EOF
-grep -qF 'agent-board/tmux.conf' ~/.tmux.conf 2>/dev/null || echo 'source-file ~/.config/agent-board/tmux.conf' >> ~/.tmux.conf
-tmux source-file ~/.tmux.conf 2>/dev/null || true
+grep -qF 'agent-board/tmux.conf' ~/.tmux.conf 2>/dev/null || printf '\n%s\n' 'source-file ~/.config/agent-board/tmux.conf' >> ~/.tmux.conf
+# load just these two hooks into the running server (re-sourcing all of ~/.tmux.conf could repeat your own bindings and plugins)
+tmux source-file ~/.config/agent-board/tmux.conf 2>/dev/null || true
 ```
 
 Effect on your other tmux use:
 
 - **`after-split-window`** checks new split panes, and acts only on a pane whose command is a Claude agent-team teammate (`--agent-name …`, or older Claude's `cat` placeholder). If you also use agent teams in tmux outside agent-board, those teammates get their own windows too. Ordinary splits are untouched.
-- **`session-closed`** deletes only files named after the closed session in agent-board's state directory (`$TMPDIR/tmux-ctl-$UID/`). If you already have hooks on either event, `set-hook -g` replaces them; use `set-hook -ga` (append) instead.
+- **`session-closed`** deletes only files named after the closed session in agent-board's state directory (`$TMPDIR/tmux-ctl-$UID/`).
 
 Optional, tmux-wide, only if you want them:
 
@@ -229,7 +251,7 @@ On first start in a folder, Claude may ask you to trust it; accept it in the `cl
 **Your own setup is untouched:**
 
 ```zsh
-grep -c 'agent-board\|bash-mirror\|kill-guard\|artifact-register' ~/.claude/settings.json   # expect 0
+grep -sc 'agent-board\|bash-mirror\|kill-guard\|artifact-register' ~/.claude/settings.json   # expect 0 (or no output: no file)
 ```
 
 In a plain `claude` session started outside agent-board, `/hooks` lists none of the three agent-board hooks. In the agent-board lead, `/hooks` lists them.
@@ -241,7 +263,8 @@ These need code changes (planned in the [installability plan](superpowers/plans/
 | Gap | Effect today | Plan task |
 | --- | --- | --- |
 | Workers (`tmux-ctl agent`) start as `claude -w …` without `--settings` | worker Bash calls are not mirrored to the feed, worker files are not auto-registered as artifacts, and kill-guard does not protect workers. `tmux-ctl run` records still appear | 2 |
-| Teammates: Claude Code passes the lead's `env` to teammates, but whether it passes `--settings` hooks is unverified | teammate commands may be missing from the feed and from kill-guard protection | 1 |
+| Teammates: Claude Code passes the lead's `env` to teammates, but whether it passes `--settings` hooks is unverified | if not, the Activity feed shows no teammate commands, teammate plans aren't auto-registered, and kill-guard doesn't protect teammates | 1 |
+| The wrapper is found through the pane shell's `PATH`; `DEV_CLAUDE_CMD` bypasses it | a pane whose shell lacks `~/.local/bin` runs no lead, and a custom `DEV_CLAUDE_CMD` must pass `--settings` itself ([CUSTOMIZATION §3](CUSTOMIZATION.md#3-lead-and-worker-behaviour)) | 2 |
 | `/handoff`, `tmux-orchestrator`, `effort-*` live outside the repo | not available in the scoped install | 3 |
 | tmux hooks are server-wide | see step 5 | 4 |
 | Commands are linked into `~/.local/bin` by fixed names | `dev` may clash with an existing command | 5 |
@@ -266,8 +289,10 @@ for t in ~/.local/share/tmux-dash ~/.local/share/tmux-tools ~/.claude/orchestrat
 done
 for f in ~/agent-board/claude/hooks/*; do [[ "$(readlink ~/.claude/hooks/${f:t})" == ~/agent-board/* ]] && rm ~/.claude/hooks/${f:t}; done
 sed -i '' '/agent-board\/tmux.conf/d' ~/.tmux.conf
-rm -r ~/.config/agent-board
+mv ~/.config/agent-board ~/.config/agent-board.bak-$(date +%Y%m%d)   # keeps your settings edits; delete when sure
 ```
+
+The running tmux server keeps the two hooks until it restarts. To drop them now: `tmux set-hook -gu after-split-window; tmux set-hook -gu session-closed`. That also clears any hook of your own on those events, so re-source your config afterwards.
 
 The `~/.local/bin/{tmux,ttyd,fzf}` links from step 2 are harmless to keep. State lives in `~/.local/state/tmux-dash/` (board token, pids, logs) and `${TMPDIR}/tmux-ctl-$UID/` (runtime state). Your ideas are in `~/.claude/ideas/`; keep that folder if you want them.
 
