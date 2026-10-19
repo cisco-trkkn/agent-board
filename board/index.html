@@ -72,7 +72,7 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; back
 .live { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
 .live.off i { background: var(--red); }
-.offline-banner { background: var(--red-soft); color: var(--red); border-bottom: 1px solid var(--red); padding: 6px 16px; font-size: 13px; text-align: center; }
+.offline-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 25; background: var(--red-soft); color: var(--red); border-bottom: 1px solid var(--red); padding: 6px 16px; font-size: 13px; text-align: center; }
 .offline-banner[hidden] { display: none; }
 
 .attention { display: none; margin: 14px 20px 0; padding: 10px 14px; border-radius: 10px;
