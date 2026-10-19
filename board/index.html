@@ -12,6 +12,7 @@
   --red: #dc2626; --red-soft: #fdecec; --blue: #2563eb; --blue-soft: #e8f0fe; --gray-soft: #eef0f4;
   --shadow: 0 1px 2px rgba(16,24,40,.06), 0 4px 12px rgba(16,24,40,.05);
   --mono: "SF Mono", Menlo, ui-monospace, monospace;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4; --series-6: #008300;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -20,6 +21,7 @@
     --green: #4ade80; --green-soft: #17301f; --amber: #fbbf24; --amber-soft: #352a12;
     --red: #f87171; --red-soft: #3a1a1a; --blue: #60a5fa; --blue-soft: #172a45; --gray-soft: #262a35;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300;
   }
 }
 * { box-sizing: border-box; }
@@ -229,7 +231,41 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
 .activity.open .chev { transform: rotate(90deg); }
 .act-body { display: none; max-height: 38vh; overflow: auto; padding: 0 12px 12px; }
 .activity.open .act-body { display: block; }
-.fails:empty { display: none; }
+.fails:empty, .alerts:empty { display: none; }
+.alerts { color: var(--amber); background: var(--amber-soft); border-radius: 999px; font-size: 11px; font-weight: 600; padding: 1px 8px; }
+.activity .tabs { flex: none; margin-bottom: 8px; }
+.activity .tabs button { border-radius: 999px; padding: 4px 12px; }
+.activity .tabs button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.usage-head { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: flex-end; margin: 4px 0 10px; }
+.usage-head .stat small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.usage-head .stat b { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.usage-head .cap { color: var(--muted); font-size: 12px; }
+.usage-note { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+.usage h4 { margin: 14px 0 6px; font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.usage-alert { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 12.5px; }
+.alert-badge { border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.alert-badge.amber { background: var(--amber-soft); color: var(--amber); }
+.alert-badge.red { background: var(--red-soft); color: var(--red); }
+.card .alert-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.usage-table th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); padding: 4px 8px 4px 0; white-space: nowrap; }
+.usage-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.usage-table .num { text-align: right; }
+.usage-table.sortable th { cursor: pointer; user-select: none; }
+.usage-table.sortable th:hover { color: var(--text); }
+.ctx-bar { display: inline-block; vertical-align: middle; width: 90px; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; margin-right: 6px; }
+.ctx-bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.ctx-bar.amber i { background: var(--amber); }
+.usage-chart { width: 100%; height: auto; display: block; }
+.usage-chart text { fill: var(--muted); font-size: 10px; }
+.usage-chart .gl { stroke: var(--border); stroke-width: 1; }
+.usage-chart rect.seg { stroke: var(--panel); stroke-width: 2; }
+.usage-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; margin-top: 4px; }
+.usage-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.s1 { fill: var(--series-1); background: var(--series-1); } .s2 { fill: var(--series-2); background: var(--series-2); }
+.s3 { fill: var(--series-3); background: var(--series-3); } .s4 { fill: var(--series-4); background: var(--series-4); }
+.s5 { fill: var(--series-5); background: var(--series-5); } .s6 { fill: var(--series-6); background: var(--series-6); }
+.s0 { fill: var(--muted); background: var(--muted); }
 .fails { color: #fff; background: #e5534b; border-radius: 999px; font-size: 11px; padding: 1px 8px; }
 .run { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-top: 8px; cursor: pointer; }
 .run .top { display: flex; gap: 8px; align-items: center; }
@@ -314,11 +350,11 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
       <div class="doc-body" id="doc-body"></div>
     </section>
       <section class="activity" id="activity">
-        <button class="act-head" id="act-toggle"><b>Activity</b> <span class="fails" id="act-fails"></span><span class="chev">▸</span></button>
+        <button class="act-head" id="act-toggle"><b>Activity</b> <span class="fails" id="act-fails"></span> <span class="alerts" id="act-alerts"></span><span class="chev">▸</span></button>
         <div class="act-body">
-          <nav class="tabs"><button data-tab="runs" class="on">Runs</button><button data-tab="cmds">Commands</button><select id="act-agent"><option value="">All agents</option></select></nav>
-          <div id="act-runs"></div>
-          <div id="act-cmds" hidden></div>
+          <nav class="tabs"><button data-tab="usage">Usage</button><button data-tab="runs">Runs</button></nav>
+          <div id="act-usage" class="usage"></div>
+          <div id="act-runs" hidden></div>
         </div>
       </section>
   </main>
@@ -436,6 +472,7 @@ function role(s, w, p) {
   return s.windows.some((x) => x.teammate) ? "lead" : "claude";
 }
 
+const alertColor = (kind) => (kind === "context" || kind === "burn" ? "amber" : "red");
 function card(s, w, p) {
   const key = `${s.name}:${w.index}`;
   const r = role(s, w, p);
@@ -452,6 +489,12 @@ function card(s, w, p) {
     .filter(Boolean).join(" · ")));
   head.append(who, el("span", "pill " + p.status, STATUS_LABEL[p.status] || p.status));
   c.append(head);
+  const alerts = (s.usage_alerts || {})[p.id] || [];
+  if (alerts.length) {
+    const bar = el("div", "alert-badges");
+    for (const a of alerts) { const b = el("span", "alert-badge " + alertColor(a.kind), a.label); b.title = a.detail; bar.append(b); }
+    c.append(bar);
+  }
   c.append(el("div", "preview", (p.preview || []).join("\n")));
 
   const acts = el("div", "card-actions");
@@ -589,6 +632,8 @@ async function refresh() {
     $("#live").classList.remove("off"); $("#live span").textContent = "live";
   } catch (e) { $("#live").classList.add("off"); $("#live span").textContent = "offline"; return; }
   if (!session() && data.sessions[0]) current = data.sessions[0].name;
+  const n = (session() || {}).usage_alert_count || 0;
+  $("#act-alerts").textContent = n ? `${n} alert${n === 1 ? "" : "s"}` : "";
   render();
 }
 
@@ -1171,15 +1216,20 @@ async function pollIdeas() {
 }
 
 // ── activity drawer ──
-const ACT = { open: false, tab: "runs", seenFails: new Set(), openLogs: new Set(), logs: new Map(), sig: null };
+const ACT = { open: false, tab: "usage", seenFails: new Set(), openLogs: new Set(), logs: new Map(), sig: null, sort: {} };
+try { if (localStorage.getItem("dash.actTab") === "runs") ACT.tab = "runs"; } catch (e) {}
+function showActTab() {
+  for (const x of $("#activity nav").querySelectorAll("button")) x.classList.toggle("on", x.dataset.tab === ACT.tab);
+  $("#act-usage").hidden = ACT.tab !== "usage"; $("#act-runs").hidden = ACT.tab !== "runs";
+}
+showActTab();
 $("#act-toggle").onclick = () => { ACT.sig = null; ACT.open = !ACT.open; $("#activity").classList.toggle("open", ACT.open); pollActivity(); };
 for (const b of $("#activity nav").querySelectorAll("button")) b.onclick = () => {
   ACT.tab = b.dataset.tab; ACT.sig = null;
-  for (const x of $("#activity nav").querySelectorAll("button")) x.classList.toggle("on", x === b);
-  $("#act-runs").hidden = ACT.tab !== "runs"; $("#act-cmds").hidden = ACT.tab !== "cmds";
+  try { localStorage.setItem("dash.actTab", ACT.tab); } catch (e) {}
+  showActTab();
   pollActivity();
 };
-$("#act-agent").onchange = () => { ACT.sig = null; pollActivity(); };
 
 async function pollActivity() {
   const s = session(); if (!s) return;
@@ -1194,7 +1244,7 @@ async function pollActivity() {
   if (ACT.tab === "runs") {   // rebuild only when the data changed, so open logs keep their scroll and selection
     const sig = "r:" + runs.map((x) => `${x.id}|${x.exit}|${x.summary}|${x.window_index}`).join(",");
     if (sig !== ACT.sig) { ACT.sig = sig; renderRuns(s, runs); }
-  } else await renderCmds(s);
+  } else await renderUsage(s);
 }
 
 function renderRuns(s, runs) {
@@ -1237,28 +1287,129 @@ function renderRuns(s, runs) {
   }
 }
 
-async function renderCmds(s) {
-  const r = await api(`feed?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const feed = (await r.json()).feed || [];
-  const sel = $("#act-agent"), want = sel.value;
-  const agents = [...new Set(feed.map((b) => b.agent))].sort();
-  if (document.activeElement !== sel && sel.dataset.agents !== agents.join("\u0001")) {   // never rebuild a focused (possibly open) dropdown
-    sel.replaceChildren(el("option", "", "All agents")); sel.firstChild.value = "";
-    for (const a of agents) { const o = el("option", "", a); o.value = a; sel.append(o); }
-    sel.value = agents.includes(want) ? want : "";
-    sel.dataset.agents = agents.join("\u0001");
-  }
-  const last = feed[feed.length - 1];
-  const sig = `c:${sel.value}|${feed.length}|${last ? last.epoch + '/' + last.time + last.exit : ""}`;
+// ── usage tab ──
+const usd = (v) => (v == null ? "unpriced" : `$${v.toFixed(2)}`);
+
+async function renderUsage(s) {
+  const r = await api(`usage?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
+  const d = await r.json();
+  const sig = "u:" + JSON.stringify(d);   // rebuild only when the data changed, so sort order and scroll survive polls
   if (sig === ACT.sig) return;
   ACT.sig = sig;
-  const box = $("#act-cmds"); box.replaceChildren();
-  for (const b of feed.filter((b) => !sel.value || b.agent === sel.value).reverse()) {
-    const row = el("div", "cmd");
-    row.append(el("span", b.exit === 0 ? "ok" : "bad", b.exit === 0 ? "✔ " : "✘ "), el("span", "badge", b.agent), " ", el("code", "", b.cmd), " ", el("small", "", `${b.time} · ${b.win}`));
-    if (b.tail) row.append(el("pre", "", b.tail));
-    box.append(row);
+  const box = $("#act-usage"); box.replaceChildren();
+  if (d.indexing && d.indexing.done < d.indexing.total)
+    box.append(el("div", "usage-note", `indexing… ${Math.round(100 * d.indexing.done / d.indexing.total)}%`));
+  if (d.index_error) box.append(el("div", "usage-note", `index error: ${d.index_error}`));
+  box.append(usageHeadline(d), usageAlerts(d), el("h4", null, "Live sessions"), usageLive(d),
+    el("h4", null, "Last 30 days"), ...usageChart(d.daily),
+    el("h4", null, "By role"), sortableTable(d.by_role, [["key", "Role"], ["usd", "$", usd], ["calls", "Calls"]], "role"),
+    el("h4", null, "By model"), sortableTable(d.by_model, [["key", "Model"], ["usd", "$", usd], ["calls", "Calls"],
+      ["cache_share", "Cache share", (v) => `${Math.round(100 * (v || 0))}%`]], "model"),
+    el("h4", null, "By branch / worktree"), sortableTable(d.by_branch, [["key", "Branch"], ["usd", "$", usd], ["calls", "Calls"]], "branch"));
+}
+
+function usageHeadline(d) {
+  const h = d.headline, box = el("div", "usage-head");
+  for (const [id, label, v] of [["usage-today", "Today", h.today], ["usage-week", "7 days", h.week], ["usage-month", "30 days", h.month]]) {
+    const st = el("div", "stat"), b = el("b", null, `$${(v || 0).toFixed(2)}`); b.id = id;
+    st.append(el("small", null, label), b); box.append(st);
   }
+  const cap = el("div", "cap", "API-equivalent estimate");
+  if (h.unpriced_calls) cap.append(` · ${h.unpriced_calls} unpriced call${h.unpriced_calls === 1 ? "" : "s"}`);
+  box.append(cap);
+  return box;
+}
+
+function usageAlerts(d) {
+  const box = el("div");
+  if (d.warning) box.append(el("div", "usage-note", d.warning));
+  if (!d.alerts.length) box.append(el("div", "usage-note", "No alerts."));
+  for (const a of d.alerts) {
+    const row = el("div", "usage-alert"), b = el("span", "alert-badge " + alertColor(a.kind), a.label); b.title = a.detail;
+    row.append(b, el("b", null, a.session), el("span", null, a.detail)); box.append(row);
+  }
+  return box;
+}
+
+function usageLive(d) {
+  if (!d.live.length) return el("div", "usage-note", "No live sessions (last call under 30 minutes ago).");
+  const t = el("table", "usage-table"), head = el("tr");
+  for (const c of ["Session", "Role", "Model", "Effort", "Context", "Last hour", "Total"]) head.append(el("th", c === "Last hour" || c === "Total" ? "num" : null, c));
+  t.append(head);
+  for (const e of d.live) {
+    const tr = el("tr"), bar = el("span", "ctx-bar" + (e.alerts.some((a) => a.kind === "context") ? " amber" : "")), fill = el("i");
+    fill.style.width = `${Math.min(100, e.context_pct)}%`; bar.append(fill);
+    const cx = el("td"); cx.append(bar, `${e.context_pct}%`);
+    tr.append(el("td", null, e.name), el("td", null, e.role), el("td", null, e.model), el("td", null, e.effort || ""), cx,
+      el("td", "num", usd(e.last_hour)), el("td", "num", usd(e.total)));
+    t.append(tr);
+  }
+  return t;
+}
+
+const SVGNS = "http://www.w3.org/2000/svg";
+const svg = (tag, attrs, text) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+
+function usageChart(daily) {
+  const totals = {};
+  for (const day of daily) for (const [m, v] of Object.entries(day.by_model)) totals[m] = (totals[m] || 0) + v;
+  const order = Object.keys(totals).sort((a, b) => totals[b] - totals[a] || (a < b ? -1 : 1));
+  const cls = (m) => { const i = order.indexOf(m); return i < 6 ? `s${i + 1}` : "s0"; };   // 7th and later models share one muted bucket
+  const legend = order.slice(0, 6); if (order.length > 6) legend.push("other");
+  const dayTotal = (day) => Object.values(day.by_model).reduce((a, b) => a + b, 0);
+  const max = Math.max(...daily.map(dayTotal), 0);
+  if (!max) return [el("div", "usage-note", "No priced spend in the last 30 days.")];
+  const step = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000].find((x) => max / x <= 4) || 10000;
+  const top = Math.ceil(max / step) * step;
+  const W = Math.max(480, $("#act-usage").clientWidth || 720), H = 200, L = 46, B = 22, T = 8, R = 6, bw = (W - L - R) / daily.length;
+  const y = (v) => T + (H - T - B) * (1 - v / top);
+  const g = svg("svg", { class: "usage-chart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Daily API-equivalent cost by model, last 30 days" });
+  for (let v = 0; v <= top + 1e-9; v += step) {
+    g.append(svg("line", { class: "gl", x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+    g.append(svg("text", { x: L - 6, y: y(v) + 3, "text-anchor": "end" }, `$${v}`));
+  }
+  daily.forEach((day, i) => {
+    let acc = 0;
+    for (const m of order) {
+      const v = day.by_model[m]; if (!v) continue;
+      const r = svg("rect", { class: `seg ${cls(m)}`, x: L + i * bw + bw * 0.15, width: bw * 0.7, y: y(acc + v), height: Math.max(0.5, y(acc) - y(acc + v)), rx: 2 });
+      r.append(svg("title", {}, `${day.date} · ${m} · $${v.toFixed(2)}`));
+      g.append(r); acc += v;
+    }
+  });
+  for (const i of [0, Math.floor(daily.length / 2), daily.length - 1])
+    g.append(svg("text", { x: L + i * bw + bw / 2, y: H - 6, "text-anchor": i === 0 ? "start" : i === daily.length - 1 ? "end" : "middle" }, daily[i].date.slice(5)));
+  const lg = el("div", "usage-legend");
+  for (const m of legend) { const sw = el("i", m === "other" ? "s0" : cls(m)); const it = el("span"); it.append(sw, m); lg.append(it); }
+  return [g, lg];
+}
+
+function sortableTable(rows, cols, key) {
+  const wrap = el("div"), st = ACT.sort[key] || (ACT.sort[key] = { k: "usd", dir: -1 });
+  const draw = () => {
+    const t = el("table", "usage-table sortable"), head = el("tr");
+    for (const [k, label] of cols) {
+      const th = el("th", k === "key" ? null : "num", label + (st.k === k ? (st.dir < 0 ? " ▾" : " ▴") : ""));
+      th.onclick = () => { st.dir = st.k === k ? -st.dir : (k === "key" ? 1 : -1); st.k = k; draw(); };
+      head.append(th);
+    }
+    t.append(head);
+    const val = (r) => r[st.k];
+    const sorted = [...rows].sort((a, b) => {   // null ($ unpriced) always last
+      const x = val(a), y = val(b);
+      if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1;
+      return (x < y ? -1 : x > y ? 1 : 0) * st.dir;
+    });
+    for (const r of sorted) {
+      const tr = el("tr");
+      for (const [k, , fmt] of cols) tr.append(el("td", k === "key" ? null : "num", fmt ? fmt(r[k]) : String(r[k])));
+      t.append(tr);
+    }
+    if (!rows.length) { const tr = el("tr"); tr.append(el("td", null, "Nothing in the last 30 days.")); t.append(tr); }
+    wrap.replaceChildren(t);
+  };
+  draw();
+  return wrap;
 }
 
 // poll 2s after the previous answer, so a slow server never gets a pile of requests
