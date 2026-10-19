@@ -40,8 +40,9 @@ on a dropped line. The CLI (`ideas.py`) gets no new subcommands.
 
 `move(project, path, target, target_repo, source_repo)`:
 
-- Allowed only for artifacts in the project's manifest whose kind is `plan` or `spec`, and whose
-  path is inside `source_repo/docs/superpowers/` and not under any `/.claude/worktrees/`.
+- Allowed only for paths in the project's manifest that are inside `source_repo/docs/superpowers/plans/`
+  or `.../specs/` and not under any `/.claude/worktrees/`. Eligibility is by path, not by the manifest
+  `kind`: `tmux-ctl artifact` registers plans as `other`.
 - The new path is `target_repo / <path relative to source_repo>`. Refuses (`ValueError`) if it
   exists, or if `<path>.tasks.json` exists and its target exists.
 - Creates parent dirs, moves the file, and moves `<path>.tasks.json` if present (plain rename;
@@ -74,7 +75,7 @@ New `action`s in the POST handler, each validating `session` and `target` with `
   posts `idea_edit`, Escape cancels. The 2 s poll does not rebuild a row while it is being edited.
 - A *Show dropped* toggle under the list shows dropped ideas (dimmed, newest first, moved ones
   labelled `→ <project>`); their menu has *Restore* (not for moved ones).
-- **Plan and spec rows** in the artifacts panel get a menu with *Move to… ▸ <open projects>*.
+- **Rows under `docs/superpowers/plans|specs/`** in the artifacts panel get a menu with *Move to… ▸ <open projects>*.
   After a move, the row disappears from this project and appears under the target.
 
 ## Testing
