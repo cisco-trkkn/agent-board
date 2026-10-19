@@ -149,6 +149,12 @@ def in_project(cwd, repo):
     return cwd == repo or (cwd or "").startswith(repo + "/.claude/worktrees/")
 
 
+def _valid_threshold(default, v):
+    if isinstance(default, list):
+        return isinstance(v, list) and all(isinstance(x, str) for x in v)
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+
+
 def thresholds(path=ALERTS_PATH):
     """(alert thresholds, warning or None). A missing file is the defaults; a bad one is the defaults plus a warning."""
     th = dict(DEFAULT_ALERTS)
@@ -161,8 +167,15 @@ def thresholds(path=ALERTS_PATH):
             raise ValueError("expected a JSON object")
     except (OSError, ValueError) as e:
         return th, f"{p.name} unreadable, using defaults: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
-    th.update({k: v for k, v in d.items() if k in DEFAULT_ALERTS})
-    return th, None
+    bad = []
+    for k, v in d.items():
+        if k not in DEFAULT_ALERTS:
+            continue
+        if _valid_threshold(DEFAULT_ALERTS[k], v):
+            th[k] = v
+        else:
+            bad.append(k)
+    return th, (f"{p.name}: ignoring invalid {', '.join(bad)}, using defaults" if bad else None)
 
 
 def _rows(conn, sql, args=()):
@@ -231,18 +244,24 @@ def _midnight(now, days_back):
 def _breakdown(rows, keyfn, prices, extra=None):
     acc = {}
     for r in rows:
-        e = acc.setdefault(keyfn(r), {"usd": 0.0, "calls": 0, "cache": 0, "input_side": 0})
-        e["usd"] += _usd(r, prices)
+        e = acc.setdefault(keyfn(r), {"usd": 0.0, "calls": 0, "unpriced": 0, "cache": 0, "input_side": 0})
+        c = call_cost(r, prices)
+        if c is None:
+            e["unpriced"] += 1
+        else:
+            e["usd"] += c
         e["calls"] += 1
         e["cache"] += r["cache_read"]
         e["input_side"] += context_tokens(r)
     out = []
     for k, e in acc.items():
-        item = {"key": k, "usd": e["usd"], "calls": e["calls"]}
+        # an all-unpriced row is "unpriced", never $0
+        item = {"key": k, "usd": None if e["unpriced"] == e["calls"] else e["usd"], "calls": e["calls"],
+                "unpriced": e["unpriced"]}
         if extra:
             item["cache_share"] = e["cache"] / e["input_side"] if e["input_side"] else 0.0
         out.append(item)
-    return sorted(out, key=lambda x: -x["usd"])
+    return sorted(out, key=lambda x: (x["usd"] is None, -(x["usd"] or 0)))
 
 
 def report(conn, repo, prices, th, now):

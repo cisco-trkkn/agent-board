@@ -259,6 +259,25 @@ class ThresholdsTest(unittest.TestCase):
             self.assertTrue(warn and "\n" not in warn)
 
 
+    def test_thresholds_bad_values_fall_back_per_key(self):
+        bad = {"burn_window_s": 0, "live_s": "1800", "context_pct": -5, "session_total": True,
+               "mismatch_models": "opus", "mismatch_efforts": [1], "burn_per_hour": None}
+        for k, v in bad.items():
+            self.p.write_text(json.dumps({k: v, "session_total": 40} if k != "session_total" else {k: v}))
+            th, warn = usage.thresholds(self.p)
+            self.assertEqual(th[k], usage.DEFAULT_ALERTS[k], k)
+            self.assertTrue(warn and k in warn and "\n" not in warn, (k, warn))
+            if k != "session_total":
+                self.assertEqual(th["session_total"], 40)   # the good key still applies
+
+    def test_thresholds_accept_numbers_and_str_lists(self):
+        self.p.write_text('{"burn_per_hour": 7.5, "context_pct": 90, "mismatch_models": ["opus"], "mismatch_efforts": []}')
+        th, warn = usage.thresholds(self.p)
+        self.assertEqual((th["burn_per_hour"], th["context_pct"], th["mismatch_models"], th["mismatch_efforts"]),
+                         (7.5, 90, ["opus"], []))
+        self.assertIsNone(warn)
+
+
 class ReportTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -369,13 +388,67 @@ class ReportTest(unittest.TestCase):
         self.assertAlmostEqual(h["month"], 8.0)
         self.assertEqual(sum(x["calls"] for x in self.report()["by_model"]), 2)
 
+    def test_report_bucket_edges_at_local_midnight(self):
+        mk = lambda y, m, d, hh=0, mi=0, ss=0: time.mktime((y, m, d, hh, mi, ss, 0, 0, -1))
+        at = lambda e: datetime.fromtimestamp(e, timezone.utc).isoformat().replace("+00:00", "Z")
+        usd = lambda n: dict(inp=250_000 * n, out=0)       # $1 * n on opus
+        self.put(line("t0", ts=at(mk(2026, 10, 19)), **usd(1)),          # exactly today's midnight: today
+                 line("t1", ts=at(mk(2026, 10, 19) - 1), **usd(2)),      # 1 s before: week, not today
+                 line("w0", ts=at(mk(2026, 10, 13)), **usd(4)),          # first second of the 7-day window
+                 line("w1", ts=at(mk(2026, 10, 13) - 1), **usd(8)),      # 1 s before it: month only
+                 line("m0", ts=at(mk(2026, 9, 20)), **usd(16)),          # first second of the 30-day window
+                 line("m1", ts=at(mk(2026, 9, 20) - 1), **usd(32)))      # 1 s before it: excluded
+        r = self.report()
+        h = r["headline"]
+        self.assertAlmostEqual(h["today"], 1.0)
+        self.assertAlmostEqual(h["week"], 1 + 2 + 4)
+        self.assertAlmostEqual(h["month"], 1 + 2 + 4 + 8 + 16)
+        self.assertEqual(sum(x["calls"] for x in r["by_model"]), 5)
+        self.assertAlmostEqual(r["daily"][0]["by_model"]["claude-opus-5-5"], 16.0)
+        self.assertEqual(r["daily"][0]["date"], "2026-09-20")
+
+    def test_report_week_and_month_edges_hold_across_dst_change(self):
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Madrid"; time.tzset()
+        try:
+            mk = lambda y, m, d, hh=0, mi=0, ss=0: time.mktime((y, m, d, hh, mi, ss, 0, 0, -1))
+            at = lambda e: datetime.fromtimestamp(e, timezone.utc).isoformat().replace("+00:00", "Z")
+            now = mk(2026, 10, 28, 12)                       # DST ended 2026-10-25, so the windows span the change
+            self.assertNotEqual(now - 6 * 86400, mk(2026, 10, 22, 12))   # sanity: N*86400 would be off by an hour
+            self.put(line("w0", ts=at(mk(2026, 10, 22, 0, 30)), inp=1_000_000, out=0),    # 00:30, day 6 back: in week
+                     line("w1", ts=at(mk(2026, 10, 21, 23, 59, 59)), inp=2_000_000, out=0),  # before it: month only
+                     line("m0", ts=at(mk(2026, 9, 29, 0, 30)), inp=4_000_000, out=0),     # first day of the 30-day window
+                     line("m1", ts=at(mk(2026, 9, 28, 23, 59, 59)), inp=8_000_000, out=0))   # excluded
+            h = usage.report(self.conn, "/r", self.prices, self.th, now)["headline"]
+            self.assertAlmostEqual(h["week"], 4.0)
+            self.assertAlmostEqual(h["month"], 4.0 + 8.0 + 16.0)
+        finally:
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+
     def test_report_unpriced_counted(self):
         self.put(line("a", ts=ts(60), model="mystery-1", inp=1_000_000), line("b", ts=ts(60), inp=1_000_000, out=0))
         r = self.report()
         self.assertEqual(r["headline"]["unpriced_calls"], 1)
         self.assertAlmostEqual(r["headline"]["month"], 4.0)
         by = {x["key"]: x for x in r["by_model"]}
-        self.assertEqual((by["mystery-1"]["calls"], by["mystery-1"]["usd"]), (1, 0))
+        self.assertEqual((by["mystery-1"]["calls"], by["mystery-1"]["usd"], by["mystery-1"]["unpriced"]), (1, None, 1))
+        self.assertEqual((by["claude-opus-5-5"]["usd"], by["claude-opus-5-5"]["unpriced"]), (4.0, 0))
+        self.assertNotIn("mystery-1", r["daily"][-1]["by_model"])
+
+    def test_report_partial_unpriced_row_keeps_partial_sum(self):
+        self.put(line("a", ts=ts(60), model="mystery-1", inp=1_000_000, cwd="/r"),
+                 line("b", ts=ts(60), model="claude-opus-5-5", inp=1_000_000, out=0, cwd="/r"))
+        role = self.report()["by_role"][0]
+        self.assertEqual((role["calls"], role["unpriced"]), (2, 1))
+        self.assertAlmostEqual(role["usd"], 4.0)
+
+    def test_report_all_unpriced_sorts_last(self):
+        self.put(line("a", ts=ts(60), model="mystery-1", inp=1_000_000), line("b", ts=ts(60), inp=1, out=0))
+        self.assertEqual([x["key"] for x in self.report()["by_model"]], ["claude-opus-5-5", "mystery-1"])
 
     def test_report_daily_has_30_days_oldest_first(self):
         self.put(line("a", ts=ts(60), inp=1_000_000, out=0))
