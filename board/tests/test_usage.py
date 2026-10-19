@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import importlib, json, os, shutil, sqlite3, sys, tempfile, time, unittest
 from pathlib import Path
 
@@ -222,6 +223,187 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(usage.context_tokens(r), 37)
         self.assertEqual(usage.context_window("m", self.P), 1000)
         self.assertEqual(usage.context_window("nope", self.P), 200)
+
+
+NOW = time.mktime((2026, 10, 19, 12, 0, 0, 0, 0, -1))
+
+
+def ts(delta):
+    return datetime.fromtimestamp(NOW - delta, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class ThresholdsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.p = self.tmp / "usage-alerts.json"
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_thresholds_missing_defaults(self):
+        th, warn = usage.thresholds(self.p)
+        self.assertEqual(th, usage.DEFAULT_ALERTS)
+        self.assertIsNone(warn)
+
+    def test_thresholds_partial_override(self):
+        self.p.write_text('{"burn_per_hour": 2}')
+        th, warn = usage.thresholds(self.p)
+        self.assertEqual(th["burn_per_hour"], 2)
+        self.assertEqual(th["context_pct"], usage.DEFAULT_ALERTS["context_pct"])
+        self.assertIsNone(warn)
+
+    def test_thresholds_invalid_warns(self):
+        for text in ("{not json", "[1]"):
+            self.p.write_text(text)
+            th, warn = usage.thresholds(self.p)
+            self.assertEqual(th, usage.DEFAULT_ALERTS)
+            self.assertTrue(warn and "\n" not in warn)
+
+
+class ReportTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.conn = usage.connect(self.tmp / "u.sqlite")
+        self.f = self.tmp / "p" / "s1.jsonl"; self.f.parent.mkdir()
+        self.text = ""
+        self.prices = usage.load_prices()
+        self.th = dict(usage.DEFAULT_ALERTS)
+    def tearDown(self):
+        self.conn.close(); shutil.rmtree(self.tmp)
+    def put(self, *lines):
+        self.text += "".join(lines); self.f.write_text(self.text); usage.ingest(self.conn, self.f)
+    def live(self):
+        return usage.live_sessions(self.conn, self.prices, self.th, NOW)
+    def kinds(self, entry=None):
+        live = self.live()
+        return [a["kind"] for a in live[0]["alerts"]] if live else None
+    def report(self, repo="/r"):
+        return usage.report(self.conn, repo, self.prices, self.th, NOW)
+
+    def test_live_excludes_older_than_30min(self):
+        self.put(line("a", ts=ts(1700)), line("b", sess="s2", ts=ts(1900)))
+        self.assertEqual([e["session_id"] for e in self.live()], ["s1"])
+
+    def test_live_entry_fields(self):
+        self.put(line("a", ts=ts(60), inp=100, out=0, cr=0, w1=0, agent="mate", cwd="/r"))
+        e = self.live()[0]
+        for k in ("session_id", "name", "role", "model", "effort", "agent_name", "cwd", "context", "context_pct",
+                  "last_hour", "total", "alerts"):
+            self.assertIn(k, e)
+        self.assertEqual((e["name"], e["role"], e["context"]), ("mate", "teammate", 100))
+
+    def test_live_total_prefers_cost_state(self):
+        self.put(line("a", ts=ts(60), inp=1_000_000, out=0))   # $4 of calls
+        with self.conn:
+            self.conn.execute("insert into cost_state values ('s1', 0, 7.5, '{}', 0)")
+        self.assertEqual(self.live()[0]["total"], 7.5)
+
+    def test_alert_context_fires(self):
+        self.put(line("a", ts=ts(60), inp=850_000, out=0))
+        self.assertIn("context", self.kinds())
+        self.assertEqual(self.live()[0]["context_pct"], 85)
+
+    def test_alert_context_clears(self):
+        self.put(line("a", ts=ts(60), inp=100, out=0))
+        self.assertNotIn("context", self.kinds())
+
+    def test_alert_burn_fires(self):
+        self.put(line("a", ts=ts(60), inp=0, out=200_000))   # $4 in 15 min = $16/h
+        self.assertIn("burn", self.kinds())
+
+    def test_alert_burn_clears(self):
+        self.put(line("a", ts=ts(1200), inp=0, out=200_000))   # same spend, outside the 900 s window
+        self.assertEqual(len(self.live()), 1)
+        self.assertNotIn("burn", self.kinds())
+
+    def test_alert_total_fires_from_cost_state(self):
+        self.put(line("a", ts=ts(60)))
+        with self.conn:
+            self.conn.execute("insert into cost_state values ('s1', 0, 30.0, '{}', 0)")
+        self.assertIn("total", self.kinds())
+
+    def test_alert_total_clears(self):
+        self.put(line("a", ts=ts(60)))
+        with self.conn:
+            self.conn.execute("insert into cost_state values ('s1', 0, 5.0, '{}', 0)")
+        self.assertNotIn("total", self.kinds())
+
+    def test_alert_mismatch_fires(self):
+        self.put(line("a", ts=ts(60), model="claude-opus-5-5", effort="low", agent="mate"))
+        self.assertIn("model_mismatch", self.kinds())
+        a = [a for a in self.live()[0]["alerts"] if a["kind"] == "model_mismatch"][0]
+        self.assertEqual(a["label"], "opus@low")
+
+    def test_alert_mismatch_clears_without_agent(self):
+        self.put(line("a", ts=ts(60), model="claude-opus-5-5", effort="low"))
+        self.assertNotIn("model_mismatch", self.kinds())
+
+    def test_alert_mismatch_clears_on_sonnet(self):
+        self.put(line("a", ts=ts(60), model="claude-sonnet-5-5", effort="low", agent="mate"))
+        self.assertNotIn("model_mismatch", self.kinds())
+
+    def test_alert_dict_shape(self):
+        self.put(line("a", ts=ts(60), inp=850_000, out=0))
+        a = self.live()[0]["alerts"][0]
+        self.assertEqual(set(a), {"kind", "label", "detail"})
+        self.assertEqual(a["label"], "ctx 85%")
+
+    def test_report_project_filter(self):
+        self.put(line("a", ts=ts(60), sess="s1", cwd="/r"), line("b", ts=ts(60), sess="s2", cwd="/r/.claude/worktrees/w"),
+                 line("c", ts=ts(60), sess="s3", cwd="/other"), line("d", ts=ts(60), sess="s4", cwd="/r_x/.claude/worktrees/w"),
+                 line("e", ts=ts(60), sess="s5", cwd="/rr"))
+        r = self.report()
+        self.assertEqual(sum(x["calls"] for x in r["by_role"]), 2)
+        self.assertEqual(sorted(e["session_id"] for e in r["live"]), ["s1", "s2"])
+
+    def test_report_alerts_carry_session_name(self):
+        self.put(line("a", ts=ts(60), inp=850_000, out=0, agent="mate", cwd="/r", effort="high"))
+        al = self.report()["alerts"]
+        self.assertEqual([(a["kind"], a["session"]) for a in al], [("context", "mate")])
+
+    def test_report_time_buckets(self):
+        self.put(line("a", ts=ts(60), inp=1_000_000, out=0), line("b", ts=ts(86400), inp=1_000_000, out=0),
+                 line("c", ts=ts(40 * 86400), inp=1_000_000, out=0))
+        h = self.report()["headline"]
+        self.assertAlmostEqual(h["today"], 4.0)
+        self.assertAlmostEqual(h["week"], 8.0)
+        self.assertAlmostEqual(h["month"], 8.0)
+        self.assertEqual(sum(x["calls"] for x in self.report()["by_model"]), 2)
+
+    def test_report_unpriced_counted(self):
+        self.put(line("a", ts=ts(60), model="mystery-1", inp=1_000_000), line("b", ts=ts(60), inp=1_000_000, out=0))
+        r = self.report()
+        self.assertEqual(r["headline"]["unpriced_calls"], 1)
+        self.assertAlmostEqual(r["headline"]["month"], 4.0)
+        by = {x["key"]: x for x in r["by_model"]}
+        self.assertEqual((by["mystery-1"]["calls"], by["mystery-1"]["usd"]), (1, 0))
+
+    def test_report_daily_has_30_days_oldest_first(self):
+        self.put(line("a", ts=ts(60), inp=1_000_000, out=0))
+        d = self.report()["daily"]
+        self.assertEqual(len(d), 30)
+        self.assertEqual([x["date"] for x in d], sorted(x["date"] for x in d))
+        self.assertEqual(d[-1]["date"], "2026-10-19")
+        self.assertEqual(d[0]["date"], "2026-09-20")
+        self.assertAlmostEqual(d[-1]["by_model"]["claude-opus-5-5"], 4.0)
+        self.assertEqual(d[0]["by_model"], {})
+
+    def test_report_by_model_cache_share(self):
+        self.put(line("a", ts=ts(60), inp=10, out=0, cr=60, w5=10, w1=20))
+        m = self.report()["by_model"][0]
+        self.assertAlmostEqual(m["cache_share"], 60 / 100)
+
+    def test_report_by_branch_falls_back_to_worktree_dir(self):
+        d = json.loads(line("a", ts=ts(60), cwd="/r/.claude/worktrees/w")); d["gitBranch"] = ""
+        self.put(json.dumps(d) + "\n", line("b", ts=ts(60), cwd="/r"))
+        keys = {x["key"] for x in self.report()["by_branch"]}
+        self.assertEqual(keys, {"w", "main"})
+
+    def test_report_breakdowns_sorted_by_usd_desc(self):
+        self.put(line("a", ts=ts(60), inp=1_000_000, out=0, cwd="/r"),
+                 line("b", ts=ts(60), inp=3_000_000, out=0, cwd="/r/.claude/worktrees/w"))
+        usds = [x["usd"] for x in self.report()["by_role"]]
+        self.assertEqual(usds, sorted(usds, reverse=True))
+        self.assertEqual(self.report()["by_role"][0]["key"], "worker")
 
 
 if __name__ == "__main__":

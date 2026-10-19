@@ -3,12 +3,15 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 
 from artifacts import state_dir
 
 HERE = Path(__file__).resolve().parent
+DEFAULT_ALERTS = {"context_pct": 80, "burn_per_hour": 15, "burn_window_s": 900, "session_total": 25,
+                  "mismatch_efforts": ["low", "medium"], "mismatch_models": ["opus", "fable"], "live_s": 1800}
+ALERTS_PATH = Path.home() / ".claude" / "usage-alerts.json"
 SCHEMA = """
 create table if not exists calls (request_id text primary key, session_id text, ts real, model text, effort text,
   agent_name text, team_name text, git_branch text, cwd text, sidechain int, subagent_file int,
@@ -144,3 +147,140 @@ def role(r):
 def in_project(cwd, repo):
     repo = repo.rstrip("/")
     return cwd == repo or (cwd or "").startswith(repo + "/.claude/worktrees/")
+
+
+def thresholds(path=ALERTS_PATH):
+    """(alert thresholds, warning or None). A missing file is the defaults; a bad one is the defaults plus a warning."""
+    th = dict(DEFAULT_ALERTS)
+    p = Path(path)
+    if not p.exists():
+        return th, None
+    try:
+        d = json.loads(p.read_text())
+        if not isinstance(d, dict):
+            raise ValueError("expected a JSON object")
+    except (OSError, ValueError) as e:
+        return th, f"{p.name} unreadable, using defaults: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
+    th.update({k: v for k, v in d.items() if k in DEFAULT_ALERTS})
+    return th, None
+
+
+def _rows(conn, sql, args=()):
+    cur = conn.execute(sql, args)
+    names = [c[0] for c in cur.description]
+    return [dict(zip(names, r)) for r in cur.fetchall()]
+
+
+def _usd(r, prices):
+    return call_cost(r, prices) or 0.0
+
+
+def _family(model):
+    parts = norm_model(model).split("-")
+    return parts[1] if len(parts) > 1 else ""
+
+
+def _live_entry(conn, sid, prices, th, now):
+    newest = _rows(conn, "select * from calls where session_id=? order by ts desc limit 1", (sid,))[0]
+    window = max(th["burn_window_s"], 3600)
+    recent = _rows(conn, "select * from calls where session_id=? and ts >= ?", (sid, now - window))
+    last_hour = sum(_usd(r, prices) for r in recent if r["ts"] >= now - 3600)
+    burn_spend = sum(_usd(r, prices) for r in recent if r["ts"] >= now - th["burn_window_s"])
+    cs = conn.execute("select total_usd from cost_state where session_id=?", (sid,)).fetchone()
+    if cs and cs[0] is not None:
+        total = cs[0]
+    else:
+        total = sum(_usd(r, prices) for r in _rows(conn, "select * from calls where session_id=?", (sid,)))
+    ctx = context_tokens(newest)
+    pct = round(100 * ctx / context_window(newest["model"], prices))
+    rl = role(newest)
+    name = newest["agent_name"] or (os.path.basename(newest["cwd"].rstrip("/")) if rl == "worker" else None) or sid[:8]
+    alerts = []
+    if pct >= th["context_pct"]:
+        alerts.append({"kind": "context", "label": f"ctx {pct}%",
+                       "detail": f"Context is {pct}% of the model window (alert at {th['context_pct']}%)."})
+    per_hour = burn_spend * 3600 / th["burn_window_s"]
+    if per_hour > th["burn_per_hour"]:
+        alerts.append({"kind": "burn", "label": f"${per_hour:.0f}/h",
+                       "detail": f"Spending ${per_hour:.2f}/h over the last {th['burn_window_s'] // 60} min (alert above ${th['burn_per_hour']}/h)."})
+    if total > th["session_total"]:
+        alerts.append({"kind": "total", "label": f"${total:.0f} total",
+                       "detail": f"Session total ${total:.2f} is over the ${th['session_total']} alert."})
+    if (newest["agent_name"] and newest["effort"] in th["mismatch_efforts"]
+            and _family(newest["model"]) in th["mismatch_models"]):
+        alerts.append({"kind": "model_mismatch", "label": f"{_family(newest['model'])}@{newest['effort']}",
+                       "detail": f"A teammate runs {_family(newest['model'])} at {newest['effort']} effort; "
+                                 f"a cheaper model or higher effort may fit (alert on {'/'.join(th['mismatch_models'])} at {'/'.join(th['mismatch_efforts'])})."})
+    return {"session_id": sid, "name": name, "role": rl, "model": newest["model"], "effort": newest["effort"],
+            "agent_name": newest["agent_name"], "cwd": newest["cwd"], "context": ctx, "context_pct": pct,
+            "last_hour": last_hour, "total": total, "alerts": alerts}
+
+
+def live_sessions(conn, prices, th, now):
+    """Every session whose newest call is less than live_s old, with its computed alerts."""
+    sids = [r[0] for r in conn.execute("select session_id, max(ts) from calls where ts > ? group by session_id order by 2 desc",
+                                       (now - th["live_s"],))]
+    return [_live_entry(conn, sid, prices, th, now) for sid in sids]
+
+
+def _midnight(now, days_back):
+    d = datetime.fromtimestamp(now).date() - timedelta(days=days_back)
+    return datetime.combine(d, dtime.min).timestamp()
+
+
+def _breakdown(rows, keyfn, prices, extra=None):
+    acc = {}
+    for r in rows:
+        e = acc.setdefault(keyfn(r), {"usd": 0.0, "calls": 0, "cache": 0, "input_side": 0})
+        e["usd"] += _usd(r, prices)
+        e["calls"] += 1
+        e["cache"] += r["cache_read"]
+        e["input_side"] += context_tokens(r)
+    out = []
+    for k, e in acc.items():
+        item = {"key": k, "usd": e["usd"], "calls": e["calls"]}
+        if extra:
+            item["cache_share"] = e["cache"] / e["input_side"] if e["input_side"] else 0.0
+        out.append(item)
+    return sorted(out, key=lambda x: -x["usd"])
+
+
+def report(conn, repo, prices, th, now):
+    """The api/usage payload for one project (everything but the threshold warning)."""
+    repo = repo.rstrip("/")
+    prefix = repo + "/.claude/worktrees/"
+    month_start = _midnight(now, 29)
+    rows = _rows(conn, "select * from calls where ts >= ? and (cwd = ? or substr(cwd, 1, ?) = ?)",
+                 (month_start, repo, len(prefix), prefix))
+    today_start, week_start = _midnight(now, 0), _midnight(now, 6)
+    headline = {"today": 0.0, "week": 0.0, "month": 0.0, "unpriced_calls": 0}
+    days = {(datetime.fromtimestamp(now).date() - timedelta(days=i)).isoformat(): {} for i in range(29, -1, -1)}
+    for r in rows:
+        c = call_cost(r, prices)
+        if c is None:
+            headline["unpriced_calls"] += 1
+            continue
+        headline["month"] += c
+        if r["ts"] >= week_start:
+            headline["week"] += c
+        if r["ts"] >= today_start:
+            headline["today"] += c
+        day = days.get(datetime.fromtimestamp(r["ts"]).date().isoformat())
+        if day is not None:
+            day[r["model"]] = day.get(r["model"], 0.0) + c
+    live = [e for e in live_sessions(conn, prices, th, now) if in_project(e["cwd"], repo)]
+    alerts = [dict(a, session=e["name"]) for e in live for a in e["alerts"]]
+    return {"headline": headline, "alerts": alerts, "live": live,
+            "daily": [{"date": d, "by_model": m} for d, m in days.items()],
+            "by_role": _breakdown(rows, role, prices),
+            "by_model": _breakdown(rows, lambda r: r["model"], prices, extra=True),
+            "by_branch": _breakdown(rows, _branch_key, prices)}
+
+
+def _branch_key(r):
+    if r["git_branch"]:
+        return r["git_branch"]
+    cwd = r["cwd"] or ""
+    if "/.claude/worktrees/" in cwd:
+        return cwd.split("/.claude/worktrees/", 1)[1].split("/")[0]
+    return "(none)"
