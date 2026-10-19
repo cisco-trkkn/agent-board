@@ -781,9 +781,10 @@ function bindAgentMenu(card, items) {
   card.addEventListener("contextmenu", (e) => {
     // keep the browser's own menu (Copy, Paste…) on inputs, links and selected text
     if (e.target.closest("input, textarea, a") || String(getSelection()).length) return;
-    e.preventDefault(); openAgentMenu(e.clientX, e.clientY, items(), card); });
+    const its = items(); if (!its.length) return;
+    e.preventDefault(); openAgentMenu(e.clientX, e.clientY, its, card); });
   card.addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse") return;
+    if (e.pointerType === "mouse" || e.target.closest("input, textarea")) return;
     cancelPress();
     press = { card, x: e.clientX, y: e.clientY, timer: setTimeout(firePress, 500) };
   });
@@ -1075,7 +1076,8 @@ $("#doc-comment").onclick = () => {
 
 // ── ideas box ──
 window.ideasOpen = 0;
-let ideaEditing = null, ideaShowDropped = false;
+let ideaEditing = null,   // {session, key} of the row being edited
+    ideaShowDropped = false;
 try { ideaShowDropped = localStorage.getItem("dash.ideas.dropped") === "1"; } catch (e) {}
 
 // open projects other than the current one, for the "Move to" items
@@ -1100,16 +1102,19 @@ async function ideaPost(body) {
 }
 function editIdea(i) {
   const row = document.querySelector(`[data-key="${CSS.escape("idea:" + i.key)}"]`); if (!row) return;
-  ideaEditing = i.key;
+  const sess = session().name;
+  ideaEditing = { session: sess, key: i.key };
   const inp = el("input"); inp.value = i.text;
   const det = el("textarea"); det.rows = 2; det.value = i.detail || "";
   const save = el("button", "", "Save"), cancel = el("button", "", "Cancel");
   const done = () => { ideaEditing = null; pollIdeas(); };
   const doSave = async () => {
     if (!inp.value.trim()) return;
-    const { status, j } = await post({ action: "idea_edit", session: session().name, key: i.key, text: inp.value, detail: det.value });
-    toast(j.message || (status === 200 ? "Saved" : status === 409 ? "the idea changed since you loaded it" : "Failed"), status !== 200);
-    done();
+    try {
+      const { status, j } = await post({ action: "idea_edit", session: sess, key: i.key, text: inp.value, detail: det.value });
+      toast(j.message || (status === 200 ? "Saved" : status === 409 ? "the idea changed since you loaded it" : "Failed"), status !== 200);
+    } catch (e) { toast(String(e), true); }
+    finally { done(); }
   };
   inp.onkeydown = (e) => { if (e.key === "Enter") doSave(); else if (e.key === "Escape") done(); };
   det.onkeydown = (e) => { if (e.key === "Escape") done(); };
@@ -1147,7 +1152,8 @@ async function pollIdeas() {
     box.append(inp, det, el("div", "ideas-list"), lab);
   }
   box.querySelector(".art-group").replaceChildren(el("h4", "", `Ideas · ${d.open}`));
-  if (ideaEditing) return;   // don't rebuild the row being edited
+  if (ideaEditing && ideaEditing.session === s.name) return;
+  ideaEditing = null;   // don't rebuild the row being edited
   const list = box.querySelector(".ideas-list"); list.replaceChildren();
   const addRow = (i, cls) => {
     const row = el("div", cls, i.text); row.dataset.key = "idea:" + i.key;
