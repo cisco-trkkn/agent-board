@@ -277,6 +277,33 @@ class MoveTest(Base):
             with self.assertRaises(FileNotFoundError):
                 self.move()
 
+    def test_hook_timeout_still_records_the_move(self):
+        with mock.patch.object(artifacts.subprocess, "run", side_effect=artifacts.subprocess.TimeoutExpired("hook", 10)):
+            self.move()
+        new = self.dst / "docs/superpowers/plans/2026-10-19-x.md"
+        self.assertTrue(new.exists())
+        last = json.loads((self.state / "artifacts-p.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((last["path"], last["moved_to"], last["agent"]), (str(self.doc), str(new), "you"))
+        self.assertNotIn(str(self.doc), [i["path"] for i in artifacts.summary("p")["items"]])
+
+    def test_failed_sidecar_move_rolls_back(self):
+        real_move = artifacts.shutil.move
+
+        def flaky(a, b):
+            if str(a).endswith(".tasks.json"):
+                raise OSError("disk full")
+            return real_move(a, b)
+
+        before = (self.state / "artifacts-p.jsonl").read_text()
+        with mock.patch.object(artifacts.shutil, "move", side_effect=flaky), \
+                mock.patch.object(artifacts.subprocess, "run") as run:
+            with self.assertRaises(OSError):
+                self.move()
+        run.assert_not_called()
+        self.assertTrue(self.doc.exists() and self.side.exists())
+        self.assertFalse((self.dst / "docs/superpowers/plans/2026-10-19-x.md").exists())
+        self.assertEqual((self.state / "artifacts-p.jsonl").read_text(), before)
+
 
 class CommentTest(unittest.TestCase):
     def test_line_format(self):

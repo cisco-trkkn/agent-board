@@ -133,11 +133,18 @@ def move(project, path, target, source_repo, target_repo):
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
     if side.exists():
-        shutil.move(str(side), str(dside))
-    subprocess.run([str(HOOK), "--path", str(dst), "--agent", "you", "--project", target],
-                   capture_output=True, timeout=10, env={**os.environ, "TC_STATE": str(state_dir())})
+        try:
+            shutil.move(str(side), str(dside))
+        except OSError:
+            shutil.move(str(dst), str(src))   # put the document back: nothing moved, nothing recorded
+            raise
     with open(state_dir() / f"artifacts-{project}.jsonl", "a") as f:
         f.write(json.dumps({"ts": time.time(), "path": path, "moved_to": str(dst), "agent": "you"}) + "\n")
+    try:   # best-effort: the move is already recorded even if the register hook is slow or missing
+        subprocess.run([str(HOOK), "--path", str(dst), "--agent", "you", "--project", target],
+                       capture_output=True, timeout=10, env={**os.environ, "TC_STATE": str(state_dir())})
+    except (subprocess.TimeoutExpired, OSError):
+        pass
     return f"moved {rel} to {target}; commit it in both repos"
 
 
