@@ -45,38 +45,42 @@
   "claude-opus-5": {
    "input": 5,
    "output": 25,
-   "cache_read": 0.5,
+   "cache_read": 0.25,
    "cache_write_5m": 6.25,
    "cache_write_1h": 10,
    "context": 1000000,
-   "_calibrated": false
+   "_calibrated": false,
+   "_note": "cache_read = input x 0.05 (fitted opus family ratio); 5m write = input x 1.25 default; 1h write = input x 2 (fitted family ratio)"
   },
   "claude-opus-4-8": {
    "input": 5,
    "output": 25,
-   "cache_read": 0.5,
+   "cache_read": 0.25,
    "cache_write_5m": 6.25,
    "cache_write_1h": 10,
    "context": 1000000,
-   "_calibrated": false
+   "_calibrated": false,
+   "_note": "cache_read = input x 0.05 (fitted opus family ratio); 5m write = input x 1.25 default; 1h write = input x 2 (fitted family ratio)"
   },
   "claude-opus-4-7": {
    "input": 5,
    "output": 25,
-   "cache_read": 0.5,
+   "cache_read": 0.25,
    "cache_write_5m": 6.25,
    "cache_write_1h": 10,
    "context": 1000000,
-   "_calibrated": false
+   "_calibrated": false,
+   "_note": "cache_read = input x 0.05 (fitted opus family ratio); 5m write = input x 1.25 default; 1h write = input x 2 (fitted family ratio)"
   },
   "claude-opus-4-6": {
    "input": 5,
    "output": 25,
-   "cache_read": 0.5,
+   "cache_read": 0.25,
    "cache_write_5m": 6.25,
    "cache_write_1h": 10,
    "context": 1000000,
-   "_calibrated": false
+   "_calibrated": false,
+   "_note": "cache_read = input x 0.05 (fitted opus family ratio); 5m write = input x 1.25 default; 1h write = input x 2 (fitted family ratio)"
   },
   "claude-sonnet-5-5": {
    "input": 2,
@@ -97,20 +101,22 @@
   "claude-sonnet-5": {
    "input": 2,
    "output": 10,
-   "cache_read": 0.2,
+   "cache_read": 0.1,
    "cache_write_5m": 2.5,
    "cache_write_1h": 4,
    "context": 1000000,
-   "_calibrated": false
+   "_calibrated": false,
+   "_note": "cache_read = input x 0.05 (fitted sonnet family ratio); 5m write = input x 1.25 default; 1h write = input x 2 (fitted family ratio)"
   },
   "claude-sonnet-4-6": {
    "input": 3,
    "output": 15,
-   "cache_read": 0.3,
+   "cache_read": 0.15,
    "cache_write_5m": 3.75,
    "cache_write_1h": 6,
    "context": 1000000,
-   "_calibrated": false
+   "_calibrated": false,
+   "_note": "cache_read = input x 0.05 (fitted sonnet family ratio); 5m write = input x 1.25 default; 1h write = input x 2 (fitted family ratio)"
   },
   "claude-haiku-5-5": {
    "input": 0.1,
