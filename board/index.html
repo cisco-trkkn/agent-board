@@ -942,7 +942,7 @@ async function pollArtifacts() {
   const hot = (it) => it.path === A.plan || it.latest.epoch === d.epoch || it.latest.ts >= A.loadedAt || it.path === docSel;
   for (const it of A.items.values()) if (!it.url && hot(it)) await trackVersion(s.name, A, it);
   renderArtifacts();
-  if (docSel && docMode !== "edit") {   // keep the reader's text selection: re-render only on a real change
+  if (docSel && docSess === s.name && docMode !== "edit") {   // keep the reader's text selection: re-render only on a real change
     const sel = getSelection(), selecting = sel && !sel.isCollapsed && $("#doc-body").contains(sel.anchorNode);
     const vs = A.versions.get(docSel), last = vs && vs[vs.length - 1];
     if (!selecting && (docMode === "changes" || (last && last.hash !== docRendered))) renderDoc();
@@ -1057,8 +1057,8 @@ function nearestHeading(node) {
 }
 
 function renderDoc() {
-  const s = session(); if (!s || !docSel) return;
-  const A = artFor(s.name), vs = A.versions.get(docSel) || [];
+  if (!docSel || !docSess) return;
+  const A = artFor(docSess), vs = A.versions.get(docSel) || [];
   const cur = vs[vs.length - 1];
   $("#doc-title").textContent = docSel.split("/").pop();
   for (const b of $("#doc-modes").children) b.classList.toggle("on", b.dataset.mode === docMode);
@@ -1085,9 +1085,9 @@ function renderDoc() {
     const save = el("button", "primary", "Save");
     const base = cur.hash;
     save.onclick = async () => {
-      const { status, j } = await post({ action: "save", session: s.name, path: docSel, base_hash: base, text: ta.value });
+      const { status, j } = await post({ action: "save", session: docSess, path: docSel, base_hash: base, text: ta.value });
       if (status === 200) { toast("Saved"); docMode = "read"; await pollArtifacts(); }
-      else if (status === 409) showConflict(s.name, ta.value, j.current);
+      else if (status === 409) showConflict(docSess, ta.value, j.current);
       else toast(j.message || "Save failed", true);
     };
     body.replaceChildren(save, ta);
@@ -1119,12 +1119,12 @@ document.addEventListener("selectionchange", () => {
 });
 $("#doc-comment").onclick = () => {
   if (!docSelection || docSelection.path !== docSel) { docSelection = null; return; }
-  const s = session(), box = el("div", "doc-banner cbox");
+  const box = el("div", "doc-banner cbox");
   const ta = el("textarea"); ta.rows = 3; ta.placeholder = `Note for the lead about "${docSelection.quote.slice(0, 60)}"`;
   const send = el("button", "primary", "Send to lead"), cancel = el("button", "ghost", "Cancel");
   const sel = docSelection;
   send.onclick = async () => {
-    const { status, j } = await post({ action: "comment", session: s.name, path: sel.path, anchor: sel.anchor, quote: sel.quote, note: ta.value });
+    const { status, j } = await post({ action: "comment", session: docSess, path: sel.path, anchor: sel.anchor, quote: sel.quote, note: ta.value });
     toast(j.message || (status === 200 ? "Queued" : "Failed"), status !== 200);
     if (status === 200) { box.remove(); docSelection = null; $("#doc-comment").disabled = true; pollArtifacts(); }
   };
