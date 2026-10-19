@@ -265,6 +265,24 @@ def session_path(sess):
     return p
 
 
+def project_repo(sess):
+    """The project's main checkout, even when its lead pane sits in a worktree."""
+    r = git(session_path(sess), "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if r.returncode != 0:
+        raise RuntimeError(f"{sess} is not in a git repo")
+    return str(Path(r.stdout.strip()).parent)
+
+
+def open_projects():
+    return [s["name"] for s in state()["sessions"] if not s["name"].startswith("_web-")]
+
+
+def _check_target(sess, target):
+    _check_project(target)
+    if target == sess or target not in open_projects():
+        raise RuntimeError(f"{target} is not open on the board")
+
+
 STOPWORDS = set("""a an the to of in on for and or with from into at by as is are be it its this that
 these those please can could would you we i my our me us let lets make sure just some all any""".split())
 
@@ -357,6 +375,22 @@ def _act(body):
         return stop_agent(sess, str(body.get("window") or ""))
     if a == "ask_shutdown":
         return ask_shutdown(sess, str(body.get("window") or ""))
+    if a in ("idea_edit", "idea_status", "idea_move", "artifact_move"):
+        _check_project(sess)
+        key = str(body.get("key") or "")
+        if a == "idea_edit":
+            ideas.edit(sess, key, body.get("text", ""), body.get("detail", ""))
+            return "idea updated"
+        if a == "idea_status":
+            status = str(body.get("status") or "")
+            ideas.set_status(sess, key, status)
+            return "idea restored" if status == "open" else "idea dropped"
+        target = str(body.get("target") or "")
+        _check_target(sess, target)
+        if a == "idea_move":
+            ideas.move(sess, key, target)
+            return f"idea moved to {target}"
+        return artifacts.move(sess, str(body.get("path") or ""), target, project_repo(sess), project_repo(target))
     if a in ("save", "comment", "idea") and not NAME_RE.fullmatch(sess):
         raise RuntimeError("bad session")
     if a == "idea":
@@ -648,6 +682,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "message": act(body)})
         except artifacts.Conflict as e:
             self._json(409, {"ok": False, "message": str(e), "current": e.current})
+        except ideas.Stale as e:
+            self._json(409, {"ok": False, "message": str(e)})
         except Exception as e:
             self._json(400, {"ok": False, "message": str(e)})
 
