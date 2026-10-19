@@ -11,7 +11,7 @@ check "precondition: view is grouped"       test "$(tt display -p -t $TMUX_PANE 
 check "layout made the group's bg session"  tt has-session -t '=tt-bg'
 check "no view-keyed bg session"            sh -c "! $TT_BIN has-session -t '=_web-1-bg' 2>/dev/null"
 
-"$H" < "$F/ok.json"
+sed "s|__HOME__|$HOME|" "$F/ok.json" | "$H"
 check "hook entry in feed-<group>-tests.log" grep -qxF '$ pytest -q tests/unit' "$TC_STATE/feed-tt-tests.log"
 check "no feed-<view> log created"          test -z "$(ls $TC_STATE | grep -F -- _web-1)"
 check "tmux-ctl feed reads it from the view" test "$("$CTL" feed tests 2>&1 | grep -cxF '$ pytest -q tests/unit')" -ge 1

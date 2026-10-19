@@ -49,7 +49,10 @@ start() {
 }
 
 case "${1:-open}" in
-  open)   start; url; open "$(url)" ;;
+  open)   start; url
+          if (( $+commands[open] )); then open "$(url)"
+          elif (( $+commands[xdg-open] )); then xdg-open "$(url)" >/dev/null 2>&1
+          fi ;;
   start)  start; url ;;
   url)    url ;;
   stop)   stop; print "stopped" ;;

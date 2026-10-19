@@ -3,3 +3,4 @@ __pycache__/
 *.pre-repo-*
 *.next
 .superpowers/
+.claude/worktrees/

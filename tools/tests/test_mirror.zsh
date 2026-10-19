@@ -2,7 +2,7 @@ source "${0:A:h}/lib.zsh"
 H="${TC_MIRROR:-$HOME/.claude/hooks/bash-mirror.sh}"; F="${0:A:h}/fixtures"
 tt_setup
 tlog="$TC_STATE/feed-tt-tests.log"; slog="$TC_STATE/feed-tt-shell.log"
-run_hook() { "$H" < "$1"; }   # env (TMUX, TMUX_PANE, TC_STATE) comes from tt_setup
+run_hook() { sed "s|__HOME__|$HOME|" "$1" | "$H"; }   # env (TMUX, TMUX_PANE, TC_STATE) comes from tt_setup
 
 out="$(run_hook "$F/ok.json")"
 check "silent stdout"           test -z "$out"
@@ -22,7 +22,7 @@ check "multiline first line"    grep -qxF '$ echo a …' "$slog"
 before="$(cat "$tlog" "$slog" | wc -c)"
 run_hook "$F/tmuxctl.json"
 echo 'not json' | "$H"
-( unset TMUX TMUX_PANE; "$H" < "$F/ok.json" )
+( unset TMUX TMUX_PANE; sed "s|__HOME__|$HOME|" "$F/ok.json" | "$H" )
 check "skips: tmux-ctl, bad json, no tmux" test "$(cat "$tlog" "$slog" | wc -c)" = "$before"
 
 tt rename-window -t "$TMUX_PANE" '✦ tester'
