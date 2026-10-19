@@ -244,6 +244,7 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
 .idea.dropped { opacity: .55; }
 .idea input, .idea textarea { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
 .ideas-dropped { font-size: 12px; color: var(--muted); display: block; margin-top: 6px; }
+.ideas-dropped input { width: auto; margin-right: 4px; vertical-align: middle; }   /* the global input rule sets width:100% */
 </style>
 <script src="vendor/marked.min.js"></script><script src="vendor/purify.min.js"></script>
 </head>
@@ -878,6 +879,9 @@ async function pollArtifacts() {
   const d = await r.json();
   Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
+  const keep = new Set(d.items.map((it) => it.url || it.path));   // a moved document leaves the manifest view
+  for (const k of [...A.items.keys()]) if (!keep.has(k)) A.items.delete(k);
+  if (docSel && !keep.has(docSel)) $("#doc-close").onclick();
   // only recent items are fetched each poll; older ones load their text when opened
   const hot = (it) => it.path === A.plan || it.latest.epoch === d.epoch || it.latest.ts >= A.loadedAt || it.path === docSel;
   for (const it of A.items.values()) if (!it.url && hot(it)) await trackVersion(s.name, A, it);
