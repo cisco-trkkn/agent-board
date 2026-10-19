@@ -198,6 +198,86 @@ class VendorRouteTest(unittest.TestCase):
         self.assertIsNone(server.vendor_file("../server.py"))
 
 
+class MoveTest(Base):
+    def setUp(self):
+        super().setUp()
+        root = Path(self.tmp.name)
+        self.src, self.dst = root / "srcrepo", root / "dstrepo"
+        (self.src / "docs/superpowers/plans").mkdir(parents=True)
+        self.dst.mkdir()
+        self.doc = self.src / "docs/superpowers/plans/2026-10-19-x.md"
+        self.doc.write_text("# X\n")
+        self.side = Path(f"{self.doc}.tasks.json")
+        self.side.write_text("{}\n")
+        with open(self.state / "artifacts-p.jsonl", "a") as f:
+            f.write(json.dumps({"ts": 9, "path": str(self.doc), "kind": "plan", "agent": "claude",
+                                "hash": sha("# X\n"), "url": "", "epoch": 1}) + "\n")
+
+    def move(self, path=None, target="t"):
+        return artifacts.move("p", str(path or self.doc), target, str(self.src), str(self.dst))
+
+    def test_move_file_and_sidecar(self):
+        with mock.patch.object(artifacts.subprocess, "run") as run:
+            msg = self.move()
+        new = self.dst / "docs/superpowers/plans/2026-10-19-x.md"
+        self.assertEqual(new.read_text(), "# X\n")
+        self.assertEqual(Path(f"{new}.tasks.json").read_text(), "{}\n")
+        self.assertFalse(self.doc.exists() or self.side.exists())
+        self.assertIn("t", msg)
+        args = run.call_args[0][0]
+        self.assertEqual(args[1:], ["--path", str(new), "--agent", "you", "--project", "t"])
+        self.assertFalse(any("git" in str(c[0][0][0]) for c in run.call_args_list))
+        last = json.loads((self.state / "artifacts-p.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((last["path"], last["moved_to"], last["agent"]), (str(self.doc), str(new), "you"))
+        self.assertNotIn(str(self.doc), [i["path"] for i in artifacts.summary("p")["items"]])
+        with self.assertRaises(FileNotFoundError):
+            artifacts.read("p", str(self.doc))
+
+    def test_move_without_sidecar(self):
+        self.side.unlink()
+        with mock.patch.object(artifacts.subprocess, "run"):
+            self.move()
+        self.assertTrue((self.dst / "docs/superpowers/plans/2026-10-19-x.md").exists())
+
+    def test_refusals_change_nothing(self):
+        (self.dst / "docs/superpowers/plans").mkdir(parents=True)
+        (self.dst / "docs/superpowers/plans/2026-10-19-x.md").write_text("theirs\n")
+        other = self.src / "notes.md"
+        other.write_text("n\n")
+        with open(self.state / "artifacts-p.jsonl", "a") as f:
+            f.write(json.dumps({"ts": 10, "path": str(other), "kind": "other", "agent": "you", "url": ""}) + "\n")
+        before = (self.state / "artifacts-p.jsonl").read_text()
+        with mock.patch.object(artifacts.subprocess, "run") as run:
+            with self.assertRaises(ValueError):   # destination exists
+                self.move()
+            with self.assertRaises(ValueError):   # outside docs/superpowers/plans|specs
+                self.move(path=other)
+            with self.assertRaises(ValueError):   # same project
+                self.move(target="p")
+            with self.assertRaises(FileNotFoundError):   # not in the manifest
+                self.move(path=self.src / "docs/superpowers/plans/unknown.md")
+        run.assert_not_called()
+        self.assertTrue(self.doc.exists() and self.side.exists())
+        self.assertEqual((self.state / "artifacts-p.jsonl").read_text(), before)
+
+    def test_refuses_worktree_paths(self):
+        wt = self.src / ".claude/worktrees/w/docs/superpowers/plans/y.md"
+        wt.parent.mkdir(parents=True)
+        wt.write_text("y\n")
+        with open(self.state / "artifacts-p.jsonl", "a") as f:
+            f.write(json.dumps({"ts": 11, "path": str(wt), "kind": "plan", "agent": "w", "url": ""}) + "\n")
+        with mock.patch.object(artifacts.subprocess, "run"):
+            with self.assertRaises(ValueError):
+                self.move(path=wt)
+        self.assertTrue(wt.exists())
+
+    def test_moved_twice_is_refused(self):
+        with mock.patch.object(artifacts.subprocess, "run"):
+            self.move()
+            with self.assertRaises(FileNotFoundError):
+                self.move()
+
+
 class CommentTest(unittest.TestCase):
     def test_line_format(self):
         q = artifacts.CommentQueue()
