@@ -594,6 +594,16 @@ class CardAlertsTest(unittest.TestCase):
         s = self.sess(); usage.card_alerts([s], [self.live(cwd="/r/.claude/worktrees/w1")])
         self.assertEqual(s["usage_alerts"], {"%3": self.AL})
 
+    def test_worker_pane_ignores_teammate_session_sharing_its_cwd(self):
+        s = self.sess(); wt = "/r/.claude/worktrees/w1"
+        mate_al = [{"kind": "total", "label": "mate $9", "detail": "d"}]
+        usage.card_alerts([s], [self.live(session_id="mate", agent_name="mate", cwd=wt, alerts=mate_al),
+                                self.live(session_id="wk", cwd=wt, alerts=self.AL)])
+        self.assertEqual(s["usage_alerts"].get("%3"), self.AL)
+        s2 = self.sess()
+        usage.card_alerts([s2], [self.live(session_id="mate", agent_name="mate", cwd=wt, alerts=mate_al)])
+        self.assertNotIn("%3", s2["usage_alerts"])     # only a teammate lives there: the worker card gets no badge
+
     def test_claude_window_matches_newest_no_agent_session_in_repo(self):
         s = self.sess()
         live = [self.live(session_id="newest-mate", agent_name="mate", alerts=[]),

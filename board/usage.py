@@ -398,7 +398,7 @@ def card_alerts(sessions, live):
     """Attach usage alerts to board cards: s["usage_alerts"] = {pane id: [alerts]}, s["usage_alert_count"].
 
     `live` is newest-first (live_sessions order). Rules: a teammate window "✦ <name>" matches the session whose
-    agent_name is <name>; a worker pane matches by cwd == pane path; the `claude` window's first pane matches the
+    agent_name is <name>; a worker pane matches a session without agent_name by cwd == pane path; the `claude` window's first pane matches the
     newest session without agent_name whose cwd is the repo. The count covers every live session in the project,
     matched or not, so it equals the number of alerts the Usage tab lists.
     """
@@ -416,7 +416,7 @@ def card_alerts(sessions, live):
                 target = panes[0]
             elif w.get("worker"):
                 for pane in panes:
-                    hit = next((e for e in live if e.get("cwd") == pane.get("path")), None)
+                    hit = next((e for e in live if not e.get("agent_name") and e.get("cwd") == pane.get("path")), None)
                     if hit:
                         target = pane
                         break
