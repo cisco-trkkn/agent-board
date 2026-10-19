@@ -314,9 +314,10 @@ class Indexer:
     One sqlite connection, created lazily and used only by the thread that scans.
     """
 
-    def __init__(self, root, db, alerts_path=None):
+    def __init__(self, root, db, alerts_path=None, on_snapshot=None):
         self.root, self.db = Path(root), Path(db)
         self.alerts_path = alerts_path or ALERTS_PATH
+        self.on_snapshot = on_snapshot
         self.error = None
         self.warning = None
         self.thread = None
@@ -371,6 +372,11 @@ class Indexer:
                 self._snapshot = live
                 self._first_pass_done = True
                 self._progress = None   # backfill is over: later passes are cheap and must not flicker the UI
+            if self.on_snapshot:
+                try:
+                    self.on_snapshot(live)
+                except Exception as e:   # noqa: BLE001 - a tmux hiccup must not stop indexing
+                    self._log_once("on_snapshot", e)
         except Exception as e:   # noqa: BLE001
             error = f"{type(e).__name__}: {e}"
             self._log_once(self.root, e)
