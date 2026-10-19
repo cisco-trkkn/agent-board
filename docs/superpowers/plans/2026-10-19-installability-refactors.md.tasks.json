@@ -1,0 +1,77 @@
+{
+ "planPath": "docs/superpowers/plans/2026-10-19-installability-refactors.md",
+ "tasks": [
+  {
+   "id": 0,
+   "subject": "Task 1: Resolve tool binaries through one chain",
+   "status": "pending",
+   "description": "**Goal:** Every script and the board find tmux, ttyd and fzf as `override env var → ~/.local/bin/<tool> → PATH`, so a Homebrew-only machine works without extra symlinks.\n\n**Files:**\n- Create: `bin/_tc_bins.zsh` (sourced helper; not linked into `~/.local/bin` by the installer)\n- Modify: `bin/dev`, `bin/tmux-ctl`, `bin/tmux-dev-layout`, `bin/tmux-session-closed`, `bin/tmux-dash`, `bin/tmux-web-attach`, `bin/tmux-jump`, `bin/tmux-teammate-window`, `bin/tmux-agent-cleanup`\n- Modify: `board/server.py` (the `TMUX` list), `board/paneclass.py` (`tmux_runner`)\n- Test: `tools/tests/test_bins.zsh`, `board/tests/test_paneclass.py`\n\n**Acceptance Criteria:**\n- [ ] With `TC_TMUX`, `TTYD_BIN`, `FZF_BIN` unset and no `~/.local/bin/tmux` in a scratch `HOME`, `tc_bin tmux` prints the `PATH` tmux.\n- [ ] With `~/.local/bin/tmux` present it wins over `PATH`; with `TC_TMUX` set that wins over both.\n- [ ] `grep -rn 'HOME/.local/bin/\\(tmux\\|ttyd\\|fzf\\)\"' bin/` finds only `bin/_tc_bins.zsh`.\n- [ ] `paneclass.tmux_runner()` uses `shutil.which(\"tmux\")` when `TC_TMUX` is unset and `~/.local/bin/tmux` does not exist.\n- [ ] Both suites pass.\n\n**Verify:** `zsh tools/tests/test_bins.zsh && python3 -m unittest board.tests.test_paneclass 2>&1 | tail -1` → `ALL PASS` then `OK`\n\n```json:metadata\n{\"files\": [\"bin/_tc_bins.zsh\", \"bin/dev\", \"bin/tmux-ctl\", \"bin/tmux-dev-layout\", \"bin/tmux-session-closed\", \"bin/tmux-dash\", \"bin/tmux-web-attach\", \"bin/tmux-jump\", \"bin/tmux-teammate-window\", \"bin/tmux-agent-cleanup\", \"board/server.py\", \"board/paneclass.py\", \"tools/tests/test_bins.zsh\", \"board/tests/test_paneclass.py\"], \"verifyCommand\": \"zsh tools/tests/test_bins.zsh && python3 -m unittest discover -s board/tests\", \"acceptanceCriteria\": [\"PATH fallback works with no ~/.local/bin/tmux\", \"~/.local/bin wins over PATH; override wins over both\", \"only _tc_bins.zsh hardcodes ~/.local/bin tool paths\", \"paneclass.tmux_bin falls back to shutil.which\", \"both suites pass\"], \"modelTier\": \"standard\"}\n```"
+  },
+  {
+   "id": 1,
+   "subject": "Task 2: Find repo files relative to the repo, not the live layout",
+   "status": "pending",
+   "description": "**Goal:** Scripts locate the board, hooks and rules files from their own resolved path, so only `bin/` needs linking. The existing `~/.claude/{orchestrator,worker}.md` keep priority as user overrides.\n\n**Files:**\n- Modify: `bin/tmux-ctl` (`_done` callback path, `idea`, `relay`, `artifact`, `agent` worker rules), `bin/tmux-dash` (`APP`), `bin/claude-orchestrator` (`PROMPT_FILE`)\n- Modify: `board/artifacts.py` (`HOOK`)\n- Test: `tools/tests/test_repo_paths.zsh`, `board/tests/test_artifacts.py`\n\n**Acceptance Criteria:**\n- [ ] `grep -n 'local/share/tmux-dash\\|local/bin/tmux-ctl\\|\\.claude/hooks/artifact-register' bin/ board/*.py` returns nothing.\n- [ ] `tmux-ctl run` still works when `~/.local/bin/tmux-ctl` does not exist: the typed callback is `${0:A}` quoted (`test_repo_paths.zsh` runs a run from a scratch `HOME`).\n- [ ] `claude-orchestrator` uses `~/.claude/orchestrator.md` when it exists, else `<repo>/claude/orchestrator.md`; same order for `worker.md` in `tmux-ctl agent` (checked with `TC_AGENT_DRYRUN` plus a printed rules path).\n- [ ] `artifacts.HOOK` is `Path(__file__).resolve().parent.parent / \"claude/hooks/artifact-register.sh\"`.\n- [ ] Both suites pass.\n\n**Verify:** `zsh tools/tests/test_repo_paths.zsh && zsh tools/tests/run-all.zsh | grep -c FAILED` → `ALL PASS` then `0`\n\n```json:metadata\n{\"files\": [\"bin/tmux-ctl\", \"bin/tmux-dash\", \"bin/claude-orchestrator\", \"board/artifacts.py\", \"tools/tests/test_repo_paths.zsh\", \"board/tests/test_artifacts.py\"], \"verifyCommand\": \"zsh tools/tests/test_repo_paths.zsh && zsh tools/tests/run-all.zsh\", \"acceptanceCriteria\": [\"no live-layout paths left in bin/ or board/*.py\", \"tmux-ctl run works without ~/.local/bin/tmux-ctl\", \"~/.claude rules files win, repo copies are the fallback\", \"artifacts.HOOK is repo-relative\", \"both suites pass\"], \"modelTier\": \"standard\"}\n```",
+   "blockedBy": [
+    0
+   ]
+  },
+  {
+   "id": 2,
+   "subject": "Task 3: Ship config fragments, skills and agent definitions in the repo",
+   "status": "pending",
+   "description": "**Goal:** Everything the docs tell a user to copy by hand exists as a file in the repo: a sourceable tmux fragment, a hooks JSON fragment, and the skills and agent types the rules name.\n\n**Files:**\n- Create: `config/tmux.conf` (exactly the block in `docs/INSTALL.md` §4)\n- Create: `config/claude-settings.json` (`env`, `teammateMode`, `hooks` from `docs/INSTALL.md` §5, with `~/.claude/hooks/...` commands)\n- Create: `claude/skills/tmux-orchestrator/SKILL.md`, `claude/skills/handoff/SKILL.md` (and the handoff skill's `agents/` dir) from the author's live copies, with machine-specific paths removed\n- Create: `claude/agents/effort-low.md`, `claude/agents/effort-medium.md`, `claude/agents/effort-high.md`\n- Modify: `claude/orchestrator.md` (the task-observer and gitlab-ci-loop rows become \"if installed\")\n- Test: `tools/tests/test_config_fragments.zsh`\n\n**Acceptance Criteria:**\n- [ ] `~/.local/bin/tmux -L t$$ -f config/tmux.conf start-server \\; show-hooks -g` lists `after-split-window` and `session-closed`, then the server is killed.\n- [ ] `python3 -c 'import json;json.load(open(\"config/claude-settings.json\"))'` exits 0 and the file names the three repo hooks.\n- [ ] `grep -rn '/Users/' claude/ config/` returns nothing.\n- [ ] Every skill and agent name used in `claude/orchestrator.md` and `claude/worker.md` is either under `claude/skills/` or `claude/agents/`, comes from the superpowers-extended-cc plugin, or is marked \"if installed\".\n\n**Verify:** `zsh tools/tests/test_config_fragments.zsh` → `ALL PASS`\n\n```json:metadata\n{\"files\": [\"config/tmux.conf\", \"config/claude-settings.json\", \"claude/skills/tmux-orchestrator/SKILL.md\", \"claude/skills/handoff/SKILL.md\", \"claude/agents/effort-low.md\", \"claude/agents/effort-medium.md\", \"claude/agents/effort-high.md\", \"claude/orchestrator.md\", \"tools/tests/test_config_fragments.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_config_fragments.zsh\", \"acceptanceCriteria\": [\"config/tmux.conf sets both hooks\", \"config/claude-settings.json is valid JSON naming the three hooks\", \"no /Users/ paths in claude/ or config/\", \"every referenced skill/agent is shipped, from the plugin, or marked if installed\"], \"modelTier\": \"standard\"}\n```",
+   "blockedBy": [
+    1
+   ]
+  },
+  {
+   "id": 3,
+   "subject": "Task 4: `install.sh` with check, dry-run, config merge and uninstall",
+   "status": "pending",
+   "description": "**Goal:** `./install.sh` links `bin/`, `claude/hooks/`, `claude/skills/`, `claude/agents/` into place with backups, checks dependencies, and with `--with-config` merges the tmux and settings fragments idempotently. `--uninstall` removes only links that point into this repo.\n\n**Files:**\n- Create: `install.sh`, `tools/merge_settings.py`\n- Test: `tools/tests/test_install.zsh`, `board/tests/test_merge_settings.py`\n\n**Acceptance Criteria:**\n- [ ] `./install.sh --check` prints one line per dependency (zsh, tmux, ttyd, fzf, python3 ≥ 3.11, jq, git, claude) as `ok <path>` or `MISSING`, and exits 1 if any required one is missing.\n- [ ] In a scratch `HOME`, `install.sh` creates links for every `bin/*` except `_*.zsh`, every hook, skill and agent; a pre-existing real `~/.local/bin/dev` is moved to `dev.bak-YYYYMMDD` first; a second run changes nothing (prints `unchanged` for every link).\n- [ ] `--dry-run` prints the same plan and changes nothing (`find \"$H\" -newer marker` is empty).\n- [ ] `--with-config` appends `source-file <repo>/config/tmux.conf` to `~/.tmux.conf` once (a second run doesn't duplicate it). It merges `config/claude-settings.json` into `~/.claude/settings.json`: existing keys are kept, hook entries are added only if no entry has the same `command`, and the original is backed up to `settings.json.bak-YYYYMMDD`.\n- [ ] `--uninstall` removes only symlinks whose target is under the repo, and removes the `source-file` line; real files and backups stay.\n\n**Verify:** `zsh tools/tests/test_install.zsh && python3 -m unittest board.tests.test_merge_settings` → `ALL PASS` then `OK`\n\n```json:metadata\n{\"files\": [\"install.sh\", \"tools/merge_settings.py\", \"tools/tests/test_install.zsh\", \"board/tests/test_merge_settings.py\"], \"verifyCommand\": \"zsh tools/tests/test_install.zsh && python3 -m unittest board.tests.test_merge_settings\", \"acceptanceCriteria\": [\"--check lists deps and exits 1 when one is missing\", \"install links everything with dated backups and is idempotent\", \"--dry-run changes nothing\", \"--with-config merges tmux and settings idempotently with a backup\", \"--uninstall removes only repo links and the source-file line\"], \"modelTier\": \"standard\"}\n```",
+   "blockedBy": [
+    2
+   ]
+  },
+  {
+   "id": 4,
+   "subject": "Task 5: Portability and repo hygiene",
+   "status": "pending",
+   "description": "**Goal:** Remove the macOS-only browser launch and ignore agent worktrees.\n\n**Files:**\n- Modify: `bin/tmux-dash` (the `open)` case), `.gitignore`\n\n**Acceptance Criteria:**\n- [ ] `tmux-dash` opens the URL with `open` on macOS, `xdg-open` when that exists, and otherwise only prints it (exit 0).\n- [ ] `.gitignore` contains `.claude/worktrees/`.\n\n**Verify:** `grep -n 'xdg-open' bin/tmux-dash && grep -nx '.claude/worktrees/' .gitignore` → one match each\n\n```json:metadata\n{\"files\": [\"bin/tmux-dash\", \".gitignore\"], \"verifyCommand\": \"grep -n 'xdg-open' bin/tmux-dash && grep -nx '.claude/worktrees/' .gitignore\", \"acceptanceCriteria\": [\"tmux-dash uses open, then xdg-open, else prints\", \".gitignore ignores .claude/worktrees/\"], \"modelTier\": \"mechanical\"}\n```"
+  },
+  {
+   "id": 5,
+   "subject": "Task 6: CI on macOS and Linux",
+   "status": "pending",
+   "description": "**Goal:** GitHub Actions runs both suites and `install.sh --check` on every push and PR, on `macos-latest` and `ubuntu-latest`.\n\n**Files:**\n- Create: `.github/workflows/test.yml`\n\n**Acceptance Criteria:**\n- [ ] The workflow installs tmux, ttyd, fzf, jq and zsh (brew on macOS, apt on Ubuntu) and runs `python3 -m unittest discover -s board/tests` and `zsh tools/tests/run-all.zsh`.\n- [ ] A push of the branch shows both jobs green in `gh run list --branch <branch>`; any Linux-only failure is fixed in the scripts, not skipped in CI.\n\n**Verify:** `gh run list --branch <branch> --limit 1 --json conclusion -q '.[0].conclusion'` → `success`\n\n```json:metadata\n{\"files\": [\".github/workflows/test.yml\"], \"verifyCommand\": \"gh run list --limit 1 --json conclusion -q '.[0].conclusion'\", \"acceptanceCriteria\": [\"workflow runs both suites on macos-latest and ubuntu-latest\", \"latest run concludes success\"], \"modelTier\": \"standard\"}\n```",
+   "blockedBy": [
+    3
+   ]
+  },
+  {
+   "id": 6,
+   "subject": "Task 7: Rewrite INSTALL.md around `install.sh`",
+   "status": "pending",
+   "description": "**Goal:** `docs/INSTALL.md` describes the one-command install. The manual steps move into an appendix, and the \"planned, not applied\" notes in all three docs are removed.\n\n**Files:**\n- Modify: `docs/INSTALL.md`, `docs/CUSTOMIZATION.md` (the `TC_TMUX` row, the new `TTYD_BIN`), `docs/ARCHITECTURE.md` (repository layout: `config/`, `install.sh`), `README.md`\n\n**Acceptance Criteria:**\n- [ ] INSTALL.md's main path is: prerequisites, `git clone`, `./install.sh --check`, `./install.sh --with-config`, verify.\n- [ ] `grep -n 'not applied\\|refactor plan' docs/*.md README.md` returns nothing.\n- [ ] The CUSTOMIZATION env table lists `TTYD_BIN`, and the `TC_TMUX` row no longer lists exceptions.\n\n**Verify:** `grep -c 'install.sh' docs/INSTALL.md` → ≥ 4, and the grep in criterion 2 → no output\n\n```json:metadata\n{\"files\": [\"docs/INSTALL.md\", \"docs/CUSTOMIZATION.md\", \"docs/ARCHITECTURE.md\", \"README.md\"], \"verifyCommand\": \"grep -c 'install.sh' docs/INSTALL.md\", \"acceptanceCriteria\": [\"INSTALL main path uses install.sh\", \"no 'not applied' or 'refactor plan' notes remain\", \"env table lists TTYD_BIN; TC_TMUX row has no exceptions\"], \"modelTier\": \"mechanical\"}\n```",
+   "blockedBy": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ]
+  },
+  {
+   "id": 7,
+   "subject": "Task 8: End-to-end install check against a fresh HOME and the real install",
+   "status": "pending",
+   "description": "**Goal:** Prove the install works from nothing and does not disturb the author's existing install.\n\n**Files:**\n- Create: `tools/tests/test_e2e_install.zsh`\n\n**Acceptance Criteria:**\n- [ ] Fresh state: in a scratch `HOME` with only `PATH` tools, `install.sh --with-config` and then `dev <scratch repo>` (with `DEV_NO_ATTACH=1`, `DEV_CLAUDE_CMD=true`, a private tmux socket) create session `<repo>` and `<repo>-bg`, and `tmux-ctl run tests \"echo ok\"` from the session returns `ok` / `[exit 0]`.\n- [ ] Real state, read-only: `./install.sh --check --dry-run` against the real `HOME` prints `unchanged` for every link that already points into `~/agent-board` and proposes no backup of any existing file. Its output is saved in the task report.\n- [ ] Aged state: the scratch run is repeated with a pre-seeded `TC_STATE` holding a `runs-<repo>.jsonl` and a feed log from a previous day with two agents, and the board's `activity.runs()` and `activity.feed()` still return them in order.\n\n**Verify:** `zsh tools/tests/test_e2e_install.zsh` → `ALL PASS`; `./install.sh --check --dry-run | grep -vc unchanged` → only dependency lines\n\n```json:metadata\n{\"files\": [\"tools/tests/test_e2e_install.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_e2e_install.zsh\", \"acceptanceCriteria\": [\"fresh-HOME install + dev + tmux-ctl run works\", \"real HOME dry-run shows every existing link unchanged and no backups\", \"aged pre-seeded state still reads back in order\"], \"modelTier\": \"standard\"}\n```",
+   "blockedBy": [
+    3
+   ]
+  }
+ ],
+ "lastUpdated": "2026-10-19T16:49:25"
+}
