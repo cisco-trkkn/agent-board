@@ -53,6 +53,98 @@ class IdeasTest(unittest.TestCase):
         self.assertEqual(len(ideas.load("p")), 20)
         self.assertEqual(sorted(int(re.search(r"\d+$", i["text"]).group()) for i in ideas.load("p")), list(range(20)))
 
+    SAMPLE = ("# Ideas: p\n\n"
+              "- [ ] 2026-10-16 10:00 · one\n  d1\n  d2\n"
+              "- [x] 2026-10-16 10:01 · two → docs/s.md\n"
+              "- [ ] 2026-10-16 10:02 · three\n")
+
+    def write(self, text, project="p"):
+        (Path(self.tmp.name) / f"{project}.md").write_text(text)
+
+    def read(self, project="p"):
+        return (Path(self.tmp.name) / f"{project}.md").read_text()
+
+    def test_load_keys(self):
+        self.write(self.SAMPLE + "- [-] 2026-10-16 10:03 · four → moved to q\n")
+        got = ideas.load("p")
+        self.assertEqual(got[0]["key"], "2026-10-16 10:00 · one")
+        self.assertEqual(got[1]["key"], "2026-10-16 10:01 · two → docs/s.md")
+        self.assertEqual((got[3]["text"], got[3]["moved_to"]), ("four", "q"))
+        self.assertEqual(got[3]["key"], "2026-10-16 10:03 · four → moved to q")
+        self.assertEqual(got[0]["moved_to"], "")
+
+    def test_edit_replaces_text_and_detail(self):
+        self.write(self.SAMPLE)
+        key = ideas.edit("p", "2026-10-16 10:00 · one", "  one   better ", "e1\n\ne2")
+        self.assertEqual(key, "2026-10-16 10:00 · one better")
+        self.assertEqual(self.read(), self.SAMPLE.replace("· one\n  d1\n  d2\n", "· one better\n  e1\n  e2\n"))
+
+    def test_edit_can_clear_detail(self):
+        self.write(self.SAMPLE)
+        ideas.edit("p", "2026-10-16 10:00 · one", "one", "")
+        self.assertIn("· one\n- [x]", self.read())
+
+    def test_edit_refuses_taken_and_empty(self):
+        self.write(self.SAMPLE)
+        with self.assertRaises(ValueError):
+            ideas.edit("p", "2026-10-16 10:01 · two → docs/s.md", "x")
+        with self.assertRaises(ValueError):
+            ideas.edit("p", "2026-10-16 10:00 · one", "   ")
+        self.assertEqual(self.read(), self.SAMPLE)
+
+    def test_stale_key(self):
+        self.write(self.SAMPLE)
+        with self.assertRaises(ideas.Stale):
+            ideas.edit("p", "2026-10-16 10:00 · gone", "x")
+        self.write(self.SAMPLE + "- [ ] 2026-10-16 10:02 · three\n")
+        with self.assertRaises(ideas.Stale):
+            ideas.set_status("p", "2026-10-16 10:02 · three", "dropped")
+
+    def test_drop_and_restore(self):
+        self.write(self.SAMPLE)
+        ideas.set_status("p", "2026-10-16 10:02 · three", "dropped")
+        self.assertIn("- [-] 2026-10-16 10:02 · three\n", self.read())
+        ideas.set_status("p", "2026-10-16 10:02 · three", "open")
+        self.assertEqual(self.read(), self.SAMPLE)
+
+    def test_status_refusals(self):
+        self.write(self.SAMPLE + "- [-] 2026-10-16 10:03 · four → moved to q\n")
+        with self.assertRaises(ValueError):
+            ideas.set_status("p", "2026-10-16 10:01 · two → docs/s.md", "dropped")
+        with self.assertRaises(ValueError):
+            ideas.set_status("p", "2026-10-16 10:03 · four → moved to q", "open")
+        with self.assertRaises(ValueError):
+            ideas.set_status("p", "2026-10-16 10:02 · three", "taken")
+
+    def test_move(self):
+        self.write(self.SAMPLE)
+        ideas.move("p", "2026-10-16 10:00 · one", "q")
+        self.assertEqual(self.read("q"), "# Ideas: q\n\n- [ ] 2026-10-16 10:00 · one\n  d1\n  d2\n")
+        self.assertIn("- [-] 2026-10-16 10:00 · one → moved to q\n  d1\n  d2\n", self.read())
+        got = ideas.load("p")[0]
+        self.assertEqual((got["status"], got["text"], got["moved_to"]), ("dropped", "one", "q"))
+        ideas.move("p", "2026-10-16 10:02 · three", "q")   # appends under the existing header
+        self.assertEqual(self.read("q").count("# Ideas"), 1)
+        self.assertEqual([i["text"] for i in ideas.load("q")], ["one", "three"])
+
+    def test_move_refusals(self):
+        self.write(self.SAMPLE)
+        with self.assertRaises(ValueError):
+            ideas.move("p", "2026-10-16 10:00 · one", "p")
+        with self.assertRaises(ValueError):
+            ideas.move("p", "2026-10-16 10:00 · one", "../x")
+        with self.assertRaises(ValueError):
+            ideas.move("p", "2026-10-16 10:01 · two → docs/s.md", "q")
+        with self.assertRaises(ideas.Stale):
+            ideas.move("p", "2026-10-16 10:00 · nope", "q")
+        self.assertFalse((Path(self.tmp.name) / "q.md").exists())
+
+    def test_add_after_edit(self):
+        self.write(self.SAMPLE)
+        ideas.edit("p", "2026-10-16 10:02 · three", "3")
+        ideas.add("p", "five")
+        self.assertEqual([i["text"] for i in ideas.load("p")], ["one", "two → docs/s.md", "3", "five"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ import hashlib
 import re
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -42,11 +43,26 @@ def lineage(project):
     return jsonl(state_dir() / f"lineage-{project}.jsonl")
 
 
-def summary(project):
-    by = {}
+def _moved(project):
+    """Paths whose latest manifest entry is a move to another project."""
+    gone = set()
     for e in entries(project):
         key = e.get("url") or e.get("path")
         if not key:
+            continue
+        if e.get("moved_to"):
+            gone.add(key)
+        else:
+            gone.discard(key)
+    return gone
+
+
+def summary(project):
+    by = {}
+    gone = _moved(project)
+    for e in entries(project):
+        key = e.get("url") or e.get("path")
+        if not key or key in gone or e.get("moved_to"):
             continue
         it = by.setdefault(key, {"path": e.get("path", ""), "kind": e.get("kind", "other"), "url": e.get("url", ""), "history": []})
         it["history"].append({k: e.get(k) for k in ("ts", "agent", "hash", "epoch")})
@@ -71,7 +87,7 @@ def _sha(data):
 
 
 def read(project, path):
-    if not any(e.get("path") == path and not e.get("url") for e in entries(project)):
+    if path in _moved(project) or not any(e.get("path") == path and not e.get("url") for e in entries(project)):
         raise FileNotFoundError(path)
     data = Path(path).read_bytes()
     return {"path": path, "text": data.decode("utf-8", "replace"), "hash": _sha(data)}
@@ -94,6 +110,42 @@ def save(project, path, base_hash, text):
     subprocess.run([str(HOOK), "--path", path, "--agent", "you", "--project", project],
                    capture_output=True, timeout=10, env={**os.environ, "TC_STATE": str(state_dir())})
     return read(project, path)
+
+
+DOC_DIRS = ("docs/superpowers/plans/", "docs/superpowers/specs/")
+
+
+def move(project, path, target, source_repo, target_repo):
+    """Move a plan or spec (and its .tasks.json) to the same path in another project's repo.
+    No git commands: both repos are left with the change uncommitted."""
+    if target == project:
+        raise ValueError("the document is already in that project")
+    if path in _moved(project) or not any(e.get("path") == path and not e.get("url") for e in entries(project)):
+        raise FileNotFoundError(path)
+    rel = os.path.relpath(path, source_repo)
+    if not rel.startswith(DOC_DIRS) or any("/.claude/worktrees/" in f"{p}/" for p in (path, source_repo, target_repo)):
+        raise ValueError("only plans and specs under docs/superpowers/ in the project's own checkout can move")
+    src, dst = Path(path), Path(target_repo) / rel
+    side, dside = Path(f"{src}.tasks.json"), Path(f"{dst}.tasks.json")
+    for p in (dst, dside) if side.exists() else (dst,):
+        if p.exists():
+            raise ValueError(f"{p} already exists in {target}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    if side.exists():
+        try:
+            shutil.move(str(side), str(dside))
+        except OSError:
+            shutil.move(str(dst), str(src))   # put the document back: nothing moved, nothing recorded
+            raise
+    with open(state_dir() / f"artifacts-{project}.jsonl", "a") as f:
+        f.write(json.dumps({"ts": time.time(), "path": path, "moved_to": str(dst), "agent": "you"}) + "\n")
+    try:   # best-effort: the move is already recorded even if the register hook is slow or missing
+        subprocess.run([str(HOOK), "--path", str(dst), "--agent", "you", "--project", target],
+                       capture_output=True, timeout=10, env={**os.environ, "TC_STATE": str(state_dir())})
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return f"moved {rel} to {target}; commit it in both repos"
 
 
 def _flat(s, limit):
