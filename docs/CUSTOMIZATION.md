@@ -38,6 +38,7 @@ Examples: allow `tmux-ctl` without prompts in agent-board sessions only (above);
 | `TMUX_DASH_PAGE` | `index.html` | `server.py` | Serve another HTML file from `board/` (a fork of the UI, an experiment). |
 | `TMUX_DASH_DEBUG` | unset | `server.py` | Log every request to stderr, which `tmux-dash` sends to `~/.local/state/tmux-dash/server.log`. |
 | `FZF_BIN` | `~/.local/bin/fzf` | `tmux-agent-cleanup` | fzf binary. |
+| `USAGE_ROOT` | `~/.claude/projects` | `board/usage.py` | Where the Usage tab reads Claude Code transcripts (read-only). |
 | `SUPERPOWERS_PLUGIN_ROOT` | auto-discovered | `superpowers-hook.sh` | Pin which superpowers-extended-cc install the optional hooks run. |
 
 `TMUX_DASH_TOKEN` is set by `tmux-dash` itself; don't set it by hand. Rotate it with `tmux-dash rotate`.
@@ -142,6 +143,18 @@ When a Claude Code release changes its screen, the board may show the wrong stat
 
 `tmux-ctl tell` has its own copy of the waiting patterns (`bin/tmux-ctl`, the `tell` case); keep them in sync. Add a case to `board/tests/test_paneclass.py` with captured screen text for any change.
 
+### Usage tab: alerts and prices
+
+Alert thresholds: create `~/.claude/usage-alerts.json` with any of these keys (the defaults are in [ARCHITECTURE.md → Usage tracking](ARCHITECTURE.md#usage-tracking)):
+
+```json
+{ "context_pct": 85, "burn_per_hour": 30, "session_total": 50, "mismatch_models": ["opus"] }
+```
+
+Only the board reads this file. A malformed file or value falls back to the defaults and shows a warning in the Usage tab. Changes apply on the next poll; no restart is needed. (The plan moves this file to `~/.config/agent-board/` in Task 6.)
+
+Prices: `board/prices.json` holds $/Mtok and context size per model. Add an entry for a new model, or calls on it show as *unpriced*. Cross-check totals after editing with `python3 tools/usage-sum.py --repo <path>`.
+
 ### New board actions
 
 1. Add a branch in `_act()` in `board/server.py`. Validate the session with `_check_project`, prefer calling an existing script (`tmux-ctl`, `dev`) over new tmux logic, and raise `RuntimeError` with a user-facing message on failure.
@@ -152,7 +165,7 @@ When a Claude Code release changes its screen, the board may show the wrong stat
 
 ### Which commands count as "tests"
 
-`bash-mirror.sh` sends a command to the `tests` feed when its `TOOL` regex matches (pytest, tox, nox, jest, vitest, make, ruff, mypy, eslint, tsc, tflint, shellcheck, bats, agent-ci, gradle, mvn, `npm|pnpm|yarn test|build|lint`, `go test|build|vet`, `cargo test|build|clippy`, `terraform plan|validate|fmt`), also behind wrappers like `uv run`, `poetry run`, `npx`, `env VAR=…`, `time`. Everything else goes to the `shell` feed. Extend `TOOL` or `WRAP` in the hook and add a fixture case to `tools/tests/test_mirror.zsh`.
+The feed is read with `tmux-ctl feed`; the board no longer displays it. `bash-mirror.sh` sends a command to the `tests` feed when its `TOOL` regex matches (pytest, tox, nox, jest, vitest, make, ruff, mypy, eslint, tsc, tflint, shellcheck, bats, agent-ci, gradle, mvn, `npm|pnpm|yarn test|build|lint`, `go test|build|vet`, `cargo test|build|clippy`, `terraform plan|validate|fmt`), also behind wrappers like `uv run`, `poetry run`, `npx`, `env VAR=…`, `time`. Everything else goes to the `shell` feed. Extend `TOOL` or `WRAP` in the hook and add a fixture case to `tools/tests/test_mirror.zsh`.
 
 Feed size: the log is trimmed to its last 1 MB when it passes 2 MB; the tail kept per entry is 12 lines. Both are literals in the hook.
 
@@ -184,7 +197,7 @@ Values that are literals in the code today. Change them in place, and add or adj
 | State cache / worktree cache | 1.5 s / 30 s | `STATE_TTL`, `WT_TTL` in `board/server.py` |
 | Capture thread pool | 12 | `POOL` in `board/server.py` |
 | Runs shown / log bytes served | 100 / 512 KB | `runs()`, `log_text()` in `board/activity.py` |
-| Feed entries shown | 200 | `feed()` in `board/activity.py` |
+| Usage indexer scan interval | 5 s | `Indexer.start()` in `board/usage.py` |
 | Recent projects kept | 10 | `RECENT_MAX` in `board/dirs.py` |
 | Folder listing cap | 500 | `CAP` in `board/dirs.py` |
 | Relay wait | 2 s poll, 120 s cap | `wait_turn_end()` in `board/relay.py` |

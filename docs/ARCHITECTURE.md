@@ -108,7 +108,7 @@ Design points:
 | --- | --- |
 | `list` | windows of the session and of `-bg`: idle/busy, needs-user (bell), worker, lane |
 | `read <win> [feed\|watch] [lines]` | capture the last N lines of a window's main pane, or of its role pane |
-| `feed [win] [lines]` | tail the mirrored-Bash feed log(s) |
+| `feed [win] [lines]` | tail the mirrored-Bash feed log(s); the only reader of the feed since the board dropped it |
 | `send [-C dir] <win> <text>` | type into an idle window without waiting |
 | `keys <win> <key>…` | raw keys (e.g. `C-c`); refused on worker windows |
 | `new <win> [dir]` | open a plain shell window |
@@ -161,7 +161,7 @@ All hooks are silent and exit 0 except kill-guard's deliberate block.
 
 ### State building
 
-`GET api/state` runs one `tmux list-panes -a` with 15 fields, captures every pane in parallel (a 12-thread pool; each process spawn is slow under macOS endpoint security), classifies each pane with `paneclass.classify` and attaches cached worktree info (30 s TTL, refreshed in the background). The whole result is cached for 1.5 s so concurrent polls share one build.
+`GET api/state` runs one `tmux list-panes -a` with 15 fields, attaches usage alerts (see [Usage tracking](#usage-tracking)), captures every pane in parallel (a 12-thread pool; each process spawn is slow under macOS endpoint security), classifies each pane with `paneclass.classify` and attaches cached worktree info (30 s TTL, refreshed in the background). The whole result is cached for 1.5 s so concurrent polls share one build.
 
 `paneclass.classify(cmd, rows, bell)` returns `(kind, status)`:
 
@@ -187,7 +187,7 @@ All paths are under `/<token>/`.
 | `GET api/artifact?session=&path=` | one artifact's text and hash (allowlisted) |
 | `GET api/runs?session=` | last 100 `tmux-ctl run` records |
 | `GET api/log?session=&id=` | a run's log (last 512 KB) |
-| `GET api/feed?session=` | last 200 mirrored Bash entries, merged by epoch |
+| `GET api/usage?session=` | the project's usage report (see [Usage tracking](#usage-tracking)) plus threshold warning and indexer progress; 500 if the index can't be read |
 | `GET api/ideas?session=` | parsed ideas + open count |
 | `GET api/dirs?path=&prefix=&hidden=` | folders for the Open project dialog |
 | `GET api/dirs/recent` | open projects' paths, then the last 10 opened |
@@ -201,7 +201,27 @@ Plan comments and `[Board]` requests sit in an in-memory `CommentQueue` per proj
 
 ### The page
 
-`board/index.html` is a single file with inline CSS and JS (no build step). It polls `api/state` and the per-project endpoints, renders project tabs, agent cards (status, "Needs you" attention bar), an embedded ttyd terminal, the Activity drawer (runs, failures, command feed), the artifacts panel (grouped by epoch, markdown rendered with marked + DOMPurify, inline edit with conflict detection, comments, move), the ideas box, the worktrees list and the Open project dialog. UI preferences (current project, drawer width, collapsed sidebar, show hidden folders, show dropped ideas) are kept in `localStorage`.
+`board/index.html` is a single file with inline CSS and JS (no build step). It polls `api/state` and the per-project endpoints, renders project tabs, agent cards (status, "Needs you" attention bar), usage alert badges on agent cards, an embedded ttyd terminal, the Activity drawer (a **Usage** tab: cost headline, alerts, live sessions, 30-day chart and breakdowns; a **Runs** tab: `tmux-ctl run` records and failures), the artifacts panel (grouped by epoch, markdown rendered with marked + DOMPurify, inline edit with conflict detection, comments, move), the ideas box, the worktrees list and the Open project dialog. UI preferences (current project, drawer width, collapsed sidebar, show hidden folders, show dropped ideas) are kept in `localStorage`.
+
+## Usage tracking
+
+`board/usage.py` estimates API-equivalent cost per project from Claude Code's own transcripts. It is read-only on Claude Code's data.
+
+- **Indexer.** When `server.py` starts, a background `usage.Indexer` thread scans `${USAGE_ROOT:-~/.claude/projects}/*/*.jsonl` and `*/*/subagents/*.jsonl` every 5 s, incrementally. It tracks each file's inode, size and offset, and detects rewrites. Every assistant line that carries `usage` becomes a row in `calls` (request id, session, timestamp, model, effort, agent/team name, branch, cwd, token counts by kind). The index is `$TC_STATE/usage.sqlite` (WAL mode). The thread keeps an in-memory snapshot of live sessions for the cards.
+- **Prices.** `board/prices.json` maps each model to $/Mtok for input, output, cache read and 5 m / 1 h cache writes, plus its context window. Calls on a model with no entry count as *unpriced* and are never shown as $0. `tools/usage-sum.py` is an independent re-implementation, used to cross-check the totals; `tools/usage-capture-fixture.py` makes content-stripped test fixtures from real transcripts.
+- **Attribution.** A call belongs to a project when its `cwd` is the project's checkout or one of its `.claude/worktrees/`. Its role is `teammate` (has an agent name), `subagent` (sidechain or subagent file), `worker` (in a worktree) or `lead`.
+- **Report** (`api/usage`): today, 7-day and 30-day totals; a 30-day per-model daily series; breakdowns by role, model (with cache-read share) and branch; live sessions (newest call within `live_s`) with their alerts.
+- **Alerts.** Thresholds come from `~/.claude/usage-alerts.json` if present (defaults otherwise; invalid keys are reported as a warning):
+
+  | Key | Default | Alert when |
+  | --- | --- | --- |
+  | `context_pct` | 80 | the session's context is at least this % of the model window |
+  | `burn_per_hour`, `burn_window_s` | 15, 900 | spend over the last `burn_window_s`, scaled to an hour, is above `burn_per_hour` USD |
+  | `session_total` | 25 | the session's total is above this many USD |
+  | `mismatch_efforts`, `mismatch_models` | `["low","medium"]`, `["opus","fable"]` | a teammate runs one of these model families at one of these efforts |
+  | `live_s` | 1800 | (not an alert) how recent a session's last call must be to count as live |
+
+  `usage.card_alerts()` pins each live session's alerts to its pane on the board. A teammate window `✦ <name>` matches by agent name, a worker pane by cwd, and the `claude` window by the newest non-teammate session in the repo root.
 
 ## Handoff relay
 
@@ -219,7 +239,8 @@ Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It 
 | --- | --- | --- |
 | `runs-<p>.jsonl` | `tmux-ctl run` (start + final record per id) | board Activity |
 | `logs/<p>/<id>.log` | `tmux-ctl run` | board `api/log` |
-| `feed-<p>-{tests,shell}.log` | `bash-mirror.sh` | board feed, `tmux-ctl feed` |
+| `feed-<p>-{tests,shell}.log` | `bash-mirror.sh` | `tmux-ctl feed` |
+| `usage.sqlite` (+ `-wal`, `-shm`) | board usage indexer | `api/usage`, card alerts. Shared by all projects; not deleted when a session closes |
 | `artifacts-<p>.jsonl` | `artifact-register.sh`, board save/move | board artifacts panel |
 | `lineage-<p>.jsonl` | `relay.py` | artifacts epoch, board |
 | `relay-<p>.log`, `relay-failed-<p>.txt` | `tmux-ctl relay` | you |
@@ -233,7 +254,7 @@ Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.lo
 
 | Suite | Command | How it isolates |
 | --- | --- | --- |
-| Board (Python `unittest`, 134 tests) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR`, fake tmux runners |
+| Board (Python `unittest`, 211 tests) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR`, fake tmux runners |
 | Toolkit (zsh, 17 files) | `zsh tools/tests/run-all.zsh` | `tools/tests/lib.zsh` starts a private tmux server (`-L tctest-…  -f /dev/null`) with a temp `TC_STATE`, and kills it on exit |
 
 Hook tests feed captured Claude hook JSON from `tools/tests/fixtures/`. Each zsh test prints `ok - …` / `FAIL - …` and ends with `ALL PASS` or `N FAILED`, which `tmux-ctl run` summarizes.

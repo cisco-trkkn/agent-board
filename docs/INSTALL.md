@@ -23,6 +23,8 @@ There is no installer yet. Installing means cloning the repo, linking a few file
 | `~/.tmux.conf` | one `source-file` line | tmux-wide; see [step 5](#5-tmux) for exactly what it changes |
 | your running tmux server | the two agent-board hooks, loaded once in step 5 | the same as the `~/.tmux.conf` row |
 | `~/.claude/ideas/`, `~/.claude/handoffs/` | created on first use | none |
+| `~/.claude/projects/` (your transcripts) | **read only**, by the board's Usage tab | none: nothing is written there |
+| `~/.claude/usage-alerts.json` | not created; the board reads it if you add it | none: only the board reads it |
 
 > **Followed an earlier version of this guide, or copied the author's setup?** If `~/.claude/settings.json` already registers `bash-mirror.sh`, `artifact-register.sh` or `kill-guard.sh`, remove those entries first. Otherwise they run twice in agent-board sessions, and they still run in all your other sessions.
 
@@ -171,7 +173,7 @@ What each hook does for the lead:
 | Hook | Without it |
 | --- | --- |
 | `kill-guard.sh` | an agent's `pkill -f <pattern>` can kill the lead and its whole team |
-| `bash-mirror.sh` | the board's Activity drawer shows no command feed |
+| `bash-mirror.sh` | `tmux-ctl feed` (the log of agents' Bash calls) stays empty. The board no longer shows this feed |
 | `artifact-register.sh` | plans, specs and handoffs don't appear in the artifacts panel automatically (`tmux-ctl artifact <path>` still works) |
 
 ### Skills and agent types the rules mention
@@ -235,7 +237,7 @@ If you use tmux-resurrect with continuum, scratch tmux servers you start yoursel
 
 ```zsh
 cd ~/agent-board
-python3 -m unittest discover -s board/tests      # expect: Ran 134 tests … OK
+python3 -m unittest discover -s board/tests      # expect: Ran 211 tests … OK
 zsh tools/tests/run-all.zsh                      # expect: ALL PASS after each of 17 ### test_*.zsh
 ```
 
@@ -262,8 +264,8 @@ These need code changes (planned in the [installability plan](superpowers/plans/
 
 | Gap | Effect today | Plan task |
 | --- | --- | --- |
-| Workers (`tmux-ctl agent`) start as `claude -w …` without `--settings` | worker Bash calls are not mirrored to the feed, worker files are not auto-registered as artifacts, and kill-guard does not protect workers. `tmux-ctl run` records still appear | 2 |
-| Teammates: Claude Code passes the lead's `env` to teammates, but whether it passes `--settings` hooks is unverified | if not, the Activity feed shows no teammate commands, teammate plans aren't auto-registered, and kill-guard doesn't protect teammates | 1 |
+| Workers (`tmux-ctl agent`) start as `claude -w …` without `--settings` | worker Bash calls are not mirrored to `tmux-ctl feed`, worker files are not auto-registered as artifacts, and kill-guard does not protect workers. `tmux-ctl run` records still appear | 2 |
+| Teammates: Claude Code passes the lead's `env` to teammates, but whether it passes `--settings` hooks is unverified | if not, `tmux-ctl feed` shows no teammate commands, teammate plans aren't auto-registered, and kill-guard doesn't protect teammates | 1 |
 | The wrapper is found through the pane shell's `PATH`; `DEV_CLAUDE_CMD` bypasses it | a pane whose shell lacks `~/.local/bin` runs no lead, and a custom `DEV_CLAUDE_CMD` must pass `--settings` itself ([CUSTOMIZATION §3](CUSTOMIZATION.md#3-lead-and-worker-behaviour)) | 2 |
 | `/handoff`, `tmux-orchestrator`, `effort-*` live outside the repo | not available in the scoped install | 3 |
 | tmux hooks are server-wide | see step 5 | 4 |
@@ -307,7 +309,8 @@ The `~/.local/bin/{tmux,ttyd,fzf}` links from step 2 are harmless to keep. State
 | Teammates open as split panes, not `✦ name` windows | the `after-split-window` hook is not loaded: check `tmux show-hooks -g`, then re-source `~/.tmux.conf`. |
 | A teammate window dies right after it spawns | the folder isn't trusted yet. Run `claude` there once and accept the trust prompt. |
 | The lead has no agent team, or `/hooks` shows no agent-board hooks | the lead was started by the repo's `claude-orchestrator` instead of the wrapper. `command -v claude-orchestrator` must print `~/.local/bin/claude-orchestrator`, and that file must be the wrapper from step 4, not a link. |
-| Activity drawer has runs but no command feed | the lead lacks the settings file (row above), or the commands came from a worker (known gap). |
+| `tmux-ctl feed` is empty | the lead lacks the settings file (row above), or the commands came from a worker (known gap). |
+| Usage tab says it is indexing, or shows $0 | the first pass over `~/.claude/projects` takes a while on a large history; costs appear as it proceeds. A model missing from `board/prices.json` shows as *unpriced*. |
 | `claude-orchestrator: ~/.claude/orchestrator.md missing, starting plain claude` | the link from step 3 is missing. |
 
 ## Linux notes

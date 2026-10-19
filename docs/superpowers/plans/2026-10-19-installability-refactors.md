@@ -230,11 +230,12 @@ esac
 
 ### Task 6: State out of `~/.claude`; `install.sh` with check, uninstall and migrate
 
-**Goal:** agent-board state moves to `~/.local/state/agent-board/{ideas,handoffs}`, still reading the old `~/.claude/ideas` when the new folder is empty. `./install.sh` makes the single `agent-board` link, checks dependencies, and migrates an existing global install.
+**Goal:** agent-board state and config move out of `~/.claude`: ideas and handoffs go to `~/.local/state/agent-board/{ideas,handoffs}`, still reading the old `~/.claude/ideas` when the new folder is empty, and usage alert thresholds go to `~/.config/agent-board/usage-alerts.json`, falling back to `~/.claude/usage-alerts.json`. `./install.sh` makes the single `agent-board` link, checks dependencies, and migrates an existing global install.
 
 **Files:**
 - Modify: `board/ideas.py` (`ideas_dir()`: `TC_IDEAS_DIR` → `~/.local/state/agent-board/ideas`; on first write, copy any `~/.claude/ideas/<project>.md` across, leaving the original in place)
 - Modify: `claude/hooks/artifact-register.sh` (`handoff` kind also for `~/.local/state/agent-board/handoffs/`)
+- Modify: `board/usage.py` (`ALERTS_PATH`: `~/.config/agent-board/usage-alerts.json` if it exists, else the legacy `~/.claude/usage-alerts.json`), with a test in `board/tests/test_usage.py`
 - Create: `install.sh`, `tools/install_lib.py` (the settings and tmux "remove what agent-board added" logic, used only by `--migrate`)
 - Test: `tools/tests/test_install.zsh`, `tools/tests/test_install_lib.py` (run by `python3 -m unittest discover -s tools/tests -p 'test_*.py'`, added to the documented test commands), `board/tests/test_ideas.py`
 
@@ -251,6 +252,7 @@ esac
 - [ ] `install.sh` never writes under `~/.claude/` except in `--migrate`.
 - [ ] `--repo DIR` makes `install.sh` treat `DIR` as the agent-board checkout instead of its own location, so a dry run from a worktree can judge the live `~/agent-board` links.
 - [ ] Ideas: with only `~/.claude/ideas/p.md` present, `ideas.load("p")` returns its items. The first write creates `~/.local/state/agent-board/ideas/p.md` with the old items plus the new one, and leaves `~/.claude/ideas/p.md` byte-identical. `TC_IDEAS_DIR` still wins over both.
+- [ ] Usage alerts: with both files present, `usage.thresholds()` reads `~/.config/agent-board/usage-alerts.json`. With only the legacy file present, it reads that one.
 - [ ] Handoffs: `artifact-register.sh` gives kind `handoff` to a `.md` under `~/.local/state/agent-board/handoffs/` and still to one under `~/.claude/handoffs/` (`test_artifact_hook.zsh` has one case each).
 
 **Verify:** `zsh tools/tests/test_install.zsh && python3 -m unittest discover -s tools/tests -p 'test_*.py'` → `ALL PASS`, `OK`
@@ -266,7 +268,7 @@ esac
 - [ ] **Step 5: Commit** — `feat(install): one-link install, dependency check, uninstall and migration from the global setup`, with your harness's attribution trailer.
 
 ```json:metadata
-{"files": ["board/ideas.py", "claude/hooks/artifact-register.sh", "install.sh", "tools/install_lib.py", "tools/tests/test_install.zsh", "tools/tests/test_install_lib.py", "board/tests/test_ideas.py"], "verifyCommand": "zsh tools/tests/test_install.zsh && python3 -m unittest discover -s tools/tests -p 'test_*.py'", "acceptanceCriteria": ["--check lists deps incl. claude flags, exits 1 if missing", "install makes only the agent-board link; idempotent; never repoints other checkouts without --force-relink", "--dry-run changes nothing", "--uninstall removes only its own link", "--migrate removes exactly the global agent-board entries with backups, rest byte-identical", "nothing under ~/.claude written outside --migrate"], "modelTier": "standard"}
+{"files": ["board/ideas.py", "board/usage.py", "board/tests/test_usage.py", "claude/hooks/artifact-register.sh", "install.sh", "tools/install_lib.py", "tools/tests/test_install.zsh", "tools/tests/test_install_lib.py", "board/tests/test_ideas.py"], "verifyCommand": "zsh tools/tests/test_install.zsh && python3 -m unittest discover -s tools/tests -p 'test_*.py'", "acceptanceCriteria": ["--check lists deps incl. claude flags, exits 1 if missing", "install makes only the agent-board link; idempotent; never repoints other checkouts without --force-relink", "--dry-run changes nothing", "--uninstall removes only its own link", "--migrate removes exactly the global agent-board entries with backups, rest byte-identical", "nothing under ~/.claude written outside --migrate"], "modelTier": "standard"}
 ```
 
 ---
