@@ -10,6 +10,7 @@
 #                                          print its output, exit with its exit code (default 600s).
 #                                          Busy window -> your own lane window <win>·<you>;
 #                                          runs in -C dir (default: your git top level)
+#                                          the command runs in a subshell: cd/export/source do not persist (use send)
 #                                          tests/shell (and lanes) live in the hidden session <project>-bg; runs are recorded for the board's Activity drawer
 #   tmux-ctl send  [-C dir] <win> <text>   type text + Enter into an IDLE shell window, don't wait
 #   tmux-ctl keys  <win> <key>...          raw keys, e.g. C-c to stop something you started
@@ -120,20 +121,40 @@ summarize() {
     res="$(grep -E '^(OK|FAILED \()' "$1" | tail -1)"
     [[ -n "$ran" && -n "$res" ]] && s="$ran, $res"
   fi
-  [[ -z "$s" ]] && s="$(grep -oE '^(ALL PASS|[0-9]+ FAILED)$' "$1" | tail -1)"
+  local z; z="$(grep -oE '^(ALL PASS|[0-9]+ FAILED)$' "$1" | tail -1)"
+  [[ -n "$z" ]] && { [[ -z "$s" || "$z" != "ALL PASS" ]] && s="$z"; }   # a zsh suite's FAILED line must not hide behind an earlier OK
   print -r -- "$s"
+}
+# lock_file <dir>: mkdir lock with stale-owner reclaim, same style as lock_win; sets RLOCKD once held
+lock_file() {
+  local d="$1" n=0 owner
+  until mkdir "$d" 2>/dev/null; do
+    owner="$(<"$d/pid" 2>/dev/null)"
+    if [[ -n "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$d"; continue; fi
+    (( n++ >= 300 )) && { rm -rf "$d"; continue }
+    sleep 0.1
+  done
+  print -r -- "$$" > "$d/pid"; RLOCKD="$d"
 }
 # run_record <exit|null> <duration> <summary>: append one record for the current run
 run_record() {
-  local f="$STATE/runs-$FEEDKEY.jsonl"
-  jq -nc --arg id "$id" --argjson ts "$t0" --arg agent "$(caller)" --arg win "$win" --arg session "$SESSION" \
+  local f="$STATE/runs-$FEEDKEY.jsonl" rec
+  rec="$(jq -nc --arg id "$id" --argjson ts "$t0" --arg agent "$(caller)" --arg win "$win" --arg session "$SESSION" \
     --arg cmd "$cmdtext" --arg cwd "$cdir" --argjson exit "$1" --argjson duration "$2" --arg log "$logf" --arg summary "$3" \
-    '{id:$id,ts:$ts,agent:$agent,win:$win,session:$session,cmd:$cmd,cwd:$cwd,exit:$exit,duration:$duration,log:$log,summary:$summary}' \
-    >> "$f"
-  # bounded: keep the newest 500 records (atomic rewrite)
+    '{id:$id,ts:$ts,agent:$agent,win:$win,session:$session,cmd:$cmd,cwd:$cwd,exit:$exit,duration:$duration,log:$log,summary:$summary}')" || return
+  append_capped "$f" "$rec"
+}
+# append_capped <file> <json>: locked append, then keep the newest 500 records
+append_capped() {
+  local f="$1"
+  lock_file "$f.lock"
+  print -r -- "$2" >> "$f"
+  # bounded: keep the newest 500 records (atomic rewrite, under the lock so no append is lost)
   if (( $(wc -l < "$f") > 500 )); then
+    rm -f -- "$f".tmp.*(N)      # leftovers of a killed trim
     tail -n 500 "$f" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
   fi
+  rm -rf "$RLOCKD"; RLOCKD=
 }
 caller() {
   local pw=""; [[ -n "$TMUX_PANE" ]] && pw="$(t display -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)"
@@ -183,7 +204,7 @@ wrap_cd() {
 
 cmd="$1"; shift 2>/dev/null
 # _done runs when a lane's command ends (the lane looks idle then); help needs no tmux
-if [[ "$cmd" != (_done|help|-h|--help|"") ]]; then
+if [[ "$cmd" != (_done|_append|help|-h|--help|"") ]]; then
   for SESSION in "$MAIN" "$BG"; do t has-session -t "=$SESSION" 2>/dev/null && reap_lanes; done
   SESSION="$MAIN"
 fi
@@ -274,6 +295,9 @@ case "$cmd" in
     msg="relay failed: ${first:-no output} — doc kept at $2; manual: claude-orchestrator 'Read $2 and continue from where the previous session left off.' (log: $1)"
     print -r -- "$msg" > "$STATE/relay-failed-${3:-$FEEDKEY}.txt"
     for c in ${(f)"$(t list-clients -F '#{client_name}' 2>/dev/null)"}; do t display-message -c "$c" -d 0 -- "${${msg//\#/##}//\%/%%}"; done ;;
+
+  _append)   # test seam: tmux-ctl _append <file> <json>
+    append_capped "$1" "$2" ;;
 
   _done)   # called by the target shell when a `run` command finishes
     [[ -e "$STATE/$1.gone" ]] && { rm -f "$STATE/$1.gone"; exit 0 }   # the run gave up (timeout/interrupt): nobody will read this

@@ -145,7 +145,7 @@ the user only when it is truly theirs to decide, and batch such questions into o
 The user follows agent runs and commands in the Agent Board's Activity drawer, and plans, specs, handoffs and reports in its artifacts panel. Drive `tests` and `shell` with `tmux-ctl` (full reference: the tmux-orchestrator skill); those names resolve to `<project>-bg`:
 
 - `tmux-ctl list`: windows, idle/busy
-- `tmux-ctl run tests "<cmd>"`: run, wait, get the output and exit code
+- `tmux-ctl run tests "<cmd>"`: run, wait, get the output and exit code (runs in a subshell: `cd`/`export` do not persist in the pane; use `send` for that)
 - `tmux-ctl read <win> [lines]`: see what's on a window
 - `tmux-ctl feed [win] [lines]`: tail of the feed log of mirrored Bash calls (default both windows, 80 lines); the user sees it in the Activity drawer
 - `tmux-ctl send <win> "<cmd>"`: start something long-running without waiting
