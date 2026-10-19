@@ -856,7 +856,7 @@ $("#form-project").addEventListener("submit", async (e) => {
 const KIND_ICON = { plan: "▤", spec: "◇", handoff: "⇄", report: "▦", published: "↗", other: "•" };
 const ART = {};
 const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(), seen: new Map(), loadedAt: Date.now() / 1000, epoch: 0, plan: null, startedFrom: null, comments: [] });
-let docBase = null, docSel = null, docMode = "read", docSelection = null, docRendered = null;
+let docBase = null, docSel = null, docSess = null, docMode = "read", docSelection = null, docRendered = null;
 if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", (n) => { if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); } });
 const api = (path) => fetch(`${API}/${path}`, { cache: "no-store" });
 async function post(body) {
@@ -881,7 +881,7 @@ async function pollArtifacts() {
   for (const it of d.items) A.items.set(it.url || it.path, it);
   const keep = new Set(d.items.map((it) => it.url || it.path));   // a moved document leaves the manifest view
   for (const k of [...A.items.keys()]) if (!keep.has(k)) { A.items.delete(k); A.versions.delete(k); A.seen.delete(k); }
-  if (docSel && !keep.has(docSel)) { $("#doc-close").onclick(); toast("The open document moved to another project"); }
+  if (docSel && docSess === s.name && !keep.has(docSel)) { $("#doc-close").onclick(); toast("The open document moved to another project"); }
   // only recent items are fetched each poll; older ones load their text when opened
   const hot = (it) => it.path === A.plan || it.latest.epoch === d.epoch || it.latest.ts >= A.loadedAt || it.path === docSel;
   for (const it of A.items.values()) if (!it.url && hot(it)) await trackVersion(s.name, A, it);
@@ -957,7 +957,7 @@ function renderArtifacts() {
 }
 
 async function openDoc(path) {
-  docSel = path; docMode = "read"; docSelection = null; docRendered = null;
+  docSel = path; docSess = session().name; docMode = "read"; docSelection = null; docRendered = null;
   document.querySelectorAll(".cbox").forEach((b) => b.remove());
   $("#doc-comment").disabled = true;
   const name = session().name, A = artFor(name), it = A.items.get(path);
