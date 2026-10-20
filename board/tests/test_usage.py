@@ -601,6 +601,26 @@ class IndexerTest(unittest.TestCase):
         self.ix.stop()
         self.assertFalse(self.ix.thread.is_alive())
 
+    def test_on_snapshot_gets_live_list(self):
+        got = []
+        ix = usage.Indexer(self.root, self.tmp / "u3.sqlite", alerts_path=self.tmp / "none.json", on_snapshot=got.append)
+        self.addCleanup(ix.close)
+        ix.scan()
+        self.assertEqual(len(got), 1)
+        self.assertEqual([e["session_id"] for e in got[0]], [e["session_id"] for e in ix.snapshot()])
+
+    def test_on_snapshot_error_is_logged_not_fatal(self):
+        import contextlib, io
+        def boom(live): raise RuntimeError("tmux gone")
+        ix = usage.Indexer(self.root, self.tmp / "u4.sqlite", alerts_path=self.tmp / "none.json", on_snapshot=boom)
+        self.addCleanup(ix.close)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            ix.scan(); ix.scan()
+        self.assertEqual(err.getvalue().count("tmux gone"), 1)
+        self.assertIsNone(ix.error)
+        self.assertTrue(ix.snapshot())
+
 
 class UsageSumTest(unittest.TestCase):
     def test_root_without_transcripts_exits_2(self):
@@ -676,6 +696,57 @@ class CardAlertsTest(unittest.TestCase):
     def test_other_projects_sessions_do_not_count(self):
         s = self.sess(); usage.card_alerts([s], [self.live(cwd="/other")])
         self.assertEqual(s["usage_alert_count"], 0)
+
+
+class CardLabelsTest(unittest.TestCase):
+    def sess(self):
+        return CardAlertsTest.sess(self)
+
+    def live(self, **kw):
+        e = {"session_id": "x", "name": "n", "role": "lead", "model": "claude-sonnet-5-5", "effort": "medium",
+             "agent_name": None, "cwd": "/r", "alerts": []}
+        e.update(kw); return e
+
+    def test_teammate_label(self):
+        s = self.sess()
+        out = usage.card_labels([s], [self.live(role="teammate", agent_name="mate", model="claude-haiku-5-5", effort="low",
+                                                cwd="/r/.claude/worktrees/x")])
+        want = {"role": "teammate", "model": "haiku", "effort": "low", "label": "✦ mate · haiku·low"}
+        self.assertEqual(s["usage_labels"]["%2"], want)
+        self.assertEqual(out["%2"], want)
+
+    def test_lead_label(self):
+        s = self.sess(); usage.card_labels([s], [self.live(model="claude-opus-5-5", effort="high")])
+        self.assertEqual(s["usage_labels"]["%1"]["label"], "claude · opus·high")
+
+    def test_worker_label_uses_window_name(self):
+        s = self.sess(); usage.card_labels([s], [self.live(role="worker", cwd="/r/.claude/worktrees/w1")])
+        self.assertEqual(s["usage_labels"]["%3"]["label"], "w1 · sonnet·med")
+
+    def test_effort_abbreviations(self):
+        for eff, ab in [("low", "low"), ("medium", "med"), ("high", "high"), ("max", "max"), ("xhigh", "xhigh")]:
+            s = self.sess(); usage.card_labels([s], [self.live(effort=eff)])
+            self.assertEqual(s["usage_labels"]["%1"]["effort"], ab, eff)
+
+    def test_no_effort_drops_suffix(self):
+        s = self.sess(); usage.card_labels([s], [self.live(effort=None)])
+        self.assertEqual(s["usage_labels"]["%1"]["label"], "claude · sonnet")
+        self.assertEqual(s["usage_labels"]["%1"]["effort"], "")
+
+    def test_unmatched_agent_windows_map_to_none(self):
+        s = self.sess(); out = usage.card_labels([s], [])
+        self.assertEqual(out, {"%1": None, "%2": None, "%3": None})
+        self.assertEqual(s["usage_labels"], {})
+
+    def test_non_agent_window_not_returned(self):
+        s = self.sess(); s["windows"].append({"name": "shell", "teammate": False, "worker": False, "panes": [{"id": "%4", "path": "/r"}]})
+        self.assertNotIn("%4", usage.card_labels([s], [self.live()]))
+
+    def test_same_name_teammate_in_other_project_gets_no_label(self):
+        a, b = self.sess(), self.sess(); a["path"] = "/a"; b["path"] = "/b"
+        usage.card_labels([a, b], [self.live(role="teammate", agent_name="mate", cwd="/b/.claude/worktrees/x")])
+        self.assertNotIn("%2", a["usage_labels"])
+        self.assertIn("%2", b["usage_labels"])
 
 
 class UsageApiTest(unittest.TestCase):
@@ -773,6 +844,53 @@ class UsageApiTest(unittest.TestCase):
             s = self.server.build_state()["sessions"][0]
         self.assertEqual(s["usage_alerts"], {"%1": fake.snapshot.return_value[0]["alerts"]})
         self.assertEqual(s["usage_alert_count"], 1)
+
+
+    def label_rows(self, *rows):
+        return "\n".join(self.server.SEP.join(r) for r in rows)
+
+    def fake_tmux(self, listing):
+        calls = []
+        def run(*a, check=False):
+            if a[0] == "list-panes":
+                return listing
+            calls.append(a); return ""
+        return run, calls
+
+    LEAD = {"session_id": "x", "role": "lead", "model": "claude-sonnet-5-5", "effort": "medium", "agent_name": None, "cwd": "/r", "alerts": []}
+
+    def test_sync_labels_sets_wanted_label(self):
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", ""]))
+        self.server.sync_labels([self.LEAD], run=run)
+        self.assertEqual(calls, [("set-option", "-w", "-t", "%1", "@tc_label", "claude · sonnet·med")])
+
+    def test_sync_labels_writes_only_on_change(self):
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", "claude · sonnet·med"]))
+        self.server.sync_labels([self.LEAD], run=run)
+        self.assertEqual(calls, [])
+
+    def test_sync_labels_unsets_unmatched_agent_window(self):
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", ""],
+                                                    ["p", "2", "✦ gone", "", "1", "", "%2", "/r", "old label"]))
+        self.server.sync_labels([], run=run)
+        self.assertEqual(calls, [("set-option", "-wu", "-t", "%2", "@tc_label")])
+
+    def test_sync_labels_leaves_non_agent_and_bg_windows(self):
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", ""],
+                                                    ["p", "2", "shell", "", "", "", "%2", "/r", "x"],
+                                                    ["p-bg", "1", "claude", "", "", "1", "%3", "/r", "y"],
+                                                    ["_web-1", "1", "claude", "", "", "", "%4", "/r", "z"]))
+        self.server.sync_labels([], run=run)
+        self.assertEqual(calls, [])
+
+    def test_build_state_carries_usage_labels(self):
+        fake = mock.Mock(); fake.snapshot.return_value = [dict(self.LEAD)]
+        S = self.server.SEP
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", ""])
+        with mock.patch.object(self.server, "INDEXER", fake), mock.patch.object(self.server, "tmux", return_value=row), \
+             mock.patch.object(self.server, "pane_text", return_value=[]), mock.patch.object(self.server, "cached_worktrees", return_value=[]):
+            s = self.server.build_state()["sessions"][0]
+        self.assertEqual(s["usage_labels"]["%1"]["label"], "claude · sonnet·med")
 
 
 if __name__ == "__main__":

@@ -314,9 +314,10 @@ class Indexer:
     One sqlite connection, created lazily and used only by the thread that scans.
     """
 
-    def __init__(self, root, db, alerts_path=None):
+    def __init__(self, root, db, alerts_path=None, on_snapshot=None):
         self.root, self.db = Path(root), Path(db)
         self.alerts_path = alerts_path or ALERTS_PATH
+        self.on_snapshot = on_snapshot
         self.error = None
         self.warning = None
         self.thread = None
@@ -371,6 +372,11 @@ class Indexer:
                 self._snapshot = live
                 self._first_pass_done = True
                 self._progress = None   # backfill is over: later passes are cheap and must not flicker the UI
+            if self.on_snapshot:
+                try:
+                    self.on_snapshot(live)
+                except Exception as e:   # noqa: BLE001 - a tmux hiccup must not stop indexing
+                    self._log_once("on_snapshot", e)
         except Exception as e:   # noqa: BLE001
             error = f"{type(e).__name__}: {e}"
             self._log_once(self.root, e)
@@ -404,38 +410,74 @@ class Indexer:
             self._conn = None
 
 
+EFFORT_ABBR = {"low": "low", "medium": "med", "high": "high", "max": "max"}
+
+
+def _project_live(s, live):
+    repo = s.get("path") or ""
+    return [e for e in live if repo and in_project(e.get("cwd"), repo)]   # every rule looks only at this project's sessions
+
+
+def _agent_windows(s, mine):
+    """Yield (window, pane, live entry or None) for each agent window of card s.
+
+    `mine` is newest-first (live_sessions order), already scoped to the project. Rules: a teammate window
+    "✦ <name>" matches the session whose agent_name is <name>; a worker pane matches a session without
+    agent_name by cwd == pane path; the `claude` window's first pane matches the newest session without
+    agent_name whose cwd is the repo. Other windows are not agent windows and are skipped.
+    """
+    repo = s.get("path") or ""
+    for w in s.get("windows", []):
+        panes = w.get("panes") or []
+        if not panes:
+            continue
+        hit, target = None, panes[0]
+        if w.get("teammate"):
+            name = re.sub(r"^✦\s*", "", w.get("name", ""))
+            hit = next((e for e in mine if e.get("agent_name") == name), None)
+        elif w.get("worker"):
+            for pane in panes:
+                hit = next((e for e in mine if not e.get("agent_name") and e.get("cwd") == pane.get("path")), None)
+                if hit:
+                    target = pane
+                    break
+        elif w.get("name") == "claude":
+            hit = next((e for e in mine if not e.get("agent_name") and e.get("cwd") == repo), None)
+        else:
+            continue
+        yield w, target, hit
+
+
 def card_alerts(sessions, live):
     """Attach usage alerts to board cards: s["usage_alerts"] = {pane id: [alerts]}, s["usage_alert_count"].
 
-    `live` is newest-first (live_sessions order). Rules: a teammate window "✦ <name>" matches the session whose
-    agent_name is <name>; a worker pane matches a session without agent_name by cwd == pane path; the `claude` window's first pane matches the
-    newest session without agent_name whose cwd is the repo. The count covers every live session in the project,
-    matched or not, so it equals the number of alerts the Usage tab lists.
+    Matching is _agent_windows'. The count covers every live session in the project, matched or not, so it
+    equals the number of alerts the Usage tab lists.
     """
     for s in sessions:
-        repo = s.get("path") or ""
-        mine = [e for e in live if repo and in_project(e.get("cwd"), repo)]   # every rule looks only at this project's sessions
-        badges = {}
-        for w in s.get("windows", []):
-            panes = w.get("panes") or []
-            if not panes:
-                continue
-            hit = None
-            if w.get("teammate"):
-                name = re.sub(r"^\u2726\s*", "", w.get("name", ""))
-                hit = next((e for e in mine if e.get("agent_name") == name), None)
-                target = panes[0]
-            elif w.get("worker"):
-                for pane in panes:
-                    hit = next((e for e in mine if not e.get("agent_name") and e.get("cwd") == pane.get("path")), None)
-                    if hit:
-                        target = pane
-                        break
-            elif w.get("name") == "claude":
-                hit = next((e for e in mine if not e.get("agent_name") and e.get("cwd") == repo), None)
-                target = panes[0]
-            if hit and hit.get("alerts"):
-                badges[target["id"]] = hit["alerts"]
-        s["usage_alerts"] = badges
+        mine = _project_live(s, live)
+        s["usage_alerts"] = {p["id"]: e["alerts"] for _, p, e in _agent_windows(s, mine) if e and e.get("alerts")}
         s["usage_alert_count"] = sum(len(e.get("alerts") or []) for e in mine)
     return sessions
+
+
+def card_labels(sessions, live):
+    """s["usage_labels"] = {pane id: {role, model, effort, label}} for matched agent windows.
+
+    Returns {pane id: entry or None} for every agent window, so sync_labels can unset unmatched ones.
+    Label: "<window name> · <family>" plus "·<effort>" when there is one.
+    """
+    wanted = {}
+    for s in sessions:
+        labels = {}
+        for w, p, e in _agent_windows(s, _project_live(s, live)):
+            if e is None:
+                wanted[p["id"]] = None
+                continue
+            fam = _family(e.get("model") or "")
+            eff = e.get("effort") or ""
+            eff = EFFORT_ABBR.get(eff, eff)
+            text = f"{w.get('name', '')} · {fam}" + (f"·{eff}" if eff else "")
+            labels[p["id"]] = wanted[p["id"]] = {"role": e.get("role") or "", "model": fam, "effort": eff, "label": text}
+        s["usage_labels"] = labels
+    return wanted

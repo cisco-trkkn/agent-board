@@ -285,8 +285,50 @@ def build_state():
         s["worktrees"] = cached_worktrees(s["path"])
     out.sort(key=lambda s: (not s["attached"], s["name"]))
     deliver_comments(out)
-    usage.card_alerts(out, INDEXER.snapshot() if INDEXER else [])
+    snap = INDEXER.snapshot() if INDEXER else []
+    usage.card_alerts(out, snap)
+    usage.card_labels(out, snap)
     return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}}
+
+
+
+def label_targets(run=None):
+    """Sessions shaped like build_state's, with each window's current @tc_label; one list-panes, no captures."""
+    fmt = SEP.join(["#{session_name}", "#{window_index}", "#{window_name}", "#{@tc_agent}", "#{@tc_teammate}",
+                    "#{@tc_bg}", "#{pane_id}", "#{pane_current_path}", "#{@tc_label}"])
+    sessions = {}
+    for f in ((run or tmux)("list-panes", "-a", "-F", fmt).splitlines()):
+        f = f.split(SEP)
+        if len(f) != 9 or f[0].startswith("_web-") or f[5] == "1":
+            continue
+        sess, widx, wname, agent, mate, _, pid, path, label = f
+        s = sessions.setdefault(sess, {"name": sess, "path": None, "windows": {}})
+        w = s["windows"].setdefault(widx, {"name": wname, "worker": agent == "1", "teammate": mate == "1",
+                                           "label": label, "panes": []})
+        w["panes"].append({"id": pid, "path": path})
+        if s["path"] is None or widx == "1":
+            s["path"] = path
+    for s in sessions.values():
+        s["windows"] = [s["windows"][k] for k in sorted(s["windows"], key=int)]
+    return list(sessions.values())
+
+
+def sync_labels(live, run=None):
+    """Keep each agent window's @tc_label equal to its usage label; unset it when no live session matches.
+
+    Runs in the indexer thread (Indexer on_snapshot), never on the api/state path. Writes only on change.
+    """
+    run = run or tmux
+    sessions = label_targets(run)
+    current = {p["id"]: w["label"] for s in sessions for w in s["windows"] for p in w["panes"]}
+    for pane, e in usage.card_labels(sessions, live).items():
+        want = e["label"] if e else ""
+        if want == current.get(pane, ""):
+            continue
+        if want:
+            run("set-option", "-w", "-t", pane, "@tc_label", want)
+        else:
+            run("set-option", "-wu", "-t", pane, "@tc_label")
 
 
 def git(path, *args):
@@ -848,7 +890,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    INDEXER = usage.Indexer(usage.root(), usage.db_path())
+    INDEXER = usage.Indexer(usage.root(), usage.db_path(), on_snapshot=sync_labels)
     INDEXER.start()
     print(f"tmux-dash on http://127.0.0.1:{PORT}/{TOKEN}/", flush=True)
     srv.serve_forever()
