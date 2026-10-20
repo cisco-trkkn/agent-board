@@ -94,7 +94,11 @@ do_uninstall() {
 }
 
 # --- --migrate
-backup() { [[ -e "$1.bak-$STAMP" ]] || { say "back up $1 to $1.bak-$STAMP" "backed up $1 to $1.bak-$STAMP"; run_or_print cp -p "$1" "$1.bak-$STAMP" } }
+backup() {   # never reuses or overwrites a backup: F.bak-YYYYMMDD, else F.bak-YYYYMMDD.1, .2, …
+  local b="$1.bak-$STAMP" i=1
+  while [[ -e "$b" || -L "$b" ]]; do b="$1.bak-$STAMP.$((i++))"; done
+  say "back up $1 to $b" "backed up $1 to $b"; run_or_print cp -p "$1" "$b"
+}
 move_aside() {   # move_aside PATH: into migrated-YYYYMMDD, never deleting
   local src="$1" dest="$STATE/migrated-$STAMP" t i=1
   t="$dest/${src:t}"; while [[ -e "$t" || -L "$t" ]]; do t="$dest/${src:t}.$((i++))"; done

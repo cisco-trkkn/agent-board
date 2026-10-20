@@ -207,3 +207,15 @@ check "migrate-team-settings: other env kept" test "$(jq -r '.env.NODE_EXTRA_CA_
 
 # no ~/.claude/ idea without a migrate: install/uninstall/check never created it (see install and check cases above)
 tt_done
+# a same-day backup that already exists is never reused or overwritten: the new one gets a free name
+newhome; seed_global "$FAKE"
+print "older hand backup" > "$H/.claude/settings.json.bak-$STAMP"; print "older tmux backup" > "$H/.tmux.conf.bak-$STAMP"
+inst --repo "$FAKE" --migrate >/dev/null 2>&1
+check "backup: existing same-day .bak is left untouched" test "$(<$H/.claude/settings.json.bak-$STAMP)" = "older hand backup" -a "$(<$H/.tmux.conf.bak-$STAMP)" = "older tmux backup"
+check "backup: the pre-migrate settings.json is saved under a free name" test "$(cat "$H"/.claude/settings.json.bak-$STAMP.1 2>/dev/null | shasum)" = "$(shasum < "$FIX/settings.seed.json")"
+check "backup: the pre-migrate .tmux.conf is saved under a free name" test "$(cat "$H"/.tmux.conf.bak-$STAMP.1 2>/dev/null | shasum)" = "$(shasum < "$FIX/tmux.seed.conf")"
+newhome; seed_global "$FAKE"
+print "older" > "$H/.tmux.conf.bak-$STAMP"; print "older" > "$H/.tmux.conf.bak-$STAMP.1"
+out="$(inst --repo "$FAKE" --migrate --dry-run 2>&1)"
+check "backup dry-run: names the free backup (.2), not an existing one" test -n "$(print -r -- "$out" | grep -F "would back up $H/.tmux.conf to $H/.tmux.conf.bak-$STAMP.2")"
+
