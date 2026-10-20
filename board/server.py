@@ -36,7 +36,7 @@ PORT = int(os.environ.get("TMUX_DASH_PORT", "7700"))
 TTYD_PORT = int(os.environ.get("TMUX_DASH_TTYD_PORT", "7701"))
 ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 
-SEP = "\x1f"
+SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 # Every process spawn costs ~0.5s on this Mac (endpoint security scans each exec), so
 # subprocesses run in parallel, worktree info is cached, and concurrent polls share one result.

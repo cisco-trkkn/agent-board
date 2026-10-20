@@ -19,7 +19,7 @@ WAITING_RE = re.compile(
     re.I,
 )
 WORKING_RE = re.compile(r"esc to interrupt", re.I)
-SEP = "\x1f"
+SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 
 INPUT_RE = re.compile(r"^\s*[│|]?\s*[>❯]\s?(.*?)\s*[│|]?\s*$")
