@@ -4,13 +4,13 @@ agent-board turns one tmux session per project into a workspace for a team of Cl
 
 1. **The `dev` toolkit** (`bin/`): zsh scripts that create the project session, let agents drive windows safely (`tmux-ctl`), and keep tmux tidy (teammate windows, state cleanup, worktree cleanup).
 2. **The Agent Board** (`board/`): a localhost web UI (stdlib Python server + one HTML page + ttyd terminals) that shows every project, agent, run, artifact and idea, and lets you act on them.
-3. **The Claude rules and hooks** (`claude/`): system-prompt files that make the lead orchestrate a team and workers act alone, plus Claude Code hooks that feed the board and stop dangerous commands.
+3. **The Claude rules, settings and plugin** (`claude/`): system-prompt files that make the lead orchestrate a team and workers act alone, a settings file for agent teams, and a Claude Code plugin (hooks that feed the board and stop dangerous commands, the `tmux-orchestrator` and `handoff` skills, the `effort-*` agent types).
 
-Nothing here is a daemon except the board. All coordination goes through **tmux** (windows, panes, user options) and **plain files** in a per-user state directory.
+Nothing here is a daemon except the board. All coordination goes through **tmux** (windows, panes, user options) and **plain files** in a per-user state directory. Everything runs on **agent-board's own tmux server** (`tmux -L agent-board`), so your own tmux server and `~/.claude` are not involved (see [Install footprint](#install-footprint)).
 
 ```mermaid
 flowchart LR
-  subgraph tmux["tmux server"]
+  subgraph tmux["tmux server -L agent-board"]
     direction TB
     P["session &lt;project&gt;<br/>1 claude (lead)<br/>2 shell (yours)<br/>✦ teammate windows<br/>worker windows"]
     BG["hidden session &lt;project&gt;-bg<br/>tests · shell · lanes"]
@@ -23,7 +23,7 @@ flowchart LR
   end
   H["hooks<br/>bash-mirror · artifact-register · kill-guard"]
   S[("state dir<br/>$TMPDIR/tmux-ctl-$UID")]
-  I[("~/.claude/ideas/&lt;project&gt;.md")]
+  I[("~/.local/state/agent-board/ideas/&lt;project&gt;.md")]
   B["board server.py<br/>127.0.0.1:7700"]
   Y["ttyd<br/>127.0.0.1:7701"]
   UI["browser"]
@@ -66,9 +66,9 @@ flowchart LR
 
 1. **`dev [dir]`** resolves the git top level (a non-repo folder under a home-directory repo stays itself), derives the session name and, if no session exists, creates it with window `claude` running `${DEV_CLAUDE_CMD:-claude-orchestrator}` and window `shell`. It then runs `tmux-dev-layout` and attaches (or `switch-client` when already inside tmux; `DEV_NO_ATTACH=1` only creates, which the board uses).
 2. **`tmux-dev-layout <session> <root>`** is idempotent. It migrates old layouts (moves an idle `tests` window into `-bg`, kills feed/watch panes, drops labels), creates `<project>-bg` atomically (`new-session` is the lock; latecomers wait for `@tc_bg`), and adds optional watch panes from `<root>/.dev/windows`.
-3. **`claude-orchestrator`** runs `claude --name orchestrator --model opus --append-system-prompt-file ~/.claude/orchestrator.md "$@"`. Passing your own `--name` or `--model` overrides the defaults. In the scoped install, `~/.local/bin/claude-orchestrator` is a wrapper that adds `--settings ~/.config/agent-board/claude-settings.json` (agent teams, `teammateMode`, hooks) and then calls the repo script.
+3. **`claude-orchestrator`** puts the clone's `bin/` first on `PATH`, exports `AGENT_BOARD_REPO`, and runs `claude --name orchestrator --model opus --settings <clone>/claude/settings.json --plugin-dir <clone>/claude/plugin --append-system-prompt-file <rules> "$@"`, where `<rules>` is `~/.config/agent-board/orchestrator.md` if it exists, else `<clone>/claude/orchestrator.md`. Passing your own `--name` or `--model` overrides the defaults. Inside tmux it also records `AGENT_BOARD_REPO` and `PATH` on the tmux session with `set-environment`, because teammates inherit the session environment and not the lead's shell. Side effect: every window opened in that session afterwards has the clone's `bin/` first on its `PATH`.
 4. The lead splits work into teammates or workers (see below). The user watches in tmux or on the board.
-5. **Closing** the session (board "Close project", or `tmux kill-session`) fires the `session-closed` hook. `tmux-session-closed` checks that no session or grouped view of that name is left, then deletes that project's state files. It never touches `~/.claude/ideas/`, and it never runs for `_web-*` or `*-bg` names.
+5. **Closing** the session (board "Close project", or `tmux kill-session`) fires the `session-closed` hook. `tmux-session-closed` checks that no session or grouped view of that name is left, then deletes that project's state files. It never touches the ideas files, and it never runs for `_web-*` or `*-bg` names.
 
 ## tmux-ctl: agents driving windows
 
@@ -116,27 +116,27 @@ Design points:
 | `tell <agent> <message>` | type into a worker's prompt; refused while it waits on the user (bell or a visible permission prompt) |
 | `agents` | each worker's state (working / WAITING ON USER / exited) and last lines |
 | `artifact <path> [--kind K]` | register a file in the board's artifacts panel |
-| `idea <text>` | append to `~/.claude/ideas/<project>.md` |
+| `idea <text>` | append to `~/.local/state/agent-board/ideas/<project>.md` |
 | `relay <doc> [--old-session ID]` | after this turn, restart the `claude` window as a fresh orchestrator reading `<doc>` (used by `/handoff`) |
 
 ## Agent teams and workers
 
-**Teammates.** With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and `teammateMode: auto` (from the agent-board settings file), Claude Code spawns teammates as split panes next to the lead. The tmux `after-split-window` hook runs `tmux-teammate-window`, which finds panes whose start command carries `--agent-name <name>` (or older Claude's placeholder `cat`, waiting up to 10 s for the respawn) and `break-pane`s each into a window `✦ <name>`, placed after the lead and any teammate windows already there. The pane id is kept, so Claude still reaches it.
+**Teammates.** With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and `teammateMode: auto` (from `claude/settings.json`), Claude Code spawns teammates as split panes next to the lead. The tmux `after-split-window` hook runs `tmux-teammate-window`, which finds panes whose start command carries `--agent-name <name>` (or older Claude's placeholder `cat`, waiting up to 10 s for the respawn) and `break-pane`s each into a window `✦ <name>`, placed after the lead and any teammate windows already there. The pane id is kept, so Claude still reaches it.
 
-**Workers.** `tmux-ctl agent` creates a window tagged `@tc_agent`, then types `claude -w <name> -n <name> --append-system-prompt-file ~/.claude/worker.md '<task>'`. `-w` makes Claude create and lock its own worktree under `.claude/worktrees/<name>`. Worktrees are removed later with `Ctrl-a W` (`tmux-agent-cleanup`) or the board's Worktrees list. Both refuse to force: a dirty worktree is kept, a lock is cleared only when its Claude pid is dead or reused, and a branch is deleted only if merged (`git branch -d`).
+**Workers.** `tmux-ctl agent` creates a window tagged `@tc_agent`, then types `PATH=<clone>/bin:$PATH AGENT_BOARD_REPO=<clone> claude -w <name> -n <name> --settings <clone>/claude/settings.json --plugin-dir <clone>/claude/plugin --append-system-prompt-file <rules> '<task>'`, where `<rules>` is `~/.config/agent-board/worker.md` if it exists, else `<clone>/claude/worker.md`. `-w` makes Claude create and lock its own worktree under `.claude/worktrees/<name>`. Worktrees are removed later with `prefix W` (`tmux-agent-cleanup`) or the board's Worktrees list. Both refuse to force: a dirty worktree is kept, a lock is cleared only when its Claude pid is dead or reused, and a branch is deleted only if merged (`git branch -d`).
 
 **Rules.** `claude/orchestrator.md` makes the lead build a team by default (2–3 teammates, never more than 4), run work through the superpowers skills, route models by tier (`mechanical → haiku`, `standard → sonnet`, `frontier → fable`, overridable in `docs/superpowers/model-routing.json`), never answer an agent's permission prompt, and never push or merge without being asked. `claude/worker.md` makes a worker plan, test and review on its own, decide instead of asking, and finish with a commit and a report.
 
 ## Hooks
 
-The hooks are registered in an agent-board-only settings file (`~/.config/agent-board/claude-settings.json`), which the `claude-orchestrator` wrapper passes with `claude --settings`. They therefore run only in agent-board leads, never in the user's other Claude Code sessions (see [INSTALL.md §4](INSTALL.md#4-claude-code-settings-for-agent-board-sessions-only); workers and teammates are a known gap). Each script is also a no-op outside a tmux pane, except `kill-guard.sh`.
+The hooks ship in the agent-board plugin (`claude/plugin/hooks/hooks.json`, scripts in `claude/plugin/scripts/`), which every agent-board Claude loads with `--plugin-dir`. They therefore run in agent-board's leads and workers, and in teammates through the session environment, never in the user's other Claude Code sessions. Each is registered with `--scoped`; the scripts also still work registered globally, as the pre-plugin install did, and when both are present the global registration defers to the scoped one (without `--scoped` a script exits when `AGENT_BOARD=1`, which `claude/settings.json` sets). Each script is a no-op outside a tmux pane, except `kill-guard.sh`.
 
 | Hook (event, matcher) | Script | Writes | Notes |
 | --- | --- | --- | --- |
 | PreToolUse, `Bash` | `kill-guard.sh` | nothing; exit 2 blocks the call | Parses `pkill`/`killall` (also inside `bash -c "…"`), checks the pattern against running Claude processes (`ps` comm and args) and blocks when it would hit one. Fails open on any error. |
 | PostToolUse + PostToolUseFailure, `Bash` | `bash-mirror.sh` | `feed-<project>-{tests,shell}.log` | Classifies the command as `tests` (pytest, make, npm test, go test, cargo, terraform plan, …) or `shell`, appends a header `── HH:MM:SS · agent · cwd · exit N · @epoch`, the first line and the last 12 output lines. Skips `tmux-ctl` calls (those are recorded as runs). Caps the log at 2 MB (keeps the last 1 MB). Only in dev sessions. |
-| PostToolUse, `Write\|Edit\|MultiEdit\|Artifact` | `artifact-register.sh` | `artifacts-<project>.jsonl` | Kinds by path: `docs/superpowers/plans/` → plan, `…/specs/` → spec, `~/.claude/handoffs/` or a tmp `*handoff*` → handoff, `scratchpad/*report*` → report, Artifact tool URL → published. Other files are ignored unless registered by hand (`--path`). Records sha256, agent, session id and epoch. |
-| Stop / PostToolUse `TaskUpdate` (optional) | `superpowers-hook.sh <name>` | — | Finds the superpowers-extended-cc plugin wherever it is installed and runs its example hook; silent no-op without the plugin. |
+| PostToolUse, `Write\|Edit\|MultiEdit\|Artifact` | `artifact-register.sh` | `artifacts-<project>.jsonl` | Kinds by path: `docs/superpowers/plans/` → plan, `…/specs/` → spec, `~/.local/state/agent-board/handoffs/` (or the old `~/.claude/handoffs/`) or a tmp `*handoff*` → handoff, `scratchpad/*report*` → report, Artifact tool URL → published. Other files are ignored unless registered by hand (`--path`). Records sha256, agent, session id and epoch. |
+| Stop / PostToolUse `TaskUpdate` (optional, not registered by agent-board; `claude/hooks/`) | `superpowers-hook.sh <name>` | — | Finds the superpowers-extended-cc plugin wherever it is installed and runs its example hook; silent no-op without the plugin. |
 
 All hooks are silent and exit 0 except kill-guard's deliberate block.
 
@@ -211,7 +211,7 @@ Plan comments and `[Board]` requests sit in an in-memory `CommentQueue` per proj
 - **Prices.** `board/prices.json` maps each model to $/Mtok for input, output, cache read and 5 m / 1 h cache writes, plus its context window. Calls on a model with no entry count as *unpriced* and are never shown as $0. `tools/usage-sum.py` is an independent re-implementation, used to cross-check the totals; `tools/usage-capture-fixture.py` makes content-stripped test fixtures from real transcripts.
 - **Attribution.** A call belongs to a project when its `cwd` is the project's checkout or one of its `.claude/worktrees/`. Its role is `teammate` (has an agent name), `subagent` (sidechain or subagent file), `worker` (in a worktree) or `lead`.
 - **Report** (`api/usage`): today, 7-day and 30-day totals; a 30-day per-model daily series; breakdowns by role, model (with cache-read share) and branch; live sessions (newest call within `live_s`) with their alerts.
-- **Alerts.** Thresholds come from `~/.claude/usage-alerts.json` if present (defaults otherwise; invalid keys are reported as a warning):
+- **Alerts.** Thresholds come from `~/.config/agent-board/usage-alerts.json`, else the older `~/.claude/usage-alerts.json`, if present (defaults otherwise; invalid keys are reported as a warning):
 
   | Key | Default | Alert when |
   | --- | --- | --- |
@@ -225,11 +225,11 @@ Plan comments and `[Board]` requests sit in an in-memory `CommentQueue` per proj
 
 ## Handoff relay
 
-`/handoff` (a skill, not in this repo) checkpoints teammates, writes `~/.claude/handoffs/<date>-<slug>.md` and calls `tmux-ctl relay <doc>`. That schedules `board/relay.py` with `tmux run-shell -b`, so the lead can finish its turn first. `relay.py` waits until the lead's pane is idle or ready on two polls 2 s apart (120 s cap), respawns the pane with a fresh shell in the repo root, types `claude-orchestrator "Read <doc> and continue from where the previous session left off."` and appends `{ts, old_session_id, doc, pane}` to `lineage-<project>.jsonl` (which bumps the epoch). On failure the old pane is untouched and `_relay_failed` shows the manual command on every attached client and in `relay-failed-<project>.txt`.
+`/handoff` (a skill in the agent-board plugin) checkpoints teammates, writes `~/.local/state/agent-board/handoffs/<date>-<slug>.md` (older docs in `~/.claude/handoffs/` are still read) and calls `tmux-ctl relay <doc>`. That schedules `board/relay.py` with `tmux run-shell -b`, so the lead can finish its turn first. `relay.py` waits until the lead's pane is idle or ready on two polls 2 s apart (120 s cap), respawns the pane with a fresh shell in the repo root, types `claude-orchestrator "Read <doc> and continue from where the previous session left off."` and appends `{ts, old_session_id, doc, pane}` to `lineage-<project>.jsonl` (which bumps the epoch). On failure the old pane is untouched and `_relay_failed` shows the manual command on every attached client and in `relay-failed-<project>.txt`.
 
 ## Ideas inbox
 
-`board/ideas.py` owns `${TC_IDEAS_DIR:-~/.claude/ideas}/<project>.md`. Each idea is `- [ ] YYYY-MM-DD HH:MM · text` with indented detail lines; `[x]` means taken up (`→ <spec>`), `[-]` dropped (or `→ moved to <project>`). Ideas are never deleted. Writers take an exclusive `fcntl` lock on `<file>.lock`. Edits address an idea by a key and raise `Stale` (HTTP 409) if the file changed underneath. The lead files `idea:` messages here and only reads the file once a plan is finished.
+`board/ideas.py` owns `${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}/<project>.md` (an older `~/.claude/ideas/<project>.md` is copied across on first use, and the original stays). Each idea is `- [ ] YYYY-MM-DD HH:MM · text` with indented detail lines; `[x]` means taken up (`→ <spec>`), `[-]` dropped (or `→ moved to <project>`). Ideas are never deleted. Writers take an exclusive `fcntl` lock on `<file>.lock`. Edits address an idea by a key and raise `Stale` (HTTP 409) if the file changed underneath. The lead files `idea:` messages here and only reads the file once a plan is finished.
 
 ## State files
 
@@ -248,24 +248,37 @@ Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It 
 | `<id>.rc`, `<id>.gone` | `tmux-ctl run`/`_done` (transient) | `tmux-ctl run` |
 | `recent-projects.json` | board `dev` action | Open project dialog |
 
-Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
+Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`). Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
+
+## Install footprint
+
+`install.sh` links one file, `~/.local/bin/agent-board`, to `bin/agent-board` in the clone. Everything else is found from the clone, so the checked-out branch is what runs.
+
+- **Claude Code.** Every Claude agent-board starts (the lead via `claude-orchestrator`, workers via `tmux-ctl agent`) gets `--settings <clone>/claude/settings.json` and `--plugin-dir <clone>/claude/plugin` from `bin/_ab_claude.zsh`, so the hooks, skills and agent types exist only in those sessions. Teammates inherit the tmux session environment (`PATH`, `AGENT_BOARD_REPO`), which `claude-orchestrator` sets on the session. `~/.claude` is never written, except by `install.sh --migrate`, which removes what the earlier global install left there.
+- **tmux.** `bin/_tc_bins.zsh` is the one resolver for the tmux command. Its order, first match wins: `TMUX_DASH_TMUX_ARGS`; the server named by `$TMUX` (hooks, `tmux-ctl`, the tests; skipped by the entry points `dev` and `tmux-dash`, which always use agent-board's server); otherwise `tmux -L ${AGENT_BOARD_TMUX_SOCKET:-agent-board} -f <clone>/config/tmux.conf`. A server started that way loads `config/tmux.conf` (the `after-split-window` and `session-closed` hooks, bell and passthrough options, the `D`, `f` and `W` bindings) instead of `~/.tmux.conf`. `board/paneclass.py` asks the same resolver, so Python and zsh agree on the server.
+- **Legacy detection.** On an install from before the dedicated server, `tc_tmux_legacy` is true: `~/.tmux.conf` still has agent-board's hook lines (`tmux-teammate-window` or `tmux-session-closed`) and no `agent-board` server is running. Then `dev` and `tmux-dash` keep using the user's own default server until `install.sh --migrate` removes those lines.
+- **State paths.** Durable data: `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `migrated-YYYYMMDD/`). Board process state: `~/.local/state/tmux-dash/`. Runtime state: `TC_STATE`. Optional user overrides: `~/.config/agent-board/` (`orchestrator.md`, `worker.md`, `tmux.local.conf`, `usage-alerts.json`).
+- **Helper binaries.** ttyd and fzf come from `TTYD_BIN` / `FZF_BIN`, else `PATH`, else `~/.local/bin/<tool>`; tmux from `TC_TMUX`, else `~/.local/bin/tmux`.
 
 ## Tests
 
 | Suite | Command | How it isolates |
 | --- | --- | --- |
-| Board (Python `unittest`, 211 tests) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR`, fake tmux runners |
-| Toolkit (zsh, 17 files) | `zsh tools/tests/run-all.zsh` | `tools/tests/lib.zsh` starts a private tmux server (`-L tctest-…  -f /dev/null`) with a temp `TC_STATE`, and kills it on exit |
+| Board (Python `unittest`) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR`, fake tmux runners |
+| Install helpers (Python `unittest`) | `python3 -m unittest discover -s tools/tests -p 'test_*.py'` | `install_lib` (the `install.sh --migrate` settings and tmux edits) on temporary files |
+| Toolkit (zsh) | `zsh tools/tests/run-all.zsh` | `tools/tests/lib.zsh` starts a private tmux server (`-L tctest-…  -f /dev/null`) with a temp `TC_STATE`, and kills it on exit. Covers tmux-ctl, the dev layout, the plugin and hooks, `install.sh` |
 
 Hook tests feed captured Claude hook JSON from `tools/tests/fixtures/`. Each zsh test prints `ok - …` / `FAIL - …` and ends with `ALL PASS` or `N FAILED`, which `tmux-ctl run` summarizes.
 
 ## Repository layout
 
 ```
-bin/                 zsh commands, symlinked into ~/.local/bin
+install.sh           link ~/.local/bin/agent-board; --check, --uninstall, --migrate
+bin/                 zsh commands; agent-board is the single entry point (dev, ctl, dash, jump, cleanup)
 board/               Agent Board: server.py, index.html, helper modules, vendor/, tests/
-claude/              orchestrator.md, worker.md, hooks/
-tools/tests/         zsh test harness and tests for bin/ and claude/hooks/
+claude/              orchestrator.md, worker.md, settings.json, plugin/ (hooks, skills, agents), hooks/
+config/              tmux.conf: agent-board's tmux server configuration
+tools/               install_lib.py (install.sh helpers), usage tools; tests/: zsh harness and tests
 docs/                INSTALL, ARCHITECTURE, CUSTOMIZATION; superpowers/ specs and plans
 ```
 

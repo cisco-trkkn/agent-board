@@ -2,22 +2,20 @@
 
 Every customization point, from least to most invasive. Read [ARCHITECTURE.md](ARCHITECTURE.md) first if you plan to change code.
 
-**Keep it scoped.** Everything below should apply only to agent-board sessions. Put Claude Code settings in `~/.config/agent-board/claude-settings.json` (loaded with `--settings` by the `claude-orchestrator` wrapper), never in `~/.claude/settings.json`. Put tmux settings in `~/.config/agent-board/tmux.conf`. Don't install agent-board skills or agents into `~/.claude/skills` or `~/.claude/agents`. See [INSTALL.md](INSTALL.md#what-this-install-changes-on-your-machine).
+**Keep it scoped.** Everything below applies only to agent-board sessions. Claude Code behaviour is set by the files in the clone's `claude/` (`settings.json`, `plugin/`, the rules), which every agent-board Claude loads with `--settings` and `--plugin-dir`; tmux behaviour by `config/tmux.conf`, loaded only by agent-board's own tmux server. Nothing here edits `~/.claude` or your tmux configuration. See [INSTALL.md](INSTALL.md#what-the-install-changes-on-your-machine).
 
-## 0. The agent-board settings file
+## 0. Override files in `~/.config/agent-board/`
 
-`~/.config/agent-board/claude-settings.json` is an ordinary Claude Code settings file that only agent-board leads load. Anything you want only for agent-board sessions goes here. It is additive: your user, project and local settings still apply underneath it.
+Optional files you create yourself; none exists after install. They override or extend the repo's copy without editing the clone, so `git pull` never conflicts with them.
 
-```json
-{
-  "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1", "AGENT_BOARD": "1" },
-  "teammateMode": "auto",
-  "permissions": { "allow": ["Bash(tmux-ctl:*)"] },
-  "hooks": { "…": "the three agent-board hooks from INSTALL.md §4, plus your own" }
-}
-```
+| File | Read by | Effect |
+| --- | --- | --- |
+| `orchestrator.md` | `claude-orchestrator` | replaces `claude/orchestrator.md` as the lead's appended system prompt |
+| `worker.md` | `tmux-ctl agent` | replaces `claude/worker.md` as a worker's appended system prompt |
+| `tmux.local.conf` | the agent-board tmux server | sourced at the end of `config/tmux.conf` (prefix key, colours, more bindings) |
+| `usage-alerts.json` | the board | usage alert thresholds (§5); the old `~/.claude/usage-alerts.json` is still read when this one is absent |
 
-Examples: allow `tmux-ctl` without prompts in agent-board sessions only (above); add a hook that only makes sense for agent teams. To use another file for one project, start that project's lead with it: `DEV_CLAUDE_CMD="$HOME/agent-board/bin/claude-orchestrator --settings ~/my/other.json" dev ~/code/proj`.
+A project-specific settings file is not an override: it is passed per lead, see §3.
 
 ## 1. Environment variables
 
@@ -27,18 +25,19 @@ Examples: allow `tmux-ctl` without prompts in agent-board sessions only (above);
 | `DEV_NO_ATTACH` | unset | `dev` | Create the session but don't attach (the board uses this). |
 | `DEV_CLIENT` | unset | `dev` | Switch this tmux client instead of the current one (`Ctrl-a D` uses it). |
 | `TC_TMUX` | `~/.local/bin/tmux` | every script, hook and the board, through `bin/_tc_bins.zsh` | tmux binary to use. |
-| `AGENT_BOARD_TMUX_SOCKET` | `agent-board` | `bin/_tc_bins.zsh` | Name of agent-board's own tmux server (`tmux -L <name>`), the one `dev` and `tmux-dash` use. An unmigrated install (agent-board hook lines still in `~/.tmux.conf`, no such server running) keeps using the user's own server until `install.sh --migrate`. The test harness points it at its private socket. |
+| `AGENT_BOARD_TMUX_SOCKET` | `agent-board` | `bin/_tc_bins.zsh` | Name of agent-board's own tmux server (`tmux -L <name>`), the one `dev` and `tmux-dash` use. An unmigrated install (agent-board's hook lines still in `~/.tmux.conf` and no such server running) keeps `dev` and `tmux-dash` on the user's own default server until `install.sh --migrate`. The test harness points it at its private socket. |
 | `TC_STATE` | `${TMPDIR:-/tmp}/tmux-ctl-$UID` | `tmux-ctl`, hooks, board, `relay.py`, `tmux-session-closed` | Runtime state directory. Must be the same for every process of one tmux server; set it in your shell profile if you change it. |
 | `TC_SESSION` | caller's session | `tmux-ctl` | Target a different session (the board sets it for actions). |
-| `TC_LAYOUT` | `~/.local/bin/tmux-dev-layout` | `dev` | Replace the layout step with your own script (called as `<script> <session> <root>`). |
-| `TC_IDEAS_DIR` | `~/.claude/ideas` | `ideas.py` (board, `tmux-ctl idea`) | Where idea files live. |
+| `TC_LAYOUT` | `tmux-dev-layout` next to `dev` | `dev` | Replace the layout step with your own script (called as `<script> <session> <root>`). |
+| `TC_IDEAS_DIR` | `~/.local/state/agent-board/ideas` | `ideas.py` (board, `tmux-ctl idea`) | Where idea files live. |
 | `TC_AGENT_DRYRUN` | unset | `tmux-ctl agent` | Test seam: print the task and stop before creating a window. |
 | `TMUX_DASH_PORT` | `7700` | `tmux-dash`, `server.py` | Board HTTP port. |
 | `TMUX_DASH_TTYD_PORT` | `7701` | `tmux-dash`, `server.py` | ttyd port. |
-| `TMUX_DASH_TMUX_ARGS` | empty | every script and the board, through `bin/_tc_bins.zsh` | Which tmux server to talk to, e.g. `-L default` to keep the board and `dev` on your own server. Overrides the resolver's choice (`$TMUX`'s server inside tmux, else `-L agent-board`); `tmux-dash` sets it for `server.py` and the ttyd terminals so both read the same server. |
+| `TMUX_DASH_TMUX_ARGS` | empty | every script and the board, through `bin/_tc_bins.zsh` | Which tmux server to talk to, e.g. `-L default` to keep the board and `dev` on your own server. Overrides the resolver's choice (`$TMUX`'s server inside tmux, else `-L agent-board`; `dev` and `tmux-dash` skip the `$TMUX` step and always use agent-board's server); `tmux-dash` sets it for `server.py` and the ttyd terminals so both read the same server. |
 | `TMUX_DASH_PAGE` | `index.html` | `server.py` | Serve another HTML file from `board/` (a fork of the UI, an experiment). |
 | `TMUX_DASH_DEBUG` | unset | `server.py` | Log every request to stderr, which `tmux-dash` sends to `~/.local/state/tmux-dash/server.log`. |
-| `FZF_BIN` | `~/.local/bin/fzf` | `tmux-agent-cleanup` | fzf binary. |
+| `TTYD_BIN` | `ttyd` on `PATH`, else `~/.local/bin/ttyd` | `tmux-dash` | ttyd binary for the board's terminals. |
+| `FZF_BIN` | `fzf` on `PATH`, else `~/.local/bin/fzf` | `tmux-jump`, `tmux-agent-cleanup` | fzf binary. |
 | `USAGE_ROOT` | `~/.claude/projects` | `board/usage.py` | Where the Usage tab reads Claude Code transcripts (read-only). |
 | `SUPERPOWERS_PLUGIN_ROOT` | auto-discovered | `superpowers-hook.sh` | Pin which superpowers-extended-cc install the optional hooks run. |
 
@@ -84,26 +83,32 @@ The lead and workers read the repo's `CLAUDE.md` like any Claude Code session. P
 
 Changes apply to the next Claude started; restart a lead from the board (Restart orchestrator) or with `claude-orchestrator` in its window.
 
-To use different rules for one project without editing the shared files, start the lead yourself:
+To use different rules for every project without editing the clone, put your copies in `~/.config/agent-board/orchestrator.md` and `worker.md` (§0). To use different rules for one project, start the lead yourself:
 
 ```zsh
-DEV_CLAUDE_CMD="claude --settings ~/.config/agent-board/claude-settings.json --append-system-prompt-file ~/my-rules/lead.md" dev ~/code/proj
+DEV_CLAUDE_CMD="claude-orchestrator --append-system-prompt-file ~/my-rules/lead.md" agent-board dev ~/code/proj
 ```
 
-Keep the `--settings` flag when you bypass `claude-orchestrator`, or the lead loses agent teams and the hooks. `DEV_CLAUDE_CMD` applies only when `dev` creates the session; Restart orchestrator and `/handoff` always start `claude-orchestrator`.
+Going through `claude-orchestrator` keeps the settings, the plugin and the `PATH`. If you bypass it with a plain `claude …`, add `--settings <clone>/claude/settings.json --plugin-dir <clone>/claude/plugin` yourself, or the lead loses agent teams, the hooks and the `tmux-orchestrator`/`handoff` skills. `DEV_CLAUDE_CMD` applies only when `dev` creates the session; Restart orchestrator and `/handoff` always start `claude-orchestrator`.
+
+The lead's Claude Code settings are `claude/settings.json` (`env` with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and the `AGENT_BOARD=1` marker, and `teammateMode`). `--settings` is additive: your own user, project and local settings still apply underneath. To add a setting for agent-board sessions only, edit that file in your clone.
+
+The plugin in `claude/plugin/` (hooks, the `tmux-orchestrator` and `handoff` skills, the `effort-*` agents) is loaded per session with `--plugin-dir`; add your own skills or agents there to make them available to agent-board sessions only.
 
 `claude-orchestrator` defaults to `--model opus` and `--name orchestrator`. Pass `--model`/`--name` to override, e.g. `DEV_CLAUDE_CMD="claude-orchestrator --model sonnet"`. The extra arguments go through the wrapper too.
 
 ## 4. tmux key bindings and hooks
 
-Bindings and hooks go in `~/.config/agent-board/tmux.conf`, which your `~/.tmux.conf` sources (see [INSTALL.md §5](INSTALL.md#5-tmux)). tmux bindings and hooks are server-wide, so choose keys you don't already use. The scripts you can bind:
+Hooks, options and bindings for agent-board's tmux server are in `config/tmux.conf` in the clone, which the server loads with `-f` in place of your `~/.tmux.conf` (which it never reads). So they reach only agent-board's sessions. Your own additions go in `~/.config/agent-board/tmux.local.conf` (§0), sourced last. The prefix is tmux's default `Ctrl-b` until that file changes it. Existing bindings: `D` (project for the current folder), `f` (fuzzy jump), `W` (worktree cleanup). The scripts you can bind:
 
 | Script | Bind it to… |
 | --- | --- |
 | `dev '#{pane_current_path}'` with `DEV_CLIENT` | open the project for the current folder |
-| `tmux-jump '#{client_name}'` in a popup | fuzzy window switcher |
+| `tmux-jump --popup '#{client_name}'` | fuzzy window switcher |
 | `tmux-agent-cleanup` in a popup with `-d '#{pane_current_path}'` | worktree cleanup picker |
 | `tmux-dash` | open the board |
+
+In `tmux.local.conf` the scripts are at `$AGENT_BOARD_REPO/bin/…` (the variable holds the clone's path).
 
 The two hooks (`after-split-window`, `session-closed`) are required; without the first, teammates stay as split panes, and without the second, per-project state accumulates in `TC_STATE` until reboot.
 
@@ -146,13 +151,13 @@ When a Claude Code release changes its screen, the board may show the wrong stat
 
 ### Usage tab: alerts and prices
 
-Alert thresholds: create `~/.claude/usage-alerts.json` with any of these keys (the defaults are in [ARCHITECTURE.md → Usage tracking](ARCHITECTURE.md#usage-tracking)):
+Alert thresholds: create `~/.config/agent-board/usage-alerts.json` (or the older `~/.claude/usage-alerts.json`, read only when the new one is absent) with any of these keys (the defaults are in [ARCHITECTURE.md → Usage tracking](ARCHITECTURE.md#usage-tracking)):
 
 ```json
 { "context_pct": 85, "burn_per_hour": 30, "session_total": 50, "mismatch_models": ["opus"] }
 ```
 
-Only the board reads this file. A malformed file or value falls back to the defaults and shows a warning in the Usage tab. Changes apply on the next poll; no restart is needed. (The plan moves this file to `~/.config/agent-board/` in Task 6.)
+Only the board reads this file. A malformed file or value falls back to the defaults and shows a warning in the Usage tab. Changes apply on the next poll; no restart is needed.
 
 Prices: `board/prices.json` holds $/Mtok and context size per model. Add an entry for a new model, or calls on it show as *unpriced*. Cross-check totals after editing with `python3 tools/usage-sum.py --repo <path>`.
 
