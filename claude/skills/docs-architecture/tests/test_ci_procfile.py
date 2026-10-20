@@ -16,8 +16,12 @@ class CiProcfileFixture(unittest.TestCase):
             c = self.comps["ci/" + job]
             self.assertEqual((c["kind"], c["source"]), ("ci_job", f"{LZ}:{line}"))
 
-    def test_job_stage(self):
-        self.assertEqual(self.comps["ci/landing-zone-validate"]["stage"], "validate")
+    def test_job_stage_in_name(self):
+        self.assertEqual(self.comps["ci/landing-zone-validate"]["name"], "landing-zone-validate [validate]")
+        self.assertEqual(set(self.comps["ci/landing-zone-validate"]), {"id", "kind", "name", "project", "env", "source"})
+
+    def test_nine_ci_jobs(self):
+        self.assertEqual(len([c for c in self.inv["components"] if c["kind"] == "ci_job"]), 9)
 
     def test_no_reserved_or_dot_keys(self):
         ci = [c["id"] for c in self.inv["components"] if c["kind"] == "ci_job"]
@@ -59,7 +63,14 @@ class CiParserUnits(unittest.TestCase):
     def test_environment_inline_and_name(self):
         root = self.tmp({".gitlab-ci.yml": "a:\n  environment: production\n  script: [x]\nb:\n  environment:\n    name: staging\n  script: [x]\nc:\n  environment: dev\n  script: [x]\n"})
         envs = {c["id"]: c["env"] for c in gitlab_ci.extract(root)["components"]}
-        self.assertEqual(envs, {"ci/a": "production", "ci/b": "stage", "ci/c": "dev"})
+        self.assertEqual(envs, {"ci/a": "prod", "ci/b": "stage", "ci/c": "dev"})
+
+    def test_odd_environment_stays_raw_with_unknown(self):
+        root = self.tmp({".gitlab-ci.yml": "a:\n  environment: review/foo\n  script: [x]\n"})
+        out = gitlab_ci.extract(root)
+        self.assertEqual(out["components"][0]["env"], "review/foo")
+        self.assertEqual([u["what"] for u in out["unknowns"]], ["ci/a"])
+        self.assertIn("not one of dev/stage/prod", out["unknowns"][0]["why"])
 
     def test_chdir_gives_call_edge_to_project_boundary(self):
         root = self.tmp({

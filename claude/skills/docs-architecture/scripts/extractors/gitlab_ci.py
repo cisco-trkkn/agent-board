@@ -62,11 +62,14 @@ def extract(root):
             text = fh.read()
         for name, line, body in jobs(text):
             cid = f"ci/{name}"
-            env = field(body, "environment")
+            env, stage = field(body, "environment"), field(body, "stage")
+            norm = terraform.env_of(env) if env else None
+            if env and not norm:
+                out["unknowns"].append({"what": cid, "source": f"{rel}:{line}",
+                                        "why": f"environment '{env}' is not one of dev/stage/prod"})
             out["components"].append({
-                "id": cid, "kind": "ci_job", "name": name, "project": None,
-                "env": (terraform.env_of(env) or env) if env else None,
-                "stage": field(body, "stage"), "source": f"{rel}:{line}"})
+                "id": cid, "kind": "ci_job", "name": f"{name} [{stage}]" if stage else name, "project": None,
+                "env": norm or env, "source": f"{rel}:{line}"})
             for n, raw in body:
                 m = CHDIR_RE.search(raw)
                 if not m or raw.lstrip().startswith("#"):

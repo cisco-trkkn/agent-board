@@ -7,7 +7,7 @@ import os, re
 
 SKIP_DIRS = {".git", ".terraform", "node_modules", ".venv", "__pycache__"}
 BLOCK_RE = re.compile(r'^(resource|module|data)\s+"([^"]+)"(?:\s+"([^"]+)")?\s*\{', re.M)
-ENV_RE = re.compile(r'(?:^|[-_/])(dev|stage|staging|prod)(?:$|[-_/])')
+ENV_RE = re.compile(r'(?:^|[-_/])(dev|development|stage|staging|prod|production)(?:$|[-_/])')
 KINDS = {
     "google_cloud_run_v2_service": "cloud_run_service", "google_cloud_run_service": "cloud_run_service",
     "google_cloud_run_v2_job": "cloud_run_job", "google_cloudfunctions2_function": "cloud_function",
@@ -46,7 +46,7 @@ def attr(body, key):
 
 def env_of(reldir):
     m = ENV_RE.search(reldir)
-    return {"staging": "stage"}.get(m.group(1), m.group(1)) if m else None
+    return {"staging": "stage", "development": "dev", "production": "prod"}.get(m.group(1), m.group(1)) if m else None
 
 REF_RE = re.compile(r'\b(google_[a-z0-9_]+)\.([A-Za-z0-9_-]+)(?:\[[^\]]*\])?')
 LOCALS_RE = re.compile(r'^locals\s*\{', re.M)
