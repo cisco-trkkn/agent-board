@@ -27,7 +27,7 @@ Examples: allow `tmux-ctl` without prompts in agent-board sessions only (above);
 | `DEV_NO_ATTACH` | unset | `dev` | Create the session but don't attach (the board uses this). |
 | `DEV_CLIENT` | unset | `dev` | Switch this tmux client instead of the current one (`Ctrl-a D` uses it). |
 | `TC_TMUX` | `~/.local/bin/tmux` | every script, hook and the board, through `bin/_tc_bins.zsh` | tmux binary to use. |
-| `AGENT_BOARD_TMUX_SOCKET` | `agent-board` | `bin/_tc_bins.zsh` | Name of agent-board's own tmux server (`tmux -L <name>`), the one `dev` and `tmux-dash` use when started outside tmux. The test harness points it at its private socket. |
+| `AGENT_BOARD_TMUX_SOCKET` | `agent-board` | `bin/_tc_bins.zsh` | Name of agent-board's own tmux server (`tmux -L <name>`), the one `dev` and `tmux-dash` use. An unmigrated install (agent-board hook lines still in `~/.tmux.conf`, no such server running) keeps using the user's own server until `install.sh --migrate`. The test harness points it at its private socket. |
 | `TC_STATE` | `${TMPDIR:-/tmp}/tmux-ctl-$UID` | `tmux-ctl`, hooks, board, `relay.py`, `tmux-session-closed` | Runtime state directory. Must be the same for every process of one tmux server; set it in your shell profile if you change it. |
 | `TC_SESSION` | caller's session | `tmux-ctl` | Target a different session (the board sets it for actions). |
 | `TC_LAYOUT` | `~/.local/bin/tmux-dev-layout` | `dev` | Replace the layout step with your own script (called as `<script> <session> <root>`). |

@@ -14,14 +14,26 @@
 #                         talk to their own server, whichever it is (skipped by `dedicated`)
 #   agent-board's server  -L ${AGENT_BOARD_TMUX_SOCKET:-agent-board}, with <repo>/config/tmux.conf: a server
 #                         started this way loads that file instead of ~/.tmux.conf
+# Except on an unmigrated install (tc_tmux_legacy): there `dedicated` means the user's own server, as before.
 # board/paneclass.py asks this file for the same answer (tmux_cmd()), so Python and zsh never disagree.
 TC_REPO="${${(%):-%x}:A:h:h}"
+# An install from before the dedicated server still has agent-board's hook lines in ~/.tmux.conf (install.sh --migrate
+# removes them) and no agent-board server running: its projects live on the user's server, so dev and tmux-dash stay
+# there until the owner migrates. Reads ~/.tmux.conf only.
+tc_tmux_legacy() {
+  emulate -L zsh
+  grep -qE 'tmux-(teammate-window|session-closed)' "$HOME/.tmux.conf" 2>/dev/null || return 1
+  ! "${TC_TMUX:-$HOME/.local/bin/tmux}" -L "${AGENT_BOARD_TMUX_SOCKET:-agent-board}" list-sessions >/dev/null 2>&1
+}
 tc_tmux_resolve() {
   emulate -L zsh
   if [[ -n "$TMUX_DASH_TMUX_ARGS" ]]; then
     TC_TMUX_SRV=("${(Q@)${(z)TMUX_DASH_TMUX_ARGS}}"); TC_TMUX_ARGS=("${TC_TMUX_SRV[@]}")
   elif [[ "$1" != dedicated && -n "$TMUX" ]]; then
     TC_TMUX_SRV=(-S "${TMUX%%,*}"); TC_TMUX_ARGS=("${TC_TMUX_SRV[@]}")
+  elif [[ "$1" == dedicated ]] && tc_tmux_legacy; then
+    if [[ -n "$TMUX" ]]; then TC_TMUX_SRV=(-S "${TMUX%%,*}"); else TC_TMUX_SRV=(-L default); fi
+    TC_TMUX_ARGS=("${TC_TMUX_SRV[@]}")     # -L default names tmux's own default socket, so children see a non-empty override
   else
     TC_TMUX_SRV=(-L "${AGENT_BOARD_TMUX_SOCKET:-agent-board}")
     TC_TMUX_ARGS=("${TC_TMUX_SRV[@]}" -f "$TC_REPO/config/tmux.conf")
