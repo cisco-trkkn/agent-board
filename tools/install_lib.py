@@ -26,6 +26,24 @@ TMUX_PATTERNS = [
 ]
 
 
+class NotCanonical(ValueError):
+    """The file parses but would not survive a rewrite byte for byte; `entries` are what to remove by hand."""
+    def __init__(self, message, entries):
+        super().__init__(message)
+        self.entries = entries
+
+
+def _pairs(pairs):
+    keys = [k for k, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise _Dup()
+    return dict(pairs)
+
+
+class _Dup(Exception):
+    pass
+
+
 def _write(path, text):
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
@@ -91,8 +109,18 @@ def strip_settings(path, commands, team=False, dry=False):
         if "teammateMode" in data:
             del data["teammateMode"]
             removed.append("teammateMode")
-    if removed and not dry:
-        _write(path, json.dumps(data, indent=_indent(text), ensure_ascii=False) + ("\n" if text.endswith("\n") else ""))
+    if removed:
+        nl = "\n" if text.endswith("\n") else ""
+        indent = _indent(text)
+        try:
+            canonical = json.dumps(json.loads(text, object_pairs_hook=_pairs), indent=indent, ensure_ascii=False) + nl == text
+        except _Dup:
+            canonical = False
+        if not canonical:
+            raise NotCanonical(f"{path.name} is not laid out the way json.dumps writes it (or has duplicate keys), "
+                               "so it is left untouched", removed)
+        if not dry:
+            _write(path, json.dumps(data, indent=indent, ensure_ascii=False) + nl)
     return removed
 
 
@@ -126,6 +154,11 @@ def main(argv):
         else:
             print(__doc__, file=sys.stderr)
             return 2
+    except NotCanonical as e:
+        print(f"install_lib: {e}", file=sys.stderr)
+        for g in e.entries:
+            print(f"MANUAL {g}")
+        return 3
     except (OSError, ValueError) as e:
         print(f"install_lib: {e}", file=sys.stderr)
         return 1

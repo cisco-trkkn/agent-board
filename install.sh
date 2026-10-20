@@ -102,28 +102,37 @@ move_aside() {   # move_aside PATH: into migrated-YYYYMMDD, never deleting
   run_or_print mkdir -p "$dest"; run_or_print mv "$src" "$t"
 }
 do_migrate() {
-  local n f line S="$HOME/.claude/settings.json" T="$HOME/.tmux.conf" tmux_removed=0 effort=0
+  local n f line S="$HOME/.claude/settings.json" T="$HOME/.tmux.conf" tmux_removed=0 effort=0 settings_ok=1 tmux_ok=1 lrc out
   local -a cmds gone old
   do_install || rc=1
   # settings.json: the agent-board hooks
   for n in bash-mirror artifact-register kill-guard; do cmds+=("~/.claude/hooks/$n.sh" "$HOME/.claude/hooks/$n.sh"); done
   if [[ -f "$S" ]]; then
-    gone=("${(@f)$(python3 "$LIB" settings "$S" ${${(M)TEAM:#1}:+--team} --dry-run "${cmds[@]}" 2>&1)}")
-    if [[ "${gone[1]}" == install_lib:* ]]; then print -u2 "settings.json left as is: ${gone[1]}"; rc=1
+    out="$(python3 "$LIB" settings "$S" ${${(M)TEAM:#1}:+--team} --dry-run "${cmds[@]}" 2>&1)"; lrc=$?
+    gone=("${(@f)out}")
+    if (( lrc == 3 )); then
+      settings_ok=0; rc=1
+      print -u2 "settings.json left as is: ${${(M)gone:#install_lib:*}[1]#install_lib: }"
+      print -u2 "remove these hook entries from settings.json by hand:"
+      for line in "${(@M)gone:#MANUAL *}"; do print -u2 "  ${line#MANUAL }"; done
+    elif (( lrc != 0 )); then settings_ok=0; rc=1; print -u2 "settings.json left as is: ${gone[1]}"
     elif [[ -n "${gone[1]}" ]]; then
       backup "$S"
       for line in "${gone[@]}"; do say "remove from settings.json: $line" "removed from settings.json: $line"; done
-      (( DRY )) || python3 "$LIB" settings "$S" ${${(M)TEAM:#1}:+--team} "${cmds[@]}" >/dev/null || rc=1
+      (( DRY )) || python3 "$LIB" settings "$S" ${${(M)TEAM:#1}:+--team} "${cmds[@]}" >/dev/null || { settings_ok=0; rc=1 }
     fi
   fi
   # ~/.tmux.conf: the hooks and bindings (config/tmux.conf has them for the dedicated server)
   if [[ -f "$T" ]]; then
-    gone=("${(@f)$(python3 "$LIB" tmux "$T" --dry-run 2>&1)}")
-    if [[ "${gone[1]}" == install_lib:* ]]; then print -u2 ".tmux.conf left as is: ${gone[1]}"; rc=1
+    out="$(python3 "$LIB" tmux "$T" --dry-run 2>&1)"; lrc=$?
+    gone=("${(@f)out}")
+    if (( lrc != 0 )); then tmux_ok=0; rc=1; print -u2 ".tmux.conf left as is: ${gone[1]}"
     elif [[ -n "${gone[1]}" ]]; then
-      backup "$T"; tmux_removed=1
+      backup "$T"
       for line in "${gone[@]}"; do say "remove from .tmux.conf: $line" "removed from .tmux.conf: $line"; done
-      (( DRY )) || python3 "$LIB" tmux "$T" >/dev/null || rc=1
+      if (( DRY )); then tmux_removed=1
+      elif python3 "$LIB" tmux "$T" >/dev/null; then tmux_removed=1
+      else tmux_ok=0; rc=1; fi
     fi
   fi
   # links into this checkout
@@ -132,12 +141,18 @@ do_migrate() {
   for n in bash-mirror artifact-register kill-guard; do old+=("$HOME/.claude/hooks/$n.sh"); done
   old+=("$HOME/.claude/orchestrator.md" "$HOME/.claude/worker.md")
   for f in "${old[@]}"; do
-    if points_into_repo "$f"; then say "remove link $f" "removed link $f"; run_or_print rm "$f"
+    if [[ "$f" == "$HOME"/.claude/hooks/* ]] && (( ! settings_ok )) && points_into_repo "$f"; then
+      print "kept $f: settings.json still names it and could not be updated"
+    elif [[ "$f" == "$HOME"/.local/bin/* ]] && (( ! tmux_ok )) && points_into_repo "$f"; then
+      print "kept $f: .tmux.conf still calls it and could not be updated"
+    elif points_into_repo "$f"; then say "remove link $f" "removed link $f"; run_or_print rm "$f"
     elif [[ -L "$f" ]]; then print "kept $f: it links outside $REPO"; fi
   done
   # what the plugin ships now
   for f in "$HOME/.claude/skills/tmux-orchestrator" "$HOME/.claude/skills/handoff"; do
-    [[ -e "$f" || -L "$f" ]] && move_aside "$f"
+    [[ -e "$f" || -L "$f" ]] || continue
+    if [[ "$f" == */skills/handoff && ! -L "$f" ]]; then print "kept $f: not a link (a real directory of yours); remove it yourself if the plugin's handoff skill replaces it"
+    else move_aside "$f"; fi
   done
   for f in "$HOME"/.claude/agents/effort-{low,medium,high}.md; do
     [[ -e "$f" || -L "$f" ]] || continue

@@ -18,6 +18,7 @@ exit 0' > "$STUB/claude"
 chmod +x "$STUB"/*
 BASEPATH="${commands[python3]:h}:/usr/bin:/bin"
 
+rc1_same() { [[ "$1" -eq 1 ]] && cmp -s "$2" "$3" }
 newhome() { H="$SCR/h$RANDOM"; mkdir -p "$H"; }
 inst() {   # inst args… : install.sh from this checkout with the scratch HOME
   [[ "$H" == "$SCR"/* ]] || { print -u2 "inst: HOME outside scratch"; return 99 }
@@ -149,6 +150,45 @@ newhome; seed_global "$FAKE"
 out="$(inst --repo "$FAKE" --migrate --keep-agents 2>&1)"
 check "migrate --keep-agents: effort-* stay" test -f "$H/.claude/agents/effort-low.md" -a -f "$H/.claude/agents/effort-high.md" -a ! -e "$H/.local/state/agent-board/migrated-$STAMP/effort-low.md"
 check "migrate --keep-agents: skills still moved" test -d "$H/.local/state/agent-board/migrated-$STAMP/tmux-orchestrator"
+
+# a settings.json that cannot be rewritten: its hook links stay, the tmux part still goes ahead
+newhome; seed_global "$FAKE"
+{ print '// my notes'; cat "$FIX/settings.seed.json" } > "$H/.claude/settings.json"; cp "$H/.claude/settings.json" "$SCR/bad-settings"
+out="$(inst --repo "$FAKE" --migrate 2>&1)"; rc=$?
+check "bad settings: exit 1, file untouched" rc1_same $rc "$H/.claude/settings.json" "$SCR/bad-settings"
+check "bad settings: hook links kept (settings still names them)" test -L "$H/.claude/hooks/kill-guard.sh" -a -L "$H/.claude/hooks/bash-mirror.sh" -a -L "$H/.claude/hooks/artifact-register.sh"
+check "bad settings: says what was kept and why" test -n "$(print -r -- "$out" | grep -F 'kept' | grep -F 'kill-guard.sh')"
+check "bad settings: tmux lines still migrated" cmp -s "$H/.tmux.conf" "$FIX/tmux.expected.conf"
+check "bad settings: ~/.local/bin links still migrated" test ! -L "$H/.local/bin/dev"
+# valid JSON, not in json.dumps layout (inline array): left byte-identical, entries printed for hand removal
+newhome; seed_global "$FAKE"
+python3 - "$FIX/settings.seed.json" "$H/.claude/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["permissions"]["allow"] = ["Bash(ls:*)"]
+t = json.dumps(d, indent=2, ensure_ascii=False).replace('"allow": [\n      "Bash(ls:*)"\n    ]', '"allow": ["Bash(ls:*)"]')
+assert '"allow": ["Bash' in t
+open(sys.argv[2], "w").write(t + "\n")
+PY
+cp "$H/.claude/settings.json" "$SCR/noncanon"
+out="$(inst --repo "$FAKE" --migrate 2>&1)"; rc=$?
+check "non-canonical settings: exit 1, file byte-identical" rc1_same $rc "$H/.claude/settings.json" "$SCR/noncanon"
+check "non-canonical settings: no backup written" test ! -e "$H/.claude/settings.json.bak-$STAMP"
+check "non-canonical settings: prints the entries to remove by hand" test -n "$(print -r -- "$out" | grep -F 'by hand' )" -a -n "$(print -r -- "$out" | grep -F 'hooks/kill-guard.sh')"
+check "non-canonical settings: hook links kept" test -L "$H/.claude/hooks/kill-guard.sh" -a -L "$H/.claude/hooks/bash-mirror.sh"
+# a .tmux.conf that cannot be read: the ~/.local/bin links stay, settings still migrated
+newhome; seed_global "$FAKE"
+printf '\377\376 bind D run-shell "~/.local/bin/dev"\n' > "$H/.tmux.conf"; cp "$H/.tmux.conf" "$SCR/badtmux"
+out="$(inst --repo "$FAKE" --migrate 2>&1)"; rc=$?
+check "bad tmux.conf: exit 1, file untouched" rc1_same $rc "$H/.tmux.conf" "$SCR/badtmux"
+check "bad tmux.conf: ~/.local/bin links kept" test -L "$H/.local/bin/dev" -a -L "$H/.local/bin/tmux-teammate-window" -a -L "$H/.local/bin/tmux-jump"
+check "bad tmux.conf: says what was kept and why" test -n "$(print -r -- "$out" | grep -F 'kept' | grep -F '.local/bin/dev')"
+check "bad tmux.conf: settings still migrated" cmp -s "$H/.claude/settings.json" "$FIX/settings.expected.json"
+check "bad tmux.conf: hook links still migrated" test ! -L "$H/.claude/hooks/kill-guard.sh"
+# a real directory at skills/handoff is not ours to move
+newhome; seed_global "$FAKE"
+rm "$H/.claude/skills/handoff"; mkdir "$H/.claude/skills/handoff"; print mine > "$H/.claude/skills/handoff/SKILL.md"
+out="$(inst --repo "$FAKE" --migrate 2>&1)"
+check "migrate: a real skills/handoff directory is left alone and reported" test -f "$H/.claude/skills/handoff/SKILL.md" -a -n "$(print -r -- "$out" | grep -F 'skills/handoff' | grep -i 'not a link')"
 
 # links into some other repo are not ours
 newhome; seed_global "$SCR/not-this-repo"

@@ -76,6 +76,30 @@ class StripSettingsTest(unittest.TestCase):
         self.assertEqual(len(install_lib.strip_settings(self.p, CMDS, dry=True)), 4)
         self.assertEqual(self.p.read_text(), dump(SETTINGS))
 
+    def test_non_canonical_formatting_is_left_alone(self):
+        for text in ('{\n  "a": [1, 2],\n  "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "~/.claude/hooks/kill-guard.sh"}]}]}\n}\n',
+                     '{\n\t"hooks": {"PreToolUse": [{"hooks": [{"command": "~/.claude/hooks/kill-guard.sh"}]}]}\n}\n',
+                     '{"hooks": {"Stop": [{"hooks": [{"command": "~/.claude/hooks/kill-guard.sh"}]}]}, "a": "x\\/y"}',
+                     '{\n  "a": 1,\n  "a": 2,\n  "hooks": {"Stop": [{"hooks": [{"command": "~/.claude/hooks/kill-guard.sh"}]}]}\n}\n'):
+            self.p.write_text(text)
+            for dry in (False, True):
+                with self.assertRaises(install_lib.NotCanonical) as cm:
+                    install_lib.strip_settings(self.p, CMDS, dry=dry)
+                self.assertEqual(cm.exception.entries, ["~/.claude/hooks/kill-guard.sh"])
+                self.assertEqual(self.p.read_text(), text)
+
+    def test_non_canonical_without_our_entries_is_fine(self):
+        text = '{"a": [1, 2]}'
+        self.p.write_text(text)
+        self.assertEqual(install_lib.strip_settings(self.p, CMDS), [])
+
+    def test_canonical_without_trailing_newline_is_rewritten(self):
+        d = {"a": 1, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": CMDS[2]}, {"type": "command", "command": "k"}]}]}}
+        self.p.write_text(dump(d).rstrip("\n"))
+        install_lib.strip_settings(self.p, CMDS)
+        d["hooks"]["Stop"][0]["hooks"].pop(0)
+        self.assertEqual(self.p.read_text(), dump(d).rstrip("\n"))
+
     def test_missing_file_is_a_noop(self):
         self.assertEqual(install_lib.strip_settings(self.p, CMDS), [])
         self.assertFalse(self.p.exists())
