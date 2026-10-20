@@ -43,10 +43,6 @@ jobs:
       - name: install_lib tests
         if: ${{ !cancelled() }}
         run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
-      - name: Diagnostics (temporary)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        run: zsh tools/tests/ci-debug.zsh
       - name: tmux / hook tests
         if: ${{ !cancelled() }}
         run: zsh tools/tests/run-all.zsh
