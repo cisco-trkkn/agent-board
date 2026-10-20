@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""ideas: the per-project ideas inbox, ${TC_IDEAS_DIR:-~/.claude/ideas}/<project>.md.
+"""ideas: the per-project ideas inbox, ${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}/<project>.md
+(reads the old ~/.claude/ideas/<project>.md until the first write copies it across).
 
 Each idea is "- [ ] YYYY-MM-DD HH:MM · text" with detail as indented lines; [x] = taken up
 (followed by "→ <spec>"), [-] = dropped. Ideas are never deleted. Every writer appends under an
@@ -14,6 +15,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -28,7 +30,23 @@ class Stale(ValueError):
 
 
 def ideas_dir():
-    return Path(os.environ.get("TC_IDEAS_DIR") or Path.home() / ".claude" / "ideas")
+    return Path(os.environ.get("TC_IDEAS_DIR") or Path.home() / ".local" / "state" / "agent-board" / "ideas")
+
+
+def _legacy_path(project):
+    """The pre-install-refactor file; only consulted when TC_IDEAS_DIR is not set."""
+    if os.environ.get("TC_IDEAS_DIR"):
+        return None
+    return Path.home() / ".claude" / "ideas" / f"{project}.md"
+
+
+def _seed(p, project):
+    """Under the lock: if the new file does not exist yet, copy the legacy one across (the original stays)."""
+    old = _legacy_path(project)
+    if old is not None and old.is_file() and not p.exists():
+        tmp = p.with_name(f".{p.name}.seed")
+        shutil.copyfile(old, tmp)
+        os.replace(tmp, p)
 
 
 def ideas_path(project):
@@ -43,6 +61,7 @@ def _append(project, first, detail_lines):
     entry = first + "\n" + "".join(f"  {l}\n" for l in detail_lines)
     with open(f"{p}.lock", "w") as lk:
         fcntl.lockf(lk, fcntl.LOCK_EX)
+        _seed(p, project)
         new = not p.exists() or p.stat().st_size == 0
         with open(p, "a") as f:
             if new:
@@ -68,8 +87,10 @@ def _rewrite(project, key, change):
     """Under the lock, find the one idea whose key matches and replace it (first line + detail)
     with change(box, ts, raw_text, detail_lines) -> (first_line, detail_lines)."""
     p = ideas_path(project)
+    p.parent.mkdir(parents=True, exist_ok=True)
     with open(f"{p}.lock", "w") as lk:
         fcntl.lockf(lk, fcntl.LOCK_EX)
+        _seed(p, project)
         lines = p.read_text().splitlines(keepends=True) if p.exists() else []
         hits = [i for i, l in enumerate(lines)
                 if (m := LINE_RE.match(l.rstrip("\n"))) and f"{m[2]} · {m[3]}" == key]
@@ -139,7 +160,10 @@ def move(project, key, target):
 def load(project):
     p = ideas_path(project)
     if not p.exists():
-        return []
+        old = _legacy_path(project)
+        if old is None or not old.is_file():
+            return []
+        p = old
     out = []
     for line in p.read_text().splitlines():
         m = LINE_RE.match(line)

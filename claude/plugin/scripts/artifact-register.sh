@@ -72,7 +72,8 @@ def kind_of(p):
     h, t, base = os.path.realpath(home), os.path.realpath(tmp), os.path.basename(p)
     if "/docs/superpowers/plans/" in p: return "plan"
     if "/docs/superpowers/specs/" in p: return "spec"
-    if p.startswith(os.path.join(h, ".claude", "handoffs") + os.sep): return "handoff"
+    for hd in ((".local", "state", "agent-board", "handoffs"), (".claude", "handoffs")):
+        if p.startswith(os.path.join(h, *hd) + os.sep): return "handoff"
     if p.startswith(t + os.sep) and "handoff" in base: return "handoff"
     if "/scratchpad/" in p and "report" in base: return "report"
     return ""

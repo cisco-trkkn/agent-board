@@ -258,6 +258,19 @@ class ThresholdsTest(unittest.TestCase):
             th, warn = usage.thresholds()
         self.assertTrue(warn)
 
+    def test_default_alerts_path_prefers_config_dir_then_legacy(self):
+        home = self.tmp / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".config" / "agent-board").mkdir(parents=True)
+        legacy = home / ".claude" / "usage-alerts.json"
+        new = home / ".config" / "agent-board" / "usage-alerts.json"
+        with mock.patch.dict(os.environ, {"HOME": str(home)}), mock.patch.object(usage, "ALERTS_PATH", None):
+            self.assertEqual(usage.thresholds()[0], usage.DEFAULT_ALERTS)
+            legacy.write_text('{"context_pct": 11}')
+            self.assertEqual(usage.thresholds()[0]["context_pct"], 11)
+            new.write_text('{"context_pct": 22}')
+            self.assertEqual(usage.thresholds()[0]["context_pct"], 22)
+
     def test_thresholds_partial_override(self):
         self.p.write_text('{"burn_per_hour": 2}')
         th, warn = usage.thresholds(self.p)
