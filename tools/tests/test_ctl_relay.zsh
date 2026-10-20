@@ -1,15 +1,17 @@
 source "${0:A:h}/lib.zsh"
 C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 STUB="$(mktemp -d "${TMPDIR:-/tmp}/ttstub.XXXXXX")"
-cat > "$STUB/claude-orchestrator" <<'EOF'
+mkdir -p "$STUB/repo/bin"
+cat > "$STUB/repo/bin/claude-orchestrator" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$@" > "$RELAY_OUT"
 exec sleep 600
 EOF
-chmod +x "$STUB/claude-orchestrator"
+chmod +x "$STUB/repo/bin/claude-orchestrator"
 export PATH="$STUB:$PATH" RELAY_OUT="$STUB/args" TC_IDEAS_DIR="$STUB/ideas"
 mkdir -p "$STUB/zdot"; export ZDOTDIR="$STUB/zdot"   # panes read no user rc, so the stub stays first on PATH (never start a real claude)
 tt_setup claude
+export AGENT_BOARD_REPO="$STUB/repo"; tt set-environment -g AGENT_BOARD_REPO "$STUB/repo"     # run-shell jobs get the server's env; the relay types <repo>/bin/claude-orchestrator by absolute path (bin/ is not on PATH on a fresh install)
 doc="$TT_DIR/h.md"; print "# handoff" > "$doc"
 $C artifact "$doc" --kind handoff >/dev/null
 check "artifact registered" test "$(jq -r .kind "$TC_STATE/artifacts-tt.jsonl" | tail -1)" = handoff
@@ -24,8 +26,6 @@ tt_wait 10 test -n "$(tt list-panes -t '=tt:claude' -F '#{pane_current_command}'
 tt send-keys -t '=tt:claude' C-c 2>/dev/null
 tt respawn-pane -k -t '=tt:claude'       # no command: a fresh interactive shell, as relay.respawn does
 tt_wait 5 tt_all_idle
-tt send-keys -t '=tt:claude' 'command -v claude-orchestrator' Enter
-check "stub is what resolves" tt_wait 5 sh -c "$TT_BIN capture-pane -p -t '=tt:claude' | grep -qxF '$STUB/claude-orchestrator'"
 # failing relay (no claude window): the failure is surfaced, not silent
 tt new-session -d -s nc -n other -c "$TT_DIR"
 TC_SESSION=nc $C relay "$doc" >/dev/null

@@ -269,7 +269,7 @@ case "$cmd" in
 
   _relay_failed)   # detached relay failed: tell the user, keep the doc
     first="$(grep -m1 . "$1" 2>/dev/null)"; first="${first#relay failed: }"
-    msg="relay failed: ${first:-no output} — doc kept at $2; manual: claude-orchestrator 'Read $2 and continue from where the previous session left off.' (log: $1)"
+    msg="relay failed: ${first:-no output} — doc kept at $2; manual: ${(q)TC_REPO}/bin/claude-orchestrator 'Read $2 and continue from where the previous session left off.' (log: $1)"
     print -r -- "$msg" > "$STATE/relay-failed-${3:-$FEEDKEY}.txt"
     for c in ${(f)"$(t list-clients -F '#{client_name}' 2>/dev/null)"}; do t display-message -c "$c" -d 0 -- "${${msg//\#/##}//\%/%%}"; done ;;
 

@@ -1,4 +1,5 @@
 import io
+import shlex
 import json
 import sys
 import tempfile
@@ -64,11 +65,11 @@ class RelayTest(unittest.TestCase):
         sk = [c for c in fake.calls if c[0] == "send-keys"]
         self.assertEqual(rp[0], ("respawn-pane", "-k", "-t", "%5", "-c", "/not/a/repo"))
         self.assertEqual(sk[0], ("send-keys", "-t", "%5", "-l", "--",
-                                 "claude-orchestrator 'Read /d.md and continue from where the previous session left off.'"))
+                                 shlex.quote(relay.orchestrator()) + " 'Read /d.md and continue from where the previous session left off.'"))
         self.assertEqual(sk[1], ("send-keys", "-t", "%5", "Enter"))
         # the session flags come from claude-orchestrator itself, never from the typed text
         self.assertNotIn("--settings", sk[0][-1])
-        self.assertTrue(sk[0][-1].startswith("claude-orchestrator "))
+        self.assertTrue(sk[0][-1].startswith(shlex.quote(relay.orchestrator()) + " "))
         self.assertLess(fake.names().index("respawn-pane"), fake.names().index("send-keys"))
 
     def test_busy_leaves_pane_alone(self):
@@ -85,7 +86,7 @@ class RelayTest(unittest.TestCase):
         with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), redirect_stderr(err):
             rc = relay.main(["--session", "proj", "--doc", "/d.md", "--state", "/tmp"])
         self.assertEqual(rc, 1)
-        self.assertIn("claude-orchestrator 'Read /d.md", err.getvalue())
+        self.assertIn(shlex.quote(relay.orchestrator()) + " 'Read /d.md", err.getvalue())
 
 
 if __name__ == "__main__":
