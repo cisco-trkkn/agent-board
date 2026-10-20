@@ -7,6 +7,7 @@ The tmux `dev` toolkit (`bin/`), the Agent Board (`board/`), its tests (`tools/t
     python3 -m unittest discover -s board/tests     # board (server, artifacts, ideas, relay…)
     python3 -m unittest discover -s tools/tests -p 'test_*.py'   # install_lib (the install.sh --migrate helpers)
     zsh tools/tests/run-all.zsh                     # tmux-ctl, dev layout, hooks (scratch tmux server)
+    python3 -m unittest discover -s claude/skills/docs-architecture/tests   # docs-architecture inventory
 
 ## Rules
 
