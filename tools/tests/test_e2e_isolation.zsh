@@ -43,7 +43,7 @@ export STUB_MARK="$TT_DIR/stub.mark"
 
 # --- aged state: yesterday's run and a feed log of two agents spanning midnight, already in TC_STATE
 zmodload zsh/datetime
-mid="$(date -j -f '%Y-%m-%d %H:%M:%S' "$(date +%Y-%m-%d) 00:00:00" +%s)"
+mid="$(python3 -c 'import time; t=time.localtime(); print(int(time.mktime((t.tm_year,t.tm_mon,t.tm_mday,0,0,0,0,0,-1))))')"   # local midnight (BSD date -j is not on Linux)
 e1=$(( mid - 600 )); e2=$(( mid - 60 )); e3=$(( mid + 60 ))
 mkdir -p "$TC_STATE/logs/proj"; print 'old output' > "$TC_STATE/logs/proj/old.log"
 print -r -- "{\"id\":\"old-1\",\"ts\":$e1,\"agent\":\"agent-a\",\"win\":\"tests\",\"session\":\"proj\",\"cmd\":\"pytest yesterday\",\"cwd\":\"$PROJ\",\"exit\":0,\"duration\":3,\"log\":\"$TC_STATE/logs/proj/old.log\",\"summary\":\"4 passed\"}" > "$TC_STATE/runs-proj.jsonl"
