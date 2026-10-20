@@ -6,29 +6,29 @@ Page background the colours were checked against: light `#FCFCFB`, dark `#151515
 
 ## Colour
 
-Colour means product category, nothing else. A node's icon hexagon and its border take the category colour; the box fill stays `none`. The page's `--cds-chart-categorical-*` tokens are not used for categories: four of the eight sit under 3:1 on the light page.
+Colour means product category, nothing else. A node's icon hexagon and its border take the category colour; the box fill stays `none`. Colours are page tokens only (`var(--cds-…)`: the Docs widget accepts no hex), so light and dark both render; the token per category is in the table below and in the `svg-modules.md` prelude.
 
-| category | covers | light | dark | contrast light / dark |
+| category | covers | token | in-frame light / dark | hex measured first (light / dark, contrast) |
 |---|---|---|---|---|
-| compute | Cloud Run, Cloud Functions | `#1C5CAB` | `#3987E5` | 6.46 / 5.02 |
-| data/analytics | BigQuery, Cloud Storage, Cloud SQL, Firestore, Pub/Sub | `#A67000` | `#EDA100` | 4.14 / 8.43 |
-| networking | VPC, subnet, Cloud Load Balancing | `#7A3EE0` | `#AB9CF2` | 5.69 / 7.63 |
-| security/identity | IAM, service account, Workload Identity Federation, Secret Manager | `#008300` | `#1FA81F` | 4.82 / 5.81 |
-| operations | Cloud Build, Artifact Registry, Cloud Scheduler, Logging, Monitoring, CI jobs | `#1A8A8A` | `#2FB8CC` | 4.05 / 7.69 |
-| neutral (no category) | people, external systems | `#52514E` | `#C3C2B7` | 7.73 / 10.19 |
-| trust-crossing marker | the badge on an edge that crosses a trust boundary | `#C62828` | `#E66767` | 5.48 / 5.65 |
+| compute | Cloud Run, Cloud Functions | `--cds-chart-categorical-1` | #2A78D6 / #3987E5 | `#1C5CAB` / `#3987E5`, 6.46 / 5.02 |
+| data/analytics | BigQuery, Cloud Storage, Cloud SQL, Firestore, Pub/Sub | `--cds-chart-categorical-2` | #EB6834 / #D95926 | `#A67000` / `#EDA100`, 4.14 / 8.43 |
+| networking | VPC, subnet, Cloud Load Balancing | `--cds-chart-categorical-7` | #4A3AA7 / #9085E9 | `#7A3EE0` / `#AB9CF2`, 5.69 / 7.63 |
+| security/identity | IAM, service account, Workload Identity Federation, Secret Manager | `--cds-chart-categorical-6` | #008300 / #028301 | `#008300` / `#1FA81F`, 4.82 / 5.81 |
+| operations | Cloud Build, Artifact Registry, Cloud Scheduler, Logging, Monitoring, CI jobs | `--cds-chart-categorical-3` | #1BAF7A / #189E70 | `#1A8A8A` / `#2FB8CC`, 4.05 / 7.69 |
+| neutral (no category) | people, external systems | `--cds-text-secondary` | #52514E / #C3C2B7 | `#52514E` / `#C3C2B7`, 7.73 / 10.19 |
+| trust-crossing marker | the badge on an edge that crosses a trust boundary | `--cds-chart-status-critical` | #D03B3B both | `#C62828` / `#E66767`, 5.48 / 5.65 |
 
-The marker is one red: the spec's "red-amber" is read as the hue family, amber being taken by data/analytics.
+The marker is one red: the spec's "red-amber" is read as the hue family, amber being taken by data/analytics. The token mapping is the rule; the last column keeps the hex pairs measured first, for reference only.
 
-Contrast is the WCAG 2 relative-luminance ratio against the page background; the weakest value is 4.05, above the 3:1 non-text minimum. The smallest OKLab distance between any two rows is 15.1 (light) and 15.0 (dark), so no two categories read alike. Neutral equals `var(--cds-text-secondary)` in both themes.
+Contrast is best-effort with tokens: the in-frame values are what renders (measured on a token sheet, Task 7); `-2` is about 3:1 on the light page, the rest higher. `categorical-4` (blue) and `-8` (coral) are left out as they sit next to compute and the marker. Neutral and edges are `var(--cds-text-secondary)`.
 
-A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Should the Docs widget refuse a literal hex or `light-dark()`, fall back per category to the page tokens as they render inside the widget frame (measured on a token sheet, Task 7: light / dark): compute `--cds-chart-categorical-1` (#2A78D6 / #3987E5), data/analytics `-2` (#EB6834 / #D95926), networking `-7` (#4A3AA7 / #9085E9), security/identity `-6` (#008300 / #028301), operations `-3` (#1BAF7A / #189E70), neutral `--cds-text-secondary` (#52514E / #C3C2B7), marker `--cds-chart-status-critical` (#D03B3B), edges `--cds-text-secondary`. No two collide; `-4` (#0D366B / #9EC5F4, blue) and `-8` (#E66767, coral) are left out as they sit next to compute and the marker. Contrast is then best-effort: `-2` is 3.12:1 on the light page. Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, project fill `var(--cds-chart-reference-tint)`. Edges, arrowheads and the org and VPC outlines take their own pair (Edges): the page's axis token is 1.75:1 on the light page.
+Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, project fill `var(--cds-chart-reference-tint)`. Edges, arrowheads and the org and VPC outlines use `var(--cds-text-secondary)`, never the page's axis token (1.75:1 on the light page).
 
 Environment bands (see Boundaries) use one page token no category uses, `var(--cds-chart-categorical-5)` (magenta, `#d55181` in both themes inside the widget frame, measured in Task 7), at three strengths: dev fill 0.1 / stroke 0.45, stage 0.2 / 0.7, prod 0.32 / 1. The word carries the meaning, the strength orders it. (The frame's `categorical-4` renders blue, next to compute, so it is not used.)
 
 ## Icons
 
-Drawn glyphs in `assets/gcp-icons/` (24×24: a hexagon in the category colour, the symbol in the page colour; not Google's files, see `SOURCE.md` there). Inline the file's SVG in the module; nothing is fetched at render time. The file carries the light values with a `#fff` symbol. For the dark theme the drawing module (`svg-modules.md`, render-checked there) swaps the hexagon fill to the dark token and every `#fff` (the symbol's `fill` and `stroke`) to `#151515`. Symbol-on-hexagon contrast then equals the hexagon-on-page contrast in the table above in dark (same colour), and sits within 0.2 of it in light (`#FFF` symbol, `#FCFCFB` page).
+Drawn glyphs in `assets/gcp-icons/` (24×24: a hexagon in the category colour, the symbol in the page colour; not Google's files, see `SOURCE.md` there). Inline the file's SVG in the module; nothing is fetched at render time. The file carries fixed light values with a `#fff` symbol. In the drawing module (`svg-modules.md`, render-checked there) the hexagon fill is the category token and every `#fff` (the symbol's `fill` and `stroke`) becomes `var(--cds-page-bg)`, so the symbol follows the theme.
 
 One icon per node, 24 px at the node's left, the name to its right. A product with no glyph takes `external-system.svg` and is named in the brief as a gap.
 
@@ -70,7 +70,7 @@ One icon per node, 24 px at the node's left, the name to its right. A product wi
 
 Boundaries nest in that order: org/folder around projects, VPC inside a project. Children sit 16 in from the box sides and 16 above its foot; the name line takes 32. A boundary with one child is still drawn when a trust or project edge crosses it, and dropped otherwise.
 
-A **trust boundary** is any project outline, any org/folder outline, and the line between GCP and the outside (actors, external systems, the CI system). An edge that crosses one carries the marker (Edges).
+A **trust boundary** is any project outline, any org/folder outline, and the line between GCP and the outside (actors, external systems, the CI system). An edge that crosses one carries the marker (Edges), except in the deploy topology, where only the deploy identity's `trust` edge carries it, once (`diagram-set.md`).
 
 ## Edges
 
@@ -83,12 +83,7 @@ A **trust boundary** is any project outline, any org/folder outline, and the lin
 
 Every edge ends in an arrowhead in the direction the data moves (one `<marker>` per diagram) and carries a label of at most three words beside the line, never on it.
 
-Edge, arrowhead and org/VPC outline colour is `light-dark(#75736E, #97958D)`, chosen so a line reads on the page and on the project tint it usually crosses (the page's `--cds-chart-axis` is 1.75:1 on the light page, 1.55:1 on the dark one):
-
-| surface | light hex | contrast | dark hex | contrast |
-|---|---|---|---|---|
-| page (`#FCFCFB` / `#151515`) | `#75736E` | 4.61 | `#97958D` | 6.09 |
-| project tint (`#EBEAE9` / `#262625`, the reference tint at 15% over the page) | `#75736E` | 3.94 | `#97958D` | 5.05 |
+Edge, arrowhead and org/VPC outline colour is `var(--cds-text-secondary)`: 7.73:1 light / 10.19:1 dark on the page, so a line reads on the page and on the project tint it usually crosses. The page's `--cds-chart-axis` is too faint (1.75:1 light, 1.55:1 dark).
 
 A pair of nodes with several edges of one kind gets one edge labelled with the count (`3 topics`); edges of different kinds stay separate.
 
@@ -97,7 +92,7 @@ A pair of nodes with several edges of one kind gets one edge labelled with the c
 ## Layout
 
 - Flow runs left → right: actors and ingress on the left, compute in the middle, data on the right; operations and identity below the row they serve.
-- At most 12 nodes per diagram. Over 12, split as `diagram-set.md` says for that diagram, and link the zoom from the parent node's label (`Billing → §Billing`).
+- At most 12 nodes per diagram; a node is a drawn product, actor or subsystem box (project, org and VPC outlines and env bands do not count). Over 12, split as `diagram-set.md` says for that diagram, and name the zoom in the parent node's label (`Billing → §Billing`; widget text holds no link, the key explains `§`).
 - Page norms apply: `viewBox 0 0 760 H`, height grows, width does not; positions on a grid of 8 with at least 16 between boxes; node box 184 wide, 56 tall (icon 24 at the left, a 13/600 name and an 11.5 body line: 184 holds the longest product name, Artifact Registry, unabbreviated; three nodes and two gaps fit a 712-wide project box); text 15 / 13 / 11.5, names `fontWeight 600`; corners `rx 8`; strokes 1 to 1.25.
 - Connectors run in the gaps, start and end on a box edge, elbow around boxes, never over a label.
 - Colour only through the tokens in Colour, so light and dark both render; every `<text>` sets its fill.
@@ -108,9 +103,9 @@ A pair of nodes with several edges of one kind gets one edge labelled with the c
 Every doc, in this order:
 
 1. **Hero context diagram** — the system-context diagram, titled with the one-sentence finding.
-2. **Key-numbers strip** — four counts from `inventory.json`: services, projects, environments, external dependencies.
+2. **Key-numbers strip** — four counts: services, projects, environments from `inventory.json` (projects as distinct resolved ids), external dependencies from the interview or `file:` sources.
 3. **Subsystem sections** — one `##` per subsystem, each opening with its zoom diagram, then the prose that explains it.
 4. **Layer-2 diagrams** — data flow, trust boundaries, deploy topology, each in its own section.
-5. **Stamp** — `As built from <repo>@<sha>, <date>`, plus the hidden id-map block (section → inventory ids) that refresh mode reads.
+5. **Stamp** — `As built from <repo>@<sha>, <date>`, plus the `Id map` tab (SKILL.md step 5; section → inventory ids) that refresh mode reads.
 
 Each diagram: title = the finding, a caption under the embed with what the picture is of, a key when colour or the marker carries meaning, and a brief written before it is drawn (`diagram-set.md`).
