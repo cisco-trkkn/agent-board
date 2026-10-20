@@ -10,7 +10,7 @@ if [[ -n "$TMUX" ]]; then
   tc_tmux set-environment AGENT_BOARD_REPO "$AB_REPO" 2>/dev/null
   tc_tmux set-environment PATH "$PATH" 2>/dev/null
 fi
-AB_ARGS=(${(z)$(ab_claude_args)})
+AB_ARGS=("${(@Q)${(z)$(ab_claude_args)}}")
 PROMPT_FILE="$HOME/.config/agent-board/orchestrator.md"   # a user override wins over the repo's rules
 [[ -r "$PROMPT_FILE" ]] || PROMPT_FILE="$AB_REPO/claude/orchestrator.md"
 # Fixed session name, so the title stays "orchestrator" whatever the task (Claude Code otherwise

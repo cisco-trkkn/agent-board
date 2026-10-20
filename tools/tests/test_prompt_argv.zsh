@@ -22,6 +22,14 @@ check "set-environment PATH has <repo>/bin" grep -qE "^PATH=${R}/bin:" <<< "$(tt
 out2="$(TC_TMUX=/nonexistent PATH="$stub:$PATH" $R/bin/claude-orchestrator 2>&1)"
 check "failing set-environment does not stop the launch" grep -qxF -- '--settings' <<< "$out2"
 
+# a clone in a directory with a space (and a quote): each path is one argv word, no backslash left over
+sp="$(mktemp -d)/my proj's"; mkdir -p "$sp"; sp="${sp:A}"; cp -R "$R/bin" "$R/claude" "$sp/"
+out3="$(HOME="$sp" TC_TMUX=/nonexistent PATH="$stub:$PATH" "$sp/bin/claude-orchestrator" 2>&1)"
+check "spaced repo: --settings value is the plain path"   grep -qxF -- "$sp/claude/settings.json" <<< "$out3"
+check "spaced repo: --plugin-dir value is the plain path" grep -qxF -- "$sp/claude/plugin" <<< "$out3"
+check "spaced repo: no backslash in any argument"         test -z "$(grep -F -e '\' <<< "$out3")"
+rm -rf "${sp:h}"
+
 dry="$(TC_AGENT_DRYRUN=1 $R/bin/tmux-ctl agent w --force "a b" 2>&1)"
 check "agent dry run keeps DRYRUN task"     grep -qF 'DRYRUN task: a b' <<< "$dry"
 check "agent line has --settings"           grep -qF -- "--settings $R/claude/settings.json" <<< "$dry"
