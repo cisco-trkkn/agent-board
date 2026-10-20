@@ -13,18 +13,6 @@ import paneclass  # noqa: E402
 import relay  # noqa: E402
 
 SEP = paneclass.SEP
-relay.PROMPT_WAIT = 0   # the fakes draw no prompt; the real wait is tested below
-
-
-class WaitPromptTest(unittest.TestCase):
-    def test_returns_when_the_pane_shows_something(self):
-        outs = iter(["", "  \n", "host% "])
-        sleeps = []
-        self.assertTrue(relay.wait_prompt(lambda *a, **k: next(outs), "%5", cap=5, sleep=sleeps.append))
-        self.assertEqual(len(sleeps), 2)
-
-    def test_gives_up_after_the_cap(self):
-        self.assertFalse(relay.wait_prompt(lambda *a, **k: "", "%5", cap=0.3, sleep=lambda s: None))
 
 
 class FakeTmux:
