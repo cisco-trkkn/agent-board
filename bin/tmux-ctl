@@ -87,7 +87,7 @@ settle_win() {
   local n=0 hs cy
   while (( n++ < 10 )); do
     [[ -n "$2" && -f "$STATE/$2.rc" ]] && return
-    [[ "$(t display -p -t "$1" '#{pane_current_command}')" != ${~SHELLS} ]] && return
+    pane_idle "$1" || return
     hs="$(t display -p -t "$1" '#{history_size}')"; cy="$(t display -p -t "$1" '#{cursor_y}')"
     (( ${hs:-0} + ${cy:-0} > ${3:-0} )) && return
     sleep 0.1
@@ -98,12 +98,19 @@ main_pane() { t list-panes -t "=$SESSION:$1" -F '#{pane_id} #{@tc_role}' 2>/dev/
 role_pane() { t list-panes -t "=$SESSION:$1" -F '#{pane_id} #{@tc_role}' 2>/dev/null | awk -v r="$2" '$2==r{print $1; exit}' }
 target() { local p; p="$(main_pane "$1")"; print -r -- "${p:-=$SESSION:$1}" }
 SHELLS='(zsh|bash|sh|fish|-zsh|-bash)'
+# pane_idle <pane>: at a prompt — the foreground command is a shell AND that shell has no child.
+# `zsh script.zsh` shows as "zsh" in #{pane_current_command}, but it runs as a child of the pane's shell.
+pane_idle() {
+  local cmd pid
+  IFS='|' read -r cmd pid <<< "$(t display -p -t "$1" '#{pane_current_command}|#{pane_pid}')"
+  [[ "$cmd" == ${~SHELLS} ]] && ! pgrep -P "$pid" >/dev/null 2>&1
+}
 
 exists() {
   t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$1" ||
     die "no window '$1' in session '$SESSION' (try: tmux-ctl list)"
 }
-is_idle() { [[ "$(t display -p -t "$(target "$1")" '#{pane_current_command}')" == ${~SHELLS} ]] }
+is_idle() { pane_idle "$(target "$1")" }
 need_idle() {
   is_idle "$1" || die "window '$1' is busy running '$(t display -p -t "$(target "$1")" '#{pane_current_command}')' — read it, wait, or ask the user"
 }
@@ -184,7 +191,7 @@ case "$cmd" in
       IFS='|' read -r idx bell agent lane <<< "$(t display -p -t "=$SESSION:$name" '#{window_index}|#{window_bell_flag}|#{@tc_agent}|#{@tc_lane}')"
       mp="$(main_pane "$name")"
       IFS='|' read -r pcmd dir <<< "$(t display -p -t "${mp:-=$SESSION:$name}" '#{pane_current_command}|#{pane_current_path}')"
-      state=busy; [[ "$pcmd" == ${~SHELLS} ]] && state=idle
+      state=busy; pane_idle "${mp:-=$SESSION:$name}" && state=idle
       [[ "$bell" == 1 ]] && state="$state,needs-user"
       lanetag=; [[ "$lane" == 1 ]] && lanetag="  (lane)"
       print -r -- "$idx  $name  [$state]  cmd=$pcmd${agent:+  (worker agent)}$lanetag  $dir"
@@ -368,12 +375,14 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
 
   artifact)
     [[ -n "$1" ]] || die "usage: tmux-ctl artifact <path> [--kind plan|spec|handoff|report|other]"
-    p="${1:A}"; shift; k=other
-    [[ "$1" == --kind && -n "$2" ]] && k="$2"
+    p="${1:A}"; shift; k=""; kopt=()
+    [[ "$1" == --kind && -n "$2" ]] && { k="$2"; kopt=(--kind "$k") }
     [[ -f "$p" ]] || die "no file '$p'"
     warn_web_key
-    "$HOME/.claude/hooks/artifact-register.sh" --path "$p" --kind "$k" --project "$FEEDKEY"
-    print -r -- "registered $p ($k)" ;;
+    # no --kind: the hook's kind_of() decides (plan, spec, handoff, report), else "other"
+    "$HOME/.claude/hooks/artifact-register.sh" --path "$p" "${kopt[@]}" --project "$FEEDKEY"
+    k="$(jq -r --arg p "$p" 'select(.path==$p)|.kind' "$STATE/artifacts-$FEEDKEY.jsonl" 2>/dev/null | tail -1)"
+    print -r -- "registered $p (${k:-unknown})" ;;
 
   idea)
     [[ -n "$*" ]] || die "usage: tmux-ctl idea <text>"

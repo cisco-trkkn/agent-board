@@ -3,7 +3,7 @@
 Date: 2026-10-19 · Ideas group C (from `~/.claude/ideas/agent-board.md`):
 - the board's 2s poll logs an unhandled "TypeError: Failed to fetch" on every tick while the server is down;
 - `test_bg.zsh` "parallel runs stay clean" fails about 2 runs in 8 under load;
-- `tmux-teammate-window` should act only on the new pane (`#{hook_pane}`);
+- `tmux-teammate-window` should act only on the new pane (`#{pane_id}`);
 - each agent window should show its role, model and effort, not the window number;
 - `tmux-ctl run` reports a `tests` window running a zsh script as idle;
 - `tmux-ctl artifact` registers plans and specs as kind `other`;
@@ -37,7 +37,7 @@ Date: 2026-10-19 · Ideas group C (from `~/.claude/ideas/agent-board.md`):
 
 - **Hook mode with a pane:** `tmux-teammate-window --hook <pane_id>` checks only that pane: its start command (a `--agent-name` start command, or `cat`), its window's pane count, and `@tc_teammate`. Moving the pane and naming it work as today.
 - **Hook mode without a pane:** keeps today's full scan, so an old hook line still works.
-- **Staged `~/.tmux.conf` change:** the hook line becomes `set-hook -g after-split-window 'run-shell -b "~/.local/bin/tmux-teammate-window --hook #{hook_pane}"'`.
+- **Staged `~/.tmux.conf` change:** the hook line becomes `set-hook -g after-split-window 'run-shell -b "~/.local/bin/tmux-teammate-window --hook #{pane_id}"'`.
 
 ## 4. Agent labels — `board/usage.py`, `board/server.py`, `board/index.html`, `~/.tmux.conf`
 

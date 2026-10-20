@@ -79,7 +79,7 @@ Lanes don't share files. Task 10 runs last.
 | `tools/tests/test_ctl_artifact.zsh` | new: kind decided by the hook; an explicit kind wins |
 | `tools/tests/test_bg.zsh` | only if the debugging in Task 2 shows a test-side cause |
 | `bin/tmux-teammate-window` | `--hook <pane>` mode; `--hook` with no pane, or no args, does the full scan |
-| `tools/tests/test_teammate_window.zsh` | hook line uses `--hook #{hook_pane}`; new checks |
+| `tools/tests/test_teammate_window.zsh` | hook line uses `--hook #{pane_id}`; new checks |
 | `board/usage.py` | `_project_live`, `_agent_windows` (shared matching), `EFFORT_ABBR`, `card_labels`; `Indexer(on_snapshot=)` |
 | `board/server.py` | `label_targets()`, `sync_labels()`, `card_labels` in `build_state`, indexer wired with `on_snapshot` |
 | `board/index.html` | offline banner and gated polls; card label text; doc pane on `docSess` |
@@ -216,7 +216,7 @@ git commit -m "fix(tmux-ctl): a pane whose shell has a child is busy"
 **Acceptance Criteria:**
 - [ ] `tmux-teammate-window --hook <pane>` moves that pane when it is a teammate: the start command carries `--agent-name`, or it is `cat`, the window has more than one pane, and `@tc_teammate` is not set. It leaves any other pane alone.
 - [ ] `tmux-teammate-window --hook`, with no pane, and `tmux-teammate-window`, with no args, both still run the full scan.
-- [ ] Tests, on a scratch server with the hook line `run-shell -b '<H> --hook #{hook_pane}'`:
+- [ ] Tests, on a scratch server with the hook line `run-shell -b '<H> --hook #{pane_id}'`:
   - the direct and the `cat` shapes get windows;
   - a plain split stays;
   - an unflagged teammate pane in another window is NOT moved by a split in `claude`;
@@ -230,7 +230,7 @@ git commit -m "fix(tmux-ctl): a pane whose shell has a child is busy"
 - [ ] **Step 1: Update the test.** In `tools/tests/test_teammate_window.zsh`, change the hook line to:
 
 ```zsh
-tt set-hook -g after-split-window "run-shell -b '$H --hook #{hook_pane}'"
+tt set-hook -g after-split-window "run-shell -b '$H --hook #{pane_id}'"
 ```
 
 Insert this before the final `tt_done`, after the existing "plain split stays" check:
@@ -239,7 +239,7 @@ Insert this before the final `tt_done`, after the existing "plain split stays" c
 # --hook <pane> acts on that pane only: an unflagged teammate pane in another window stays put
 tt set-hook -gu after-split-window
 tt split-window -d -t '=tt:shell' "exec sh -c 'sleep 60; :' teammate --agent-name probe-c"
-tt set-hook -g after-split-window "run-shell -b '$H --hook #{hook_pane}'"
+tt set-hook -g after-split-window "run-shell -b '$H --hook #{pane_id}'"
 tt split-window -d -t '=tt:claude'
 sleep 2
 check "--hook ignores other panes"   test -z "$(win_of probe-c)"
@@ -255,10 +255,10 @@ check "bare call scans"              test -n "$(win_of probe-d)"
 ```
 
 - [ ] **Step 2: Run it to see it fail.** Run `zsh tools/tests/test_teammate_window.zsh`. Expected: `FAIL - direct shape gets a window`, because the old script treats `--hook` as a pane id and exits.
-- [ ] **Step 3: Implement.** In `bin/tmux-teammate-window`, add this right after `T="$HOME/.local/bin/tmux"`, and update the header comment's "Run by the after-split-window hook" line to mention `--hook #{hook_pane}`:
+- [ ] **Step 3: Implement.** In `bin/tmux-teammate-window`, add this right after `T="$HOME/.local/bin/tmux"`, and update the header comment's "Run by the after-split-window hook" line to mention `--hook #{pane_id}`:
 
 ```zsh
-# Hook with the new pane (`--hook #{hook_pane}`): look only at that pane. `--hook` alone, or no
+# Hook with the new pane (`--hook #{pane_id}`): look only at that pane. `--hook` alone, or no
 # arguments (an old hook line), falls through to the full scan at the bottom.
 if [[ "$1" == --hook && -n "$2" ]]; then
   IFS=$'\t' read -r panes flag cmd <<< "$("$T" display -p -t "$2" '#{window_panes}	#{?#{@tc_teammate},1,0}	#{pane_start_command}' 2>/dev/null)"
@@ -828,7 +828,7 @@ git commit -m "fix(board): doc pane reads, saves and re-renders under its own pr
 
 ### Task 9: Staged `~/.tmux.conf` patch
 
-**Goal:** Produce `~/.claude/staged/tmux.conf.patch`, which switches the teammate hook to `--hook #{hook_pane}` and drops `#I ` from both window-status formats. It must pass `patch --dry-run` against the live file. The live file is not edited.
+**Goal:** Produce `~/.claude/staged/tmux.conf.patch`, which switches the teammate hook to `--hook #{pane_id}` and drops `#I ` from both window-status formats. It must pass `patch --dry-run` against the live file. The live file is not edited.
 
 **Files:**
 - Create: `~/.claude/staged/tmux.conf.patch` (outside the repo)
@@ -837,7 +837,7 @@ git commit -m "fix(board): doc pane reads, saves and re-renders under its own pr
 **Acceptance Criteria:**
 - [ ] The patch is generated with `diff -u` from a copy of the live file and an edited copy, never typed. It changes exactly 3 lines: the `after-split-window` hook, `window-status-format` and `window-status-current-format`.
 - [ ] `patch --dry-run ~/.tmux.conf < ~/.claude/staged/tmux.conf.patch` succeeds.
-- [ ] The edited lines load in a scratch server: `~/.local/bin/tmux -L tcconf -f /dev/null` with a file holding only the 3 edited lines sourced, and `show-hooks -g after-split-window` contains `--hook #{hook_pane}`. The scratch server is killed afterwards. Never source the full file there: it restores resurrect/continuum sessions.
+- [ ] The edited lines load in a scratch server: `~/.local/bin/tmux -L tcconf -f /dev/null` with a file holding only the 3 edited lines sourced, and `show-hooks -g after-split-window` contains `--hook #{pane_id}`. The scratch server is killed afterwards. Never source the full file there: it restores resurrect/continuum sessions.
 - [ ] `~/.tmux.conf` sha256 is unchanged before and after the task.
 - [ ] The report gives the install command from the spec, and the note that the patch goes in only after the branch is merged to `main`, because the hook calls the `main` checkout through the symlink.
 
@@ -856,7 +856,7 @@ s = open(sys.argv[1]).read()
 old_hook = 'run-shell -b "~/.local/bin/tmux-teammate-window"'
 assert s.count(old_hook) == 1, "hook line"
 assert s.count('] #I #{?@tc_label') == 2, "status formats"
-s = s.replace(old_hook, 'run-shell -b "~/.local/bin/tmux-teammate-window --hook #{hook_pane}"')
+s = s.replace(old_hook, 'run-shell -b "~/.local/bin/tmux-teammate-window --hook #{pane_id}"')
 s = s.replace('] #I #{?@tc_label', '] #{?@tc_label')
 open(sys.argv[2], "w").write(s)
 EOF
@@ -875,12 +875,12 @@ grep -E 'after-split-window|window-status-(current-)?format' "$S/edited" > "$S/l
 ~/.local/bin/tmux -L tcconf kill-server
 ```
 
-Expected: the hook shows `--hook #{hook_pane}`, and the format starts `#[fg=#6c7086] #{?@tc_label`.
+Expected: the hook shows `--hook #{pane_id}`, and the format starts `#[fg=#6c7086] #{?@tc_label`.
 
 - [ ] **Step 3: Confirm the live file is untouched.** Run `shasum -a 256 ~/.tmux.conf | diff - "$S/sha.before"` → no output. Report the patch text, the dry-run output and the install command.
 
 ```json:metadata
-{"files": ["~/.claude/staged/tmux.conf.patch"], "verifyCommand": "patch --dry-run ~/.tmux.conf < ~/.claude/staged/tmux.conf.patch", "acceptanceCriteria": ["patch generated by diff -u from live and edited copies, 3 changed lines", "patch --dry-run passes against live", "edited lines load in a -f /dev/null scratch server; hook has --hook #{hook_pane}; server killed", "~/.tmux.conf sha256 unchanged", "report gives install command and install-after-merge note"], "modelTier": "mechanical"}
+{"files": ["~/.claude/staged/tmux.conf.patch"], "verifyCommand": "patch --dry-run ~/.tmux.conf < ~/.claude/staged/tmux.conf.patch", "acceptanceCriteria": ["patch generated by diff -u from live and edited copies, 3 changed lines", "patch --dry-run passes against live", "edited lines load in a -f /dev/null scratch server; hook has --hook #{pane_id}; server killed", "~/.tmux.conf sha256 unchanged", "report gives install command and install-after-merge note"], "modelTier": "mechanical"}
 ```
 
 ---
