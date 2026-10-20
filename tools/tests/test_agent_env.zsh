@@ -15,7 +15,7 @@ tt set-environment -g TT_DIR "$TT_DIR"
 tt set-option -g default-command "env PATH=$stub:/usr/bin:/bin /bin/sh -i"
 repo="$TT_DIR/repo"; mkdir -p "$repo"; git -C "$repo" init -qb main; git -C "$repo" commit -q --allow-empty -m init
 
-(cd "$repo" && $C agent w1 "Goal: check env. Scope: nothing at all here. Done: the stub saw its env vars set.") >/dev/null 2>&1
+(cd "$repo" && PATH="$stub:$PATH" $C agent w1 "Goal: check env. Scope: nothing at all here. Done: the stub saw its env vars set.") >/dev/null 2>&1
 tt_wait 8 test -s "$TT_DIR/seen"
 check "worker env: nudge hook off"   grep -qx 'HOOK=0' "$TT_DIR/seen"
 check "worker env: TC_ROLE=worker"   grep -qx 'ROLE=worker' "$TT_DIR/seen"
