@@ -22,7 +22,7 @@ The marker is one red: the spec's "red-amber" is read as the hue family, amber b
 
 Contrast is the WCAG 2 relative-luminance ratio against the page background; the weakest value is 4.05, above the 3:1 non-text minimum. The smallest OKLab distance between any two rows is 15.1 (light) and 15.0 (dark), so no two categories read alike. Neutral equals `var(--cds-text-secondary)` in both themes.
 
-A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Should the Docs widget refuse a literal hex or `light-dark()`, fall back per category to the page tokens as they render inside the widget frame (measured on a token sheet, Task 7: light / dark): compute `--cds-chart-categorical-1` (#2A78D6 / #3987E5), data/analytics `-2` (#EB6834 / #D95926), networking `-7` (#4A3AA7 / #9085E9), security/identity `-6` (#008300 / #028301), operations `-3` (#1BAF7A / #189E70), neutral `--cds-text-secondary` (#52514E / #C3C2B7), marker `--cds-chart-status-critical` (#D03B3B), edges `--cds-text-secondary`. No two collide; `-4` (#0D366B / #9EC5F4, blue) and `-8` (#E66767, coral) are left out as they sit next to compute and the marker. Contrast is then best-effort: `-2` is 2.9:1 on the light page. Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, boundary outlines `var(--cds-chart-axis)`, project fill `var(--cds-chart-reference-tint)`. Edges and arrowheads take their own pair (Edges): the page's axis token is 1.75:1 on the light page.
+A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Should the Docs widget refuse a literal hex or `light-dark()`, fall back per category to the page tokens as they render inside the widget frame (measured on a token sheet, Task 7: light / dark): compute `--cds-chart-categorical-1` (#2A78D6 / #3987E5), data/analytics `-2` (#EB6834 / #D95926), networking `-7` (#4A3AA7 / #9085E9), security/identity `-6` (#008300 / #028301), operations `-3` (#1BAF7A / #189E70), neutral `--cds-text-secondary` (#52514E / #C3C2B7), marker `--cds-chart-status-critical` (#D03B3B), edges `--cds-text-secondary`. No two collide; `-4` (#0D366B / #9EC5F4, blue) and `-8` (#E66767, coral) are left out as they sit next to compute and the marker. Contrast is then best-effort: `-2` is 3.12:1 on the light page. Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, project fill `var(--cds-chart-reference-tint)`. Edges, arrowheads and the org and VPC outlines take their own pair (Edges): the page's axis token is 1.75:1 on the light page.
 
 Environment bands (see Boundaries) use one page token no category uses, `var(--cds-chart-categorical-5)` (magenta, `#d55181` in both themes inside the widget frame, measured in Task 7), at three strengths: dev fill 0.1 / stroke 0.45, stage 0.2 / 0.7, prod 0.32 / 1. The word carries the meaning, the strength orders it. (The frame's `categorical-4` renders blue, next to compute, so it is not used.)
 
@@ -63,9 +63,9 @@ One icon per node, 24 px at the node's left, the name to its right. A product wi
 
 | boundary | inventory kind | drawing |
 |---|---|---|
-| organisation / folder | `org`, `folder` | dashed outline (`strokeDasharray 6 4`), `--cds-chart-axis`, no fill; name top-left |
+| organisation / folder | `org`, `folder` | dashed outline (`strokeDasharray 6 4`, `strokeWidth 1.25`) in the edge pair (Edges), no fill; name top-left |
 | project | `project` | rounded box `rx 8`, fill `var(--cds-chart-reference-tint)`, no stroke; label is the project id, `<tenant>-prod` |
-| VPC / subnet | `vpc` | thin solid outline (`strokeWidth 1`), `--cds-chart-axis`, no fill; `vpc.svg` then the name top-left. A `subnet` component is the same thin outline nested inside its VPC, boundary kind `vpc` |
+| VPC / subnet | `vpc` | thin solid outline (`strokeWidth 1`) in the edge pair (Edges), no fill; `vpc.svg` then the name top-left. A `subnet` component is the same thin outline nested inside its VPC, boundary kind `vpc` |
 | environment | `env` | a pill behind the boundary label in the env token from Colour at that env's strength, the env word in capitals: `DEV`, `STAGE`, `PROD` |
 
 Boundaries nest in that order: org/folder around projects, VPC inside a project. Children sit 16 in from the box sides and 16 above its foot; the name line takes 32. A boundary with one child is still drawn when a trust or project edge crosses it, and dropped otherwise.
@@ -83,12 +83,14 @@ A **trust boundary** is any project outline, any org/folder outline, and the lin
 
 Every edge ends in an arrowhead in the direction the data moves (one `<marker>` per diagram) and carries a label of at most three words beside the line, never on it.
 
-Edge and arrowhead colour is `light-dark(#75736E, #97958D)`, chosen so a line reads on the page and on the project tint it usually crosses (the page's `--cds-chart-axis` is 1.75:1 on the light page, 1.55:1 on the dark one):
+Edge, arrowhead and org/VPC outline colour is `light-dark(#75736E, #97958D)`, chosen so a line reads on the page and on the project tint it usually crosses (the page's `--cds-chart-axis` is 1.75:1 on the light page, 1.55:1 on the dark one):
 
 | surface | light hex | contrast | dark hex | contrast |
 |---|---|---|---|---|
 | page (`#FCFCFB` / `#151515`) | `#75736E` | 4.61 | `#97958D` | 6.09 |
-| project tint (`#EBEAE9` / `#262625`, the reference tint at 15% over the page) | `#75736E` | 3.94 | `#97958D` | 5.05 | A pair of nodes with several edges of one kind gets one edge labelled with the count (`3 topics`); edges of different kinds stay separate.
+| project tint (`#EBEAE9` / `#262625`, the reference tint at 15% over the page) | `#75736E` | 3.94 | `#97958D` | 5.05 |
+
+A pair of nodes with several edges of one kind gets one edge labelled with the count (`3 topics`); edges of different kinds stay separate.
 
 **Trust-boundary crossing:** where an edge crosses a trust boundary, a disc of radius 7 in the marker colour sits on the edge at the boundary line, its `!` in the page colour. The key names it ("crosses a trust boundary"); it is the only red on the page.
 
