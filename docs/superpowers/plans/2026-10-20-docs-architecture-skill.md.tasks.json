@@ -34,7 +34,7 @@
   {
    "id": 5,
    "subject": "Task 5: `--since <sha>` diff mode",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** `inventory.py <repo> --since <sha>` emits `{\"since\": sha, \"head\": sha, \"components\": {\"added\",\"removed\",\"changed\"}, \"edges\": {\"added\",\"removed\"}}`, computed offline from `git archive`.\n\n**Files:**\n- Modify: `claude/skills/docs-architecture/scripts/inventory.py`\n- Create: `claude/skills/docs-architecture/tests/test_since.py`\n\n**Acceptance Criteria:**\n- [ ] In a scratch git repo (a temp dir: `git init`, then the fixture's `infra/ledger/*.tf` committed as commit A), add a `google_cloud_run_v2_service \"probe\"` resource and delete the `google_secret_manager_secret_iam_member \"ledger_password_reader\"` block, as commit B. Then `--since A` lists the probe under `components.added` and the ledger\u2192db_password iam edge under `edges.removed`.\n- [ ] `changed` lists components whose `kind`, `name`, `project` or `env` differ. A pure line shift is **not** a change.\n- [ ] An unknown sha gives exit 2 with `inventory: unknown --since sha` on stderr.\n- [ ] The scratch repo lives under `tempfile.TemporaryDirectory()` and is gone after the test (leak check: no `tmp*` dirs left by the test under `$TMPDIR` whose names it created).\n\n**Verify:** `python3 -m unittest discover -s claude/skills/docs-architecture/tests -v` \u2192 all OK.\n\nFull steps: docs/superpowers/plans/2026-10-20-docs-architecture-skill.md (Task 5)\n\n```json:metadata\n{\"files\": [\"claude/skills/docs-architecture/scripts/inventory.py\", \"claude/skills/docs-architecture/tests/test_since.py\"], \"verifyCommand\": \"python3 -m unittest discover -s claude/skills/docs-architecture/tests -v\", \"acceptanceCriteria\": [\"probe service in components.added, ledger->db_password iam edge in edges.removed\", \"line shift alone is not a change\", \"unknown sha exits 2 with message\", \"scratch repo removed after the test\"], \"modelTier\": \"standard\"}\n```",
    "blockedBy": [
     3,
@@ -88,5 +88,5 @@
    ]
   }
  ],
- "lastUpdated": "2026-10-20T11:45:55"
+ "lastUpdated": "2026-10-20T11:50:23"
 }
