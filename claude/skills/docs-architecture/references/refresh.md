@@ -12,14 +12,14 @@ Updates a stamped architecture doc to the repo's current HEAD by rewriting only 
     python3 <skill root>/scripts/inventory.py <repo> --since <sha> -o diff.json
 
 - Compares two committed trees (`git archive` of `<sha>` and of HEAD). Uncommitted work never shows: if the user means uncommitted changes, they commit first, or the refresh waits.
-- Output: `{since, head, components: {added, removed, changed}, edges: {added, removed}}`; `since` and `head` are full shas; `changed` lists components whose kind, name, project or env differ, with their new values.
+- Output: `{since, head, components: {added, removed, changed}, edges: {added, removed, changed}}`; `since` and `head` are full shas. A changed component is one whose kind, name, project or env differ, listed with its new values. An edge is identified by `(from, to, kind, label)`; a changed edge has the same identity on both sides but another field differing (other than `source`, which moves with line numbers): the new edge plus `was: {field: old value}`. Every `iam` and `trust` edge carries `member`, the raw member expression, so a changed member condition shows as one changed edge.
 - **Exit 2, "inventory: unknown --since sha":** the stamp sha is not in this clone (shallow clone, rewritten history, a different repo). Stop and ask the user which repo or sha to diff against. Never substitute a sha, never diff against an earlier stamp, never regenerate.
 - Exit 2 on zero components: discovery is broken at HEAD; halt as SKILL.md says.
-- Empty diff: say "no architecture change since <date>", move the stamp to `head` with today's date (step 5), nothing else.
+- Empty diff (all six lists empty): say "no architecture change since <date>", move the stamp to `head` with today's date (step 5), nothing else.
 
 ## 3. Map the diff to sections
 
-For each entry in the diff, find every section whose id map lists the id (components by id, edges by their `from`/`to` ids). An added id not in any section belongs to the section whose project or subsystem it sits in (`project`, `env`, the boundary it is a member of); if that is unclear, it is one of the refresh's interview questions (still at most 5 in total).
+For each entry in the diff, find every section whose id map lists the id (components by id; edges, whether added, removed or changed, by their `from`/`to` ids). An added id not in any section belongs to the section whose project or subsystem it sits in (`project`, `env`, the boundary it is a member of); if that is unclear, it is one of the refresh's interview questions (still at most 5 in total).
 
 Collect the set of touched sections. Each is rewritten whole, one section per call, in reading order:
 

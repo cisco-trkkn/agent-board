@@ -56,13 +56,16 @@ def diff(old, new, since):
     oc, nc = {c["id"]: c for c in old["components"]}, {c["id"]: c for c in new["components"]}
     ek = lambda e: (e["from"], e["to"], e["kind"], e["label"])
     oe, ne = {ek(e): e for e in old["edges"]}, {ek(e): e for e in new["edges"]}
+    # same identity on both sides, any field but `source` differs (line numbers move on any edit)
+    echg = lambda k: {f: oe[k].get(f) for f in (oe[k].keys() | ne[k].keys()) - {"source"} if oe[k].get(f) != ne[k].get(f)}
     return {"since": since, "head": new["meta"]["sha"],
             "components": {"added": [nc[i] for i in sorted(nc.keys() - oc.keys())],
                            "removed": [oc[i] for i in sorted(oc.keys() - nc.keys())],
                            "changed": [nc[i] for i in sorted(nc.keys() & oc.keys())
                                        if any(nc[i][k] != oc[i][k] for k in SAME)]},
             "edges": {"added": [ne[k] for k in sorted(ne.keys() - oe.keys())],
-                      "removed": [oe[k] for k in sorted(oe.keys() - ne.keys())]}}
+                      "removed": [oe[k] for k in sorted(oe.keys() - ne.keys())],
+                      "changed": [{**ne[k], "was": w} for k in sorted(ne.keys() & oe.keys()) if (w := echg(k))]}}
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="inventory.py", description=__doc__.splitlines()[0])

@@ -139,14 +139,17 @@ def add_edges(out, pending, locals_by_dir, projects):
         if u not in out["unknowns"]:
             out["unknowns"].append(u)
 
-    def edge(frm, to, kind, label, source):
+    def edge(frm, to, kind, label, source, member=None):
         e = {"from": frm, "to": to, "kind": kind, "label": label, "source": source}
+        if member is not None:
+            e["member"] = member            # iam/trust only: the raw member expression, as written
         if e not in out["edges"]:
             out["edges"].append(e)
 
     for reldir, rel, typ, name, line, body in pending:
         src, locs = f"{rel}:{line}", locals_by_dir.get(reldir, {})
-        get = lambda k: subst(value(body, k), locs).strip('"') if value(body, k) is not None else None
+        get = lambda k, raw=False: (value(body, k) if raw else subst(value(body, k), locs)).strip('"') if value(body, k) is not None else None
+        sub = lambda s: subst(s, locs)
         if typ == "google_pubsub_subscription":
             topic = get("topic")
             sub = f"{reldir}/{typ}.{name}"
@@ -171,10 +174,10 @@ def add_edges(out, pending, locals_by_dir, projects):
                 else:
                     unknown(f"{typ}.{name} uri", src, f"uri is variable-driven: {uri}")
         else:
-            add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unknown, edge, projects)
+            add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unknown, edge, projects, sub)
     out["boundaries"].extend(boundaries.values())
 
-def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unknown, edge, projects):
+def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unknown, edge, projects, sub):
     # target
     target, shown = None, None
     for a in TARGET_ATTRS:
@@ -201,9 +204,9 @@ def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unkno
         return
     # members: one edge per resolvable member, one unknown per unresolvable one
     if get("member") is not None:
-        members = [get("member")]
+        members = [get("member", True)]
     else:
-        members = split_list(get("members") or "")
+        members = split_list(get("members", True) or "")
     if not members:
         unknown(f"{typ}.{name} members", src, "no member or members attribute found")
     # role and kind
@@ -214,7 +217,8 @@ def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unkno
         listed = re.findall(r'"(roles/[^"]+)"', get("for_each") or "")
         roles = listed or roles
         label = "<for_each roles>" + (": " + ", ".join(listed) if listed else "")
-    for member in members:
+    for raw_member in members:
+        member = sub(raw_member)       # resolved copy drives from/kind; the raw one is kept on the edge
         pool = [r for r in refs(reldir, member, ids) if ids[r]["kind"] == "wif_pool"]
         principalish = "principalSet://" in member or "principal://" in member
         if principalish and pool:
@@ -227,7 +231,7 @@ def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unkno
                 frm = f"principal:{member}"
                 unknown(frm, src, "principal is not a resource in this repo")
         kind = "trust" if principalish or any(x in TRUST_ROLES for x in roles) else "iam"
-        edge(frm, target, kind, label, src)
+        edge(frm, target, kind, label, src, raw_member)
 
 def extract(root):
     out = {"components": [], "edges": [], "boundaries": [], "unknowns": [], "confidence": "high"}

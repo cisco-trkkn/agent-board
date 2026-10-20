@@ -26,6 +26,14 @@ class TerraformEdges(unittest.TestCase):
         e = self.edge(B + "google_iam_workload_identity_pool.gitlab", B + "google_service_account.planner", "trust")
         self.assertEqual((e["label"], e["source"]), ("roles/iam.workloadIdentityUser", B + "identity.tf:67"))
 
+    def test_iam_and_trust_edges_carry_raw_member(self):
+        e = self.edge(B + "google_iam_workload_identity_pool.gitlab", B + "google_service_account.planner", "trust")
+        self.assertEqual(e["member"], "${local.pool_principal}/attribute.ref_type/branch")
+        e = self.edge(L + "google_service_account.ledger", L + "google_secret_manager_secret.db_password", "iam")
+        self.assertEqual(e["member"], "google_service_account.ledger.member")
+        for e in self.inv["edges"]:
+            self.assertEqual("member" in e, e["kind"] in ("iam", "trust"), e)
+
     def test_variable_target_is_unknown(self):
         hits = [u for u in self.inv["unknowns"] if u["source"] == L + "applied-events.tf:1"]
         self.assertTrue(hits and "var.ledger_service_name" in hits[0]["why"], self.inv["unknowns"])

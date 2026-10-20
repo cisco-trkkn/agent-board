@@ -58,7 +58,7 @@ class Since(unittest.TestCase):
         code, out, err = run([self.repo, "--since", self.a])
         self.assertEqual(code, 0, err)
         self.assertEqual(out["components"], {"added": [], "removed": [], "changed": []})
-        self.assertEqual(out["edges"], {"added": [], "removed": []})
+        self.assertEqual(out["edges"], {"added": [], "removed": [], "changed": []})
 
     def test_changed_lists_kind_name_project_env_differences(self):
         p = os.path.join(self.repo, "infra", "ledger", "main.tf")
@@ -99,6 +99,34 @@ class Since(unittest.TestCase):
         run([self.repo, "--since", self.a])
         run([self.repo, "--since", "0" * 40])
         self.assertEqual(os.listdir(self.seam), ["repo"])
+
+class MemberChange(unittest.TestCase):
+    """Real-shape binding change: fixtures are trimmed from master-gcp-repo identity.tf at df19131a and 7a42e580."""
+    def test_member_only_change_is_one_changed_edge(self):
+        seam = tempfile.mkdtemp(prefix="since-seam-")
+        old_tempdir, tempfile.tempdir = tempfile.tempdir, seam
+        try:
+            repo = os.path.join(seam, "repo")
+            os.makedirs(os.path.join(repo, "lz"))
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True, check=True).stdout.strip()
+            g("init", "-q"); g("config", "user.email", "t@example.com"); g("config", "user.name", "t")
+            fx = os.path.join(FIXTURE, "..", "planner-binding")
+            shas = []
+            for tag in ("before", "after"):
+                shutil.copy(os.path.join(fx, tag + ".tf"), os.path.join(repo, "lz", "identity.tf"))
+                g("add", "-A"); g("commit", "-q", "-m", tag); shas.append(g("rev-parse", "HEAD"))
+            code, out, err = run([repo, "--since", shas[0]])
+            self.assertEqual(code, 0, err)
+            self.assertEqual(out["components"], {"added": [], "removed": [], "changed": []})
+            self.assertEqual((out["edges"]["added"], out["edges"]["removed"]), ([], []))
+            [c] = out["edges"]["changed"]
+            self.assertEqual((c["from"], c["to"], c["kind"]),
+                             ("lz/google_iam_workload_identity_pool.gitlab", "lz/google_service_account.planner", "trust"))
+            self.assertEqual(c["member"], "${local.pool_principal}/attribute.planner/allowed")
+            self.assertEqual(c["was"], {"member": "${local.pool_principal}/attribute.ref_type/branch"})
+        finally:
+            tempfile.tempdir = old_tempdir
+            shutil.rmtree(seam)
 
 if __name__ == "__main__":
     unittest.main()
