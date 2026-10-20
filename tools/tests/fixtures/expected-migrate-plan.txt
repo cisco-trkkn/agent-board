@@ -7,6 +7,8 @@ would remove from settings.json: ~/.claude/hooks/bash-mirror.sh
 would remove from settings.json: ~/.claude/hooks/artifact-register.sh
 would remove from settings.json: ~/.claude/hooks/bash-mirror.sh
 would remove from settings.json: ~/.claude/hooks/kill-guard.sh
+would back up ~/.tmux.conf to ~/.tmux.conf.bak-YYYYMMDD
+  would: cp -p ~/.tmux.conf ~/.tmux.conf.bak-YYYYMMDD
 would remove from .tmux.conf: bind W display-popup -E -w 90% -h 60% -d "#{pane_current_path}" -T " clean up agent worktrees " "~/.local/bin/tmux-agent-cleanup"
 would remove from .tmux.conf: set-hook -g after-split-window 'run-shell -b "~/.local/bin/tmux-teammate-window --hook #{pane_id}"'
 would remove from .tmux.conf: set-hook -g session-closed 'run-shell -b "~/.local/bin/tmux-session-closed #{q:hook_session_name}"'
@@ -18,8 +20,7 @@ would remove link ~/.local/bin/dev
   would: rm ~/.local/bin/dev
 would remove link ~/.local/bin/tmux-agent-cleanup
   would: rm ~/.local/bin/tmux-agent-cleanup
-would remove link ~/.local/bin/tmux-ctl
-  would: rm ~/.local/bin/tmux-ctl
+kept ~/.local/bin/tmux-ctl: .tmux.conf: set -s command-alias[101] 'agent-go=run-shell -b -c "#{pane_current_path}" "export TMUX=\"#{socket_path},#{pid},0\" TMUX_PANE=\"#{pane_id}\"; n=\"\$(~/.local/bin/tmux show -gqv @agent_name)\"; t=\"\$(~/.local/bin/tmux show -gqv @agent_task)\"; ~/.local/bin/tmux set -gu @agent_name; ~/.local/bin/tmux set -gu @agent_task; ~/.local/bin/tmux-ctl agent \"\$n\" \"\$t\""'
 would remove link ~/.local/bin/tmux-dash
   would: rm ~/.local/bin/tmux-dash
 would remove link ~/.local/bin/tmux-dev-layout
