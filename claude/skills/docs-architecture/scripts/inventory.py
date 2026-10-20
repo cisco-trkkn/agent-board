@@ -16,9 +16,28 @@ def git_sha(repo):
     except (OSError, subprocess.CalledProcessError):
         return None
 
+def repo_name(repo):
+    """The repo's name, never a path: the origin remote's basename, else the main checkout's directory name
+    (right inside a `git worktree add` scratch path), else the scanned directory's basename."""
+    def git(*args):
+        try:
+            return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True,
+                                  check=True).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            return ""
+    url = git("remote", "get-url", "origin").rstrip("/")
+    name = os.path.basename(url.replace(":", "/"))
+    name = name[:-4] if name.endswith(".git") else name
+    if name:
+        return name
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    if common:
+        return os.path.basename(os.path.dirname(common.rstrip("/")))
+    return os.path.basename(os.path.abspath(repo))
+
 def build(repo):
     inv = {"components": [], "edges": [], "boundaries": [], "unknowns": [],
-           "meta": {"repo": os.path.abspath(repo), "sha": git_sha(repo), "extractors": {}, "confidence": "high"}}
+           "meta": {"repo": repo_name(repo), "sha": git_sha(repo), "extractors": {}, "confidence": "high"}}
     for name, mod in EXTRACTORS:
         part = mod.extract(repo)
         for key in ("components", "edges", "boundaries", "unknowns"):
@@ -47,7 +66,7 @@ def build_at(repo, sha):
         with tarfile.open(fileobj=io.BytesIO(blob)) as t:
             t.extractall(d, filter="data")
         inv = build(d)
-    inv["meta"]["repo"], inv["meta"]["sha"] = os.path.abspath(repo), sha   # the archive is not a git repo
+    inv["meta"]["repo"], inv["meta"]["sha"] = repo_name(repo), sha   # the archive is not a git repo
     return inv
 
 SAME = ("kind", "name", "project", "env")

@@ -56,6 +56,8 @@ def field(lines, key):
 def extract(root):
     out = {"components": [], "edges": [], "boundaries": [], "unknowns": [], "confidence": "high"}
     boundaries = [b["id"] for b in terraform.extract(root)["boundaries"] if b["kind"] == "project"]
+    seen = {}                           # job id -> index in out["components"]
+    sources = {}                        # job id -> every file:line that defines it
     for path in ci_files(root):
         rel = os.path.relpath(path, root)
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -67,9 +69,14 @@ def extract(root):
             if env and not norm:
                 out["unknowns"].append({"what": cid, "source": f"{rel}:{line}",
                                         "why": f"environment '{env}' is not one of dev/stage/prod"})
-            out["components"].append({
-                "id": cid, "kind": "ci_job", "name": f"{name} [{stage}]" if stage else name, "project": None,
-                "env": norm or env, "source": f"{rel}:{line}"})
+            comp = {"id": cid, "kind": "ci_job", "name": f"{name} [{stage}]" if stage else name, "project": None,
+                    "env": norm or env, "source": f"{rel}:{line}"}
+            sources.setdefault(cid, []).append(comp["source"])
+            if cid in seen:             # GitLab merges by key: the later definition wins
+                out["components"][seen[cid]] = comp
+            else:
+                seen[cid] = len(out["components"])
+                out["components"].append(comp)
             for n, raw in body:
                 m = CHDIR_RE.search(raw)
                 if not m or raw.lstrip().startswith("#"):
@@ -85,4 +92,8 @@ def extract(root):
                 if not targets:
                     out["unknowns"].append({"what": f"{cid} → {d}", "source": f"{rel}:{n}",
                                             "why": "job runs Terraform here but the directory declares no project boundary"})
+    for cid, srcs in sources.items():
+        if len(srcs) > 1:
+            out["unknowns"].append({"what": cid, "source": srcs[-1],
+                                    "why": f"job defined in {len(srcs)} files: {', '.join(srcs)}"})
     return out
