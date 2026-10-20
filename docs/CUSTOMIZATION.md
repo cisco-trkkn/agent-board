@@ -21,7 +21,7 @@ A project-specific settings file is not an override: it is passed per lead, see 
 
 | Variable | Default | Read by | Effect |
 | --- | --- | --- | --- |
-| `DEV_CLAUDE_CMD` | `<clone>/bin/claude-orchestrator` (absolute path) | `dev` | Command typed into the `claude` window of a **new** session, e.g. `DEV_CLAUDE_CMD=claude dev .` for a plain Claude, or `"<clone>/bin/claude-orchestrator --continue"`. Ignored (with a warning) when the session already exists. |
+| `DEV_CLAUDE_CMD` | `<clone>/bin/claude-orchestrator` (absolute path) | `dev` | Command typed into the `claude` window of a **new** session, e.g. `DEV_CLAUDE_CMD=claude agent-board dev .` for a plain Claude, or `"<clone>/bin/claude-orchestrator --continue"`. Ignored (with a warning) when the session already exists. |
 | `DEV_NO_ATTACH` | unset | `dev` | Create the session but don't attach (the board uses this). |
 | `DEV_CLIENT` | unset | `dev` | Switch this tmux client instead of the current one (`Ctrl-a D` uses it). |
 | `TC_TMUX` | `~/.local/bin/tmux` if executable, else `tmux` on `PATH` | every script, hook and the board, through `bin/_tc_bins.zsh` | tmux binary to use. |
