@@ -491,8 +491,8 @@ function card(s, w, p) {
   const task = paneName(w, p);
   const lab = (s.usage_labels || {})[p.id];
   who.append(el("b", null, mate || task));
-  who.append(el("span", null, [r && ROLE[r], lab ? [lab.role, lab.model, lab.effort].filter(Boolean).join(" · ") : `window ${w.index}`, r ? null : p.command, mate && task !== w.name ? task : null]
-    .filter(Boolean).join(" · ")));
+  const facts = lab ? [lab.role, lab.model, lab.effort] : [r && ROLE[r], `window ${w.index}`, r ? null : p.command];   // labelled: role · model · effort
+  who.append(el("span", null, [...facts, mate && task !== w.name ? task : null].filter(Boolean).join(" · ")));
   head.append(who, el("span", "pill " + p.status, STATUS_LABEL[p.status] || p.status));
   c.append(head);
   const alerts = (s.usage_alerts || {})[p.id] || [];
