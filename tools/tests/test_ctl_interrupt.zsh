@@ -1,7 +1,7 @@
 source "${0:A:h}/lib.zsh"
 C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 export TC_IDEAS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ttideas.XXXXXX")"
-mkdir -p "$TMPDIR/zd.$$"; export ZDOTDIR="$TMPDIR/zd.$$"
+mkdir -p "${TMPDIR:-/tmp}/zd.$$"; export ZDOTDIR="${TMPDIR:-/tmp}/zd.$$"
 tt_setup
 last_log() { jq -rs 'map(select(.log))|last|.log' "$TC_STATE/runs-tt.jsonl" }
 # M2 + M1: a timeout leaves a log and no stale .rc once the late _done arrives
@@ -32,5 +32,5 @@ warns() { [[ "${1:l}" == *"browser view"* ]] }
 check "artifact warns on _web- key" warns "$err"
 err="$(TC_SESSION=_web-9 $C relay "$doc" 2>&1 >/dev/null)"
 check "relay warns on _web- key"    warns "$err"
-rm -rf "$TC_IDEAS_DIR" "$TMPDIR/zd.$$"
+rm -rf "$TC_IDEAS_DIR" "${TMPDIR:-/tmp}/zd.$$"
 tt_done
