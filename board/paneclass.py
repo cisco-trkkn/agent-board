@@ -6,6 +6,7 @@ CLI: paneclass.py status <pane-id>   -> prints "<kind> <status>"
 """
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -67,6 +68,16 @@ def classify(cmd, rows, bell):
 RESOLVER = Path(__file__).resolve().parent.parent / "bin" / "_tc_bins.zsh"
 
 
+def tmux_bin():
+    """The tmux binary, in the order bin/_tc_bins.zsh uses: $TC_TMUX, ~/.local/bin/tmux if executable, tmux on PATH."""
+    if os.environ.get("TC_TMUX"):
+        return os.environ["TC_TMUX"]
+    own = Path.home() / ".local" / "bin" / "tmux"
+    if os.access(own, os.X_OK) and own.is_file():
+        return str(own)
+    return shutil.which("tmux") or str(own)
+
+
 def tmux_cmd(extra=()):
     """The tmux command every agent-board caller runs, as bin/_tc_bins.zsh resolves it (the one place that decides:
     TC_TMUX for the binary; TMUX_DASH_TMUX_ARGS, else the server of $TMUX, else agent-board's own server).
@@ -80,7 +91,7 @@ def tmux_cmd(extra=()):
             return words + list(extra)
     except (OSError, subprocess.SubprocessError):
         pass
-    base = [os.environ.get("TC_TMUX") or str(Path.home() / ".local" / "bin" / "tmux")]
+    base = [tmux_bin()]
     return base + shlex.split(os.environ.get("TMUX_DASH_TMUX_ARGS", "")) + list(extra)
 
 

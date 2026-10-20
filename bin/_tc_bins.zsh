@@ -8,7 +8,7 @@
 #   tc_tmux_args_str               the server arguments as one shell-quoted string, for TMUX_DASH_TMUX_ARGS
 #   TC_TMUX_SRV                    the server selector alone (-L name | -S path | the override), for messages
 #
-# The binary is $TC_TMUX, else ~/.local/bin/tmux. The server, first match wins:
+# The binary is $TC_TMUX, else ~/.local/bin/tmux if executable, else tmux on PATH (tc_tmux_bin). The server, first match wins:
 #   TMUX_DASH_TMUX_ARGS   an explicit override such as "-L work"; the board, its terminals and dev all honour it
 #   $TMUX                 the server this command runs inside: hooks, run-shell jobs, tmux-ctl and the tests
 #                         talk to their own server, whichever it is (skipped by `dedicated`)
@@ -20,10 +20,18 @@ TC_REPO="${${(%):-%x}:A:h:h}"
 # An install from before the dedicated server still has agent-board's hook lines in ~/.tmux.conf (install.sh --migrate
 # removes them) and no agent-board server running: its projects live on the user's server, so dev and tmux-dash stay
 # there until the owner migrates. Reads ~/.tmux.conf only.
+# tc_tmux_bin: the tmux binary. Same order as board/paneclass.py: $TC_TMUX, ~/.local/bin/tmux if executable, tmux on PATH.
+tc_tmux_bin() {
+  emulate -L zsh
+  if [[ -n "$TC_TMUX" ]]; then print -r -- "$TC_TMUX"
+  elif [[ -x "$HOME/.local/bin/tmux" ]]; then print -r -- "$HOME/.local/bin/tmux"
+  elif (( $+commands[tmux] )); then print -r -- "$commands[tmux]"
+  else print -r -- "$HOME/.local/bin/tmux"; fi    # none found: a path the error message can name
+}
 tc_tmux_legacy() {
   emulate -L zsh
   grep -qE 'tmux-(teammate-window|session-closed)' "$HOME/.tmux.conf" 2>/dev/null || return 1
-  ! "${TC_TMUX:-$HOME/.local/bin/tmux}" -L "${AGENT_BOARD_TMUX_SOCKET:-agent-board}" list-sessions >/dev/null 2>&1
+  ! "$(tc_tmux_bin)" -L "${AGENT_BOARD_TMUX_SOCKET:-agent-board}" list-sessions >/dev/null 2>&1
 }
 tc_tmux_resolve() {
   emulate -L zsh
@@ -39,7 +47,7 @@ tc_tmux_resolve() {
     TC_TMUX_ARGS=("${TC_TMUX_SRV[@]}" -f "$TC_REPO/config/tmux.conf")
     export AGENT_BOARD_REPO="$TC_REPO"   # config/tmux.conf names this checkout's scripts by it; a server we start inherits it
   fi
-  TC_TMUX_CMD=("${TC_TMUX:-$HOME/.local/bin/tmux}" "${TC_TMUX_ARGS[@]}")
+  TC_TMUX_CMD=("$(tc_tmux_bin)" "${TC_TMUX_ARGS[@]}")
 }
 # tc_bin <tool> <override-var>: the path of a helper tool. The override variable's value, else the tool on PATH, else
 # ~/.local/bin/<tool> (the documented legacy fallback for installs that linked their tools there).

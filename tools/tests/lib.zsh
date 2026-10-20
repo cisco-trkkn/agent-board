@@ -1,5 +1,5 @@
 # lib.zsh — isolated tmux server for tmux-tools tests. Source it, then call tt_setup.
-TT_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+TT_BIN="${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME/.local/bin/tmux || print -r -- ${commands[tmux]:-$HOME/.local/bin/tmux})}"
 TT_REPO="${${(%):-%x}:A:h:h:h}"          # the checkout under test (file scope: inside a function $0 is the function name)
 TT_FAILS=0
 

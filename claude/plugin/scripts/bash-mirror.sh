@@ -59,7 +59,7 @@ sys.stdout.write("\0".join([kind, first, cwd, str(code), tail]))
   # tmux: the repo's resolver; if the plugin was copied away from its repo, the server this pane is on
   RES="${0:A:h:h:h:h}/bin/_tc_bins.zsh"
   if [[ -r "$RES" ]]; then source "$RES"; T=tc_tmux
-  else T=("${TC_TMUX:-${commands[tmux]:-$HOME/.local/bin/tmux}}" -S "${TMUX%%,*}"); fi
+  else T=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME/.local/bin/tmux || print -r -- ${commands[tmux]:-$HOME/.local/bin/tmux})}" -S "${TMUX%%,*}"); fi
   info="$("${T[@]}" display -p -t "$TMUX_PANE" '#{session_name}'$'\t''#{window_name}'$'\t''#{?session_group,#{session_group},#{session_name}}')" || exit 0
   session="${info%%$'\t'*}" rest="${info#*$'\t'}"
   caller="${rest%%$'\t'*}" canon="${rest#*$'\t'}"
