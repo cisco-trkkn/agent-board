@@ -16,13 +16,18 @@ except Exception:
 if not re.search(r"\b(pkill|killall)\b", cmd):
     sys.exit(0)
 
-def is_claude(pid, comm):
-    exe = comm
+def is_claude(pid, comm, argv):
+    """Fail closed: a process is Claude if ANY of comm, argv[0] or /proc/<pid>/exe says so. exe is added to comm and
+    args, never swapped for them: an npm install runs /usr/bin/node, which only comm/args (process.title) call claude.
+    Without a readable /proc (macOS, a hidden /proc) comm and args alone decide; there comm is the full path."""
+    def looks(x):
+        return "/claude/versions/" in x or os.path.basename(x) == "claude"
+    names = [comm, (argv.split(None, 1) or [""])[0]]
     try:  # Linux ps prints comm as the bare name, not the path; /proc/<pid>/exe has the path
-        exe = os.readlink("/proc/%d/exe" % pid)
+        names.append(os.readlink("%s/%d/exe" % (os.environ.get("KILL_GUARD_PROC_ROOT", "/proc"), pid)))
     except OSError:
         pass
-    return "/claude/versions/" in exe or os.path.basename(exe) == "claude"
+    return any(looks(x) for x in names)
 
 def matches(tool, args):
     full = tool == "pkill" and any(a.startswith("-") and "f" in a[1:] and not a.startswith("--") for a in args)
@@ -37,7 +42,7 @@ def matches(tool, args):
     comms, argvs = ps("comm"), ps("args")
     for pid, comm in comms.items():
         argv = argvs.get(pid, "")
-        if pid == me or not is_claude(pid, comm): continue
+        if pid == me or not is_claude(pid, comm, argv): continue
         hay = argv if full else os.path.basename(comm)
         try:
             ok = re.search(pat, hay) if tool == "pkill" else os.path.basename(comm) == pat
