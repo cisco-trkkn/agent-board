@@ -5,7 +5,13 @@
 # Appends {ts,path,kind,agent,hash,url,session_id,epoch} to $STATE/artifacts-<project>.jsonl.
 # epoch = lines in $STATE/lineage-<project>.jsonl (one per handoff relay). Silent; always exits 0.
 emulate -L zsh
-STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
+_tcenv="${${(%):-%x}:A:h:h:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
+source "$_tcenv" 2>/dev/null || {   # never fail the Claude call, but say so: stderr plus a log in $TMPDIR
+  _m="${${(%):-%x}:t}: cannot load $_tcenv: using the default state dir (a plugin copied away from its repo has no tc-env)"
+  print -u2 -r -- "$_m"; print -r -- "$(date +%FT%T) $_m" >> "${${TMPDIR:-/tmp}%/}/tmux-ctl-hook-errors.log" 2>/dev/null
+  TC_STATE_DIR="${TC_STATE:-${${TMPDIR:-/tmp}%/}/tmux-ctl-$UID}"   # same rule as tc_state_dir; the plugin keeps working
+}
+STATE="$TC_STATE_DIR"
 # tmux: the repo's resolver; if the plugin was copied away from its repo, the server this pane is on
 RES="${0:A:h:h:h:h}/bin/_tc_bins.zsh"
 if [[ -r "$RES" ]]; then source "$RES"; TMUX_BIN=tc_tmux

@@ -50,6 +50,7 @@ Coming from the author's earlier global setup? `./install.sh --migrate` (see [do
 | `board/` | the Agent Board server and page |
 | `claude/orchestrator.md`, `claude/worker.md`, `claude/session-settings.json` | lead and worker rules, settings for agent teams |
 | `claude/plugin/` | the session plugin: hooks, `tmux-orchestrator` and `handoff` skills, `effort-*` agents |
+| `claude/CLAUDE.md`, `claude/settings.json`, `claude/agents/`, `claude/skills/`, `claude/hooks/` | the author's own global `~/.claude` config (mirror; `bin/claude-config-link` / `claude-config-sync`). Not used by agent-board sessions or `install.sh`; the session settings and hooks come from `claude/session-settings.json` and `claude/plugin/` |
 | `config/tmux.conf` | agent-board's tmux server configuration |
 
 The checked-out branch is what runs. Restart the board after server changes: `agent-board dash stop && agent-board dash start`.

@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
 import paneclass  # noqa: E402
+import tc_env  # noqa: E402
 
 SEP = paneclass.SEP
 ENDED = {"idle", "ready"}
@@ -83,7 +84,7 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", **wait):
 
 
 def default_state():
-    return os.environ.get("TC_STATE") or f"{os.environ.get('TMPDIR', '/tmp').rstrip('/')}/tmux-ctl-{os.getuid()}"
+    return str(tc_env.state_dir())
 
 
 def main(argv=None):

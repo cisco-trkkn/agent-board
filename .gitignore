@@ -4,3 +4,4 @@ __pycache__/
 *.next
 .superpowers/
 .claude/worktrees/
+.DS_Store

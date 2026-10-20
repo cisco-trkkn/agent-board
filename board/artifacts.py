@@ -9,16 +9,20 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tc_env  # noqa: E402
+
 HOOK = Path(__file__).resolve().parent.parent / "claude" / "hooks" / "artifact-register.sh"
 
 
 def state_dir():
-    return Path(os.environ.get("TC_STATE") or f"{os.environ.get('TMPDIR', '/tmp').rstrip('/')}/tmux-ctl-{os.getuid()}")
+    return tc_env.state_dir()
 
 
 def jsonl(path):

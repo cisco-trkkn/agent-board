@@ -3,6 +3,12 @@
 # session's tests/shell feed log. Silent, always exits 0.
 # Entry header: `── HH:MM:SS · <agent> · <cwd> · exit N · @<epoch>` (the epoch orders entries across midnight).
 emulate -L zsh
+_tcenv="${${(%):-%x}:A:h:h:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
+source "$_tcenv" 2>/dev/null || {   # never fail the Claude call, but say so: stderr plus a log in $TMPDIR
+  _m="${${(%):-%x}:t}: cannot load $_tcenv: using the default state dir (a plugin copied away from its repo has no tc-env)"
+  print -u2 -r -- "$_m"; print -r -- "$(date +%FT%T) $_m" >> "${${TMPDIR:-/tmp}%/}/tmux-ctl-hook-errors.log" 2>/dev/null
+  TC_STATE_DIR="${TC_STATE:-${${TMPDIR:-/tmp}%/}/tmux-ctl-$UID}"   # same rule as tc_state_dir; the plugin keeps working
+}
 zmodload zsh/datetime
 # dedupe: the scoped registration (--scoped) covers agent-board sessions; the legacy global one defers to it
 [[ "$1" == --scoped || "$AGENT_BOARD" != 1 ]] || exit 0
@@ -68,7 +74,7 @@ sys.stdout.write("\0".join([kind, first, cwd, str(code), tail]))
   winarr=("${(@f)wins}")
   # feeds are written for dev sessions: the agents' window lives in <project>-bg (or, before migration, here)
   "${T[@]}" has-session -t "=$canon-bg" 2>/dev/null || (( ${winarr[(Ie)$kind]} )) || exit 0
-  STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"; mkdir -p "$STATE"
+  STATE="$TC_STATE_DIR"; mkdir -p "$STATE"
   log="$STATE/feed-$canon-$kind.log"
   if [[ -f "$log" ]] && (( $(wc -c < "$log") > 2097152 )); then
     tail -c 1048576 "$log" > "$log.tmp.$$" && mv "$log.tmp.$$" "$log"

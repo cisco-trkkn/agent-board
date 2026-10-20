@@ -57,8 +57,7 @@ class HideBgTest(unittest.TestCase):
         S = server.SEP
         row = lambda sess, bg: S.join([sess, "1", "1", "tests", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", bg])
         out = "\n".join([row("proj", ""), row("proj-bg", "1")])
-        with mock.patch.object(server, "tmux", return_value=out), \
-             mock.patch.object(server, "pane_text", return_value=[]), \
+        with mock.patch.object(server, "tmux", side_effect=lambda *a, **k: out if a[0] == "list-panes" else ""), \
              mock.patch.object(server, "cached_worktrees", return_value=[]):
             names = [s["name"] for s in server.build_state()["sessions"]]
         self.assertEqual(names, ["proj"])
@@ -130,15 +129,16 @@ class RunsEndpointTest(unittest.TestCase):
         self.assertEqual((d["ideas"][0]["text"], d["ideas"][0]["detail"]), ("try x", "why"))
 
     def test_running_record_gets_window_index(self):
+        # the index comes from the state build's own list-panes (window "tests" is index 3 in proj): no list-windows exec
         S = server.SEP
-        listing = f"claude{S}1\ntests{S}3\n"
-        with mock.patch.object(server, "tmux", return_value=listing) as tm:
+        pane = S.join(["proj", "1", "3", "tests", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", ""]) + "\n"
+        with mock.patch.object(server, "tmux", side_effect=lambda *a, **k: pane if a[0] == "list-panes" else "") as tm, \
+             mock.patch.object(server, "cached_worktrees", return_value=[]):
             with urllib.request.urlopen(self.url, timeout=5) as r:
                 runs = {x["id"]: x for x in json.loads(r.read())["runs"]}
-        self.assertEqual(runs["r1"]["window_index"], "3")
+        self.assertEqual(runs["r1"]["window_index"], 3)
         self.assertNotIn("window_index", runs["r2"])  # finished: no lookup
-        self.assertEqual(tm.call_count, 1)
-        self.assertEqual(tm.call_args[0][:3], ("list-windows", "-t", "=proj"))
+        self.assertEqual([c[0][0] for c in tm.call_args_list if c[0][0] == "list-windows"], [])
 
 
 if __name__ == "__main__":
