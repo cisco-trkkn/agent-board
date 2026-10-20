@@ -59,7 +59,7 @@ class TerraformComponents(unittest.TestCase):
         self.assertIn("infra/ledger/google_compute_subnetwork.ledger", b["members"])
 
     def test_meta_counts(self):
-        tf = [c for c in self.inv["components"] if not c["id"].startswith("ci/") and ".procfile." not in c["id"]]
+        tf = [c for c in self.inv["components"] if not c["id"].startswith("ci/") and "/procfile." not in c["id"]]
         self.assertEqual(self.inv["meta"]["extractors"]["terraform"], len(tf))
 
     def test_empty_repo_halts(self):
