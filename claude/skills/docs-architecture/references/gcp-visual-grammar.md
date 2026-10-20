@@ -22,7 +22,7 @@ The marker is one red: the spec's "red-amber" is read as the hue family, amber b
 
 Contrast is the WCAG 2 relative-luminance ratio against the page background; the weakest value is 4.05, above the 3:1 non-text minimum. The smallest OKLab distance between any two rows is 15.1 (light) and 15.0 (dark), so no two categories read alike. Neutral equals `var(--cds-text-secondary)` in both themes.
 
-A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Should the Docs widget refuse a literal hex or `light-dark()`, fall back per category to the page tokens: compute `--cds-chart-categorical-1`, data/analytics `-4`, networking `-7`, security/identity `-6`, operations `-3`, neutral `--cds-text-secondary`, marker `--cds-chart-status-critical`; contrast is then best-effort (three of those sit under 3:1 on the light page). Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, lines and arrowheads `var(--cds-chart-axis)`, project fill `var(--cds-chart-reference-tint)`.
+A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Should the Docs widget refuse a literal hex or `light-dark()`, fall back per category to the page tokens as they render inside the widget frame (measured on a token sheet, Task 7: light / dark): compute `--cds-chart-categorical-1` (#2A78D6 / #3987E5), data/analytics `-2` (#EB6834 / #D95926), networking `-7` (#4A3AA7 / #9085E9), security/identity `-6` (#008300 / #028301), operations `-3` (#1BAF7A / #189E70), neutral `--cds-text-secondary` (#52514E / #C3C2B7), marker `--cds-chart-status-critical` (#D03B3B), edges `--cds-text-secondary`. No two collide; `-4` (#0D366B / #9EC5F4, blue) and `-8` (#E66767, coral) are left out as they sit next to compute and the marker. Contrast is then best-effort: `-2` is 2.9:1 on the light page. Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, boundary outlines `var(--cds-chart-axis)`, project fill `var(--cds-chart-reference-tint)`. Edges and arrowheads take their own pair (Edges): the page's axis token is 1.75:1 on the light page.
 
 Environment bands (see Boundaries) use one page token no category uses, `var(--cds-chart-categorical-5)` (magenta, `#d55181` in both themes inside the widget frame, measured in Task 7), at three strengths: dev fill 0.1 / stroke 0.45, stage 0.2 / 0.7, prod 0.32 / 1. The word carries the meaning, the strength orders it. (The frame's `categorical-4` renders blue, next to compute, so it is not used.)
 
@@ -57,7 +57,7 @@ One icon per node, 24 px at the node's left, the name to its right. A product wi
 | `user.svg` | User | neutral | interview answer |
 | `external-system.svg` | External system | neutral | interview answer, or a product with no glyph |
 
-`project` and `vpc` are boundaries, never nodes; `vpc.svg` marks the VPC outline's label. Two glyphs are single-colour (no hexagon): `user.svg` and `external-system.svg`, in the neutral colour.
+`project` and `vpc` are boundaries, never nodes; `vpc.svg` marks the VPC outline's label. Names are drawn unabbreviated as in this table, with two short forms: Workload Identity Federation is drawn as `WIF pool` / `WIF provider` (its inventory kinds) and Cloud Load Balancing as `Load Balancing`. Two glyphs are single-colour (no hexagon): `user.svg` and `external-system.svg`, in the neutral colour.
 
 ## Boundaries
 
@@ -81,7 +81,14 @@ A **trust boundary** is any project outline, any org/folder outline, and the lin
 | IAM grant | `iam` | dotted `1.5 3` | the role: `roles/run.invoker` |
 | trust (WIF, impersonation) | `trust` | dotted `1.5 3` | the provider or attribute: `gitlab oidc`, `impersonate` |
 
-Every edge ends in an arrowhead in the direction the data moves (one `<marker>` per diagram, `--cds-chart-axis`) and carries a label of at most three words beside the line, never on it. A pair of nodes with several edges of one kind gets one edge labelled with the count (`3 topics`); edges of different kinds stay separate.
+Every edge ends in an arrowhead in the direction the data moves (one `<marker>` per diagram) and carries a label of at most three words beside the line, never on it.
+
+Edge and arrowhead colour is `light-dark(#75736E, #97958D)`, chosen so a line reads on the page and on the project tint it usually crosses (the page's `--cds-chart-axis` is 1.75:1 on the light page, 1.55:1 on the dark one):
+
+| surface | light hex | contrast | dark hex | contrast |
+|---|---|---|---|---|
+| page (`#FCFCFB` / `#151515`) | `#75736E` | 4.61 | `#97958D` | 6.09 |
+| project tint (`#EBEAE9` / `#262625`, the reference tint at 15% over the page) | `#75736E` | 3.94 | `#97958D` | 5.05 | A pair of nodes with several edges of one kind gets one edge labelled with the count (`3 topics`); edges of different kinds stay separate.
 
 **Trust-boundary crossing:** where an edge crosses a trust boundary, a disc of radius 7 in the marker colour sits on the edge at the boundary line, its `!` in the page colour. The key names it ("crosses a trust boundary"); it is the only red on the page.
 
@@ -89,7 +96,7 @@ Every edge ends in an arrowhead in the direction the data moves (one `<marker>` 
 
 - Flow runs left → right: actors and ingress on the left, compute in the middle, data on the right; operations and identity below the row they serve.
 - At most 12 nodes per diagram. Over 12, split as `diagram-set.md` says for that diagram, and link the zoom from the parent node's label (`Billing → §Billing`).
-- Page norms apply: `viewBox 0 0 760 H`, height grows, width does not; positions on a grid of 8 with at least 16 between boxes; node box 156 wide, 48 tall (icon 24 + name) or taller with body lines; text 15 / 13 / 11.5, names `fontWeight 600`; corners `rx 8`; strokes 1 to 1.25.
+- Page norms apply: `viewBox 0 0 760 H`, height grows, width does not; positions on a grid of 8 with at least 16 between boxes; node box 184 wide, 56 tall (icon 24 at the left, a 13/600 name and an 11.5 body line: 184 holds the longest product name, Artifact Registry, unabbreviated; three nodes and two gaps fit a 712-wide project box); text 15 / 13 / 11.5, names `fontWeight 600`; corners `rx 8`; strokes 1 to 1.25.
 - Connectors run in the gaps, start and end on a box edge, elbow around boxes, never over a label.
 - Colour only through the tokens in Colour, so light and dark both render; every `<text>` sets its fill.
 - A key strip along the bottom lists the categories on the diagram and the marker when one appears; a diagram with one category has no key.
