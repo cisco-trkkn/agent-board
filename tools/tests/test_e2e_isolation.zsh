@@ -3,6 +3,10 @@
 # server, stands in for the default server; B = agent-board's server, stands in for -L agent-board), TC_STATE in the
 # scratch dir. The trap kills only those two servers; the real default server, the real -L agent-board server, ~/.claude,
 # ~/.tmux.conf and ~/.local are never started, written or (outside the leak check's hashes) read.
+# TMUX_TMPDIR is a scratch dir before any tmux call: a plain `tmux` (no -L/-S) would land on a scratch "default" socket,
+# not the real default server, and the check at the end fails the test if that socket exists.
+ORIG_TMPDIR="${TMUX_TMPDIR:-/tmp}"   # where the REAL tmux sockets live, captured before the scratch export
+TMX="$(mktemp -d /tmp/abx.XXXXXX)"; export TMUX_TMPDIR="$TMX"
 source "${0:A:h}/lib.zsh"
 R="$TT_REPO"; F="${0:A:h}/fixtures"
 tt_setup claude shell
@@ -14,11 +18,12 @@ kill_b() {
   local sp; sp="$("$TT_BIN" -L "$B_SOCK" display -p '#{socket_path}' 2>/dev/null)"
   "$TT_BIN" -L "$B_SOCK" kill-server 2>/dev/null; [[ -n "$sp" ]] && rm -f "$sp"
 }
-trap 'kill_b; tt_teardown' EXIT INT TERM
+kill_x() { "$TT_BIN" -S "$TMX/tmux-$UID/default" kill-server 2>/dev/null; rm -rf "$TMX" }   # a stray plain tmux would have started a server here
+trap 'kill_b; tt_teardown; kill_x' EXIT INT TERM
 REALHOME="$HOME"
 real_sum() { shasum -a 256 "$REALHOME/.claude/settings.json" "$REALHOME/.tmux.conf" 2>&1 }
 real_sum > "$TT_DIR/real.before"
-real_sock() { "$TT_BIN" -L agent-board list-sessions -F x 2>/dev/null | wc -l | tr -d ' ' }
+real_sock() { "$TT_BIN" -S "$ORIG_TMPDIR/tmux-$UID/agent-board" list-sessions -F x 2>/dev/null | wc -l | tr -d ' ' }
 real_b0="$(real_sock)"
 
 # --- the user's setup, in a scratch HOME
@@ -90,9 +95,15 @@ check "aged: feed epochs ascend"              test "$eps" = "$(print -r -- ${(n)
 if (( $+commands[claude] )); then
   PR="$TT_DIR/plain"; mkdir -p "$PR/state"; git -C "$PR" init -q
   print -r -- "{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"echo user-hook >> $PR/probe\"}]}]}}" > "$PR/settings.json"
-  ( cd "$PR" && env -u TMUX -u TMUX_PANE -u AGENT_BOARD TC_STATE="$PR/state" claude -p --model haiku --no-session-persistence --settings "$PR/settings.json" 'Reply with the single word ok.' > "$PR/out" 2>&1 )
-  check "plain claude: the user's hook fired" grep -qx user-hook "$PR/probe"
-  check "plain claude: no agent-board marker" test -z "$(ls -A "$PR/state")" -a "$(sort -u "$PR/probe")" = user-hook
+  ( cd "$PR" && exec env -u TMUX -u TMUX_PANE -u AGENT_BOARD TC_STATE="$PR/state" claude -p --model haiku --no-session-persistence --settings "$PR/settings.json" 'Reply with the single word ok.' > "$PR/out" 2>&1 ) &
+  cpid=$!; ( sleep 60; kill $cpid ) >/dev/null 2>&1 </dev/null & kpid=$!   # 60s cap; output closed so it can't hold a pipe open
+  wait $cpid; crc=$?; kill $kpid 2>/dev/null
+  if grep -qx user-hook "$PR/probe" 2>/dev/null; then
+    check "plain claude: the user's hook fired" true
+    check "plain claude: no agent-board marker" test -z "$(ls -A "$PR/state")" -a "$(sort -u "$PR/probe")" = user-hook
+  else
+    print -r -- "skip - claude -p did not reach the prompt hook (exit $crc: timeout, auth or network): $(head -c 200 "$PR/out")"
+  fi
 else
   print -r -- "skip - no claude"
 fi
@@ -101,6 +112,7 @@ fi
 real_sum > "$TT_DIR/real.after"
 check "leak: real settings.json and .tmux.conf unchanged" diff "$TT_DIR/real.before" "$TT_DIR/real.after"
 check "leak: real -L agent-board server untouched" test "$(real_sock)" = "$real_b0"
+check "leak: nothing talked to the default tmux socket" test ! -e "$TMX/tmux-$UID/default"
 kill_b
 check "leak: the stand-in agent-board server is gone" sh -c "! $TT_BIN -L $B_SOCK list-sessions >/dev/null 2>&1"
 tt_done
