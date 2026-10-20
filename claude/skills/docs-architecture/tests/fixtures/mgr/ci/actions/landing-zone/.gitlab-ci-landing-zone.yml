@@ -1,0 +1,160 @@
+stages:
+  - validate
+  - landing-zone-deploy
+
+landing-zone-validate:
+  stage: validate
+  image: python:3.11
+  script:
+    - set -euo pipefail
+    - apt-get -qq update > /dev/null && apt-get -qq install -y jq > /dev/null
+    - pip install --quiet pyyaml -r tests/helpers/requirements.txt
+    - sh ci/actions/landing-zone/scripts/validate-fast-layout.sh
+    - python ci/actions/landing-zone/scripts/validate-landing-zone-contracts.py
+    - python -m unittest discover -s ci/actions/landing-zone/tests -p 'test_*.py'
+    - python ci/actions/landing-zone/scripts/validate-migration-waves.py
+    - python ci/actions/landing-zone/scripts/validate-workload-contracts.py
+    - python ci/actions/landing-zone/scripts/drift-sentinel.py
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "dev3" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
+      changes:
+        - landing-zone/**/*
+        - ci/actions/landing-zone/**/*
+        - ci/scripts/ledger/**/*
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "dev3" || $CI_COMMIT_BRANCH == "staging" || $CI_COMMIT_BRANCH == "main")'
+      changes:
+        - landing-zone/**/*
+        - ci/actions/landing-zone/**/*
+        - ci/scripts/ledger/**/*
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone"'
+      when: on_success
+    - when: never
+
+.landing-zone-deploy-template:
+  stage: landing-zone-deploy
+  image: google/cloud-sdk:slim
+  before_script:
+    - set -euo pipefail
+    - apt-get update && apt-get install -y jq python3
+    - apt-get update -qq && apt-get install -y -qq curl unzip >/dev/null
+    - |
+      if ! command -v terraform >/dev/null 2>&1; then
+        TF_VERSION="1.12.2"
+        curl -sSLo /tmp/terraform.zip "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+        unzip -q /tmp/terraform.zip -d /usr/local/bin
+      fi
+    - . ci/actions/landing-zone/scripts/auth-fast-wif.sh
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: "$FAST_AUD"
+  artifacts:
+    paths:
+      - tf-results/
+      - landing-zone/fast/outputs/*.contract.json
+    when: always
+    expire_in: 1 day
+
+landing-zone-deploy-stage0:
+  extends: .landing-zone-deploy-template
+  script:
+    - bash ci/actions/landing-zone/scripts/run-fast-stage.sh 0-org-setup
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "0-org-setup"'
+      when: on_success
+    - when: never
+
+landing-zone-deploy-stage2-security:
+  extends: .landing-zone-deploy-template
+  script:
+    - bash ci/actions/landing-zone/scripts/run-fast-stage.sh 2-security
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "2-security"'
+      when: on_success
+    - when: never
+
+landing-zone-deploy-stage2-networking:
+  extends: .landing-zone-deploy-template
+  script:
+    - bash ci/actions/landing-zone/scripts/run-fast-stage.sh 2-networking
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "2-networking"'
+      when: on_success
+    - when: never
+
+landing-zone-networking-traffic-checks:
+  extends: .landing-zone-deploy-template
+  interruptible: false
+  resource_group: fast-networking-traffic-checks
+  timeout: 45 minutes
+  script:
+    - python3 ci/actions/landing-zone/scripts/check-networking-traffic.py
+  after_script:
+    - |
+      if [ -f tf-results/networking-traffic/manifest.json ]; then
+        set -euo pipefail
+        . ci/actions/landing-zone/scripts/auth-fast-wif.sh
+        python3 ci/actions/landing-zone/scripts/check-networking-traffic.py --cleanup
+      fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "2-networking-traffic-checks" && $CI_COMMIT_BRANCH == "main" && $CI_COMMIT_REF_PROTECTED == "true" && $APPLY_MODE == "apply" && $NETWORKING_TRAFFIC_APPROVED == "true" && $AUTO_CHAIN_PROJECT_FACTORY == "false" && $AUTO_CHAIN_ROLLOUT == "false"'
+      when: on_success
+    - when: never
+
+landing-zone-deploy-stage2-project-factory-shared:
+  extends: .landing-zone-deploy-template
+  script:
+    - bash ci/actions/landing-zone/scripts/run-fast-stage.sh 2-project-factory-shared
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "2-project-factory-shared"'
+      when: on_success
+    - when: never
+
+# One tenant per run. Applies run only from protected main (run-fast-stage.sh
+# and auth-fast-wif.sh enforce it); dev3 and staging can plan. The resource
+# group serializes runs on one tenant state in one environment.
+.landing-zone-tenant-factory-template:
+  extends: .landing-zone-deploy-template
+  resource_group: project-factory-$LANDING_ZONE_STAGE-$TENANT_ID
+  variables:
+    TENANT_FACTORY_DEPS: &tenant-factory-deps >-
+      apt-get install -y -qq python3-pip >/dev/null &&
+      pip install --quiet --break-system-packages pyyaml "cloud-sql-python-connector[pg8000]"
+  artifacts:
+    paths:
+      - tf-results/
+      - landing-zone/fast/outputs/2-project-factory-*/*.contract.json
+      - landing-zone/fast/outputs/2-project-factory-*/*.tenant-project.json
+    when: always
+    expire_in: 1 day
+
+landing-zone-deploy-stage2-project-factory-dev:
+  extends: .landing-zone-tenant-factory-template
+  script:
+    - *tenant-factory-deps
+    - bash ci/actions/landing-zone/scripts/run-fast-stage.sh 2-project-factory-dev
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "2-project-factory-dev" && $CI_COMMIT_BRANCH =~ /^(dev3|staging|main)$/ && $TENANT_ID =~ /^[a-z][a-z0-9-]*[a-z0-9]$/'
+      when: on_success
+    - when: never
+
+landing-zone-deploy-stage2-project-factory-stage:
+  extends: .landing-zone-tenant-factory-template
+  script:
+    - *tenant-factory-deps
+    - bash ci/actions/landing-zone/scripts/run-fast-stage.sh 2-project-factory-stage
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "2-project-factory-stage" && $CI_COMMIT_BRANCH =~ /^(dev3|staging|main)$/ && $TENANT_ID =~ /^[a-z][a-z0-9-]*[a-z0-9]$/'
+      when: on_success
+    - when: never
+
+landing-zone-deploy-stage2-project-factory-prod:
+  extends: .landing-zone-tenant-factory-template
+  script:
+    - *tenant-factory-deps
+    - bash ci/actions/landing-zone/scripts/run-fast-stage.sh 2-project-factory-prod
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $PIPELINE_TYPE == "landing-zone" && $LANDING_ZONE_STAGE == "2-project-factory-prod" && $CI_COMMIT_BRANCH =~ /^(dev3|staging|main)$/ && $TENANT_ID =~ /^[a-z][a-z0-9-]*[a-z0-9]$/'
+      when: on_success
+    - when: never
