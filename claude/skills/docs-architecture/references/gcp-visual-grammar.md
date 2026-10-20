@@ -18,15 +18,17 @@ Colour means product category, nothing else. A node's icon hexagon and its borde
 | neutral (no category) | people, external systems | `#52514E` | `#C3C2B7` | 7.73 / 10.19 |
 | trust-crossing marker | the badge on an edge that crosses a trust boundary | `#C62828` | `#E66767` | 5.48 / 5.65 |
 
+The marker is one red: the spec's "red-amber" is read as the hue family, amber being taken by data/analytics.
+
 Contrast is the WCAG 2 relative-luminance ratio against the page background; the weakest value is 4.05, above the 3:1 non-text minimum. The smallest OKLab distance between any two rows is 15.1 (light) and 15.0 (dark), so no two categories read alike. Neutral equals `var(--cds-text-secondary)` in both themes.
 
-A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, lines and arrowheads `var(--cds-chart-axis)`, project fill `var(--cds-chart-reference-tint)`.
+A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Should the Docs widget refuse a literal hex or `light-dark()`, fall back per category to the page tokens: compute `--cds-chart-categorical-1`, data/analytics `-4`, networking `-7`, security/identity `-6`, operations `-3`, neutral `--cds-text-secondary`, marker `--cds-chart-status-critical`; contrast is then best-effort (three of those sit under 3:1 on the light page). Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, lines and arrowheads `var(--cds-chart-axis)`, project fill `var(--cds-chart-reference-tint)`.
 
 Environment bands (see Boundaries) use page tokens that no category uses: dev `var(--cds-chart-categorical-3)`, stage `var(--cds-chart-categorical-4)`, prod `var(--cds-chart-categorical-5)`. A band is a fill at `fillOpacity 0.18` under a text-primary label, so the token's own contrast does not carry the word.
 
 ## Icons
 
-Drawn glyphs in `assets/gcp-icons/` (24×24: a hexagon in the category colour, the symbol in the page colour; not Google's files, see `SOURCE.md` there). Inline the file's SVG in the module; nothing is fetched at render time. The file carries the light values with a `#fff` symbol. For the dark theme the module swaps the hexagon fill to the dark token and every `#fff` (the symbol's `fill` and `stroke`) to `#151515`; because the symbol is the page colour, symbol-on-hexagon contrast equals the hexagon-on-page contrast in the table above.
+Drawn glyphs in `assets/gcp-icons/` (24×24: a hexagon in the category colour, the symbol in the page colour; not Google's files, see `SOURCE.md` there). Inline the file's SVG in the module; nothing is fetched at render time. The file carries the light values with a `#fff` symbol. For the dark theme the drawing module (`svg-modules.md`, render-checked there) swaps the hexagon fill to the dark token and every `#fff` (the symbol's `fill` and `stroke`) to `#151515`. Symbol-on-hexagon contrast then equals the hexagon-on-page contrast in the table above in dark (same colour), and sits within 0.2 of it in light (`#FFF` symbol, `#FCFCFB` page).
 
 One icon per node, 24 px at the node's left, the name to its right. A product with no glyph takes `external-system.svg` and is named in the brief as a gap.
 
@@ -39,7 +41,7 @@ One icon per node, 24 px at the node's left, the name to its right. A product wi
 | `cloud-sql.svg` | Cloud SQL | data/analytics | `cloud_sql` |
 | `firestore.svg` | Firestore | data/analytics | `firestore` |
 | `pubsub.svg` | Pub/Sub | data/analytics | `pubsub_topic`, `pubsub_subscription` |
-| `vpc.svg` | VPC | networking | `vpc`, `subnet` |
+| `vpc.svg` | VPC | networking | `vpc`, `subnet`: the glyph sits in the VPC outline's label (Boundaries), never as a node |
 | `cloud-load-balancing.svg` | Cloud Load Balancing | networking | interview answer (no extractor yet) |
 | `iam.svg` | IAM | security/identity | the grantee of an `iam` edge when it is a role, not a principal |
 | `service-account.svg` | Service Account | security/identity | `service_account` |
@@ -55,7 +57,7 @@ One icon per node, 24 px at the node's left, the name to its right. A product wi
 | `user.svg` | User | neutral | interview answer |
 | `external-system.svg` | External system | neutral | interview answer, or a product with no glyph |
 
-`project` is a boundary, never a node. Two glyphs are single-colour (no hexagon): `user.svg` and `external-system.svg`, in the neutral colour.
+`project` and `vpc` are boundaries, never nodes; `vpc.svg` marks the VPC outline's label. Two glyphs are single-colour (no hexagon): `user.svg` and `external-system.svg`, in the neutral colour.
 
 ## Boundaries
 
@@ -63,7 +65,7 @@ One icon per node, 24 px at the node's left, the name to its right. A product wi
 |---|---|---|
 | organisation / folder | `org`, `folder` | dashed outline (`strokeDasharray 6 4`), `--cds-chart-axis`, no fill; name top-left |
 | project | `project` | rounded box `rx 8`, fill `var(--cds-chart-reference-tint)`, no stroke; label is the project id, `<tenant>-prod` |
-| VPC / subnet | `vpc` | thin solid outline (`strokeWidth 1`), `--cds-chart-axis`, no fill; name top-left |
+| VPC / subnet | `vpc` | thin solid outline (`strokeWidth 1`), `--cds-chart-axis`, no fill; `vpc.svg` then the name top-left. A `subnet` component is the same thin outline nested inside its VPC, boundary kind `vpc` |
 | environment | `env` | a band behind the boundary label (`fillOpacity 0.18`, the env token from Colour), the env word in capitals: `DEV`, `STAGE`, `PROD` |
 
 Boundaries nest in that order: org/folder around projects, VPC inside a project. Children sit 16 in from the box sides and 16 above its foot; the name line takes 32. A boundary with one child is still drawn when a trust or project edge crosses it, and dropped otherwise.
