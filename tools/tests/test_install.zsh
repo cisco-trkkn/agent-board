@@ -175,6 +175,7 @@ check "non-canonical settings: exit 1, file byte-identical" rc1_same $rc "$H/.cl
 check "non-canonical settings: no backup written" test ! -e "$H/.claude/settings.json.bak-$STAMP"
 check "non-canonical settings: prints the entries to remove by hand" test -n "$(print -r -- "$out" | grep -F 'by hand' )" -a -n "$(print -r -- "$out" | grep -F 'hooks/kill-guard.sh')"
 check "non-canonical settings: hook links kept" test -L "$H/.claude/hooks/kill-guard.sh" -a -L "$H/.claude/hooks/bash-mirror.sh"
+check "non-canonical settings: the reason is the message, not one character" test -n "$(print -r -- "$out" | grep -E '^settings.json left as is: .{8,}')"
 # a .tmux.conf that cannot be read: the ~/.local/bin links stay, settings still migrated
 newhome; seed_global "$FAKE"
 printf '\377\376 bind D run-shell "~/.local/bin/dev"\n' > "$H/.tmux.conf"; cp "$H/.tmux.conf" "$SCR/badtmux"

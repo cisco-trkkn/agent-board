@@ -103,7 +103,7 @@ move_aside() {   # move_aside PATH: into migrated-YYYYMMDD, never deleting
 }
 do_migrate() {
   local n f line S="$HOME/.claude/settings.json" T="$HOME/.tmux.conf" tmux_removed=0 effort=0 settings_ok=1 tmux_ok=1 lrc out
-  local -a cmds gone old
+  local -a cmds gone old whys
   do_install || rc=1
   # settings.json: the agent-board hooks
   for n in bash-mirror artifact-register kill-guard; do cmds+=("~/.claude/hooks/$n.sh" "$HOME/.claude/hooks/$n.sh"); done
@@ -112,7 +112,7 @@ do_migrate() {
     gone=("${(@f)out}")
     if (( lrc == 3 )); then
       settings_ok=0; rc=1
-      print -u2 "settings.json left as is: ${${(M)gone:#install_lib:*}[1]#install_lib: }"
+      whys=("${(@M)gone:#install_lib:*}"); print -u2 "settings.json left as is: ${whys[1]#install_lib: }"
       print -u2 "remove these hook entries from settings.json by hand:"
       for line in "${(@M)gone:#MANUAL *}"; do print -u2 "  ${line#MANUAL }"; done
     elif (( lrc != 0 )); then settings_ok=0; rc=1; print -u2 "settings.json left as is: ${gone[1]}"
