@@ -28,6 +28,20 @@ check "python fallback: executable ~/.local/bin/tmux wins" test "$(fresh python3
 check "python fallback: TC_TMUX wins" test "$(env HOME="$H" PATH="$BREW:$CLEAN" TC_TMUX=/x/tmux python3 -I -c "$PYT" "$R/board")" = /x/tmux
 rm "$H/.local/bin/tmux"
 
+# --- finding 2, plugin scripts copied away from their repo (no resolver to source): same order, own tmux first
+for scr in artifact-register bash-mirror; do
+  CP="$SCR/copy-$scr/a/b/c"; mkdir -p "$CP"; cp "$R/claude/plugin/scripts/$scr.sh" "$CP/"
+  LB="$SCR/lb-$scr"; mkdir -p "$LB/.local/bin" "$SCR/pb-$scr"
+  for w in "$LB/.local/bin/tmux:local" "$SCR/pb-$scr/tmux:path"; do
+    print -r -- "#!/bin/sh
+echo ${w#*:} > $SCR/which-$scr
+echo proj" > "${w%%:*}"; chmod +x "${w%%:*}"
+  done
+  rm -f "$SCR/which-$scr"
+  print -r -- '{"tool_name":"Bash","tool_input":{"command":"true"}}' | env -u TC_TMUX HOME="$LB" PATH="$SCR/pb-$scr:$CLEAN" TMUX=/x/sock,1,0 TMUX_PANE=%1 TC_STATE="$SCR/st" zsh -f "$CP/$scr.sh" --path "$SCR/none.md" >/dev/null 2>&1
+  check "$scr (copied away): ~/.local/bin/tmux beats the PATH one" test "$(cat "$SCR/which-$scr" 2>/dev/null)" = local
+done
+
 # --- finding 1: dev types the lead's launcher by absolute path
 STUBD="$SCR/stub"; mkdir -p "$STUBD"
 print -r -- '#!/bin/sh

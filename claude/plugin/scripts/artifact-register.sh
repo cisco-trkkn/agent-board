@@ -9,7 +9,7 @@ STATE="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}"
 # tmux: the repo's resolver; if the plugin was copied away from its repo, the server this pane is on
 RES="${0:A:h:h:h:h}/bin/_tc_bins.zsh"
 if [[ -r "$RES" ]]; then source "$RES"; TMUX_BIN=tc_tmux
-else TMUX_BIN=("${TC_TMUX:-${commands[tmux]:-$HOME/.local/bin/tmux}}"); [[ -n "$TMUX" ]] && TMUX_BIN+=(-S "${TMUX%%,*}"); fi
+else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME/.local/bin/tmux || print -r -- ${commands[tmux]:-$HOME/.local/bin/tmux})}"); [[ -n "$TMUX" ]] && TMUX_BIN+=(-S "${TMUX%%,*}"); fi
 {
   apath= kind= agent= project= manual=0 scoped=0
   while (( $# )); do
