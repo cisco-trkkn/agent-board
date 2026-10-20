@@ -16,7 +16,10 @@ case "$1" in
 esac
 exit 0' > "$STUB/claude"
 chmod +x "$STUB"/*
-BASEPATH="${commands[python3]:h}:/usr/bin:/bin"
+# system tools without the ones --check looks for: CI runners keep fzf/jq/tmux in /usr/bin, which would hide a "missing" stub
+SYSBIN="$SCR/sysbin"; mkdir -p "$SYSBIN"
+for f in /usr/bin/*(N) /bin/*(N); do [[ ${f:t} == (fzf|jq|tmux|ttyd|claude) || -e $SYSBIN/${f:t} ]] || ln -s "$f" "$SYSBIN/${f:t}"; done
+BASEPATH="${commands[python3]:h}:$SYSBIN"
 
 rc1_same() { [[ "$1" -eq 1 ]] && cmp -s "$2" "$3" }
 newhome() { H="$SCR/h$RANDOM"; mkdir -p "$H"; }
