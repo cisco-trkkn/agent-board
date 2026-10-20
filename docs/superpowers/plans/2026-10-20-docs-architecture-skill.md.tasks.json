@@ -72,7 +72,7 @@
   {
    "id": 9,
    "subject": "Task 9: End-to-end: architecture doc for master-gcp-repo",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** Using only the installed skill, produce a real Claude Doc architecture overview of master-gcp-repo at current `dev3`. Then have a fresh-eyes reviewer verify traceability and at-a-glance quality.\n\n> **USER-ORDERED GATE \u2014 NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- None in the repo: output is a Claude Doc plus `inventory.json` in the task's scratch dir\n\n**Constraints:**\n- Real, aged state: run against the user's real `~/master-gcp-repo` at `origin/dev3`, read-only. If you need a scratch checkout, use `git worktree add --detach` and remove it afterwards. Never against fixtures.\n- Interview questions go to the lead, not the user. The lead answers or forwards them.\n- Run `inventory.py` with `-o` into the task's scratch dir. Never write into master-gcp-repo.\n\n**Acceptance Criteria:**\n- [ ] The Doc exists and its link is in the report. It has a hero context diagram, a key-numbers strip, at least 3 subsystem sections each with a zoom diagram, and a trust-boundary diagram showing the GitLab WIF pool \u2192 planner/deployer service-account path.\n- [ ] The stamp reads `As built from master-gcp-repo@<dev3 sha>, <date>`, and the hidden id-map block is present.\n- [ ] A fresh reviewer subagent (standard tier) samples 10 diagram nodes and traces each to a `file:line` in master-gcp-repo, and all 10 trace. It also gives a per-diagram verdict on \"makes its point at a glance\", and any \"no\" is fixed and re-reviewed.\n- [ ] No diagram has more than 12 nodes.\n\n**Verify:** the report contains the Doc link, the inventory `meta` (sha, extractor counts, confidence), the reviewer's 10-node trace table, and its per-diagram verdicts.\n\nFull steps: docs/superpowers/plans/2026-10-20-docs-architecture-skill.md (Task 9)\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"Doc with hero, key numbers, >=3 subsystem zooms, WIF trust diagram\", \"stamp with dev3 sha + hidden id map\", \"reviewer: 10/10 nodes trace to file:line; at-a-glance verdicts all yes\", \"no diagram > 12 nodes\"], \"modelTier\": \"frontier\", \"userGate\": true, \"tags\": [\"user-gate\"], \"subagentBrief\": \"Real master-gcp-repo dev3, read-only; reviewer traces 10 nodes.\"}\n```",
    "blockedBy": [
     8
@@ -88,5 +88,5 @@
    ]
   }
  ],
- "lastUpdated": "2026-10-20T12:32:29"
+ "lastUpdated": "2026-10-20T13:40:25"
 }
