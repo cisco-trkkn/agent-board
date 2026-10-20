@@ -53,7 +53,7 @@
   {
    "id": 7,
    "subject": "Task 7: SVG drawing modules, render-checked in a real Doc",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** Write `references/svg-modules.md`: copy-ready `claude.Visualize` module snippets for an icon node, a labelled edge (solid/dashed/dotted), a boundary box (org/project/vpc), an environment band, a swimlane and a trust-crossing marker, plus one composed example. Each is verified by rendering in a real Claude Doc in light and dark.\n\n**Files:**\n- Create: `claude/skills/docs-architecture/references/svg-modules.md`\n\n**Constraints:**\n- Read `anthropic-skills:docs` and its `guide` topics `topic.diagram` and `topic.charts` first. The module contract (how a widget module returns SVG, how labels stay editable in place, theme tokens) comes from there, never from memory.\n- Use the colours and icons from Task 6 and Task 1. Icons are inlined. No external fetches.\n- Labels must stay editable in place, as that topic describes.\n- Make the render check in a scratch Doc titled `docs-architecture module check (scratch)`, then delete that Doc afterwards. Record the screenshot reads in the task report.\n\n**Acceptance Criteria:**\n- [ ] `svg-modules.md` has one `## ` section per primitive (6) plus `## Composed example`, each with a fenced module snippet.\n- [ ] The composed example draws a 5-node diagram: Cloud Run \u2192 Pub/Sub (dashed) \u2192 Cloud Run \u2192 BigQuery, plus a WIF pool with a dotted trust edge and a trust-crossing marker, inside a project boundary with an env band.\n- [ ] The task report shows the screenshot `read` of the composed example in light and in dark. Every label is legible and no element is clipped. If a screenshot cannot be returned, the report says so, and the task stays open for the lead.\n- [ ] The scratch Doc is deleted (the report shows the delete call result).\n\n**Verify:** `grep -c '^## ' claude/skills/docs-architecture/references/svg-modules.md` \u2192 `7`; the report contains both screenshot reads.\n\nFull steps: docs/superpowers/plans/2026-10-20-docs-architecture-skill.md (Task 7)\n\n```json:metadata\n{\"files\": [\"claude/skills/docs-architecture/references/svg-modules.md\"], \"verifyCommand\": \"grep -c '^## ' claude/skills/docs-architecture/references/svg-modules.md\", \"acceptanceCriteria\": [\"6 primitive sections + Composed example with module snippets\", \"composed example: 5 nodes, async + trust edges, marker, project boundary, env band\", \"light and dark screenshot reads in report, legible, unclipped\", \"scratch Doc deleted\"], \"modelTier\": \"frontier\"}\n```",
    "blockedBy": [
     6
@@ -88,5 +88,5 @@
    ]
   }
  ],
- "lastUpdated": "2026-10-20T11:53:40"
+ "lastUpdated": "2026-10-20T12:24:42"
 }
