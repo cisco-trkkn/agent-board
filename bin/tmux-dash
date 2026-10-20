@@ -13,7 +13,7 @@ source "${0:A:h}/_tc_bins.zsh"
 tc_tmux_resolve dedicated                           # the board shows agent-board's own server, wherever tmux-dash was typed
 export TMUX_DASH_TMUX_ARGS="$(tc_tmux_args_str)"   # server.py and ttyd's tmux-web-attach read the same server
 STATE="$HOME/.local/state/tmux-dash"
-APP="$HOME/.local/share/tmux-dash"
+APP="${0:A:h:h}/board"
 PORT="${TMUX_DASH_PORT:-7700}"
 TTYD_PORT="${TMUX_DASH_TTYD_PORT:-7701}"
 mkdir -p "$STATE"; chmod 700 "$STATE"
@@ -35,11 +35,11 @@ stop() {
 start() {
   local tok; tok="$(token)"
   if ! alive ttyd; then
-    TMUX_DASH_TMUX_ARGS="$TMUX_DASH_TMUX_ARGS" nohup "$HOME/.local/bin/ttyd" \
+    TMUX_DASH_TMUX_ARGS="$TMUX_DASH_TMUX_ARGS" nohup "$(tc_bin ttyd TTYD_BIN)" \
       -i 127.0.0.1 -p "$TTYD_PORT" -b "/$tok-tty" -O -W -a \
       -t fontSize=13 -t 'fontFamily=SF Mono, Menlo, monospace' -t disableLeaveAlert=true \
       -t 'theme={"background":"#1e1e2e","foreground":"#cdd6f4","cursor":"#f5e0dc","selectionBackground":"#45475a"}' \
-      "$HOME/.local/bin/tmux-web-attach" > "$STATE/ttyd.log" 2>&1 &
+      "${0:A:h}/tmux-web-attach" > "$STATE/ttyd.log" 2>&1 &
     print $! > "$STATE/ttyd.pid"
   fi
   if ! alive server; then

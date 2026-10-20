@@ -41,6 +41,15 @@ tc_tmux_resolve() {
   fi
   TC_TMUX_CMD=("${TC_TMUX:-$HOME/.local/bin/tmux}" "${TC_TMUX_ARGS[@]}")
 }
+# tc_bin <tool> <override-var>: the path of a helper tool. The override variable's value, else the tool on PATH, else
+# ~/.local/bin/<tool> (the documented legacy fallback for installs that linked their tools there).
+tc_bin() {
+  emulate -L zsh
+  local o="${(P)2}"
+  if [[ -n "$o" ]]; then print -r -- "$o"
+  elif (( $+commands[$1] )); then print -r -- "$commands[$1]"
+  else print -r -- "$HOME/.local/bin/$1"; fi
+}
 tc_tmux() { "${TC_TMUX_CMD[@]}" "$@" }
 tc_tmux_args_str() { print -r -- "${(j: :)${(q)TC_TMUX_ARGS[@]}}" }
 tc_tmux_resolve

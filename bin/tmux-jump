@@ -4,7 +4,7 @@
 # popup on the client (display-popup does not expand formats in its command, run-shell does).
 emulate -L zsh
 source "${0:A:h}/_tc_bins.zsh"
-FZF_BIN="$HOME/.local/bin/fzf"
+FZF_BIN="${FZF_BIN:-$(tc_bin fzf FZF_BIN)}"
 popup=0; [[ "$1" == --popup ]] && { popup=1; shift }
 client=(); [[ -n "$1" ]] && client=(-c "$1")
 if (( popup )); then

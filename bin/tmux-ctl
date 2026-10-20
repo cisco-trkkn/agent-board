@@ -20,7 +20,6 @@
 #                                          refused unless --brief FILE (contents sent verbatim) or --force;
 #                                          user-config work (~/.claude, hooks, dotfiles...) draws a warning
 #   tmux-ctl tell  <agent> <message>       type a message into a worker's prompt
-TC_SELF="${0:A}"          # file scope: inside a function $0 is the function name
 #                                          (refused while the worker is waiting on the user)
 #   tmux-ctl agents                        worker status + last lines
 #   tmux-ctl artifact <path> [--kind K]    show a file in the board's artifacts panel
@@ -30,6 +29,7 @@ TC_SELF="${0:A}"          # file scope: inside a function $0 is the function nam
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
+TC_SELF="${0:A}"          # file scope: inside a function $0 is the function name
 emulate -L zsh
 setopt pipefail
 source "${0:A:h}/_tc_bins.zsh"
@@ -336,7 +336,8 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
       print -u2 "tmux-ctl: warning: this looks like user-config work (~/.claude, settings, hooks, plugins, skills, global CLAUDE.md, LaunchAgents, dotfiles) — run it in the main session, not a worktree worker (--force silences this)"
     fi
     source "${0:A:h}/_ab_claude.zsh"
-    rules=""; [[ -r "$HOME/.claude/worker.md" ]] && rules=' --append-system-prompt-file ~/.claude/worker.md'
+    rules=""; wr="$HOME/.config/agent-board/worker.md"; [[ -r "$wr" ]] || wr="$AB_REPO/claude/worker.md"   # a user override wins
+    [[ -r "$wr" ]] && rules=" --append-system-prompt-file ${(q)wr}"
     line="PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; exit 0 }   # test seam: stop before any window is created
     t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"
@@ -383,13 +384,13 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     [[ -f "$p" ]] || die "no file '$p'"
     warn_web_key
     # no --kind: the hook's kind_of() decides (plan, spec, handoff, report), else "other"
-    "$HOME/.claude/hooks/artifact-register.sh" --path "$p" "${kopt[@]}" --project "$FEEDKEY"
+    "${0:A:h:h}/claude/hooks/artifact-register.sh" --path "$p" "${kopt[@]}" --project "$FEEDKEY"
     k="$(jq -r --arg p "$p" 'select(.path==$p)|.kind' "$STATE/artifacts-$FEEDKEY.jsonl" 2>/dev/null | tail -1)"
     print -r -- "registered $p (${k:-unknown})" ;;
 
   idea)
     [[ -n "$*" ]] || die "usage: tmux-ctl idea <text>"
-    python3 -I "$HOME/.local/share/tmux-dash/ideas.py" add --project "$FEEDKEY" -- "$*" ;;
+    python3 -I "${0:A:h:h}/board/ideas.py" add --project "$FEEDKEY" -- "$*" ;;
 
   relay)
     [[ -n "$1" ]] || die "usage: tmux-ctl relay <handoff-doc> [--old-session <id>]"
@@ -402,7 +403,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     # detached: the lead that asked for the relay must finish its turn before its pane is replaced
     # tmux format-expands run-shell strings: '#' -> '##' in every interpolated argument
     h() { print -r -- "${1//\#/##}" }
-    t run-shell -b "python3 -I $(h ${(q)HOME})/.local/share/tmux-dash/relay.py --session $(h ${(q)FEEDKEY}) --doc $(h ${(q)doc}) --old-session $(h ${(q)old}) --state $(h ${(q)STATE}) --socket $(h ${(q)sock}) > $(h ${(q)log}) 2>&1 || $(h ${(q)${0:A}}) _relay_failed $(h ${(q)log}) $(h ${(q)doc}) $(h ${(q)FEEDKEY})"
+    t run-shell -b "python3 -I $(h ${(q)${0:A:h:h}})/board/relay.py --session $(h ${(q)FEEDKEY}) --doc $(h ${(q)doc}) --old-session $(h ${(q)old}) --state $(h ${(q)STATE}) --socket $(h ${(q)sock}) > $(h ${(q)log}) 2>&1 || $(h ${(q)${0:A}}) _relay_failed $(h ${(q)log}) $(h ${(q)doc}) $(h ${(q)FEEDKEY})"
     print -r -- "relay scheduled: ${FEEDKEY}:claude restarts with $doc once this turn ends (log: $log)" ;;
 
   ""|-h|--help|help)

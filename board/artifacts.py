@@ -1,4 +1,4 @@
-"""artifacts: the session artifact manifest written by ~/.claude/hooks/artifact-register.sh.
+"""artifacts: the session artifact manifest written by claude/hooks/artifact-register.sh.
 
 summary() for the board's panel, read() of allowlisted files only, save() with a hash check,
 and CommentQueue: plan comments typed into the lead's pane, never while it shows a prompt.
@@ -14,7 +14,7 @@ import time
 import uuid
 from pathlib import Path
 
-HOOK = Path.home() / ".claude" / "hooks" / "artifact-register.sh"
+HOOK = Path(__file__).resolve().parent.parent / "claude" / "hooks" / "artifact-register.sh"
 
 
 def state_dir():

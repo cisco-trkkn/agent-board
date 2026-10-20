@@ -3,6 +3,7 @@
 # Windows: 1 claude · 2 shell (yours). Agent windows live in the hidden session <name>-bg.  Run it again and it just reattaches.
 emulate -L zsh
 source "${0:A:h}/_tc_bins.zsh"
+[[ "$1" == (-h|--help|help) ]] && { sed -n '2,3p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 }
 tc_tmux_resolve dedicated       # dev is an entry point: agent-board's own tmux server, wherever it was typed
 
 dir="${1:-$PWD}"
@@ -26,7 +27,7 @@ fi
 
 # the session's server, by socket: the layout child targets exactly it, whatever its own environment would resolve to
 sock="$(tc_tmux display -p -t "=${name}:" '#{socket_path}' 2>/dev/null)"
-TMUX_DASH_TMUX_ARGS="${sock:+-S ${(q)sock}}" "${TC_LAYOUT:-$HOME/.local/bin/tmux-dev-layout}" "$name" "$root" 2>/dev/null || true
+TMUX_DASH_TMUX_ARGS="${sock:+-S ${(q)sock}}" "${TC_LAYOUT:-${0:A:h}/tmux-dev-layout}" "$name" "$root" 2>/dev/null || true
 
 # attach, or switch the client we are in. Typed in a pane of another tmux server, never nest: say how to attach.
 on_this_server() { [[ -n "$TMUX" && -n "$sock" && "${sock:A}" == "${${TMUX%%,*}:A}" ]] }

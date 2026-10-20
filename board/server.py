@@ -21,10 +21,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HOME = Path.home()
-BIN = HOME / ".local" / "bin"
+HERE = Path(__file__).resolve().parent
+BIN = HERE.parent / "bin"
 TMUX_CTL = str(BIN / "tmux-ctl")
 DEV = str(BIN / "dev")
-HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)

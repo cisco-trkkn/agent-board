@@ -5,11 +5,12 @@ stub="$(mktemp -d)"; trap 'rm -rf "$stub"; tt_teardown' EXIT INT TERM
 print -r -- '#!/bin/sh
 for a in "$@"; do printf "%s\n" "$a"; done
 printf "PATH=%s\n" "$PATH"' > "$stub/claude"; chmod +x "$stub/claude"
-out="$(PATH="$stub:$PATH" $R/bin/claude-orchestrator)"
+cfg="$(mktemp -d)"   # a HOME with no user override: the repo rules apply
+out="$(HOME="$cfg" TC_TMUX="$TT_BIN" PATH="$stub:$PATH" $R/bin/claude-orchestrator)"; rm -rf "$cfg"
 check "orchestrator uses -file flag"  grep -qxF -- '--append-system-prompt-file' <<< "$out"
-check "orchestrator passes path"      grep -qxF -- "$HOME/.claude/orchestrator.md" <<< "$out"
+check "orchestrator passes path"      grep -qxF -- "$R/claude/orchestrator.md" <<< "$out"
 check "no prompt text in argv"        test -z "$(grep -F 'tmux-ctl run' <<< "$out")"
-check "worker rules via -file"        grep -qE 'append-system-prompt-file (~|"\$HOME)/\.claude/worker\.md' $R/bin/tmux-ctl
+check "worker rules via -file"        grep -qF -- "--append-system-prompt-file $R/claude/worker.md" <<< "$(HOME=/nonexistent TC_AGENT_DRYRUN=1 $R/bin/tmux-ctl agent w --force 'a b' 2>&1)"
 check "no inline worker.md"           test -z "$(grep -F '$(<~/.claude/worker.md)' $R/bin/tmux-ctl)"
 
 # agent-board session config on every launcher
