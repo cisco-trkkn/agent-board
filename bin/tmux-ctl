@@ -57,12 +57,16 @@ warn_web_key() {   # state filed under a browser view's name is invisible to the
 MAIN="$SESSION"
 BG="$FEEDKEY-bg"   # hidden session for the agents' tests/shell windows and their lanes (user keeps a plain shell)
 is_bg_win() { [[ "${1%%·*}" == (tests|shell) ]] }
+# wait_prompt <target>: a window created a moment ago has drawn something (its first prompt), up to 5s.
+# Typing earlier than that races the shell's startup files, and the line can be lost.
+wait_prompt() { local n=0; while (( n++ < 50 )); do [[ -n "$(t capture-pane -p -t "$1" 2>/dev/null | tr -d '[:space:]')" ]] && return 0; sleep 0.1; done; return 1 }
 ensure_bg() {
   t has-session -t "=$BG" 2>/dev/null && [[ -n "$(t show-options -qv -t "=$BG:" @tc_bg)" ]] && return
   local root; root="$(git rev-parse --show-toplevel 2>/dev/null)" || root="$PWD"
   # new-session is the atomic gate: only the caller that creates the session finishes setting it up
   if t new-session -d -s "$BG" -n tests -x 200 -y 50 -c "$root" 2>/dev/null; then
     t new-window -d -t "=$BG:" -n shell -c "$root"
+    wait_prompt "=${BG}:tests"; wait_prompt "=${BG}:shell"
     t set-option -t "=$BG:" @tc_bg 1      # set last: it marks the session as complete
   else
     local n=0; while [[ -z "$(t show-options -qv -t "=$BG:" @tc_bg)" ]] && (( n++ < 40 )); do sleep 0.1; done
@@ -146,6 +150,7 @@ pick_win() {
     t new-window -d -t "=$SESSION:" -n "$lane" -c "$(t display -p -t "$(target "$base")" '#{pane_current_path}')"
     t set-option -w -t "=$SESSION:$lane" @tc_lane 1
     t set-option -w -t "=$SESSION:$lane" automatic-rename off
+    wait_prompt "=${SESSION}:${lane}"
   fi
   need_idle "$lane"
   t set-option -w -t "=$SESSION:$lane" @tc_lane_used "$EPOCHSECONDS"

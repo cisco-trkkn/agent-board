@@ -13,6 +13,13 @@ SEP = server.SEP
 relay = server.relay
 
 
+import sys  # noqa: E402
+
+
+def setUpModule():
+    sys.modules["relay"].PROMPT_WAIT = 0   # the fake draws no prompt
+
+
 class Fake:
     """Records tmux calls; answers list-windows / list-panes / has-session."""
 

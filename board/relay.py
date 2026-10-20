@@ -61,9 +61,26 @@ def orchestrator():
     return str(Path(repo) / "bin" / "claude-orchestrator")
 
 
+PROMPT_WAIT = 5.0   # seconds to let a fresh shell draw its first prompt before typing into it
+
+
+def wait_prompt(tmux, pane, cap=None, sleep=time.sleep):
+    """True once the pane shows anything (its first prompt). Typing earlier races the shell's startup files."""
+    cap = PROMPT_WAIT if cap is None else cap
+    waited = 0.0
+    while True:
+        if tmux("capture-pane", "-p", "-t", pane).strip():
+            return True
+        if waited >= cap:
+            return False
+        sleep(0.1)
+        waited += 0.1
+
+
 def respawn(tmux, pane, root, prompt=None):
     """Replace whatever runs in pane with a fresh shell in root, then start claude-orchestrator [prompt]."""
     tmux("respawn-pane", "-k", "-t", pane, "-c", root, check=True)  # no command: fresh default shell
+    wait_prompt(tmux, pane)
     cmd = shlex.quote(orchestrator()) + (f" {shlex.quote(prompt)}" if prompt else "")
     tmux("send-keys", "-t", pane, "-l", "--", cmd, check=True)
     tmux("send-keys", "-t", pane, "Enter", check=True)
