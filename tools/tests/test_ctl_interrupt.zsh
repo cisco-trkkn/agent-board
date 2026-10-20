@@ -1,7 +1,7 @@
 source "${0:A:h}/lib.zsh"
 C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 export TC_IDEAS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ttideas.XXXXXX")"
-mkdir -p "${TMPDIR:-/tmp}/zd.$$"; export ZDOTDIR="${TMPDIR:-/tmp}/zd.$$"
+mkdir -p "${TMPDIR:-/tmp}/zd.$$"; : > "${TMPDIR:-/tmp}/zd.$$/.zshrc"; export ZDOTDIR="${TMPDIR:-/tmp}/zd.$$"
 tt_setup
 last_log() { jq -rs 'map(select(.log))|last|.log' "$TC_STATE/runs-tt.jsonl" }
 # M2 + M1: a timeout leaves a log and no stale .rc once the late _done arrives
