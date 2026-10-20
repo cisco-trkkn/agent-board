@@ -9,7 +9,7 @@ exec sleep 600
 EOF
 chmod +x "$STUB/repo/bin/claude-orchestrator"
 export PATH="$STUB:$PATH" RELAY_OUT="$STUB/args" TC_IDEAS_DIR="$STUB/ideas"
-mkdir -p "$STUB/zdot"; : > "$STUB/zdot/.zshrc"; export ZDOTDIR="$STUB/zdot"   # panes read no user rc, so the stub stays first on PATH (never start a real claude)
+tt_zdot "$STUB/zdot"   # panes read no user rc, so the stub stays first on PATH (never start a real claude)
 tt_setup claude
 export AGENT_BOARD_REPO="$STUB/repo"; tt set-environment -g AGENT_BOARD_REPO "$STUB/repo"     # run-shell jobs get the server's env; the relay types <repo>/bin/claude-orchestrator by absolute path (bin/ is not on PATH on a fresh install)
 doc="$TT_DIR/h.md"; print "# handoff" > "$doc"

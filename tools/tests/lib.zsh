@@ -3,6 +3,10 @@ TT_BIN="${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME/.local/
 TT_REPO="${${(%):-%x}:A:h:h:h}"          # the checkout under test (file scope: inside a function $0 is the function name)
 TT_FAILS=0
 
+# tt_zdot <dir>: a ZDOTDIR for pane shells. No global rcs either: Ubuntu's /etc/zsh/zshrc runs compinit, which asks
+# "insecure directories, continue [y/n]?" on a runner and eats the first typed line.
+tt_zdot() { mkdir -p "$1"; print -r -- 'unsetopt GLOBAL_RCS' > "$1/.zshenv"; : > "$1/.zshrc"; export ZDOTDIR="$1" }
+
 tt_setup() {   # tt_setup [windows...]  (default: claude shell tests)
   local wins=("${@:-claude}"); (( $# )) || wins=(claude shell tests)
   TT_SOCK_NAME="tctest-$$-$RANDOM"
@@ -10,7 +14,7 @@ tt_setup() {   # tt_setup [windows...]  (default: claude shell tests)
   TT_DIR="${TT_DIR:A}"
   export TC_STATE="$TT_DIR/state"; mkdir -p "$TC_STATE"
   # pane shells are interactive zsh: without a .zshrc in $ZDOTDIR/$HOME they open the zsh-newuser-install menu and eat the typed line (fresh CI runners)
-  [[ -n "$ZDOTDIR" ]] || { export ZDOTDIR="$TT_DIR/zdot"; mkdir -p "$ZDOTDIR"; : > "$ZDOTDIR/.zshrc" }
+  [[ -n "$ZDOTDIR" ]] || tt_zdot "$TT_DIR/zdot"
   unset TMUX TMUX_PANE TC_SESSION TMUX_DASH_TMUX_ARGS DEV_NO_ATTACH DEV_CLIENT DEV_CLAUDE_CMD   # a board-opened shell exports some of these
   # the private socket stands in for agent-board's own server (-L agent-board), and this checkout for the live one
   export SHELL="${commands[zsh]:-/bin/zsh}"   # pane shells run zsh syntax; tmux takes default-shell from $SHELL (CI runners have bash)
