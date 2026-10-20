@@ -32,11 +32,13 @@ check "legacy hook paths are symlinks into the plugin" zsh -c 'cd "$1/claude/hoo
 check "superpowers-hook.sh stays in claude/hooks (regular file)" test -f "$R/claude/hooks/superpowers-hook.sh" -a ! -L "$R/claude/hooks/superpowers-hook.sh"
 check "plugin ships skills and agents" zsh -c 'cd "$1" && for f in skills/tmux-orchestrator/SKILL.md skills/handoff/SKILL.md skills/handoff/agents/openai.yaml agents/effort-low.md agents/effort-medium.md agents/effort-high.md; do [[ -s $f ]] || exit 1; done' _ "$P"
 
-# the per-session file must not share a name with main's tracked mirror of the user's global settings (claude/settings.json)
-check "session settings file is session-settings.json; claude/settings.json is not used" test -f "$R/claude/session-settings.json" -a ! -e "$R/claude/settings.json"
+# the per-session file must not share a name with main's tracked mirror of the user's global settings (claude/settings.json):
+# the launcher loads session-settings.json and never the mirror
+check "session settings file is session-settings.json; claude/settings.json (the global mirror) is not used" zsh -c 'source "$1/bin/_ab_claude.zsh"; [[ -f $1/claude/session-settings.json && "$(ab_claude_args)" == *"--settings ${(q)AB_REPO}/claude/session-settings.json "* && "$(ab_claude_args)" != *claude/settings.json* ]]' _ "$R"
 
 # 2. no absolute home paths
-check "no /Users/ under claude/" test -z "$(grep -rn '/Users/' "$R/claude/" 2>/dev/null)"
+# (claude/settings.json and claude/staged/ are the author's own global config mirror, not shipped to agent-board sessions)
+check "no /Users/ under claude/" test -z "$(grep -rn '/Users/' "$R/claude/" --exclude=settings.json --exclude-dir=staged --exclude-dir=__pycache__ 2>/dev/null)"
 check "ab_claude_args loads the plugin" zsh -c 'source "$1/bin/_ab_claude.zsh"; [[ "$(ab_claude_args)" == *"--plugin-dir ${(q)AB_REPO}/claude/plugin"* ]]' _ "$R"
 
 # the agent-facing rules name the ideas path board/ideas.py writes, not the old ~/.claude one
@@ -86,7 +88,7 @@ for f in ("orchestrator.md", "worker.md"):
             if "If installed" in line: continue
             bad.append((f, n, ns + ":" + name))
         for name in ("task-observer", "gitlab-ci-loop"):
-            if "`" + name in line and "If installed" not in line: bad.append((f, n, name))
+            if "`" + name in line and "If installed" not in line and not re.search(r"(?i)(do not|don't) invoke", line): bad.append((f, n, name))
         if re.search(r"tmux-orchestrator|`/?handoff`", line) and "agent-board:" not in line:
             bad.append((f, n, "unprefixed plugin skill"))
         for name in re.findall(r"effort-(?:low|medium|high)", line):
