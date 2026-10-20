@@ -375,12 +375,14 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
 
   artifact)
     [[ -n "$1" ]] || die "usage: tmux-ctl artifact <path> [--kind plan|spec|handoff|report|other]"
-    p="${1:A}"; shift; k=other
-    [[ "$1" == --kind && -n "$2" ]] && k="$2"
+    p="${1:A}"; shift; k=""; kopt=()
+    [[ "$1" == --kind && -n "$2" ]] && { k="$2"; kopt=(--kind "$k") }
     [[ -f "$p" ]] || die "no file '$p'"
     warn_web_key
-    "$HOME/.claude/hooks/artifact-register.sh" --path "$p" --kind "$k" --project "$FEEDKEY"
-    print -r -- "registered $p ($k)" ;;
+    # no --kind: the hook's kind_of() decides (plan, spec, handoff, report), else "other"
+    "$HOME/.claude/hooks/artifact-register.sh" --path "$p" "${kopt[@]}" --project "$FEEDKEY"
+    k="$(jq -r --arg p "$p" 'select(.path==$p)|.kind' "$STATE/artifacts-$FEEDKEY.jsonl" 2>/dev/null | tail -1)"
+    print -r -- "registered $p (${k:-unknown})" ;;
 
   idea)
     [[ -n "$*" ]] || die "usage: tmux-ctl idea <text>"
