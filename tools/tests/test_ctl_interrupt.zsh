@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-C="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 export TC_IDEAS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ttideas.XXXXXX")"
 mkdir -p "$TMPDIR/zd.$$"; export ZDOTDIR="$TMPDIR/zd.$$"
 tt_setup

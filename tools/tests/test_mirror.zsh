@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-H="${TC_MIRROR:-$HOME/.claude/hooks/bash-mirror.sh}"; F="${0:A:h}/fixtures"
+H="${TC_MIRROR:-$TT_REPO/claude/hooks/bash-mirror.sh}"; F="${0:A:h}/fixtures"
 tt_setup
 tlog="$TC_STATE/feed-tt-tests.log"; slog="$TC_STATE/feed-tt-shell.log"
 run_hook() { sed "s|__HOME__|$HOME|" "$1" | "$H"; }   # env (TMUX, TMUX_PANE, TC_STATE) comes from tt_setup

@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-C="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 STUB="$(mktemp -d "${TMPDIR:-/tmp}/ttstub.XXXXXX")"
 cat > "$STUB/claude-orchestrator" <<'EOF'
 #!/bin/sh

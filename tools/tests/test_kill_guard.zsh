@@ -1,6 +1,6 @@
 source "${0:A:h}/lib.zsh"
 # Never runs a real pkill/killall: the hook only inspects `ps`; we feed it JSON on stdin.
-H=~/.claude/hooks/kill-guard.sh
+H="${TC_KILLGUARD:-$TT_REPO/claude/hooks/kill-guard.sh}"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/kg.XXXXXX")"; tmp="${tmp:A}"
 pids=()
 cleanup() { local p c; for p in $pids; do for c in $(pgrep -P "$p"); do kill "$c" 2>/dev/null; done; kill "$p" 2>/dev/null; done; rm -rf "$tmp"; }

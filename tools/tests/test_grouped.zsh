@@ -1,7 +1,7 @@
 # Grouped (web-attach) view sessions: feed logs must be keyed by the session GROUP, not the view name.
 source "${0:A:h}/lib.zsh"
-H="${TC_MIRROR:-$HOME/.claude/hooks/bash-mirror.sh}"; F="${0:A:h}/fixtures"
-LAYOUT="${TC_LAYOUT:-$HOME/.local/bin/tmux-dev-layout}"; CTL="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+H="${TC_MIRROR:-$TT_REPO/claude/hooks/bash-mirror.sh}"; F="${0:A:h}/fixtures"
+LAYOUT="${TC_LAYOUT:-$TT_REPO/bin/tmux-dev-layout}"; CTL="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt_setup
 tt new-session -d -t '=tt' -s _web-1       # newest session in the group: TMUX_PANE now resolves to it
 check "precondition: pane resolves to view" test "$(tt display -p -t $TMUX_PANE '#{session_name}')" = _web-1

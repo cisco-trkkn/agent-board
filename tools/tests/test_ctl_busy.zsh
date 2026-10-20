@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-C="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt_setup claude shell
 $C run tests true >/dev/null                       # creates the bg session tt-bg with its tests window
 check "idle shell is idle"        sh -c "$C list | grep -q '  tests  \[idle\]'"

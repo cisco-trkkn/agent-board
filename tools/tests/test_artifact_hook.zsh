@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-H="${TC_HOOK:-$HOME/.claude/hooks/artifact-register.sh}"
+H="${TC_HOOK:-$TT_REPO/claude/hooks/artifact-register.sh}"
 tt_setup claude
 tt rename-window -t '=tt:claude' '✦ impl'
 mkdir -p "$TT_DIR/r/docs/superpowers/plans" "$TT_DIR/sp/scratchpad"
