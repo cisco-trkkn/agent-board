@@ -70,7 +70,7 @@ class Scratch:
         time.sleep(1.2)   # let the creation-second elapse, so the first build's captures can be reused
 
     def calls(self):
-        return [l for l in self.log.read_text().split("\n") if l]   # not splitlines(): the chain marker holds \x1e
+        return [l for l in self.log.read_text().split("\n") if l]   # not splitlines(): keep the split explicit; the chain marker is printable
 
     def during(self, fn):
         """(result, tmux calls made while fn ran)."""
