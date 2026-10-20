@@ -1,10 +1,10 @@
 # Refresh mode
 
-Updates a stamped architecture doc to the repo's current HEAD by rewriting only what changed. Preconditions: the doc has a stamp (`As built from <repo>@<sha>, <date>`) and an `Id map` tab (SKILL.md step 5). Without either, there is nothing to diff against: tell the user and offer a fresh doc instead.
+Updates a stamped architecture doc to the repo's current HEAD by rewriting only what changed. Preconditions: the doc has a stamp (`As built from <repo>@<sha>, <date>`) and an `Id map` tab (SKILL.md step 5), and the repo's checkout is at hand (`<repo>` in the stamp is a name, not a path: when the checkout is not the cwd, ask the user for its path). Without a stamp or an id map there is nothing to diff against: tell the user; a fresh doc only when they agree, never silently.
 
 ## 1. Read the stamp and the id map
 
-1. `read(ref = {"object":"project","id":"<doc id>"})` → the tabs. Main tab: `read(…, payload = {"kind":"search","text":"As built from"})` → the stamp block; take `<sha>` (full) and `<date>`. Keep the read's `rev` as the guard bookmark.
+1. Read the doc (docs skill) and find the stamp block in the main tab; take `<sha>` (full) and `<date>`.
 2. `Id map` tab → its ```json block → `{section heading: {ids, diagram}}`. Interview answers appear as `interview:<n>`; they have no diff and stay as they are.
 
 ## 2. Diff the repo
@@ -23,7 +23,7 @@ For each entry in the diff, find every section whose id map lists the id (compon
 
 Collect the set of touched sections. Each is rewritten whole, one section per call, in reading order:
 
-- redraw the diagram with the whole module (`draft` with `basePub` from a `read` of the widget), keeping every text id and anchor whose node remains, adding and removing nodes and edges as the diff says, under the same brief with the finding sentence updated;
+- redraw the diagram as the docs skill's redraw road says (the whole module, from the stored code), keeping every text id and anchor whose node remains, adding and removing nodes and edges as the diff says, under the same brief with the finding sentence updated;
 - rewrite the section's prose block to match;
 - look at the redrawn diagram (screenshot `read`), as in step 4 of the workflow.
 
@@ -31,7 +31,7 @@ The hero diagram and the key-numbers strip are touched whenever a subsystem, pro
 
 ## 4. Leave everything else untouched
 
-Every `replace` of an existing block carries `ifHash` (its `h` from your read) and `ifRev` (that read's `rev`). A `guard_mismatch` or `find_none` refusal means the block changed since the stamp, that is, the user edited it: **their edit wins**. Re-read the block, keep their words, and change only what the diff requires inside it — or, when the two cannot be merged, leave the block as it is and name it in the Changed row (step 5) as "left as edited". Never resend with `force`. Blocks outside the touched set are never read for writing, so the user's edits there are never at risk.
+Every rewrite of an existing block goes through the docs skill's guarded edit. A guard refusal means the block changed or is gone since the stamp: **their edit wins**. Leave it, name it in the Changed row (step 5) as "left as edited"; when the diff still needs something from it, re-read it and change only that inside their words. Never force. Blocks outside the touched set are never written, so the user's edits there are never at risk.
 
 ## 5. Record and re-stamp
 
