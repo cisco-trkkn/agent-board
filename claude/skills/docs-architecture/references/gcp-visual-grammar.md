@@ -24,7 +24,7 @@ Contrast is the WCAG 2 relative-luminance ratio against the page background; the
 
 A module writes a category colour once as `light-dark(<light>, <dark>)`; claude.ai sets `color-scheme` per theme (measured), so the browser picks the value. Should the Docs widget refuse a literal hex or `light-dark()`, fall back per category to the page tokens: compute `--cds-chart-categorical-1`, data/analytics `-4`, networking `-7`, security/identity `-6`, operations `-3`, neutral `--cds-text-secondary`, marker `--cds-chart-status-critical`; contrast is then best-effort (three of those sit under 3:1 on the light page). Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, lines and arrowheads `var(--cds-chart-axis)`, project fill `var(--cds-chart-reference-tint)`.
 
-Environment bands (see Boundaries) use page tokens that no category uses: dev `var(--cds-chart-categorical-3)`, stage `var(--cds-chart-categorical-4)`, prod `var(--cds-chart-categorical-5)`. A band is a fill at `fillOpacity 0.18` under a text-primary label, so the token's own contrast does not carry the word.
+Environment bands (see Boundaries) use one page token no category uses, `var(--cds-chart-categorical-5)` (magenta, `#d55181` in both themes inside the widget frame, measured in Task 7), at three strengths: dev fill 0.1 / stroke 0.45, stage 0.2 / 0.7, prod 0.32 / 1. The word carries the meaning, the strength orders it. (The frame's `categorical-4` renders blue, next to compute, so it is not used.)
 
 ## Icons
 
@@ -66,7 +66,7 @@ One icon per node, 24 px at the node's left, the name to its right. A product wi
 | organisation / folder | `org`, `folder` | dashed outline (`strokeDasharray 6 4`), `--cds-chart-axis`, no fill; name top-left |
 | project | `project` | rounded box `rx 8`, fill `var(--cds-chart-reference-tint)`, no stroke; label is the project id, `<tenant>-prod` |
 | VPC / subnet | `vpc` | thin solid outline (`strokeWidth 1`), `--cds-chart-axis`, no fill; `vpc.svg` then the name top-left. A `subnet` component is the same thin outline nested inside its VPC, boundary kind `vpc` |
-| environment | `env` | a band behind the boundary label (`fillOpacity 0.18`, the env token from Colour), the env word in capitals: `DEV`, `STAGE`, `PROD` |
+| environment | `env` | a pill behind the boundary label in the env token from Colour at that env's strength, the env word in capitals: `DEV`, `STAGE`, `PROD` |
 
 Boundaries nest in that order: org/folder around projects, VPC inside a project. Children sit 16 in from the box sides and 16 above its foot; the name line takes 32. A boundary with one child is still drawn when a trust or project edge crosses it, and dropped otherwise.
 
