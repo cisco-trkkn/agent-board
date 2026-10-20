@@ -1,6 +1,6 @@
 ---
 name: "writing-plans-extras"
-description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. It overrides three base rules. Step granularity follows each task's modelTier (frontier tasks get goal, constraints and acceptance criteria instead of code). Audit or discovery tasks are exempt from code in every step. In autonomous sessions the execution handoff is a printed kickoff prompt instead of AskUserQuestion. It also requires every e2e task to check real, aged state and not only a fresh scratch fixture, and commit steps to name the harness attribution trailer instead of a literal model line.
+description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. It overrides three base rules. Step granularity follows each task's modelTier (frontier tasks get goal, constraints and acceptance criteria instead of code). Audit or discovery tasks are exempt from code in every step. In autonomous sessions the execution handoff is a printed kickoff prompt instead of AskUserQuestion. It also requires every e2e task to check real, aged state and not only a fresh scratch fixture, and commit steps to name the harness attribution trailer instead of a literal model line. Steps that copy another component name the differences, event consumers state their delivery semantics, and each Verify line matches its verifyCommand.
 ---
 
 # writing-plans extras
@@ -50,6 +50,20 @@ Example: "the feed renders in order for a log that spans midnight" is verified b
 
 When tasks route to different models, don't write a value that each executor's harness provides. Commit steps say "end with the attribution trailer your harness specifies", never a literal `Co-Authored-By: Claude <model>` line. A hardcoded line contradicts the trailer a Haiku or Sonnet teammate is told to use, and each one stops to ask or picks its own.
 
+## 6. Steps that copy another component name the differences
+
+A step that says "copy X's structure" (or "follow X's pattern") names each difference between X and the target that changes behaviour, or states that there are none, checked. A mechanism the spec fixes (auth mode, transport, entrypoint, storage) is quoted from the spec in the task's Acceptance Criteria, not inferred from X.
+
+Example: a deploy task copied another layer's script, but the target layer had a Procfile that overrides `--function`; the spec's "IAM DB user" became the existing password-based connection helper in a sibling task. Both passed task review, because reviewers see the brief, not the spec.
+
+## 7. Event and message consumers state their delivery semantics
+
+For any task whose component consumes events or messages (Pub/Sub push, queues, webhooks), the Acceptance Criteria answer three questions, each with a test: what if two deliveries run concurrently, arrive out of order, or repeat? Typical answers are idempotence, a monotonic guard (version or timestamp), or an ordering key. Also compare the subscription's ack deadline with the handler's worst-case latency.
+
+Example: "retire every other active snapshot" let a redelivered older message retire a newer snapshot. Six task reviews passed; only the final whole-branch review found the race.
+
 ## Before you finish
 
-Re-read the plan's tasks: every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, and an autonomous session ends with a printed prompt, not a question.
+Re-read the plan's tasks: every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, and an autonomous session ends with a printed prompt, not a question.
+
+Then check that each task's `**Verify:**` command is byte-identical to its json:metadata `verifyCommand`, or that the Verify line says "see verifyCommand". Two different commands give the executor two acceptance numbers. Mechanical check: extract both per task and diff them.

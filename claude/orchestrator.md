@@ -35,6 +35,8 @@ If your first prompt says to read a handoff doc (`~/.claude/handoffs/…`), read
 
 Then continue with the plan, using the task list and the plan file as the source of truth.
 
+A handoff's Team section describes how the past session worked; it is not a mode to continue. "No teammates (work was done by per-task subagents)" still means you start a team here, as "Default: use an agent team" says.
+
 ## Ideas inbox
 
 The user keeps ideas for future work in `~/.claude/ideas/<project>.md` (the board's Ideas box, or `tmux-ctl idea`).
@@ -69,6 +71,10 @@ The `superpowers-extended-cc:*` skills are how work is done here. Use them witho
 | Before saying anything works or is done | `verification-before-completion` | everyone |
 | Finishing a branch | `finishing-a-development-branch`; it asks the user how to integrate | you |
 | The user asked to push, open or update an MR, merge, or check a pipeline | `gitlab-ci-loop` (not a superpowers skill): push, watch the pipeline, read failed jobs, fix until green. Only after the user asked; never push to `main`/`master` | you |
+
+In this mode, `subagent-driven-development`'s per-task implementer and reviewer seats are filled by
+teammates in named windows, not by background subagents: where the skill says "dispatch a fresh
+subagent", start or reuse a teammate.
 
 The skills apply whether or not you start a team: a fix you make yourself still goes through
 `systematic-debugging` and `verification-before-completion`. Invoke each one with the Skill tool; don't just
@@ -114,7 +120,10 @@ permission prompt. Start every teammate's prompt with these rules:
    not run `brainstorming` and does not ask the user anything.
 3. Questions and decisions go to you, the lead, as a message. If an answer can't wait, it makes the
    reasonable choice, notes the assumption, and keeps going.
-4. It reports back with evidence: commands run, their output, files changed, assumptions made.
+4. It reports back with evidence: commands run, their output, files changed, assumptions made. Where
+   the repo maps changed paths to CI checks (`.agent-ci.yml`), it runs the mapped checks for its diff
+   (`agent-ci check`) before reporting done, and again after every fix round. The brief's verify
+   command proves the task's own claim, not that nothing next to it broke.
 5. Run test suites and long builds with `tmux-ctl run [-t secs] [-C dir] tests "<cmd>"` (options before
    the window): it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is
    busy), in your own worktree unless `-C` says otherwise, and the user sees every run in the Agent
@@ -127,8 +136,8 @@ permission prompt. Start every teammate's prompt with these rules:
 7. To approve a shutdown request, first load SendMessage's full schema (ToolSearch with query
    `select:SendMessage`; it is a deferred tool), then call it with `message` as a JSON object, not a
    string: `{"to":"team-lead","message":{"type":"shutdown_response","request_id":"<id from the request>","approve":true}}`.
-8. Do not invoke `task-observer` (the session-start protocol is the lead's); put any skill findings in
-   the final report for you to log.
+8. Do not invoke `task-observer` or write to its log (the session-start protocol is the lead's); put any
+   skill findings in the final report for you to log.
 
 Answer teammates' questions yourself from the plan, the code and sensible defaults. Bring a question to
 the user only when it is truly theirs to decide, and batch such questions into one message.
@@ -193,3 +202,13 @@ applies to every agent.
   around it with `keys` for anything else.
 - Don't push, merge or delete branches unless the user asks. Finished worker worktrees are cleaned up by
   the user with `Ctrl-a W`.
+- When the repo checkout is also the live install (its files are symlinked into `~/.claude`,
+  `~/.local/bin` or similar, so the checked-out branch runs for every session), execute plans in a
+  worktree under `.claude/worktrees/`, never on a branch in the live checkout. Switch branches or merge
+  in the live checkout only at the integration step, after checking that no other session is mid-change
+  there (`ListAgents`, `git status`, `git log -3`). UI checks run a second instance from the worktree
+  (the board: `TMUX_DASH_PORT=7710 python3 board/server.py`).
+- Replacing a stalled teammate or subagent: send the shutdown and wait for its termination notice
+  first. Idle at its prompt is not dead; a queued message can revive it. Give every dispatch its own
+  output path (`<deliverable>.<agent-name>.md`) and promote one to the canonical name yourself, so two
+  writers never share a file. Snapshot an artefact before downstream agents start reading it by ID.

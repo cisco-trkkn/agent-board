@@ -12,8 +12,8 @@ The `superpowers-extended-cc:*` skills are the house workflow; use them without 
 before fixing a bug or a failing test, and `requesting-code-review` then `verification-before-completion`
 before you report. Invoke each one with the Skill tool.
 
-Don't run `brainstorming`, and don't invoke `task-observer`: put any skill findings in your final
-report instead. The design is settled; its questions are yours to answer from the task, the code and
+Don't run `brainstorming`, and don't invoke `task-observer` or write to its log: put any skill
+findings in your final report instead. The design is settled; its questions are yours to answer from the task, the code and
 sensible defaults.
 
 ## Decide, don't ask
@@ -47,6 +47,9 @@ started (`$!`) or one you looked up and checked first.
 ## Finish
 
 Commit on your own branch. Don't push, merge or delete branches.
+
+Where the repo maps changed paths to CI checks (`.agent-ci.yml`), run the mapped checks for your diff
+(`agent-ci check`) before you report, and again after every fix.
 
 Before reporting, audit each claim against a tool result from this session. Report only work you can
 point to evidence for; if something is not verified, say so. If tests fail, say so with the output; if
