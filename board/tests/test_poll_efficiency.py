@@ -18,7 +18,11 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 BOARD = Path(__file__).resolve().parent.parent
-REAL_TMUX = os.environ.get("TC_REAL_TMUX") or str(Path.home() / ".local" / "bin" / "tmux")
+sys.path.insert(0, str(BOARD))
+import paneclass  # noqa: E402  (tmux_bin: TC_TMUX, else ~/.local/bin/tmux if executable, else tmux on PATH)
+
+# Resolved before any test sets TC_TMUX to its logging shim, so the shim never execs itself.
+REAL_TMUX = os.environ.get("TC_REAL_TMUX") or paneclass.tmux_bin()
 SOCK = f"poll-{os.getpid()}"
 TOKEN = "poll-test-token"
 
@@ -79,14 +83,16 @@ class Scratch:
         return out, self.calls()[before:]
 
     def close(self):
-        subprocess.run(self.real + ["kill-server"], capture_output=True)
-        for k, v in self.saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        import shutil
-        shutil.rmtree(self.tmp, ignore_errors=True)
+        try:
+            subprocess.run(self.real + ["kill-server"], capture_output=True)
+        finally:   # restore the environment even when kill-server can't run: a leaked TC_TMUX/TMUX_DASH_* breaks later test modules
+            for k, v in self.saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            import shutil
+            shutil.rmtree(self.tmp, ignore_errors=True)
 
 
 def pane_ids(state):
