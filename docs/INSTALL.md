@@ -20,7 +20,7 @@ agent-board installs from a clone of this repo with one script, `install.sh`, an
 | `~/.config/agent-board/` | **not created**; optional overrides you write yourself ([CUSTOMIZATION](CUSTOMIZATION.md)) | none |
 | `~/.claude/projects/` (your transcripts) | **read only**, by the board's Usage tab | none: nothing is written there |
 
-How the rest reaches Claude without touching `~/.claude`: every Claude that agent-board starts gets `--settings` with the settings file in `<clone>/claude/` (agent teams, `teammateMode`, the `AGENT_BOARD=1` marker) and `--plugin-dir <clone>/claude/plugin` (the `bash-mirror`, `artifact-register` and `kill-guard` hooks, the `tmux-orchestrator` and `handoff` skills, the `effort-low`/`-medium`/`-high` agent types). That covers the lead, the workers started by `tmux-ctl agent`, and (through the session environment) the teammates. Plain `claude` outside agent-board loads none of it.
+How the rest reaches Claude without touching `~/.claude`: every Claude that agent-board starts gets `--settings` with the settings file in `<clone>/claude/` (agent teams, `teammateMode`, the `AGENT_BOARD=1` marker) and `--plugin-dir <clone>/claude/plugin` (the `bash-mirror`, `artifact-register` and `kill-guard` hooks, the `tmux-orchestrator` and `handoff` skills, the `effort-low`/`-medium`/`-high` agent types). That covers the lead, the workers started by `tmux-ctl agent`, and the teammates, which Claude Code starts with the lead's own `--settings` and `--plugin-dir` flags. Plain `claude` outside agent-board loads none of it.
 
 > **Used the author's earlier global setup, or an earlier version of this guide?** Run `./install.sh --migrate` (see [Migrating](#migrating-from-the-global-setup)). Otherwise the old global hooks run next to the new ones.
 
@@ -31,7 +31,7 @@ Versions are the ones tested. Older versions may work, but only Python 3.9 has b
 | Tool | Tested | Used by | Notes |
 | --- | --- | --- | --- |
 | zsh | 5.9 | every `bin/` script, `install.sh` | on `PATH` |
-| tmux | 3.8 | everything | on `PATH`, or `~/.local/bin/tmux`, or set `TC_TMUX` |
+| tmux | 3.8 | everything | found as `TC_TMUX` if set, else `~/.local/bin/tmux` if executable, else `tmux` on `PATH` |
 | ttyd | 1.7.7 | the board's live terminals | on `PATH`, or set `TTYD_BIN` |
 | fzf | 0.74 | `agent-board jump`, `agent-board cleanup` | on `PATH`, or set `FZF_BIN` |
 | python3 | 3.9.6, 3.14 | board server, hooks, `install.sh` | 3.9 or newer, standard library only |
@@ -108,7 +108,7 @@ Nothing under `~/.claude` was written by `./install.sh`. In a plain `claude` ses
 ### Things to know
 
 - **The session `PATH`.** `claude-orchestrator` puts the clone's `bin/` first on `PATH` and also sets it as the `PATH` of the agent-board tmux session (`tmux set-environment`). Workers started by `tmux-ctl agent` get the same `PATH` on their command line. Every window opened in that session afterwards, yours included, finds `tmux-ctl` and the other agent-board commands without a path, and sees the clone's `bin/` ahead of the rest of your `PATH` there. It reaches no other session or server.
-- **Teammates.** Claude Code starts teammates from the tmux session environment rather than from the lead's shell; that is why `AGENT_BOARD_REPO` and `PATH` are set on the session.
+- **Teammates.** They get the lead's `--settings` and `--plugin-dir` flags from Claude Code. The tmux session environment carries only `PATH` and `AGENT_BOARD_REPO`, which is why they are set on the session.
 
 ## Migrating from the global setup
 
@@ -133,7 +133,7 @@ Moving the `effort-*` agents means plain `claude` sessions outside agent-board n
 
 More options: `--migrate-team-settings` also drops `env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and `teammateMode` from `~/.claude/settings.json` (agent-board sets them itself, per session). `--repo DIR` treats `DIR` as the checkout.
 
-**Until you migrate**, the tools keep using your own default tmux server instead of the dedicated `-L agent-board` server: `agent-board dev` and `agent-board dash` do so when `~/.tmux.conf` still contains agent-board's hook lines (`tmux-teammate-window` or `tmux-session-closed`) and no agent-board server is running. After `--migrate` has removed those lines, the next `agent-board dev` starts the dedicated server. Sessions left on your default server stay there; close and reopen them with `agent-board dev`.
+**Until you migrate**, the tools keep using your own default tmux server instead of the dedicated `-L agent-board` server: `agent-board dev` and `agent-board dash` do so when `~/.tmux.conf` still contains agent-board's hook lines (`tmux-teammate-window` or `tmux-session-closed`) and no agent-board server is running. Which server that is: with `$TMUX` set (typed inside a tmux pane) they use the server that command was typed in; without it, tmux's default server. After `--migrate` has removed those lines, the next `agent-board dev` starts the dedicated server. Sessions left on your default server stay there; close and reopen them with `agent-board dev`.
 
 ## Upgrading
 

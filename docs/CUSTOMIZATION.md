@@ -21,11 +21,11 @@ A project-specific settings file is not an override: it is passed per lead, see 
 
 | Variable | Default | Read by | Effect |
 | --- | --- | --- | --- |
-| `DEV_CLAUDE_CMD` | `claude-orchestrator` | `dev` | Command typed into the `claude` window of a **new** session, e.g. `DEV_CLAUDE_CMD=claude dev .` for a plain Claude, or `"claude-orchestrator --continue"`. Ignored (with a warning) when the session already exists. |
+| `DEV_CLAUDE_CMD` | `<clone>/bin/claude-orchestrator` (absolute path) | `dev` | Command typed into the `claude` window of a **new** session, e.g. `DEV_CLAUDE_CMD=claude dev .` for a plain Claude, or `"<clone>/bin/claude-orchestrator --continue"`. Ignored (with a warning) when the session already exists. |
 | `DEV_NO_ATTACH` | unset | `dev` | Create the session but don't attach (the board uses this). |
 | `DEV_CLIENT` | unset | `dev` | Switch this tmux client instead of the current one (`Ctrl-a D` uses it). |
-| `TC_TMUX` | `~/.local/bin/tmux` | every script, hook and the board, through `bin/_tc_bins.zsh` | tmux binary to use. |
-| `AGENT_BOARD_TMUX_SOCKET` | `agent-board` | `bin/_tc_bins.zsh` | Name of agent-board's own tmux server (`tmux -L <name>`), the one `dev` and `tmux-dash` use. An unmigrated install (agent-board's hook lines still in `~/.tmux.conf` and no such server running) keeps `dev` and `tmux-dash` on the user's own default server until `install.sh --migrate`. The test harness points it at its private socket. |
+| `TC_TMUX` | `~/.local/bin/tmux` if executable, else `tmux` on `PATH` | every script, hook and the board, through `bin/_tc_bins.zsh` | tmux binary to use. |
+| `AGENT_BOARD_TMUX_SOCKET` | `agent-board` | `bin/_tc_bins.zsh` | Name of agent-board's own tmux server (`tmux -L <name>`), the one `dev` and `tmux-dash` use. An unmigrated install (agent-board's hook lines still in `~/.tmux.conf` and no such server running) keeps `dev` and `tmux-dash` on the user's own server (the one the command was typed in when `$TMUX` is set, else tmux's default server) until `install.sh --migrate`. The test harness points it at its private socket. |
 | `TC_STATE` | `${TMPDIR:-/tmp}/tmux-ctl-$UID` | `tmux-ctl`, hooks, board, `relay.py`, `tmux-session-closed` | Runtime state directory. Must be the same for every process of one tmux server; set it in your shell profile if you change it. |
 | `TC_SESSION` | caller's session | `tmux-ctl` | Target a different session (the board sets it for actions). |
 | `TC_LAYOUT` | `tmux-dev-layout` next to `dev` | `dev` | Replace the layout step with your own script (called as `<script> <session> <root>`). |
@@ -41,7 +41,7 @@ A project-specific settings file is not an override: it is passed per lead, see 
 | `USAGE_ROOT` | `~/.claude/projects` | `board/usage.py` | Where the Usage tab reads Claude Code transcripts (read-only). |
 | `SUPERPOWERS_PLUGIN_ROOT` | auto-discovered | `superpowers-hook.sh` | Pin which superpowers-extended-cc install the optional hooks run. |
 
-`TMUX_DASH_TOKEN` is set by `tmux-dash` itself; don't set it by hand. Rotate it with `tmux-dash rotate`.
+`TMUX_DASH_TOKEN` is set by `tmux-dash` itself; don't set it by hand. Rotate it with `agent-board dash rotate`.
 
 ## 2. Per-project files
 
@@ -86,7 +86,7 @@ Changes apply to the next Claude started; restart a lead from the board (Restart
 To use different rules for every project without editing the clone, put your copies in `~/.config/agent-board/orchestrator.md` and `worker.md` (§0). To use different rules for one project, start the lead yourself:
 
 ```zsh
-DEV_CLAUDE_CMD="claude-orchestrator --append-system-prompt-file ~/my-rules/lead.md" agent-board dev ~/code/proj
+DEV_CLAUDE_CMD="$HOME/agent-board/bin/claude-orchestrator --append-system-prompt-file ~/my-rules/lead.md" agent-board dev ~/code/proj
 ```
 
 Going through `claude-orchestrator` keeps the settings, the plugin and the `PATH`. If you bypass it with a plain `claude …`, add `--settings <clone>/claude/settings.json --plugin-dir <clone>/claude/plugin` yourself, or the lead loses agent teams, the hooks and the `tmux-orchestrator`/`handoff` skills. `DEV_CLAUDE_CMD` applies only when `dev` creates the session; Restart orchestrator and `/handoff` always start `claude-orchestrator`.
@@ -95,7 +95,7 @@ The lead's Claude Code settings are `claude/settings.json` (`env` with `CLAUDE_C
 
 The plugin in `claude/plugin/` (hooks, the `tmux-orchestrator` and `handoff` skills, the `effort-*` agents) is loaded per session with `--plugin-dir`; add your own skills or agents there to make them available to agent-board sessions only.
 
-`claude-orchestrator` defaults to `--model opus` and `--name orchestrator`. Pass `--model`/`--name` to override, e.g. `DEV_CLAUDE_CMD="claude-orchestrator --model sonnet"`. The extra arguments go through the wrapper too.
+`claude-orchestrator` defaults to `--model opus` and `--name orchestrator`. Pass `--model`/`--name` to override, e.g. `DEV_CLAUDE_CMD="$HOME/agent-board/bin/claude-orchestrator --model sonnet"`. The extra arguments go through the wrapper too.
 
 ## 4. tmux key bindings and hooks
 
@@ -108,7 +108,7 @@ Hooks, options and bindings for agent-board's tmux server are in `config/tmux.co
 | `tmux-agent-cleanup` in a popup with `-d '#{pane_current_path}'` | worktree cleanup picker |
 | `tmux-dash` | open the board |
 
-In `tmux.local.conf` the scripts are at `$AGENT_BOARD_REPO/bin/…` (the variable holds the clone's path).
+In `tmux.local.conf` the scripts are at `$AGENT_BOARD_REPO/bin/…`. The variable holds the clone's path: the scripts export it before they start the server. A server you start by hand with `tmux -L agent-board -f <clone>/config/tmux.conf` has none, and `config/tmux.conf` then falls back to `$HOME/agent-board`.
 
 The two hooks (`after-split-window`, `session-closed`) are required; without the first, teammates stay as split panes, and without the second, per-project state accumulates in `TC_STATE` until reboot.
 
@@ -117,9 +117,9 @@ The two hooks (`after-split-window`, `session-closed`) are required; without the
 ### Ports, server and token
 
 ```zsh
-TMUX_DASH_PORT=8800 TMUX_DASH_TTYD_PORT=8801 tmux-dash start
-tmux-dash rotate        # new token; old URLs stop working
-tmux-dash url           # print the current URL
+TMUX_DASH_PORT=8800 TMUX_DASH_TTYD_PORT=8801 agent-board dash start
+agent-board dash rotate        # new token; old URLs stop working
+agent-board dash url           # print the current URL
 ```
 
 Ports are read at start time, so `stop` then `start` with the new values. The server only ever binds 127.0.0.1. To reach it from another machine, use an SSH tunnel (`ssh -L 7700:127.0.0.1:7700 -L 7701:127.0.0.1:7701 host`), never a public bind; the `Host` header check accepts only `127.0.0.1`/`localhost`.
@@ -134,7 +134,7 @@ ttyd options are in `bin/tmux-dash` (`-t fontSize=13`, `fontFamily`, the Catppuc
 
 ```zsh
 cp board/index.html board/mine.html
-tmux-dash stop && TMUX_DASH_PAGE=mine.html tmux-dash start
+agent-board dash stop && TMUX_DASH_PAGE=mine.html agent-board dash start
 ```
 
 The page polls everything in one loop every 2 s (the `poll()` function at the end of the script); server-side caching is `STATE_TTL` (1.5 s) and `WT_TTL` (30 s) at the top of `board/server.py`.
