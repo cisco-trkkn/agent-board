@@ -49,7 +49,7 @@ n=0; for a in "" --scoped; do [[ "$(AGENT_BOARD=1 kg $a)" == 2 ]] && (( n++ )); 
 check "kill-guard: both registrations -> 1 block"    test $n = 1
 
 # --- settings.json: scoped registration, no absolute paths
-S="$R/claude/settings.json"
+S="$R/claude/session-settings.json"
 check "settings.json exists"                         test -f "$S"
 check "settings.json has no absolute path"           test -z "$(grep -E '/(Users|home)/' "$S" 2>/dev/null)"
 HJ="$R/claude/plugin/hooks/hooks.json"   # hook registration lives in the plugin now

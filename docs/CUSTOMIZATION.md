@@ -2,7 +2,7 @@
 
 Every customization point, from least to most invasive. Read [ARCHITECTURE.md](ARCHITECTURE.md) first if you plan to change code.
 
-**Keep it scoped.** Everything below applies only to agent-board sessions. Claude Code behaviour is set by the files in the clone's `claude/` (`settings.json`, `plugin/`, the rules), which every agent-board Claude loads with `--settings` and `--plugin-dir`; tmux behaviour by `config/tmux.conf`, loaded only by agent-board's own tmux server. Nothing here edits `~/.claude` or your tmux configuration. See [INSTALL.md](INSTALL.md#what-the-install-changes-on-your-machine).
+**Keep it scoped.** Everything below applies only to agent-board sessions. Claude Code behaviour is set by the files in the clone's `claude/` (`session-settings.json`, `plugin/`, the rules), which every agent-board Claude loads with `--settings` and `--plugin-dir`; tmux behaviour by `config/tmux.conf`, loaded only by agent-board's own tmux server. Nothing here edits `~/.claude` or your tmux configuration. See [INSTALL.md](INSTALL.md#what-the-install-changes-on-your-machine).
 
 ## 0. Override files in `~/.config/agent-board/`
 
@@ -89,9 +89,9 @@ To use different rules for every project without editing the clone, put your cop
 DEV_CLAUDE_CMD="$HOME/agent-board/bin/claude-orchestrator --append-system-prompt-file ~/my-rules/lead.md" agent-board dev ~/code/proj
 ```
 
-Going through `claude-orchestrator` keeps the settings, the plugin and the `PATH`. If you bypass it with a plain `claude …`, add `--settings <clone>/claude/settings.json --plugin-dir <clone>/claude/plugin` yourself, or the lead loses agent teams, the hooks and the `tmux-orchestrator`/`handoff` skills. `DEV_CLAUDE_CMD` applies only when `dev` creates the session; Restart orchestrator and `/handoff` always start `claude-orchestrator`.
+Going through `claude-orchestrator` keeps the settings, the plugin and the `PATH`. If you bypass it with a plain `claude …`, add `--settings <clone>/claude/session-settings.json --plugin-dir <clone>/claude/plugin` yourself, or the lead loses agent teams, the hooks and the `tmux-orchestrator`/`handoff` skills. `DEV_CLAUDE_CMD` applies only when `dev` creates the session; Restart orchestrator and `/handoff` always start `claude-orchestrator`.
 
-The lead's Claude Code settings are `claude/settings.json` (`env` with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and the `AGENT_BOARD=1` marker, and `teammateMode`). `--settings` is additive: your own user, project and local settings still apply underneath. To add a setting for agent-board sessions only, edit that file in your clone.
+The lead's Claude Code settings are `claude/session-settings.json` (`env` with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and the `AGENT_BOARD=1` marker, and `teammateMode`). `--settings` is additive: your own user, project and local settings still apply underneath. To add a setting for agent-board sessions only, edit that file in your clone.
 
 The plugin in `claude/plugin/` (hooks, the `tmux-orchestrator` and `handoff` skills, the `effort-*` agents) is loaded per session with `--plugin-dir`; add your own skills or agents there to make them available to agent-board sessions only.
 

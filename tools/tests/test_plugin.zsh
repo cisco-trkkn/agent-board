@@ -27,10 +27,13 @@ for c in cmds:
         if "/" + n + ".sh" in c: want[n] += 1
 assert all(want.values()), want
 PY
-check "settings.json no longer registers hooks (no double run)" python3 -c 'import json,sys; assert "hooks" not in json.load(open(sys.argv[1]))' "$R/claude/settings.json"
+check "settings.json no longer registers hooks (no double run)" python3 -c 'import json,sys; assert "hooks" not in json.load(open(sys.argv[1]))' "$R/claude/session-settings.json"
 check "legacy hook paths are symlinks into the plugin" zsh -c 'cd "$1/claude/hooks" && for n in kill-guard bash-mirror artifact-register; do [[ -L $n.sh && $(readlink $n.sh) == ../plugin/scripts/$n.sh && -x $n.sh ]] || exit 1; done' _ "$R"
 check "superpowers-hook.sh stays in claude/hooks (regular file)" test -f "$R/claude/hooks/superpowers-hook.sh" -a ! -L "$R/claude/hooks/superpowers-hook.sh"
 check "plugin ships skills and agents" zsh -c 'cd "$1" && for f in skills/tmux-orchestrator/SKILL.md skills/handoff/SKILL.md skills/handoff/agents/openai.yaml agents/effort-low.md agents/effort-medium.md agents/effort-high.md; do [[ -s $f ]] || exit 1; done' _ "$P"
+
+# the per-session file must not share a name with main's tracked mirror of the user's global settings (claude/settings.json)
+check "session settings file is session-settings.json; claude/settings.json is not used" test -f "$R/claude/session-settings.json" -a ! -e "$R/claude/settings.json"
 
 # 2. no absolute home paths
 check "no /Users/ under claude/" test -z "$(grep -rn '/Users/' "$R/claude/" 2>/dev/null)"

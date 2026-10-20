@@ -15,7 +15,7 @@ check "no inline worker.md"           test -z "$(grep -F '$(<~/.claude/worker.md
 
 # agent-board session config on every launcher
 check "orchestrator passes --settings"      grep -qxF -- '--settings' <<< "$out"
-check "orchestrator settings path"          grep -qxF -- "$R/claude/settings.json" <<< "$out"
+check "orchestrator settings path"          grep -qxF -- "$R/claude/session-settings.json" <<< "$out"
 check "orchestrator puts <repo>/bin first"  grep -qE "^PATH=${R}/bin:" <<< "$out"
 check "set-environment AGENT_BOARD_REPO"    test "$(tt show-environment -t '=tt:' AGENT_BOARD_REPO 2>&1)" = "AGENT_BOARD_REPO=$R"
 check "set-environment PATH has <repo>/bin" grep -qE "^PATH=${R}/bin:" <<< "$(tt show-environment -t '=tt:' PATH 2>&1)"
@@ -25,14 +25,14 @@ check "failing set-environment does not stop the launch" grep -qxF -- '--setting
 # a clone in a directory with a space (and a quote): each path is one argv word, no backslash left over
 sp="$(mktemp -d)/my proj's"; mkdir -p "$sp"; sp="${sp:A}"; cp -R "$R/bin" "$R/claude" "$sp/"
 out3="$(HOME="$sp" TC_TMUX=/nonexistent PATH="$stub:$PATH" "$sp/bin/claude-orchestrator" 2>&1)"
-check "spaced repo: --settings value is the plain path"   grep -qxF -- "$sp/claude/settings.json" <<< "$out3"
+check "spaced repo: --settings value is the plain path"   grep -qxF -- "$sp/claude/session-settings.json" <<< "$out3"
 check "spaced repo: --plugin-dir value is the plain path" grep -qxF -- "$sp/claude/plugin" <<< "$out3"
 check "spaced repo: no backslash in any argument"         test -z "$(grep -F -e '\' <<< "$out3")"
 rm -rf "${sp:h}"
 
 dry="$(TC_AGENT_DRYRUN=1 $R/bin/tmux-ctl agent w --force "a b" 2>&1)"
 check "agent dry run keeps DRYRUN task"     grep -qF 'DRYRUN task: a b' <<< "$dry"
-check "agent line has --settings"           grep -qF -- "--settings $R/claude/settings.json" <<< "$dry"
+check "agent line has --settings"           grep -qF -- "--settings $R/claude/session-settings.json" <<< "$dry"
 check "agent line has PATH=<repo>/bin:"     grep -qF -- "PATH=$R/bin:" <<< "$dry"
 check "agent line has AGENT_BOARD_REPO"     grep -qF -- "AGENT_BOARD_REPO=$R" <<< "$dry"
 tt_done

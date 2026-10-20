@@ -19,7 +19,7 @@ The tmux `dev` orchestration toolkit and the Agent Board web UI, for running tea
 ## Doesn't touch your existing Claude Code setup
 
 `./install.sh` links one file, `~/.local/bin/agent-board`, and nothing else:
-- **Claude Code:** it never edits `~/.claude`. agent-board's settings, hooks, skills and agent types come from `claude/settings.json` and `claude/plugin/` in this checkout, loaded with `--settings` and `--plugin-dir` only by the Claude sessions agent-board starts.
+- **Claude Code:** it never edits `~/.claude`. agent-board's settings, hooks, skills and agent types come from `claude/session-settings.json` and `claude/plugin/` in this checkout, loaded with `--settings` and `--plugin-dir` only by the Claude sessions agent-board starts.
 - **tmux:** agent-board runs its own tmux server (`tmux -L agent-board`) with `config/tmux.conf`. Your tmux server and configuration are not touched.
 
 ## Quick start (macOS)
@@ -48,7 +48,7 @@ Coming from the author's earlier global setup? `./install.sh --migrate` (see [do
 | `install.sh` | installs the one link; `--check`, `--uninstall`, `--migrate` |
 | `bin/` | the commands; `bin/agent-board` is the single entry point |
 | `board/` | the Agent Board server and page |
-| `claude/orchestrator.md`, `claude/worker.md`, `claude/settings.json` | lead and worker rules, settings for agent teams |
+| `claude/orchestrator.md`, `claude/worker.md`, `claude/session-settings.json` | lead and worker rules, settings for agent teams |
 | `claude/plugin/` | the session plugin: hooks, `tmux-orchestrator` and `handoff` skills, `effort-*` agents |
 | `config/tmux.conf` | agent-board's tmux server configuration |
 
