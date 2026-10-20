@@ -1,0 +1,41 @@
+# Refresh mode
+
+Updates a stamped architecture doc to the repo's current HEAD by rewriting only what changed. Preconditions: the doc has a stamp (`As built from <repo>@<sha>, <date>`) and an `Id map` tab (SKILL.md step 5). Without either, there is nothing to diff against: tell the user and offer a fresh doc instead.
+
+## 1. Read the stamp and the id map
+
+1. `read(ref = {"object":"project","id":"<doc id>"})` → the tabs. Main tab: `read(…, payload = {"kind":"search","text":"As built from"})` → the stamp block; take `<sha>` (full) and `<date>`. Keep the read's `rev` as the guard bookmark.
+2. `Id map` tab → its ```json block → `{section heading: {ids, diagram}}`. Interview answers appear as `interview:<n>`; they have no diff and stay as they are.
+
+## 2. Diff the repo
+
+    python3 <skill root>/scripts/inventory.py <repo> --since <sha> -o diff.json
+
+- Compares two committed trees (`git archive` of `<sha>` and of HEAD). Uncommitted work never shows: if the user means uncommitted changes, they commit first, or the refresh waits.
+- Output: `{since, head, components: {added, removed, changed}, edges: {added, removed}}`; `since` and `head` are full shas; `changed` lists components whose kind, name, project or env differ, with their new values.
+- **Exit 2, "inventory: unknown --since sha":** the stamp sha is not in this clone (shallow clone, rewritten history, a different repo). Stop and ask the user which repo or sha to diff against. Never substitute a sha, never diff against an earlier stamp, never regenerate.
+- Exit 2 on zero components: discovery is broken at HEAD; halt as SKILL.md says.
+- Empty diff: say "no architecture change since <date>", move the stamp to `head` with today's date (step 5), nothing else.
+
+## 3. Map the diff to sections
+
+For each entry in the diff, find every section whose id map lists the id (components by id, edges by their `from`/`to` ids). An added id not in any section belongs to the section whose project or subsystem it sits in (`project`, `env`, the boundary it is a member of); if that is unclear, it is one of the refresh's interview questions (still at most 5 in total).
+
+Collect the set of touched sections. Each is rewritten whole, one section per call, in reading order:
+
+- redraw the diagram with the whole module (`draft` with `basePub` from a `read` of the widget), keeping every text id and anchor whose node remains, adding and removing nodes and edges as the diff says, under the same brief with the finding sentence updated;
+- rewrite the section's prose block to match;
+- look at the redrawn diagram (screenshot `read`), as in step 4 of the workflow.
+
+The hero diagram and the key-numbers strip are touched whenever a subsystem, project, env or external dependency was added or removed.
+
+## 4. Leave everything else untouched
+
+Every `replace` of an existing block carries `ifHash` (its `h` from your read) and `ifRev` (that read's `rev`). A `guard_mismatch` or `find_none` refusal means the block changed since the stamp, that is, the user edited it: **their edit wins**. Re-read the block, keep their words, and change only what the diff requires inside it — or, when the two cannot be merged, leave the block as it is and name it in the Changed row (step 5) as "left as edited". Never resend with `force`. Blocks outside the touched set are never read for writing, so the user's edits there are never at risk.
+
+## 5. Record and re-stamp
+
+1. Under the stamp, a `Changed since <date>` table, one row per change: `date · change · section` (`2026-10-20 · added cloud_run_service worker · Orders`). Append to the existing table when the doc has one.
+2. Move the stamp to the new sha and today's date: `As built from <repo>@<head>, <date>`.
+3. Update the `Id map` tab: add the new ids to their sections, remove the gone ones, keep interview entries.
+4. Reply with the Changed rows and any block left as edited.
