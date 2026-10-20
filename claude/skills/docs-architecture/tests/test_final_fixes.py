@@ -64,9 +64,29 @@ class CiDuplicateJob(unittest.TestCase):
         self.assertEqual(jobs[0]["source"], ".gitlab-ci-b.yml:1")
         unk = [u for u in out["unknowns"] if u["what"] == "ci/validate"]
         self.assertEqual(len(unk), 1)
-        self.assertIn("job defined in 2 files", unk[0]["why"])
+        self.assertIn("job defined 2 times", unk[0]["why"])
+        self.assertNotIn("files", unk[0]["why"])
+        self.assertIn("earlier definition dropped", unk[0]["why"])
         self.assertIn(".gitlab-ci-a.yml:1", unk[0]["why"])
         self.assertIn(".gitlab-ci-b.yml:1", unk[0]["why"])
+
+    def test_shadowed_definition_drops_its_chdir_edges(self):
+        """N5: the earlier definition is replaced whole, so its -chdir call edges go too; the later one's stay."""
+        with tempfile.TemporaryDirectory() as d:
+            for sub in ("old", "new"):
+                os.makedirs(os.path.join(d, sub))
+                with open(os.path.join(d, sub, "main.tf"), "w") as fh:
+                    fh.write('resource "google_project_iam_member" "m" {\n  project = "p-%s"\n  role = "roles/viewer"\n'
+                             '  member = "user:a@example.com"\n}\n' % sub)
+            with open(os.path.join(d, ".gitlab-ci.yml"), "w") as fh:
+                fh.write("deploy:\n  script:\n    - terraform -chdir=old apply\n"
+                         "deploy:\n  script:\n    - terraform -chdir=new apply\n")
+            out = gitlab_ci.extract(d)
+        self.assertEqual(len([c for c in out["components"] if c["id"] == "ci/deploy"]), 1)
+        tos = [e["to"] for e in out["edges"] if e["from"] == "ci/deploy"]
+        self.assertTrue(tos and all(t.startswith("new/") for t in tos), tos)
+        unk = [u for u in out["unknowns"] if u["what"] == "ci/deploy"]
+        self.assertEqual(len(unk), 1)
 
 class UnparseableTf(unittest.TestCase):
     """I2 (spec:97): an unparseable .tf file lands in unknowns[], not a crash."""

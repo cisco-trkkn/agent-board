@@ -74,6 +74,9 @@ def extract(root):
             sources.setdefault(cid, []).append(comp["source"])
             if cid in seen:             # GitLab merges by key: the later definition wins
                 out["components"][seen[cid]] = comp
+                # the earlier definition is gone whole, so are the call edges (and their unknowns) it produced
+                out["edges"] = [e for e in out["edges"] if e["from"] != cid]
+                out["unknowns"] = [u for u in out["unknowns"] if not u["what"].startswith(cid + " → ")]
             else:
                 seen[cid] = len(out["components"])
                 out["components"].append(comp)
@@ -95,5 +98,7 @@ def extract(root):
     for cid, srcs in sources.items():
         if len(srcs) > 1:
             out["unknowns"].append({"what": cid, "source": srcs[-1],
-                                    "why": f"job defined in {len(srcs)} files: {', '.join(srcs)}"})
+                                    "why": f"job defined {len(srcs)} times: {', '.join(srcs)}; "
+                                           "the later one replaces the earlier, whose -chdir call edges are dropped "
+                                           "(earlier definition dropped)"})
     return out
