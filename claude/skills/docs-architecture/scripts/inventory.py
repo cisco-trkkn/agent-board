@@ -28,6 +28,32 @@ def build(repo):
             inv["meta"]["confidence"] = "low"
     return inv
 
+def build_at(repo, sha):
+    """Inventory of <repo> at <sha>, from `git archive` into a temp dir (offline, read-only on the repo)."""
+    import tarfile, tempfile, io
+    try:
+        blob = subprocess.run(["git", "-C", repo, "archive", "--format=tar", sha], capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    with tempfile.TemporaryDirectory() as d:
+        with tarfile.open(fileobj=io.BytesIO(blob)) as t:
+            t.extractall(d, filter="data")
+        return build(d)
+
+SAME = ("kind", "name", "project", "env")
+
+def diff(old, new, since):
+    oc, nc = {c["id"]: c for c in old["components"]}, {c["id"]: c for c in new["components"]}
+    ek = lambda e: (e["from"], e["to"], e["kind"], e["label"])
+    oe, ne = {ek(e): e for e in old["edges"]}, {ek(e): e for e in new["edges"]}
+    return {"since": since, "head": new["meta"]["sha"],
+            "components": {"added": [nc[i] for i in sorted(nc.keys() - oc.keys())],
+                           "removed": [oc[i] for i in sorted(oc.keys() - nc.keys())],
+                           "changed": [nc[i] for i in sorted(nc.keys() & oc.keys())
+                                       if any(nc[i][k] != oc[i][k] for k in SAME)]},
+            "edges": {"added": [ne[k] for k in sorted(ne.keys() - oe.keys())],
+                      "removed": [oe[k] for k in sorted(oe.keys() - ne.keys())]}}
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="inventory.py", description=__doc__.splitlines()[0])
     ap.add_argument("repo")
@@ -40,6 +66,12 @@ def main(argv=None):
         print(f"inventory: 0 components — discovery is broken, not an empty system ({counts}; repo {a.repo})",
               file=sys.stderr)
         return 2
+    if a.since:
+        old = build_at(a.repo, a.since)
+        if old is None:
+            print(f"inventory: unknown --since sha {a.since}", file=sys.stderr)
+            return 2
+        inv = diff(old, inv, a.since)
     text = json.dumps(inv, indent=1, sort_keys=True)
     if a.output:
         with open(a.output, "w") as fh:
