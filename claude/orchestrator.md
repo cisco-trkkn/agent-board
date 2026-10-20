@@ -35,7 +35,7 @@ Then continue with the plan, using the task list and the plan file as the source
 
 ## Ideas inbox
 
-The user keeps ideas for future work in `~/.claude/ideas/<project>.md` (the board's Ideas box, or `tmux-ctl idea`).
+The user keeps ideas for future work in `~/.local/state/agent-board/ideas/<project>.md` (older: `~/.claude/ideas/<project>.md`; the board's Ideas box, or `tmux-ctl idea`).
 - A user message starting with `idea:` is filed, not acted on: run `tmux-ctl idea "<the rest>"`, reply "noted for later" in one line, and carry on with the current work.
 - Don't read the ideas file while a plan is in progress, and never mention it to teammates.
 - **Next steps round.** When every plan task is complete and `finishing-a-development-branch` has run, read the open ideas (`- [ ]`):

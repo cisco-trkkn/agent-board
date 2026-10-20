@@ -36,6 +36,10 @@ check "plugin ships skills and agents" zsh -c 'cd "$1" && for f in skills/tmux-o
 check "no /Users/ under claude/" test -z "$(grep -rn '/Users/' "$R/claude/" 2>/dev/null)"
 check "ab_claude_args loads the plugin" zsh -c 'source "$1/bin/_ab_claude.zsh"; [[ "$(ab_claude_args)" == *"--plugin-dir ${(q)AB_REPO}/claude/plugin"* ]]' _ "$R"
 
+# the agent-facing rules name the ideas path board/ideas.py writes, not the old ~/.claude one
+check "lead and handoff rules name ~/.local/state/agent-board/ideas" test "$(grep -lF '~/.local/state/agent-board/ideas/<project>.md' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | wc -l)" -eq 2
+check "no rule or doc outside docs/superpowers history points at ~/.claude/ideas as THE path" test -z "$(grep -rn '~/.claude/ideas' "$R/claude" "$R/CLAUDE.md" "$R/README.md" "$R/docs/INSTALL.md" "$R/docs/CUSTOMIZATION.md" 2>/dev/null | grep -v 'older\|old ')"
+
 # 3. headless probe
 if ! command -v claude >/dev/null 2>&1; then
   print -r -- "skip - no claude (headless probe)"
