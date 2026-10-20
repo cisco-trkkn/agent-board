@@ -44,7 +44,7 @@
   {
    "id": 6,
    "subject": "Task 6: Visual grammar and diagram catalogue references",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** Write `references/gcp-visual-grammar.md` and `references/diagram-set.md`. Together they must let an agent that has never seen a GCP architecture diagram draw consistent, at-a-glance diagrams of any layer.\n\n**Files:**\n- Create: `claude/skills/docs-architecture/references/gcp-visual-grammar.md`\n- Create: `claude/skills/docs-architecture/references/diagram-set.md`\n\n**Constraints:**\n- Content exactly as in the spec's \"Visual grammar (GCP)\" section. Colours are given as concrete hex tokens per category, each with a light and a dark value, checked for contrast against the Docs page background in both themes. Icons are referenced by their `assets/gcp-icons/` file names from Task 1.\n- `diagram-set.md` covers the five diagrams: system context, subsystem/container zoom, data flow, trust boundaries, deploy topology. For each it gives the reader question it answers, which inventory kinds and edge kinds go on it, the 12-node limit and how to split, and the one-sentence brief template.\n- Follow `writing-for-agents`: short, concrete, no padding. Each file is under 250 lines.\n- No client names or project ids in examples. Use placeholders like `<tenant>-prod`.\n\n**Acceptance Criteria:**\n- [ ] `gcp-visual-grammar.md` has sections `## Colour`, `## Icons`, `## Boundaries`, `## Edges`, `## Layout`, `## Page frame`, each matching the spec.\n- [ ] The colour table gives hex values for all 5 categories \u00d7 light/dark, plus the trust-crossing marker colour, with a contrast ratio of at least 3:1 against the page background (a computed number in the table).\n- [ ] `diagram-set.md` has one `## ` section per diagram (5), each with \"Answers\", \"Draws\", \"Omits\", \"Split when\" and \"Brief\".\n- [ ] Every icon file named exists in `assets/gcp-icons/`.\n\n**Verify:** `cd claude/skills/docs-architecture/references && grep -c '^## ' gcp-visual-grammar.md` \u2192 `6`; `grep -c '^## ' diagram-set.md` \u2192 `5`; `for f in $(grep -oE '[a-z0-9-]+\\.svg' *.md | cut -d: -f2 | sort -u); do test -f ../assets/gcp-icons/$f || echo MISSING $f; done` \u2192 no output.\n\nFull steps: docs/superpowers/plans/2026-10-20-docs-architecture-skill.md (Task 6)\n\n```json:metadata\n{\"files\": [\"claude/skills/docs-architecture/references/gcp-visual-grammar.md\", \"claude/skills/docs-architecture/references/diagram-set.md\"], \"verifyCommand\": \"cd claude/skills/docs-architecture/references && grep -c '^## ' gcp-visual-grammar.md && grep -c '^## ' diagram-set.md\", \"acceptanceCriteria\": [\"grammar has Colour, Icons, Boundaries, Edges, Layout, Page frame\", \"hex per category light/dark + trust marker, contrast >= 3:1 computed\", \"diagram-set has 5 diagram sections with Answers/Draws/Omits/Split when/Brief\", \"every named icon file exists\"], \"modelTier\": \"frontier\"}\n```",
    "blockedBy": [
     1
@@ -88,5 +88,5 @@
    ]
   }
  ],
- "lastUpdated": "2026-10-20T11:50:23"
+ "lastUpdated": "2026-10-20T11:53:40"
 }
