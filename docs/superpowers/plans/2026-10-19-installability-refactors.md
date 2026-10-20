@@ -249,6 +249,7 @@ esac
   - backs up `settings.json` and `.tmux.conf` to `*.bak-YYYYMMDD` first;
   - leaves every other key and line byte-identical (diffed against the seed minus the removed lines);
   - prints each change it made.
+- [ ] `--migrate` also retires the global copies of what the plugin now ships (Task 3), so agent-board sessions don't see each one twice: `~/.claude/skills/tmux-orchestrator/` (a directory), `~/.claude/skills/handoff` (removes only the link, never its `~/.agents/skills/handoff` target) and `~/.claude/agents/effort-{low,medium,high}.md`. Each is moved, not deleted, to `~/.local/state/agent-board/migrated-YYYYMMDD/` and printed. It acts only on entries that exist. `--keep-agents` leaves the three `effort-*` files in place, because plain `claude` sessions outside agent-board lose them otherwise and the migrate output says so.
 - [ ] `install.sh` never writes under `~/.claude/` except in `--migrate`.
 - [ ] `--repo DIR` makes `install.sh` treat `DIR` as the agent-board checkout instead of its own location, so a dry run from a worktree can judge the live `~/agent-board` links.
 - [ ] Ideas: with only `~/.claude/ideas/p.md` present, `ideas.load("p")` returns its items. The first write creates `~/.local/state/agent-board/ideas/p.md` with the old items plus the new one, and leaves `~/.claude/ideas/p.md` byte-identical. `TC_IDEAS_DIR` still wins over both.
@@ -350,7 +351,7 @@ esac
   - Pass: `shasum -a 256` of every file under the seeded `~/.claude`, of `~/.tmux.conf` and of `~/.zshrc` is unchanged; `~/.local/bin` holds only `agent-board` plus what was seeded; the user server's `show-hooks -g` and `list-keys` match their pre-run capture; the run printed `ok` and `[exit 0]`.
 - [ ] **Plain session unaffected:** where `claude` is available, a plain `claude -p --model haiku` run in the scratch repo with a seeded user `UserPromptSubmit` probe hook fires only the user's hook. No agent-board hook marker appears.
 - [ ] **Scratch, aged:** the same `HOME` gets a `TC_STATE` seeded with yesterday's `runs-<repo>.jsonl` and a feed log with two agents' entries spanning midnight. `activity.runs()` and `activity.feed()` return them in order next to the new run.
-- [ ] **Real state, read-only:** `./install.sh --repo ~/agent-board --migrate --dry-run` (from any checkout) against the real `HOME` prints exactly the agent-board entries of the author's install (the three hook commands, 10 `~/.local/bin` links, the 2 rules links, 3 hook links, 2 tmux hook lines) and nothing else. The output is saved in the task report and diffed against that expected list.
+- [ ] **Real state, read-only:** `./install.sh --repo ~/agent-board --migrate --dry-run` (from any checkout) against the real `HOME` prints exactly the agent-board entries of the author's install (the three hook commands, 10 `~/.local/bin` links, the 2 rules links, 3 hook links, 2 tmux hook lines, the 2 global skills and 3 `effort-*` agents) and nothing else. The output is saved in the task report and diffed against that expected list.
 
 **Verify:** `zsh tools/tests/test_e2e_isolation.zsh` → `ALL PASS`; `./install.sh --repo ~/agent-board --migrate --dry-run | diff - tools/tests/fixtures/expected-migrate-plan.txt` → no output
 
