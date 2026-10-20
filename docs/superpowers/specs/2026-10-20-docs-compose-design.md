@@ -44,7 +44,7 @@ All in `~/agent-board/claude/skills/`, tracked in git and linked into `~/.claude
 | `docs-explainer/SKILL.md` | Explainer workflow, shape, rules. |
 | `docs-architecture/SKILL.md`, `references/refresh.md` | Gain guest mode and the `Sources`/`Id map` fallback. |
 
-The trigger is a companion line in `~/.claude/CLAUDE.md`: "Whenever `anthropic-skills:docs` runs, also load `docs-compose`." It is staged as a generated patch, per the user's tooling rules. Each type skill's own description still triggers it alone for a single-type request.
+The trigger is a companion line in `~/.claude/CLAUDE.md`: "Whenever `anthropic-skills:docs` runs, also load `docs-compose`." `~/.claude/CLAUDE.md` is a symlink to the tracked `claude/CLAUDE.md`, so the line is a branch edit that goes live at merge. Each type skill's own description still triggers it alone for a single-type request.
 
 ## The composer (`docs-compose`)
 
@@ -143,4 +143,4 @@ Source kinds: `file:<path>:<line>`, `inventory:<id>`, `interview:<n>`, `cloud:<n
 
 ## Delivery
 
-Work in a worktree under `~/agent-board/.claude/worktrees/` (the live checkout is the install). After merge: `bin/claude-config-link` links the four skills; a fresh `claude -p "list your available skills by name only"` lists all four; the CLAUDE.md companion line is installed from its staged patch after `patch --dry-run` passes against the live file.
+Work in a worktree under `~/agent-board/.claude/worktrees/` (the live checkout is the install). After merge: `bin/claude-config-link` links the four skills; a fresh `claude -p "list your available skills by name only"` lists all four; the companion line in `claude/CLAUDE.md` is live (`grep -c docs-compose ~/.claude/CLAUDE.md` → 1).
