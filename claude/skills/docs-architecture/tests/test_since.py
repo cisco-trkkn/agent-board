@@ -72,6 +72,23 @@ class Since(unittest.TestCase):
         self.assertEqual([c["id"] for c in out["components"]["changed"]],
                          ["infra/ledger/google_secret_manager_secret.db_password"])
 
+    def test_untracked_tf_is_not_reported(self):
+        b = self.commit_b()
+        with open(os.path.join(self.repo, "infra", "ledger", "untracked.tf"), "w") as fh:
+            fh.write('resource "google_pubsub_topic" "untracked" {\n  name = "u"\n}\n')
+        code, out, err = run([self.repo, "--since", self.a])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out["head"], b)
+        ids = [c["id"] for c in out["components"]["added"]]
+        self.assertNotIn("infra/ledger/google_pubsub_topic.untracked", ids)
+        self.assertIn("infra/ledger/google_cloud_run_v2_service.probe", ids)
+
+    def test_since_resolved_to_full_sha(self):
+        self.commit_b()
+        for ref in (self.a[:8], "HEAD~1"):
+            code, out, err = run([self.repo, "--since", ref])
+            self.assertEqual((code, out["since"]), (0, self.a), ref)
+
     def test_unknown_sha_exits_2(self):
         code, out, err = run([self.repo, "--since", "0" * 40])
         self.assertEqual(code, 2)

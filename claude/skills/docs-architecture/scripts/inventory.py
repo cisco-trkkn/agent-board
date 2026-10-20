@@ -28,6 +28,14 @@ def build(repo):
             inv["meta"]["confidence"] = "low"
     return inv
 
+def resolve(repo, ref):
+    """Full commit sha for <ref>, or None."""
+    try:
+        return subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+                              capture_output=True, text=True, check=True).stdout.strip() or None
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
 def build_at(repo, sha):
     """Inventory of <repo> at <sha>, from `git archive` into a temp dir (offline, read-only on the repo)."""
     import tarfile, tempfile, io
@@ -38,7 +46,9 @@ def build_at(repo, sha):
     with tempfile.TemporaryDirectory() as d:
         with tarfile.open(fileobj=io.BytesIO(blob)) as t:
             t.extractall(d, filter="data")
-        return build(d)
+        inv = build(d)
+    inv["meta"]["repo"], inv["meta"]["sha"] = os.path.abspath(repo), sha   # the archive is not a git repo
+    return inv
 
 SAME = ("kind", "name", "project", "env")
 
@@ -57,21 +67,25 @@ def diff(old, new, since):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="inventory.py", description=__doc__.splitlines()[0])
     ap.add_argument("repo")
-    ap.add_argument("--since", help="emit the diff between <sha> and the working tree instead")
+    ap.add_argument("--since", help="emit the diff between <sha> and HEAD (both from git archive) instead")
     ap.add_argument("-o", "--output", help="write JSON here instead of stdout")
     a = ap.parse_args(argv)
-    inv = build(a.repo)
+    if a.since:
+        since, head = resolve(a.repo, a.since), resolve(a.repo, "HEAD")
+        old = build_at(a.repo, since) if since else None
+        if old is None or head is None:
+            print(f"inventory: unknown --since sha {a.since}", file=sys.stderr)
+            return 2
+        inv = build_at(a.repo, head)        # both sides from `git archive`: same semantics, exact `head`
+    else:
+        inv = build(a.repo)
     if not inv["components"]:
         counts = ", ".join(f"{k}={v}" for k, v in inv["meta"]["extractors"].items())
         print(f"inventory: 0 components — discovery is broken, not an empty system ({counts}; repo {a.repo})",
               file=sys.stderr)
         return 2
     if a.since:
-        old = build_at(a.repo, a.since)
-        if old is None:
-            print(f"inventory: unknown --since sha {a.since}", file=sys.stderr)
-            return 2
-        inv = diff(old, inv, a.since)
+        inv = diff(old, inv, since)
     text = json.dumps(inv, indent=1, sort_keys=True)
     if a.output:
         with open(a.output, "w") as fh:
