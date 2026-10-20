@@ -121,7 +121,7 @@ check "uninstall: touches nothing else (old links, ~/.claude)" test -L "$H/.loca
 
 # --- --migrate
 newhome; seed_global "$FAKE"
-ln -sfn "$SCR/elsewhere/tmux-ctl" "$H/.local/bin/tmux-ctl"           # points outside this repo: stays
+ln -sfn "$SCR/elsewhere/tmux-dash" "$H/.local/bin/tmux-dash"         # points outside this repo: stays
 out="$(inst --repo "$FAKE" --migrate 2>&1)"; rc=$?
 print -r -- "$out" > "$SCR/migrate.out"
 check "migrate: exit 0" test $rc -eq 0
@@ -130,7 +130,10 @@ check "migrate: .tmux.conf = seed minus the 2 hook and 3 binding lines" cmp -s "
 check "migrate: settings backup is the seed" cmp -s "$H/.claude/settings.json.bak-$STAMP" "$FIX/settings.seed.json"
 check "migrate: tmux.conf backup is the seed" cmp -s "$H/.tmux.conf.bak-$STAMP" "$FIX/tmux.seed.conf"
 left="$(ls "$H/.local/bin" | tr '\n' ' ')"
-check "migrate: old links gone, agent-board link made, foreign link kept" test "$left" = "agent-board tmux-ctl "
+check "migrate: old links gone, agent-board link made, foreign link kept, tmux-ctl kept (agent-go alias calls it)" test "$left" = "agent-board tmux-ctl tmux-dash "
+check "migrate: tmux-ctl link still points into DIR" test "$(readlink "$H/.local/bin/tmux-ctl")" = "$FAKE/bin/tmux-ctl"
+check "migrate: says tmux-ctl is kept because .tmux.conf still calls it, and prints the line" test -n "$(print -r -- "$out" | grep -F 'kept' | grep -F '.local/bin/tmux-ctl' | grep -F 'agent-go=')"
+check "migrate: the tmux lines that call no migrated link are not mentioned as kept" test -z "$(print -r -- "$out" | grep -F 'kept' | grep -F '.local/bin/dev')"
 check "migrate: agent-board link points into DIR" test "$(readlink "$H/.local/bin/agent-board")" = "$FAKE/bin/agent-board"
 check "migrate: hook and rules links gone" test ! -L "$H/.claude/hooks/bash-mirror.sh" -a ! -L "$H/.claude/hooks/artifact-register.sh" -a ! -L "$H/.claude/hooks/kill-guard.sh" -a ! -L "$H/.claude/orchestrator.md" -a ! -L "$H/.claude/worker.md"
 check "migrate: unrelated hook file kept" test -f "$H/.claude/hooks/context-size-guard.sh"
@@ -205,8 +208,6 @@ inst --repo "$FAKE" --migrate --migrate-team-settings >/dev/null 2>&1
 check "migrate-team-settings: teammateMode and the team env var are gone" test "$(jq -r '.teammateMode // "none"' "$H/.claude/settings.json")" = none -a "$(jq -r '.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS // "none"' "$H/.claude/settings.json")" = none
 check "migrate-team-settings: other env kept" test "$(jq -r '.env.NODE_EXTRA_CA_CERTS' "$H/.claude/settings.json")" = /home/u/.certs/ca.pem
 
-# no ~/.claude/ idea without a migrate: install/uninstall/check never created it (see install and check cases above)
-tt_done
 # a same-day backup that already exists is never reused or overwritten: the new one gets a free name
 newhome; seed_global "$FAKE"
 print "older hand backup" > "$H/.claude/settings.json.bak-$STAMP"; print "older tmux backup" > "$H/.tmux.conf.bak-$STAMP"
@@ -219,3 +220,5 @@ print "older" > "$H/.tmux.conf.bak-$STAMP"; print "older" > "$H/.tmux.conf.bak-$
 out="$(inst --repo "$FAKE" --migrate --dry-run 2>&1)"
 check "backup dry-run: names the free backup (.2), not an existing one" test -n "$(print -r -- "$out" | grep -F "would back up $H/.tmux.conf to $H/.tmux.conf.bak-$STAMP.2")"
 
+# no ~/.claude/ idea without a migrate: install/uninstall/check never created it (see install and check cases above)
+tt_done

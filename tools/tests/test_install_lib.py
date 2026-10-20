@@ -158,5 +158,42 @@ class StripTmuxTest(unittest.TestCase):
         self.assertEqual(self.p.read_text(), "set -g mouse on")
 
 
+class RemainingRefsTest(unittest.TestCase):
+    """Lines that would stay in the file but still call a ~/.local/bin link that migrate removes."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.p = Path(self.tmp.name) / ".tmux.conf"
+        self.names = ["tmux-ctl", "dev", "tmux-jump"]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def refs(self, *lines, home="/home/u"):
+        self.p.write_text("\n".join(lines) + "\n")
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = home
+        try:
+            return install_lib.remaining_refs(self.p, self.names)
+        finally:
+            os.environ["HOME"] = old
+
+    def test_finds_alias_that_calls_a_link_in_all_spellings(self):
+        a = "set -s command-alias[101] 'agent-go=run-shell \"~/.local/bin/tmux-ctl agent x\"'"
+        b = 'bind X run-shell "$HOME/.local/bin/dev ."'
+        c = 'bind Y run-shell "${HOME}/.local/bin/dev ."'
+        d = 'bind Z run-shell "/home/u/.local/bin/tmux-ctl ls"'
+        self.assertEqual(self.refs(a, b, c, d), [("tmux-ctl", a), ("dev", b), ("dev", c), ("tmux-ctl", d)])
+
+    def test_ignores_comments_removed_lines_other_tools_and_prefix_names(self):
+        self.assertEqual(self.refs("# ~/.local/bin/tmux-ctl is mentioned",
+                                   'bind W display-popup "~/.local/bin/tmux-jump x"',        # stripped anyway
+                                   'run-shell "~/.local/bin/tmux show -gqv x"',                # not one of ours
+                                   'run-shell "~/.local/bin/tmux-ctlx y"',                     # longer name
+                                   'run-shell "~/.local/bin/devtool"'), [])
+
+    def test_missing_file(self):
+        self.assertEqual(install_lib.remaining_refs(self.p, self.names), [])
+
+
 if __name__ == "__main__":
     unittest.main()

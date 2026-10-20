@@ -107,7 +107,8 @@ move_aside() {   # move_aside PATH: into migrated-YYYYMMDD, never deleting
 }
 do_migrate() {
   local n f line S="$HOME/.claude/settings.json" T="$HOME/.tmux.conf" tmux_removed=0 effort=0 settings_ok=1 tmux_ok=1 lrc out
-  local -a cmds gone old whys
+  local -a cmds gone old whys refs
+  local -A held   # ~/.local/bin link name -> "<file>: <line>" of a line that stays and still calls it
   do_install || rc=1
   # settings.json: the agent-board hooks
   for n in bash-mirror artifact-register kill-guard; do cmds+=("~/.claude/hooks/$n.sh" "$HOME/.claude/hooks/$n.sh"); done
@@ -126,6 +127,15 @@ do_migrate() {
       (( DRY )) || python3 "$LIB" settings "$S" ${${(M)TEAM:#1}:+--team} "${cmds[@]}" >/dev/null || { settings_ok=0; rc=1 }
     fi
   fi
+  # the 10 old links in ~/.local/bin: any line that stays in settings.json or .tmux.conf and calls one keeps it
+  for n in claude-orchestrator dev tmux-agent-cleanup tmux-ctl tmux-dash tmux-dev-layout tmux-jump tmux-session-closed tmux-teammate-window tmux-web-attach; do
+    old+=("$HOME/.local/bin/$n"); done
+  for f in "$S" "$T"; do
+    [[ -f "$f" ]] || continue
+    refs=("${(@f)$(python3 "$LIB" refs "$f" ${old:t} 2>/dev/null)}")
+    for line in "${refs[@]}"; do [[ -n "$line" ]] && held[${line%%$'\t'*}]="${f:t}: ${line#*$'\t'}"; done
+  done
+  old=()
   # ~/.tmux.conf: the hooks and bindings (config/tmux.conf has them for the dedicated server)
   if [[ -f "$T" ]]; then
     out="$(python3 "$LIB" tmux "$T" --dry-run 2>&1)"; lrc=$?
@@ -149,6 +159,8 @@ do_migrate() {
       print "kept $f: settings.json still names it and could not be updated"
     elif [[ "$f" == "$HOME"/.local/bin/* ]] && (( ! tmux_ok )) && points_into_repo "$f"; then
       print "kept $f: .tmux.conf still calls it and could not be updated"
+    elif [[ "$f" == "$HOME"/.local/bin/* && -n "${held[${f:t}]}" ]] && points_into_repo "$f"; then
+      print "kept $f: ${held[${f:t}]}"
     elif points_into_repo "$f"; then say "remove link $f" "removed link $f"; run_or_print rm "$f"
     elif [[ -L "$f" ]]; then print "kept $f: it links outside $REPO"; fi
   done

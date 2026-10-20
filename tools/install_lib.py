@@ -3,6 +3,8 @@
 
   install_lib.py settings FILE [--team] [--dry-run] CMD...   drop hook entries whose command is one of CMD (prints each)
   install_lib.py tmux FILE [--dry-run]                    drop the agent-board hook and binding lines (prints each)
+  install_lib.py refs FILE NAME...                        lines that would stay in FILE but call ~/.local/bin/NAME
+                                                          (prints "NAME<TAB>line"); migrate keeps those links
 
 Both leave the file alone (not even rewritten) when nothing matches, and write through a temp file + os.replace.
 """
@@ -142,6 +144,23 @@ def strip_tmux(path, patterns=TMUX_PATTERNS, dry=False):
     return removed
 
 
+def remaining_refs(path, names, patterns=TMUX_PATTERNS):
+    """(name, line) for each non-comment line of path that survives strip_tmux but calls ~/.local/bin/<name>
+    (as ~, $HOME, ${HOME} or the absolute home). Migrate removes those links, so it keeps the ones named here."""
+    path = Path(path)
+    if not path.exists() or not names:
+        return []
+    home = re.escape(os.path.expanduser("~").rstrip("/"))
+    rx = [(n, re.compile(rf"(?:~|\$HOME|\$\{{HOME\}}|{home})/\.local/bin/{re.escape(n)}(?![\w.-])")) for n in names]
+    strip = [re.compile(p) for p in patterns]
+    found = []
+    for line in path.read_text().splitlines():
+        if line.lstrip().startswith("#") or any(r.search(line) for r in strip):
+            continue
+        found += [(n, line) for n, r in rx if r.search(line)]
+    return found
+
+
 def main(argv):
     try:
         if len(argv) >= 3 and argv[0] == "settings":
@@ -149,6 +168,10 @@ def main(argv):
             flags = [a for a in rest if a in ("--team", "--dry-run")]
             gone = strip_settings(argv[1], [a for a in rest if a not in flags], team="--team" in flags,
                                   dry="--dry-run" in flags)
+        elif argv[0] == "refs" and len(argv) >= 3:
+            for n, line in remaining_refs(argv[1], argv[2:]):
+                print(f"{n}\t{line}")
+            return 0
         elif argv[0] == "tmux" and len(argv) in (2, 3):
             gone = strip_tmux(argv[1], dry="--dry-run" in argv[2:])
         else:
