@@ -62,7 +62,7 @@
   {
    "id": 8,
    "subject": "Task 8: SKILL.md, refresh procedure, install link",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** Write `SKILL.md` (triggers, the 5-step workflow, hard rules) and `references/refresh.md`, then link the skill live with `bin/claude-config-link` so that `docs-architecture` appears in a new session's skill listing.\n\n**Files:**\n- Create: `claude/skills/docs-architecture/SKILL.md`\n- Create: `claude/skills/docs-architecture/references/refresh.md`\n- Live: `~/.claude/skills/docs-architecture` (symlink made by `bin/claude-config-link`)\n\n**Constraints:**\n- Use `writing-for-agents` (and `superpowers-extended-cc:writing-skills` for skill structure). `SKILL.md` stays under 150 lines and points to the references at their trigger points.\n- `SKILL.md` must say to load `anthropic-skills:docs` first. It must not restate that skill's rules, only add to them.\n- Hard rules carried verbatim in meaning from the spec:\n  - every node and edge traces to the inventory or an interview answer\n  - zero components halts\n  - at most 5 interview questions, seeded from `unknowns[]`\n  - one section per call\n  - a brief before each diagram, and a rendered look after it\n  - fresh-eyes review before stamping\n  - the stamp format `As built from <repo>@<sha>, <date>`\n  - a hidden id-map block\n- `refresh.md` implements the spec's Refresh mode steps 1\u20135, including \"their edit wins\" on a guard mismatch.\n- Run `bin/claude-config-link --dry-run` first. The only new line expected is the `docs-architecture` link. Then run it for real. Never move `.bak` copies into `~/.claude/skills/`.\n\n**Acceptance Criteria:**\n- [ ] The `SKILL.md` frontmatter `description` names the triggers (\"architecture doc\", \"system overview\", \"how X fits together\") and says it is for architecture/system docs only.\n- [ ] `SKILL.md` names each of the 5 workflow steps and each reference file at the step that needs it.\n- [ ] `ls -l ~/.claude/skills/docs-architecture` is a symlink to `~/agent-board/claude/skills/docs-architecture`.\n- [ ] `claude -p \"list your available skills by name only\" --max-turns 1` output contains `docs-architecture`.\n\n**Verify:** `ls -l ~/.claude/skills/docs-architecture`; `wc -l claude/skills/docs-architecture/SKILL.md` \u2192 < 150; `claude -p \"list your available skills by name only\" --max-turns 1 | grep -c docs-architecture` \u2192 \u2265 1.\n\nFull steps: docs/superpowers/plans/2026-10-20-docs-architecture-skill.md (Task 8)\n\n```json:metadata\n{\"files\": [\"claude/skills/docs-architecture/SKILL.md\", \"claude/skills/docs-architecture/references/refresh.md\"], \"verifyCommand\": \"ls -l ~/.claude/skills/docs-architecture && wc -l claude/skills/docs-architecture/SKILL.md\", \"acceptanceCriteria\": [\"description names triggers and architecture-only scope\", \"5 steps named with references at their step\", \"live symlink into agent-board\", \"new session lists docs-architecture\"], \"modelTier\": \"frontier\"}\n```",
    "blockedBy": [
     5,
@@ -88,5 +88,5 @@
    ]
   }
  ],
- "lastUpdated": "2026-10-20T12:24:42"
+ "lastUpdated": "2026-10-20T12:32:29"
 }
