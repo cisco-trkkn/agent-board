@@ -16,7 +16,7 @@
   {
    "id": 3,
    "subject": "Task 3: Terraform edges (iam, trust, async, call) and unknow",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** The Terraform extractor emits `iam`, `trust`, `async` and `call` edges with `file:line`. It resolves one level of `local.*`, and it records variable-driven targets in `unknowns[]` instead of dropping them.\n\n**Files:**\n- Modify: `claude/skills/docs-architecture/scripts/extractors/terraform.py`\n- Create: `claude/skills/docs-architecture/tests/test_terraform_edges.py`\n\n**Acceptance Criteria:**\n- [ ] async edge `infra/ledger/google_pubsub_topic.pipeline_events` \u2192 `infra/ledger/google_pubsub_subscription.pipeline_events_ledger`, source `infra/ledger/pipeline-events.tf:71`.\n- [ ] iam edge `infra/ledger/google_service_account.ledger` \u2192 `infra/ledger/google_secret_manager_secret.db_password`, label `roles/secretmanager.secretAccessor`, source `infra/ledger/main.tf:205`.\n- [ ] trust edge `landing-zone/fast-bootstrap/google_iam_workload_identity_pool.gitlab` \u2192 `landing-zone/fast-bootstrap/google_service_account.planner`, label `roles/iam.workloadIdentityUser`, source `landing-zone/fast-bootstrap/identity.tf:67` (resolved through `local.pool_principal`).\n- [ ] `unknowns[]` has an entry with source `infra/ledger/applied-events.tf:1` whose `why` contains `var.ledger_service_name`.\n- [ ] `unknowns[]` has an entry with source `infra/ledger/pipeline-events.tf:71` whose `why` mentions the push endpoint.\n- [ ] Every edge's `from` and `to` is either a component id, a boundary id, or a `principal:<expr>` string. Every `principal:` endpoint has a matching unknowns entry.\n\n**Verify:** `python3 -m unittest discover -s claude/skills/docs-architecture/tests -v` \u2192 all OK.\n\nFull steps: docs/superpowers/plans/2026-10-20-docs-architecture-skill.md (Task 3)\n\n```json:metadata\n{\"files\": [\"claude/skills/docs-architecture/scripts/extractors/terraform.py\", \"claude/skills/docs-architecture/tests/test_terraform_edges.py\"], \"verifyCommand\": \"python3 -m unittest discover -s claude/skills/docs-architecture/tests -v\", \"acceptanceCriteria\": [\"async topic->subscription edge at pipeline-events.tf:71\", \"iam ledger SA -> db_password secretAccessor at main.tf:205\", \"trust WIF pool gitlab -> planner SA at identity.tf:67 via local.pool_principal\", \"unknown at applied-events.tf:1 naming var.ledger_service_name\", \"unknown push endpoint at pipeline-events.tf:71\", \"all edge endpoints resolve or are principal: with an unknown\"], \"modelTier\": \"standard\"}\n```",
    "blockedBy": [
     2
@@ -88,5 +88,5 @@
    ]
   }
  ],
- "lastUpdated": "2026-10-20T11:32:03"
+ "lastUpdated": "2026-10-20T15:41:16.278435+00:00"
 }
