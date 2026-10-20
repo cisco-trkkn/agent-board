@@ -44,5 +44,63 @@ class TerraformEdges(unittest.TestCase):
                 else:
                     self.assertIn(end, ids, e)
 
+class TerraformEdgeParserUnits(unittest.TestCase):
+    """Unit tests of the extractor on minimal in-memory .tf text (not fixtures): the captured
+    mgr fixture has no iam_binding and no IAM resource with a local.* project."""
+    def extract(self, text):
+        import tempfile, os
+        from extractors import terraform
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "m"))
+            with open(os.path.join(d, "m", "main.tf"), "w") as fh:
+                fh.write(text)
+            return terraform.extract(d)
+
+    def test_iam_binding_emits_one_edge_per_member(self):
+        out = self.extract('''
+resource "google_service_account" "a" {
+  account_id = "a"
+}
+resource "google_service_account" "b" {
+  account_id = "b"
+}
+resource "google_secret_manager_secret" "s" {
+  secret_id = "s"
+}
+resource "google_secret_manager_secret_iam_binding" "bind" {
+  secret_id = google_secret_manager_secret.s.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  members   = [
+    google_service_account.a.member,
+    google_service_account.b.member,
+    "user:x@example.com",
+  ]
+}
+''')
+        pairs = {(e["from"], e["to"]) for e in out["edges"]}
+        self.assertEqual(pairs, {("m/google_service_account.a", "m/google_secret_manager_secret.s"),
+                                 ("m/google_service_account.b", "m/google_secret_manager_secret.s"),
+                                 ("principal:user:x@example.com", "m/google_secret_manager_secret.s")})
+        self.assertIn("principal:user:x@example.com", {u["what"] for u in out["unknowns"]})
+
+    def test_project_iam_with_local_project_reuses_boundary(self):
+        out = self.extract('''
+locals {
+  p = "my-proj"
+}
+resource "google_service_account" "a" {
+  project    = local.p
+  account_id = "a"
+}
+resource "google_project_iam_member" "grant" {
+  project = local.p
+  role    = "roles/viewer"
+  member  = google_service_account.a.member
+}
+''')
+        bids = [b["id"] for b in out["boundaries"] if b["kind"] == "project"]
+        self.assertEqual(bids, ["m/project:local.p"], bids)
+        self.assertEqual([e["to"] for e in out["edges"]], ["m/project:local.p"])
+
 if __name__ == "__main__":
     unittest.main()

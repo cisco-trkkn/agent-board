@@ -84,6 +84,27 @@ def dir_locals(text):
             out[k] = (value(body, k) or "").strip('"')
     return out
 
+def split_list(text):
+    """Top-level comma-separated items of a `[a, b, ...]` expression; a non-list is one item."""
+    t = text.strip()
+    if not (t.startswith("[") and t.endswith("]")):
+        return [t] if t else []
+    items, depth, quote, cur = [], 0, False, ""
+    for c in t[1:-1]:
+        if c == '"':
+            quote = not quote
+        elif not quote and c in "([{":
+            depth += 1
+        elif not quote and c in ")]}":
+            depth -= 1
+        if c == "," and depth == 0 and not quote:
+            items.append(cur)
+            cur = ""
+        else:
+            cur += c
+    items.append(cur)
+    return [i.strip().strip('"') for i in items if i.strip()]
+
 def subst(expr, locs):
     """Substitute local.k with its expression, one level."""
     return re.sub(r'\blocal\.(\w+)', lambda m: locs.get(m.group(1), m.group(0)), expr or "")
@@ -164,8 +185,8 @@ def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unkno
             if r:
                 target = r[0]
             break
-    if target is None and typ == "google_project_iam_member" and get("project"):
-        expr = get("project")
+    if target is None and typ == "google_project_iam_member" and attr(body, "project"):
+        expr = attr(body, "project")       # raw, like Task 2's boundary ids and `projects` keys
         target = f"{reldir}/project:{expr}"
         if (reldir, expr) not in projects:
             boundaries.setdefault(target, {"id": target, "kind": "project", "name": expr, "members": []})
@@ -178,20 +199,13 @@ def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unkno
     if target is None:
         unknown(f"{typ}.{name} target", src, f"target is variable-driven: {shown if shown is not None else '(no recognised target attribute)'}")
         return
-    # member
-    member = get("member") if get("member") is not None else get("members")
-    member = member or ""
-    pool = [r for r in refs(reldir, member, ids) if ids[r]["kind"] == "wif_pool"]
-    principalish = "principalSet://" in member or "principal://" in member
-    if principalish and pool:
-        frm = pool[0]
+    # members: one edge per resolvable member, one unknown per unresolvable one
+    if get("member") is not None:
+        members = [get("member")]
     else:
-        r = refs(reldir, member, ids)
-        if r:
-            frm = r[0]
-        else:
-            frm = f"principal:{member}"
-            unknown(frm, src, "principal is not a resource in this repo")
+        members = split_list(get("members") or "")
+    if not members:
+        unknown(f"{typ}.{name} members", src, "no member or members attribute found")
     # role and kind
     role = (get("role") or "").strip('"')
     roles = [role]
@@ -200,8 +214,20 @@ def add_iam(out, ids, boundaries, reldir, typ, name, src, body, get, refs, unkno
         listed = re.findall(r'"(roles/[^"]+)"', get("for_each") or "")
         roles = listed or roles
         label = "<for_each roles>" + (": " + ", ".join(listed) if listed else "")
-    kind = "trust" if principalish or any(x in TRUST_ROLES for x in roles) else "iam"
-    edge(frm, target, kind, label, src)
+    for member in members:
+        pool = [r for r in refs(reldir, member, ids) if ids[r]["kind"] == "wif_pool"]
+        principalish = "principalSet://" in member or "principal://" in member
+        if principalish and pool:
+            frm = pool[0]
+        else:
+            r = refs(reldir, member, ids)
+            if r:
+                frm = r[0]
+            else:
+                frm = f"principal:{member}"
+                unknown(frm, src, "principal is not a resource in this repo")
+        kind = "trust" if principalish or any(x in TRUST_ROLES for x in roles) else "iam"
+        edge(frm, target, kind, label, src)
 
 def extract(root):
     out = {"components": [], "edges": [], "boundaries": [], "unknowns": [], "confidence": "high"}
