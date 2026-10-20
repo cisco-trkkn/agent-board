@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text  # noqa: E402,F401
-import activity, artifacts, dirs, ideas, relay  # noqa: E402
+import activity, artifacts, dirs, ideas, relay, usage  # noqa: E402
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 
 TOKEN = os.environ["TMUX_DASH_TOKEN"]
@@ -210,6 +210,7 @@ def vendor_file(name):
 
 
 COMMENTS = artifacts.CommentQueue()
+INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
 NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")   # the same rule as ideas.py
 
 
@@ -284,6 +285,7 @@ def build_state():
         s["worktrees"] = cached_worktrees(s["path"])
     out.sort(key=lambda s: (not s["attached"], s["name"]))
     deliver_comments(out)
+    usage.card_alerts(out, INDEXER.snapshot() if INDEXER else [])
     return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}}
 
 
@@ -374,6 +376,27 @@ def session_path(sess):
     if not p:
         raise RuntimeError(f"no session '{sess}'")
     return p
+
+
+def project_repo(sess):
+    """The project's main checkout, even when its lead pane sits in a worktree."""
+    path = next((x.get("path") for x in state()["sessions"] if x["name"] == sess), None)  # as /api/state computes it
+    if not path:
+        raise RuntimeError(f"no session '{sess}'")
+    r = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if r.returncode != 0:
+        raise RuntimeError(f"{sess} is not in a git repo")
+    return str(Path(r.stdout.strip()).parent)
+
+
+def open_projects():
+    return [s["name"] for s in state()["sessions"] if not s["name"].startswith("_web-")]
+
+
+def _check_target(sess, target):
+    _check_project(target)
+    if target == sess or target not in open_projects():
+        raise RuntimeError(f"{target} is not open on the board")
 
 
 STOPWORDS = set("""a an the to of in on for and or with from into at by as is are be it its this that
@@ -473,6 +496,22 @@ def _act(body):
         return stop_agent(sess, str(body.get("window") or ""))
     if a == "ask_shutdown":
         return ask_shutdown(sess, str(body.get("window") or ""))
+    if a in ("idea_edit", "idea_status", "idea_move", "artifact_move"):
+        _check_project(sess)
+        key = str(body.get("key") or "")
+        if a == "idea_edit":
+            ideas.edit(sess, key, body.get("text", ""), body.get("detail", ""))
+            return "idea updated"
+        if a == "idea_status":
+            status = str(body.get("status") or "")
+            ideas.set_status(sess, key, status)
+            return "idea restored" if status == "open" else "idea dropped"
+        target = str(body.get("target") or "")
+        _check_target(sess, target)
+        if a == "idea_move":
+            ideas.move(sess, key, target)
+            return f"idea moved to {target}"
+        return artifacts.move(sess, str(body.get("path") or ""), target, project_repo(sess), project_repo(target))
     if a in ("save", "comment", "idea") and not NAME_RE.fullmatch(sess):
         raise RuntimeError("bad session")
     if a == "idea":
@@ -738,11 +777,32 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, txt.encode(), "text/plain; charset=utf-8")
             except (FileNotFoundError, ValueError):
                 self._json(404, {"error": "no log (still running?)"})
-        elif sub == "api/feed":
+        elif sub == "api/usage":
             try:
-                self._json(200, {"feed": activity.feed(project_arg(q))}, etag=True)
+                sess = project_arg(q)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
+                return
+            try:
+                path = next((x["path"] for x in state().get("sessions", []) if x["name"] == sess and x.get("path")), None)
+            except Exception:  # tmux not running: no sessions
+                path = None
+            if path is None:
+                self._json(404, {"error": "no such session"})
+                return
+            conn = None   # per request: the indexer's connection belongs to its thread
+            try:
+                conn = usage.connect(usage.db_path())
+                th, warn = usage.thresholds()
+                r = usage.report(conn, path, usage.load_prices(), th, time.time())
+            except Exception as e:  # sqlite locked or corrupt, bad prices.json: say so instead of dropping the connection
+                self._json(500, {"error": str(e) or type(e).__name__})
+                return
+            finally:
+                if conn is not None:
+                    conn.close()
+            self._json(200, {**r, "warning": warn, "indexing": INDEXER.progress() if INDEXER else None,
+                             "index_error": INDEXER.error if INDEXER else None}, etag=True)
         elif sub == "api/artifact":
             try:
                 self._json(200, artifacts.read(project_arg(q), (q.get("path") or [""])[0]))
@@ -780,11 +840,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "message": act(body)})
         except artifacts.Conflict as e:
             self._json(409, {"ok": False, "message": str(e), "current": e.current})
+        except ideas.Stale as e:
+            self._json(409, {"ok": False, "message": str(e)})
         except Exception as e:
             self._json(400, {"ok": False, "message": str(e)})
 
 
 if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    INDEXER = usage.Indexer(usage.root(), usage.db_path())
+    INDEXER.start()
     print(f"tmux-dash on http://127.0.0.1:{PORT}/{TOKEN}/", flush=True)
     srv.serve_forever()

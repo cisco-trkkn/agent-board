@@ -171,6 +171,8 @@
   "precomputeCompactionEnabled": true,
   "switchModelsOnFlag": true,
   "autoContinueAtUsageLimit": false,
+  "autoScrollEnabled": true,
+  "fileCheckpointingEnabled": false,
   "terminalProgressBarEnabled": true,
   "teammateMode": "auto",
   "crossSessionInbound": "accept",

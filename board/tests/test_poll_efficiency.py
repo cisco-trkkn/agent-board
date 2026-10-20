@@ -191,8 +191,9 @@ class PollEndpointsTest(unittest.TestCase):
         self.assertNotEqual(etag3, etag)
         self.assertEqual([r["id"] for r in json.loads(body)["runs"]], ["b", "a"])
 
-    def test_unchanged_state_artifacts_ideas_feed_answer_304(self):
-        for sub in ("api/state", "api/artifacts?session=p", "api/ideas?session=p", "api/feed?session=p"):
+    def test_unchanged_state_artifacts_ideas_usage_answer_304(self):
+        # usage needs a real session (`t`); it 404s for unknown ones
+        for sub in ("api/state", "api/artifacts?session=p", "api/ideas?session=p", "api/usage?session=t"):
             code, etag, _ = self.get(sub)
             self.assertEqual(code, 200, sub)
             self.assertTrue(etag, f"no ETag on /{sub}")
