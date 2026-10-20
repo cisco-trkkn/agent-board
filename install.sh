@@ -160,7 +160,7 @@ do_migrate() {
     elif [[ "$f" == "$HOME"/.local/bin/* ]] && (( ! tmux_ok )) && points_into_repo "$f"; then
       print "kept $f: .tmux.conf still calls it and could not be updated"
     elif [[ "$f" == "$HOME"/.local/bin/* && -n "${held[${f:t}]}" ]] && points_into_repo "$f"; then
-      print "kept $f: ${held[${f:t}]}"
+      print -r -- "kept $f: ${held[${f:t}]}"
     elif points_into_repo "$f"; then say "remove link $f" "removed link $f"; run_or_print rm "$f"
     elif [[ -L "$f" ]]; then print "kept $f: it links outside $REPO"; fi
   done
