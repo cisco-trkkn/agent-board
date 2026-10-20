@@ -1,5 +1,6 @@
 # lib.zsh — isolated tmux server for tmux-tools tests. Source it, then call tt_setup.
 TT_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+TT_REPO="${${(%):-%x}:A:h:h:h}"          # the checkout under test (file scope: inside a function $0 is the function name)
 TT_FAILS=0
 
 tt_setup() {   # tt_setup [windows...]  (default: claude shell tests)
@@ -8,7 +9,9 @@ tt_setup() {   # tt_setup [windows...]  (default: claude shell tests)
   TT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tctest.XXXXXX")"
   TT_DIR="${TT_DIR:A}"
   export TC_STATE="$TT_DIR/state"; mkdir -p "$TC_STATE"
-  unset TMUX TMUX_PANE TC_SESSION
+  unset TMUX TMUX_PANE TC_SESSION TMUX_DASH_TMUX_ARGS DEV_NO_ATTACH DEV_CLIENT DEV_CLAUDE_CMD   # a board-opened shell exports some of these
+  # the private socket stands in for agent-board's own server (-L agent-board), and this checkout for the live one
+  export AGENT_BOARD_TMUX_SOCKET="$TT_SOCK_NAME" AGENT_BOARD_REPO="$TT_REPO"
   # TC_STATE is exported before the server starts, so pane shells inherit it
   "$TT_BIN" -L "$TT_SOCK_NAME" -f /dev/null new-session -d -s tt -n "$wins[1]" -c "$TT_DIR" -x 200 -y 50
   local w; for w in "${wins[@]:1}"; do

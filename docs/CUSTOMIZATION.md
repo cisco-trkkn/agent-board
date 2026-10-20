@@ -26,7 +26,8 @@ Examples: allow `tmux-ctl` without prompts in agent-board sessions only (above);
 | `DEV_CLAUDE_CMD` | `claude-orchestrator` | `dev` | Command typed into the `claude` window of a **new** session, e.g. `DEV_CLAUDE_CMD=claude dev .` for a plain Claude, or `"claude-orchestrator --continue"`. Ignored (with a warning) when the session already exists. |
 | `DEV_NO_ATTACH` | unset | `dev` | Create the session but don't attach (the board uses this). |
 | `DEV_CLIENT` | unset | `dev` | Switch this tmux client instead of the current one (`Ctrl-a D` uses it). |
-| `TC_TMUX` | `~/.local/bin/tmux` | `dev`, `tmux-ctl`, `tmux-dev-layout`, `tmux-session-closed`, hooks, `paneclass.py` | tmux binary to use. Not honoured by `tmux-dash`, `tmux-web-attach`, `tmux-jump`, `tmux-teammate-window` (see the refactor plan). |
+| `TC_TMUX` | `~/.local/bin/tmux` | every script, hook and the board, through `bin/_tc_bins.zsh` | tmux binary to use. |
+| `AGENT_BOARD_TMUX_SOCKET` | `agent-board` | `bin/_tc_bins.zsh` | Name of agent-board's own tmux server (`tmux -L <name>`), the one `dev` and `tmux-dash` use when started outside tmux. The test harness points it at its private socket. |
 | `TC_STATE` | `${TMPDIR:-/tmp}/tmux-ctl-$UID` | `tmux-ctl`, hooks, board, `relay.py`, `tmux-session-closed` | Runtime state directory. Must be the same for every process of one tmux server; set it in your shell profile if you change it. |
 | `TC_SESSION` | caller's session | `tmux-ctl` | Target a different session (the board sets it for actions). |
 | `TC_LAYOUT` | `~/.local/bin/tmux-dev-layout` | `dev` | Replace the layout step with your own script (called as `<script> <session> <root>`). |
@@ -34,7 +35,7 @@ Examples: allow `tmux-ctl` without prompts in agent-board sessions only (above);
 | `TC_AGENT_DRYRUN` | unset | `tmux-ctl agent` | Test seam: print the task and stop before creating a window. |
 | `TMUX_DASH_PORT` | `7700` | `tmux-dash`, `server.py` | Board HTTP port. |
 | `TMUX_DASH_TTYD_PORT` | `7701` | `tmux-dash`, `server.py` | ttyd port. |
-| `TMUX_DASH_TMUX_ARGS` | empty | `server.py`, `tmux-web-attach`, `paneclass.py` | Extra tmux arguments, e.g. `-L work` to point the board at a non-default tmux server. |
+| `TMUX_DASH_TMUX_ARGS` | empty | every script and the board, through `bin/_tc_bins.zsh` | Which tmux server to talk to, e.g. `-L default` to keep the board and `dev` on your own server. Overrides the resolver's choice (`$TMUX`'s server inside tmux, else `-L agent-board`); `tmux-dash` sets it for `server.py` and the ttyd terminals so both read the same server. |
 | `TMUX_DASH_PAGE` | `index.html` | `server.py` | Serve another HTML file from `board/` (a fork of the UI, an experiment). |
 | `TMUX_DASH_DEBUG` | unset | `server.py` | Log every request to stderr, which `tmux-dash` sends to `~/.local/state/tmux-dash/server.log`. |
 | `FZF_BIN` | `~/.local/bin/fzf` | `tmux-agent-cleanup` | fzf binary. |

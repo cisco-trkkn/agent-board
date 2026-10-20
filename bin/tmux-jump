@@ -1,9 +1,15 @@
 #!/usr/bin/env zsh
-# tmux-jump — fuzzy-search every window in every session and jump to it.
-# Opened by Ctrl-a f (runs inside a tmux popup).
+# tmux-jump [--popup] [client] — fuzzy-search every window in every session and jump to it.
+# Bound to prefix f in config/tmux.conf as `tmux-jump --popup '#{client_name}'`: that opens this script in a
+# popup on the client (display-popup does not expand formats in its command, run-shell does).
 emulate -L zsh
 source "${0:A:h}/_tc_bins.zsh"
 FZF_BIN="$HOME/.local/bin/fzf"
+popup=0; [[ "$1" == --popup ]] && { popup=1; shift }
+client=(); [[ -n "$1" ]] && client=(-c "$1")
+if (( popup )); then
+  exec "${TC_TMUX_CMD[@]}" display-popup "${client[@]}" -E -w 70% -h 50% -T ' jump to window ' "${(q)${0:A}} ${(q)1}"
+fi
 
 pick="$(tc_tmux list-windows -a -F '#{session_name}:#{window_index}	#{session_name} › #{window_name}  #{?window_bell_flag,🔴 needs you,}	#{pane_current_path}' |
   "$FZF_BIN" --layout=reverse --delimiter='\t' --with-nth=2,3 --tabstop=4 \
@@ -11,6 +17,4 @@ pick="$(tc_tmux list-windows -a -F '#{session_name}:#{window_index}	#{session_na
     --color='bg+:#313244,fg+:#cdd6f4,hl:#f38ba8,hl+:#f38ba8,prompt:#cba6f7,pointer:#f5c2e7,header:#6c7086,border:#cba6f7' \
   | cut -f1)"
 
-client=()
-[[ -n "$1" ]] && client=(-c "$1")
 [[ -n "$pick" ]] && tc_tmux switch-client "${client[@]}" -t "$pick"
