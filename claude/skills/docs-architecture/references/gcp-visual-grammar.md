@@ -14,13 +14,13 @@ Colour means product category, nothing else. A node's icon hexagon and its borde
 | data/analytics | BigQuery, Cloud Storage, Cloud SQL, Firestore, Pub/Sub | `--cds-chart-categorical-2` | #EB6834 / #D95926 | `#A67000` / `#EDA100`, 4.14 / 8.43 |
 | networking | VPC, subnet, Cloud Load Balancing | `--cds-chart-categorical-7` | #4A3AA7 / #9085E9 | `#7A3EE0` / `#AB9CF2`, 5.69 / 7.63 |
 | security/identity | IAM, service account, Workload Identity Federation, Secret Manager | `--cds-chart-categorical-6` | #008300 / #028301 | `#008300` / `#1FA81F`, 4.82 / 5.81 |
-| operations | Cloud Build, Artifact Registry, Cloud Scheduler, Logging, Monitoring, CI jobs | `--cds-chart-categorical-3` | #1BAF7A / #189E70 | `#1A8A8A` / `#2FB8CC`, 4.05 / 7.69 |
+| operations | Cloud Build, Artifact Registry, Cloud Scheduler, Logging, Monitoring, CI jobs | `--cds-chart-categorical-3` | #1BAF7A / #189E70 | `#1A8A8A` / `#2FB8CC`, 4.05 / 7.69 (a teal, not the token) |
 | neutral (no category) | people, external systems | `--cds-text-secondary` | #52514E / #C3C2B7 | `#52514E` / `#C3C2B7`, 7.73 / 10.19 |
 | trust-crossing marker | the badge on an edge that crosses a trust boundary | `--cds-chart-status-critical` | #D03B3B both | `#C62828` / `#E66767`, 5.48 / 5.65 |
 
-The marker is one red: the spec's "red-amber" is read as the hue family, amber being taken by data/analytics. The token mapping is the rule; the last column keeps the hex pairs measured first, for reference only.
+The marker is one red: the spec's "red-amber" is read as the hue family, amber and orange being category colours (data/analytics is orange, `-2`). The token mapping is the rule; the last column keeps the hex pairs measured first, for reference only.
 
-Contrast is best-effort with tokens: the in-frame values are what renders (measured on a token sheet, Task 7); `-2` is about 3:1 on the light page, the rest higher. `categorical-4` (blue) and `-8` (coral) are left out as they sit next to compute and the marker. Neutral and edges are `var(--cds-text-secondary)`.
+Contrast is best-effort with tokens. Measured on the in-frame values against the page (hexagon vs page; the symbol is the page colour, so symbol vs hexagon is the same ratio), light / dark: compute `-1` 4.30 / 5.02, data `-2` 3.12 / 4.70, networking `-7` 8.33 / 5.84, security `-6` 4.82 / 3.70, operations `-3` **2.74** / 5.36, neutral 7.73 / 10.19. Every row clears 3:1 except operations on the light page: 2.74:1, below the 3:1 non-text minimum, so a GitLab, CI job, Artifact Registry or Scheduler hexagon is best effort there and the node's border and name label carry it. No other token fixes it: `-4` (navy / pale blue, 11.64 / 10.21) clears 3:1 but is a blue next to compute, `-8` and the status tokens sit next to the marker or security, `-5` is the env bands. Neutral and edges are `var(--cds-text-secondary)`.
 
 Everything else stays on the page tokens: names `var(--cds-text-primary)`, edge labels and notes `var(--cds-text-secondary)`, project fill `var(--cds-chart-reference-tint)`. Edges, arrowheads and the org and VPC outlines use `var(--cds-text-secondary)`, never the page's axis token (1.75:1 on the light page).
 
@@ -87,7 +87,7 @@ Edge, arrowhead and org/VPC outline colour is `var(--cds-text-secondary)`: 7.73:
 
 A pair of nodes with several edges of one kind gets one edge labelled with the count (`3 topics`); edges of different kinds stay separate.
 
-**Trust-boundary crossing:** where an edge crosses a trust boundary, a disc of radius 7 in the marker colour sits on the edge at the boundary line, its `!` in the page colour. The key names it ("crosses a trust boundary"); it is the only red on the page.
+**Trust-boundary crossing:** where an edge crosses a trust boundary, a disc of radius 7 in the marker colour sits on the edge at the boundary line, its `!` in the page colour. The key names it ("crosses a trust boundary"); the disc with its `!` is told apart by shape and placement (on an edge, at the boundary line), not by hue alone: against the data colour its luminance contrast is only 1.50:1 light / 1.24:1 dark.
 
 ## Layout
 
