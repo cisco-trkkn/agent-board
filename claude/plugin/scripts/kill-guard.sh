@@ -16,8 +16,12 @@ except Exception:
 if not re.search(r"\b(pkill|killall)\b", cmd):
     sys.exit(0)
 
-def is_claude(comm):
+def is_claude(pid, comm):
     exe = comm
+    try:  # Linux ps prints comm as the bare name, not the path; /proc/<pid>/exe has the path
+        exe = os.readlink("/proc/%d/exe" % pid)
+    except OSError:
+        pass
     return "/claude/versions/" in exe or os.path.basename(exe) == "claude"
 
 def matches(tool, args):
@@ -33,7 +37,7 @@ def matches(tool, args):
     comms, argvs = ps("comm"), ps("args")
     for pid, comm in comms.items():
         argv = argvs.get(pid, "")
-        if pid == me or not is_claude(comm): continue
+        if pid == me or not is_claude(pid, comm): continue
         hay = argv if full else os.path.basename(comm)
         try:
             ok = re.search(pat, hay) if tool == "pkill" else os.path.basename(comm) == pat
