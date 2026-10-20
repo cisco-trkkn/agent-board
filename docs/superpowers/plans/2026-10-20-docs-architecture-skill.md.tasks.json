@@ -25,7 +25,7 @@
   {
    "id": 4,
    "subject": "Task 4: GitLab CI and Procfile extractors",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** CI jobs (with stage and environment) and Procfile processes become components, and a CI job that runs a Terraform directory gets a `call` edge to that directory's project boundary.\n\n**Files:**\n- Create: `claude/skills/docs-architecture/scripts/extractors/gitlab_ci.py`\n- Create: `claude/skills/docs-architecture/scripts/extractors/procfile.py`\n- Modify: `claude/skills/docs-architecture/scripts/extractors/__init__.py`\n- Create: `claude/skills/docs-architecture/tests/test_ci_procfile.py`\n\n**Acceptance Criteria:**\n- [ ] Every top-level job in the fixture's `.gitlab-ci.yml` and `ci/actions/landing-zone/.gitlab-ci-landing-zone.yml` is a component `ci/<job>` of kind `ci_job` with a `file:line` source. Keys starting with `.` and the reserved keys (`stages, variables, include, default, workflow, image, services, before_script, after_script, cache`) are excluded.\n- [ ] A job's `environment:` name, or `environment: name:`, sets its `env`, normalised to dev/stage/prod when it matches.\n- [ ] `tools/cloudrun-ledger-layer/procfile.web` has kind `service_source`, source `tools/cloudrun-ledger-layer/Procfile:1`, and its name contains `ledger_api`.\n- [ ] Parsing uses no YAML library (GitLab `!reference` tags break `safe_load`). It is a line scanner, and the test proves a `!reference` line does not crash it.\n- [ ] `meta.extractors` has `terraform`, `gitlab_ci` and `procfile` keys.\n\n**Verify:** `python3 -m unittest discover -s claude/skills/docs-architecture/tests -v` \u2192 all OK.\n\nFull steps: docs/superpowers/plans/2026-10-20-docs-architecture-skill.md (Task 4)\n\n```json:metadata\n{\"files\": [\"claude/skills/docs-architecture/scripts/extractors/gitlab_ci.py\", \"claude/skills/docs-architecture/scripts/extractors/procfile.py\", \"claude/skills/docs-architecture/scripts/extractors/__init__.py\", \"claude/skills/docs-architecture/tests/test_ci_procfile.py\"], \"verifyCommand\": \"python3 -m unittest discover -s claude/skills/docs-architecture/tests -v\", \"acceptanceCriteria\": [\"top-level CI jobs are ci_job components with file:line, reserved and dot keys excluded\", \"environment sets env\", \"Procfile web process is service_source at Procfile:1 naming ledger_api\", \"no YAML library; !reference line does not crash\", \"meta.extractors has terraform, gitlab_ci, procfile\"], \"modelTier\": \"standard\"}\n```",
    "blockedBy": [
     3
@@ -88,5 +88,5 @@
    ]
   }
  ],
- "lastUpdated": "2026-10-20T15:41:16.278435+00:00"
+ "lastUpdated": "2026-10-20T11:45:55"
 }
