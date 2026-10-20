@@ -40,8 +40,5 @@ jobs:
         run: python3 -m unittest discover -s board/tests
       - name: install_lib tests
         run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
-      - name: Diagnostics (pane shell and tmux-ctl run)
-        continue-on-error: true
-        run: zsh tools/tests/ci-debug.zsh
       - name: tmux / hook tests
         run: zsh tools/tests/run-all.zsh
