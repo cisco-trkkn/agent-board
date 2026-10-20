@@ -32,7 +32,8 @@ class ReloadTest(unittest.TestCase):
         (self.tmp / "tools").mkdir()   # tc_env.py parses ../tools/lib/tc-env.zsh, so the copy keeps the repo layout
         shutil.copytree(BOARD.parent / "tools" / "lib", self.tmp / "tools" / "lib")
         self.port = free_port()
-        env = {**os.environ, "TMUX_DASH_TOKEN": TOKEN, "TMUX_DASH_PORT": str(self.port),
+        env = {k: v for k, v in os.environ.items() if k != "TC_TMUX"}   # a TC_TMUX leaked by another test module must not reach the server
+        env = {**env, "TMUX_DASH_TOKEN": TOKEN, "TMUX_DASH_PORT": str(self.port),
                "TMUX_DASH_TTYD_PORT": str(free_port()), "TC_STATE": str(self.tmp / "state"),
                "TC_IDEAS_DIR": str(self.tmp / "ideas"), "TMUX_DASH_TMUX_ARGS": f"-L reload-{os.getpid()} -f /dev/null"}
         self.log = open(self.tmp / "server.log", "wb")
@@ -55,13 +56,13 @@ class ReloadTest(unittest.TestCase):
             return json.load(r)
 
     def _wait_up(self):
-        end = time.time() + 10
+        end = time.time() + 30   # a loaded CI runner (macOS) is several times slower than a laptop; startup itself takes ~0.2s
         while time.time() < end:
             try:
                 return self.get("api/version")
             except Exception:
                 time.sleep(0.1)
-        self.fail("server did not come up: " + (self.tmp / "server.log").read_text())
+        self.fail(f"server did not come up (exit status {self.proc.poll()}): " + (self.tmp / "server.log").read_text())
 
     def test_version_reports_start_time(self):
         v = self.get("api/version")
