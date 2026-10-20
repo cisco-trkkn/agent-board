@@ -949,6 +949,9 @@ def cmd_postmerge(cfg: dict, args) -> int:
         sig = add_attempt(args.note[0], args.note[1])
         say(f"logged attempt for: {sig}")
         return 0
+    if args.mr and not args.ref:
+        # an MR names the branch it merged into; postmerge.ref is only the default for the no-flag case
+        ref = api(f"projects/:id/merge_requests/{args.mr}")["target_branch"]
     pid = resolve_postmerge_pipeline(args, ref)
     pl = api(f"projects/:id/pipelines/{pid}")
     if pl["ref"] != ref:
@@ -1026,7 +1029,7 @@ def main() -> int:
     pm = sub.add_parser("postmerge", help="read-only: diagnose the pipeline on the merged ref (default staging)")
     pm.add_argument("--ref")
     pm.add_argument("--pipeline", type=int, help="specific pipeline id on the ref")
-    pm.add_argument("--mr", type=int, help="use the pipeline for this merged MR's merge commit")
+    pm.add_argument("--mr", type=int, help="use the pipeline for this merged MR's merge commit, on its target branch")
     pm.add_argument("--note", nargs=2, metavar=("SIG_PART", "TEXT"), help="log what you tried for an incident")
     pm.add_argument("--timeout", type=int, default=3600)
     pm.add_argument("--interval", type=int, default=20)

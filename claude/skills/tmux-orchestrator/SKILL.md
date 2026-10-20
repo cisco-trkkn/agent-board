@@ -31,7 +31,7 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
 | `tmux-ctl send [-C dir] <win> "<cmd>"` | Type and press Enter without waiting, e.g. a watcher or dev server. Same lane and `-C` rules as `run` |
 | `tmux-ctl keys <win> C-c` | Raw keys, e.g. stop something you started. Not allowed on worker windows |
 | `tmux-ctl new <win> [dir]` | Open another shell window |
-| `tmux-ctl agent <name> [--force] "<task>"` or `--brief FILE` | Start a worker Claude: new window plus `claude -w <name>` (worktree `.claude/worktrees/<name>`, branch `claude/<name>`) |
+| `tmux-ctl agent <name> [--force] "<task>"` or `--brief FILE` | Start a worker Claude: new window plus `claude -w <name>` (worktree `.claude/worktrees/<name>`, branch `claude/<name>`, cut from the default branch, not yours) |
 | `tmux-ctl tell <agent> "<msg>"` | Send a follow-up message to a worker. Refused while it is waiting on the user |
 | `tmux-ctl agents` | Each worker's state (working / WAITING ON USER / exited) and last lines |
 | `tmux-ctl artifact <path>` | Show a file in the board's artifacts panel |
@@ -41,7 +41,7 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
 ## How to use it
 
 1. Start with `tmux-ctl list` to see what exists and what's busy.
-2. Run test suites and long builds with `tmux-ctl run tests "<cmd>"`: it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is busy), in your own worktree (`-C <dir>` to override), and the user sees every run in the Agent Board's Activity drawer. Use `-t` for long suites (`-t 1800`). Use your Bash tool for everything else. Never type into the user's own `shell` window.
+2. Run test suites and long builds with `tmux-ctl run tests "<cmd>"`: it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is busy), in your own worktree (another directory: `tmux-ctl run -C <dir> tests "<cmd>"`; options always go before the window), and the user sees every run in the Agent Board's Activity drawer. Use `-t` for long suites (`-t 1800`). Use your Bash tool for everything else. Never type into the user's own `shell` window.
 3. Exit 124 means it is still running after the timeout. `read` the window later; don't re-run it.
 4. A `busy` error means something else is running there. Read it and wait, or ask the user. Don't
    interrupt what you didn't start.
@@ -69,6 +69,16 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
   task names such paths. A worker starts with none of your context, so the brief needs a goal, a scope
   and a done-criterion: `agent` refuses a brief under ~8 words, so pass longer text or `--brief FILE`
   (contents sent verbatim); `--force` skips both checks.
+- **Brief length:** `agent` types the brief into the new pane as part of the `claude` command line. A
+  long multi-line brief (observed at ~1.5 KB) arrives cut off, the shell sits at a continuation prompt,
+  and `agents` then reports `exited`, which looks like a worker that ran and quit. Until `tmux-ctl`
+  passes the brief by file, write the full brief to a file and give `agent` a one-line task that points
+  at it ("Read <path> and do the task it describes").
+- **Worker base branch:** `claude -w` cuts the worktree from the repo's default branch (origin HEAD,
+  usually `main`), not from the branch you have checked out. When you work on another branch (an
+  integration branch such as `dev3`), tell the worker in the brief to run `git reset --hard <branch>`
+  (or merge it) before starting, and check its HEAD with `git -C .claude/worktrees/<name> log -1` before
+  trusting its results.
 
 ## Rules
 

@@ -158,6 +158,33 @@ class PostmergeTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 agent.cmd_postmerge(CFG, self.args())
 
+    def test_mr_uses_its_target_branch_not_postmerge_ref(self):
+        def _api(endpoint, method="GET", raw=False, fields=None):
+            self.calls.append((method, endpoint))
+            if endpoint == "projects/:id/merge_requests/291":
+                return {"iid": 291, "state": "merged", "target_branch": "main", "merge_commit_sha": "c" * 40}
+            if endpoint.startswith("projects/:id/pipelines?sha="):
+                self.assertIn("ref=main", endpoint)
+                return [{"id": 777}]
+            if endpoint == "projects/:id/pipelines/777":
+                return {"id": 777, "ref": "main", "sha": "c" * 40, "status": "success", "web_url": "u"}
+            raise AssertionError(endpoint)
+        with patch.object(agent, "api", side_effect=_api):
+            self.assertEqual(0, agent.cmd_postmerge(CFG, self.args(pipeline=None, mr=291)))
+
+    def test_explicit_ref_wins_over_mr_target(self):
+        def _api(endpoint, method="GET", raw=False, fields=None):
+            if endpoint == "projects/:id/merge_requests/291":
+                return {"iid": 291, "state": "merged", "target_branch": "main", "merge_commit_sha": "c" * 40}
+            if endpoint.startswith("projects/:id/pipelines?sha="):
+                self.assertIn("ref=staging", endpoint)
+                return [{"id": 555}]
+            if endpoint == "projects/:id/pipelines/555":
+                return {"id": 555, "ref": "staging", "sha": "a" * 40, "status": "success", "web_url": "u"}
+            raise AssertionError(endpoint)
+        with patch.object(agent, "api", side_effect=_api):
+            self.assertEqual(0, agent.cmd_postmerge(CFG, self.args(pipeline=None, mr=291, ref="staging")))
+
     def test_note_requires_unique_incident(self):
         agent.save_incidents({"a :: x": {"count": 1, "pipelines": [1], "attempts": []},
                               "a :: y": {"count": 1, "pipelines": [2], "attempts": []}})

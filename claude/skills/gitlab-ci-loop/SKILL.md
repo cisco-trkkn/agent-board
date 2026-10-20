@@ -136,7 +136,7 @@ branch the MR merged into. Run it by hand when the user says an MR was merged ou
 why staging failed:
 
 ```bash
-agent-ci postmerge --mr <iid>            # or no flag: latest push pipeline on postmerge.ref (default staging)
+agent-ci postmerge --mr <iid>            # the MR's target branch; no flag: latest push pipeline on postmerge.ref (default staging)
 ```
 
 - It only does GETs. It never creates, retries or plays pipelines or jobs.
