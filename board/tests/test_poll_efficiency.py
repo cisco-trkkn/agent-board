@@ -58,7 +58,10 @@ class Scratch:
         self.server.RELOAD_EVERY = 10 ** 9   # never re-exec the test process
 
     def tmux(self, *args):
-        return subprocess.run(self.real + list(args), capture_output=True, text=True, check=True).stdout
+        r = subprocess.run(self.real + list(args), capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError(f"{' '.join(self.real + list(args))} exited {r.returncode}: {r.stderr.strip()!r}")
+        return r.stdout
 
     def layout(self):
         """Project session `t`: 3 windows x 2 panes (6 panes), plus `t-bg` (tagged @tc_bg) with tests/shell windows."""
