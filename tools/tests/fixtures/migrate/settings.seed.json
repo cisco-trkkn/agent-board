@@ -1,0 +1,110 @@
+{
+  "env": {
+    "NODE_EXTRA_CA_CERTS": "/home/u/.certs/ca.pem",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)"
+    ],
+    "deny": []
+  },
+  "model": "opus[1m]",
+  "enabledPlugins": {
+    "superpowers-extended-cc@x": true
+  },
+  "theme": "dark",
+  "teammateMode": "tmux",
+  "note": "café — ünïcode kept as is",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ~/.claude/hooks/task-observer-session-start.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/revise-claude-md-nudge.py"
+          },
+          {
+            "type": "command",
+            "command": "bash \"/opt/agent-board/claude/hooks/superpowers-hook.sh\" stop-revalidate-user-gates.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash \"/opt/agent-board/claude/hooks/superpowers-hook.sh\" stop-wait-guard.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/context-size-guard.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/bash-mirror.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|Artifact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/artifact-register.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/opt/agent-board/claude/hooks/superpowers-hook.sh\" post-task-complete-revalidate.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/bash-mirror.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/kill-guard.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

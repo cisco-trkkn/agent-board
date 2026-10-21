@@ -1,8 +1,8 @@
 source "${0:A:h}/lib.zsh"
-F="${0:A:h}/fixtures"; C="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+F="${0:A:h}/fixtures"; C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt_setup
-"${TC_LAYOUT:-$HOME/.local/bin/tmux-dev-layout}" tt "$TT_DIR"
-"${TC_MIRROR:-$HOME/.claude/hooks/bash-mirror.sh}" < "$F/ok.json"
+"${TC_LAYOUT:-$TT_REPO/bin/tmux-dev-layout}" tt "$TT_DIR"
+sed "s|__HOME__|$HOME|" "$F/ok.json" | "${TC_MIRROR:-$TT_REPO/claude/hooks/bash-mirror.sh}"
 (cd "$TT_DIR" && $C run tests true >/dev/null)      # creates the hidden tt-bg session
 mp="$(tt list-panes -t '=tt-bg:tests' -F '#{pane_id} #{@tc_role}' | awk '$2==""{print $1}')"
 check "hook entry in feed log"  grep -qxF '$ pytest -q tests/unit' "$TC_STATE/feed-tt-tests.log"

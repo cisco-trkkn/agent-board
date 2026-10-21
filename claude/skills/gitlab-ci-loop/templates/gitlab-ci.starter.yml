@@ -1,0 +1,18 @@
+# Minimal starter pipeline installed by the gitlab-ci-loop skill (only when a repo had no CI).
+# Replace the placeholder script with the project's real lint/test commands.
+stages:
+  - validate
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+validate:
+  stage: validate
+  image: python:3.12
+  script:
+    - 'echo "TODO: add lint/test commands"'
+    - if [ -f requirements.txt ]; then pip install -q -r requirements.txt; fi
+    - if ls tests 2>/dev/null | grep -q .; then pip install -q pytest && python -m pytest -q; fi

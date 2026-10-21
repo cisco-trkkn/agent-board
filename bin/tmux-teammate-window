@@ -9,7 +9,12 @@
 # and the window closes when Claude shuts the teammate down. Other splits are left alone.
 emulate -L zsh
 setopt extendedglob
-T="$HOME/.local/bin/tmux"
+source "${0:A:h}/_tc_bins.zsh"; T=tc_tmux      # the resolved tmux command: the server this hook fires on
+
+# --hook <pane>: the after-split hook names the pane it just split; check only that one. A bare
+# --hook (or no args) falls through to the full scan below.
+hookpane=""
+if [[ "$1" == --hook ]]; then hookpane="$2"; shift $#; fi
 
 # Called with a pane id (and the teammate name, when the start command already gave it): else wait
 # for that pane to show its teammate name, then move it.
@@ -43,6 +48,7 @@ fi
 # as `cat` and respawns; 2.1.301 starts them directly as `claude … --agent-name <name> …`.
 for line in ${(f)"$("$T" list-panes -a -F '#{pane_id} #{window_panes} #{?#{@tc_teammate},1,0} #{pane_start_command}')"}; do
   read -r id panes flag cmd <<< "$line"
+  [[ -z "$hookpane" || "$id" == "$hookpane" ]] || continue
   [[ "$panes" -gt 1 && "$flag" != 1 ]] || continue
   if [[ "$cmd" =~ "--agent-name '?([A-Za-z0-9_-]+)" ]]; then "$0" "$id" "$match[1]" &!
   elif [[ "$cmd" == (cat|\"cat\") ]]; then "$0" "$id" &!

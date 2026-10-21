@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-C="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt_setup claude
 $C run tests true >/dev/null
 log="$TC_STATE/feed-tt-tests.log"; printf 'a\nb\nc\nd\n' > "$log"

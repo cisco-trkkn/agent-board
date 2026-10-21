@@ -234,9 +234,12 @@ class MoveTest(Base):
         with self.assertRaises(FileNotFoundError):
             artifacts.read("p", str(self.doc))
 
+    def test_hook_is_the_repos_own_script(self):
+        repo = Path(artifacts.__file__).resolve().parent.parent
+        self.assertEqual(artifacts.HOOK, repo / "claude/hooks/artifact-register.sh")
+        self.assertTrue(os.access(artifacts.HOOK, os.X_OK))
+
     def test_move_with_the_real_hook_and_an_other_kind_plan(self):
-        if not os.access(artifacts.HOOK, os.X_OK):
-            self.skipTest("artifact-register.sh is not installed")
         doc = self.src / "docs/superpowers/plans/2026-10-19-real.md"
         doc.write_text("# Real\n")
         env = {**os.environ, "TC_STATE": str(self.state)}

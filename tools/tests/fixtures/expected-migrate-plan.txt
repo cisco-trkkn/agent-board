@@ -1,0 +1,65 @@
+  would: mkdir -p ~/.local/bin
+would link ~/.local/bin/agent-board -> ~/agent-board/bin/agent-board
+  would: ln -s ~/agent-board/bin/agent-board ~/.local/bin/agent-board
+would back up ~/.claude/settings.json to ~/.claude/settings.json.bak-YYYYMMDD
+  would: cp -p ~/.claude/settings.json ~/.claude/settings.json.bak-YYYYMMDD
+would remove from settings.json: ~/.claude/hooks/bash-mirror.sh
+would remove from settings.json: ~/.claude/hooks/artifact-register.sh
+would remove from settings.json: ~/.claude/hooks/bash-mirror.sh
+would remove from settings.json: ~/.claude/hooks/kill-guard.sh
+would back up ~/.tmux.conf to ~/.tmux.conf.bak-YYYYMMDD
+  would: cp -p ~/.tmux.conf ~/.tmux.conf.bak-YYYYMMDD
+would remove from .tmux.conf: bind W display-popup -E -w 90% -h 60% -d "#{pane_current_path}" -T " clean up agent worktrees " "~/.local/bin/tmux-agent-cleanup"
+would remove from .tmux.conf: set-hook -g after-split-window 'run-shell -b "~/.local/bin/tmux-teammate-window --hook #{pane_id}"'
+would remove from .tmux.conf: set-hook -g session-closed 'run-shell -b "~/.local/bin/tmux-session-closed #{q:hook_session_name}"'
+would remove from .tmux.conf: bind f run-shell -b "~/.local/bin/tmux display-popup -c '#{client_name}' -E -w 70% -h 50% -T ' jump to window ' \"~/.local/bin/tmux-jump '#{client_name}'\""
+would remove from .tmux.conf: bind D run-shell -b "DEV_CLIENT='#{client_name}' ~/.local/bin/dev '#{pane_current_path}'"
+would remove link ~/.local/bin/claude-orchestrator
+  would: rm ~/.local/bin/claude-orchestrator
+would remove link ~/.local/bin/dev
+  would: rm ~/.local/bin/dev
+would remove link ~/.local/bin/tmux-agent-cleanup
+  would: rm ~/.local/bin/tmux-agent-cleanup
+kept ~/.local/bin/tmux-ctl: .tmux.conf: set -s command-alias[101] 'agent-go=run-shell -b -c "#{pane_current_path}" "export TMUX=\"#{socket_path},#{pid},0\" TMUX_PANE=\"#{pane_id}\"; n=\"\$(~/.local/bin/tmux show -gqv @agent_name)\"; t=\"\$(~/.local/bin/tmux show -gqv @agent_task)\"; ~/.local/bin/tmux set -gu @agent_name; ~/.local/bin/tmux set -gu @agent_task; ~/.local/bin/tmux-ctl agent \"\$n\" \"\$t\""'
+would remove link ~/.local/bin/tmux-dash
+  would: rm ~/.local/bin/tmux-dash
+would remove link ~/.local/bin/tmux-dev-layout
+  would: rm ~/.local/bin/tmux-dev-layout
+would remove link ~/.local/bin/tmux-jump
+  would: rm ~/.local/bin/tmux-jump
+would remove link ~/.local/bin/tmux-session-closed
+  would: rm ~/.local/bin/tmux-session-closed
+would remove link ~/.local/bin/tmux-teammate-window
+  would: rm ~/.local/bin/tmux-teammate-window
+would remove link ~/.local/bin/tmux-web-attach
+  would: rm ~/.local/bin/tmux-web-attach
+would remove link ~/.claude/hooks/bash-mirror.sh
+  would: rm ~/.claude/hooks/bash-mirror.sh
+would remove link ~/.claude/hooks/artifact-register.sh
+  would: rm ~/.claude/hooks/artifact-register.sh
+would remove link ~/.claude/hooks/kill-guard.sh
+  would: rm ~/.claude/hooks/kill-guard.sh
+would remove link ~/.claude/orchestrator.md
+  would: rm ~/.claude/orchestrator.md
+would remove link ~/.claude/worker.md
+  would: rm ~/.claude/worker.md
+would move ~/.claude/skills/tmux-orchestrator to ~/.local/state/agent-board/migrated-YYYYMMDD/tmux-orchestrator
+  would: mkdir -p ~/.local/state/agent-board/migrated-YYYYMMDD
+  would: mv ~/.claude/skills/tmux-orchestrator ~/.local/state/agent-board/migrated-YYYYMMDD/tmux-orchestrator
+would move ~/.claude/skills/handoff to ~/.local/state/agent-board/migrated-YYYYMMDD/handoff
+  would: mkdir -p ~/.local/state/agent-board/migrated-YYYYMMDD
+  would: mv ~/.claude/skills/handoff ~/.local/state/agent-board/migrated-YYYYMMDD/handoff
+would move ~/.claude/agents/effort-low.md to ~/.local/state/agent-board/migrated-YYYYMMDD/effort-low.md
+  would: mkdir -p ~/.local/state/agent-board/migrated-YYYYMMDD
+  would: mv ~/.claude/agents/effort-low.md ~/.local/state/agent-board/migrated-YYYYMMDD/effort-low.md
+would move ~/.claude/agents/effort-medium.md to ~/.local/state/agent-board/migrated-YYYYMMDD/effort-medium.md
+  would: mkdir -p ~/.local/state/agent-board/migrated-YYYYMMDD
+  would: mv ~/.claude/agents/effort-medium.md ~/.local/state/agent-board/migrated-YYYYMMDD/effort-medium.md
+would move ~/.claude/agents/effort-high.md to ~/.local/state/agent-board/migrated-YYYYMMDD/effort-high.md
+  would: mkdir -p ~/.local/state/agent-board/migrated-YYYYMMDD
+  would: mv ~/.claude/agents/effort-high.md ~/.local/state/agent-board/migrated-YYYYMMDD/effort-high.md
+note: the effort-* agents are now provided by the agent-board plugin; plain `claude` sessions outside agent-board lose them once they are gone from ~/.claude/agents. Use --keep-agents to leave them in place.
+next: a running tmux server still has the old hooks and keys. Either restart tmux, or run
+  tmux set-hook -gu after-split-window; tmux set-hook -gu session-closed; tmux unbind W; tmux unbind f; tmux unbind D
+With the lines gone from ~/.tmux.conf, the next `agent-board dev` starts on agent-board's dedicated tmux server (-L agent-board).
+(dry run: nothing was changed)

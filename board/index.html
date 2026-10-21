@@ -72,6 +72,8 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; back
 .live { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
 .live.off i { background: var(--red); }
+.offline-banner { background: var(--red-soft); color: var(--red); border: 1px solid var(--red); border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
+.offline-banner[hidden] { display: none; }
 
 .attention { display: none; margin: 14px 20px 0; padding: 10px 14px; border-radius: 10px;
   background: var(--amber-soft); color: var(--amber); font-weight: 600; align-items: center; gap: 10px; }
@@ -292,6 +294,7 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
     <div class="brand"><div class="logo">✦</div>Agent Board</div>
     <nav class="tabs" id="tabs"></nav>
     <div class="live" id="live"><i></i><span>live</span></div>
+    <div class="offline-banner" id="offline-banner" role="status" hidden>Board server unreachable — retrying</div>
     <div class="hdr-actions">
       <button class="primary" id="btn-agent">+ New agent</button>
       <div class="menu-wrap">
@@ -354,6 +357,7 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
       <section class="activity" id="activity">
         <button class="act-head" id="act-toggle"><b>Activity</b> <span class="fails" id="act-fails"></span> <span class="alerts" id="act-alerts"></span><span class="chev">▸</span></button>
         <div class="act-body">
+          <div class="doc-banner" id="act-stale" hidden></div>
           <nav class="tabs"><button data-tab="usage">Usage</button><button data-tab="runs">Runs</button></nav>
           <div id="act-usage" class="usage"></div>
           <div id="act-runs" hidden></div>
@@ -368,6 +372,8 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   <p>Starts Claude in its own window and git worktree (<code>claude -w</code>), so it can't collide with other agents.</p>
   <textarea id="agent-task" rows="4" placeholder="What should it do?" required></textarea>
   <input id="agent-name" placeholder="Name (optional, taken from the task if empty)" pattern="[A-Za-z0-9._-]{1,40}">
+  <div class="row"><label>Model <select id="agent-model"><option value="haiku">haiku</option><option value="sonnet" selected>sonnet</option><option value="opus">opus</option><option value="fable">fable</option></select></label>
+  <label>Effort <select id="agent-effort"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label></div>
   <div class="row"><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start agent</button></div>
 </form></dialog>
 
@@ -486,9 +492,10 @@ function card(s, w, p) {
   const who = el("div", "who");
   const mate = w.teammate ? w.name.replace(/^✦\s*/, "") : null;
   const task = paneName(w, p);
+  const lab = (s.usage_labels || {})[p.id];
   who.append(el("b", null, mate || task));
-  who.append(el("span", null, [r && ROLE[r], `window ${w.index}`, r ? null : p.command, mate && task !== w.name ? task : null]
-    .filter(Boolean).join(" · ")));
+  const facts = lab ? [lab.role, lab.model, lab.effort] : [r && ROLE[r], `window ${w.index}`, r ? null : p.command];   // labelled: role · model · effort
+  who.append(el("span", null, [...facts, mate && task !== w.name ? task : null].filter(Boolean).join(" · ")));
   head.append(who, el("span", "pill " + p.status, STATUS_LABEL[p.status] || p.status));
   c.append(head);
   const alerts = (s.usage_alerts || {})[p.id] || [];
@@ -532,10 +539,12 @@ function btn(label, formKey, form, input) {
   return b;
 }
 
+let cardsStale = false;   // a render was skipped while an input had focus: the next poll must render even if nothing changed
 function renderCards() {
   const s = session(), agents = $("#agents"), cards = $("#cards");
   // keep focus while typing: don't rebuild if an input inside the cards is focused
-  if ((agents.contains(document.activeElement) || cards.contains(document.activeElement)) && document.activeElement.tagName === "INPUT") return;
+  if ((agents.contains(document.activeElement) || cards.contains(document.activeElement)) && document.activeElement.tagName === "INPUT") { cardsStale = true; return; }
+  cardsStale = false;
   agents.replaceChildren(); cards.replaceChildren(); $("#agent-count").textContent = "";
   if (!s) { cards.append(el("div", "empty", "Nothing to show yet.")); return; }
   $("#sess-path").textContent = s.path || "";
@@ -627,23 +636,32 @@ for (const g of document.querySelectorAll(".grip")) g.addEventListener("pointerd
 
 function render() { renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
 
+function setOffline(off) {
+  $("#live").classList.toggle("off", off); $("#live span").textContent = off ? "offline" : "live";
+  $("#offline-banner").hidden = !off;
+}
 async function refresh() {
+  let p;
   try {
-    const r = await fetch(`${API}/state`, { cache: "no-store" });
-    data = await r.json();
-    $("#live").classList.remove("off"); $("#live span").textContent = "live";
-  } catch (e) { $("#live").classList.add("off"); $("#live span").textContent = "offline"; return; }
+    p = await pollJSON("state");
+    if (!p.ok) throw new Error(`HTTP ${p.status}`);
+  } catch (e) { setOffline(true); return false; }
+  setOffline(false);
+  if (!p.changed && !cardsStale) return true;   // 304: the DOM already shows this state; the server is up
+  data = p.json;
   if (!session() && data.sessions[0]) current = data.sessions[0].name;
   const n = (session() || {}).usage_alert_count || 0;
   $("#act-alerts").textContent = n ? `${n} alert${n === 1 ? "" : "s"}` : "";
   render();
+  return true;
 }
 
 $("#btn-agent").onclick = () => { if (!session()) return toast("Open a project first", true); $("#dlg-agent").showModal(); $("#agent-task").focus(); };
 $("#form-agent").addEventListener("submit", async (e) => {
   if (e.submitter && e.submitter.value !== "ok") return;
   e.preventDefault();
-  const ok = await action({ action: "agent", session: session().name, name: $("#agent-name").value, task: $("#agent-task").value });
+  const ok = await action({ action: "agent", session: session().name, name: $("#agent-name").value, task: $("#agent-task").value,
+    model: $("#agent-model").value, effort: $("#agent-effort").value });
   if (ok) { $("#dlg-agent").close(); $("#form-agent").reset(); }
 });
 const pathIn = $("#project-path"), acList = $("#ac-list");
@@ -906,6 +924,17 @@ const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(),
 let docBase = null, docSel = null, docSess = null, docMode = "read", docSelection = null, docRendered = null;
 if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", (n) => { if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); } });
 const api = (path) => fetch(`${API}/${path}`, { cache: "no-store" });
+// Polled endpoints carry an ETag; an unchanged answer is a 304 with no body, and the last body is reused.
+const POLL = new Map();   // url -> { etag, json }
+async function pollJSON(path) {
+  const url = `${API}/${path}`, last = POLL.get(url);
+  const r = await fetch(url, { cache: "no-store", headers: last ? { "If-None-Match": last.etag } : {} });
+  if (r.status === 304 && last) return { ok: true, status: 200, changed: false, json: last.json };
+  if (!r.ok) return { ok: false, status: r.status, changed: true, json: null };
+  const json = await r.json(), etag = r.headers.get("ETag");
+  if (etag) POLL.set(url, { etag, json });
+  return { ok: true, status: r.status, changed: true, json };
+}
 async function post(body) {
   const r = await fetch(`${API}/action`, { method: "POST", headers: { "Content-Type": "application/json", "X-Dash-Token": TOKEN }, body: JSON.stringify(body) });
   return { status: r.status, j: await r.json().catch(() => ({})) };
@@ -922,8 +951,8 @@ $("#side-toggle").textContent = $("#side").classList.contains("collapsed") ? "�
 async function pollArtifacts() {
   const s = session(); if (!s) return;
   const A = artFor(s.name);
-  const r = await api(`artifacts?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const d = p.json;
   Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
   const keep = new Set(d.items.map((it) => it.url || it.path));   // a moved document leaves the manifest view
@@ -933,7 +962,7 @@ async function pollArtifacts() {
   const hot = (it) => it.path === A.plan || it.latest.epoch === d.epoch || it.latest.ts >= A.loadedAt || it.path === docSel;
   for (const it of A.items.values()) if (!it.url && hot(it)) await trackVersion(s.name, A, it);
   renderArtifacts();
-  if (docSel && docMode !== "edit") {   // keep the reader's text selection: re-render only on a real change
+  if (docSel && docSess === s.name && docMode !== "edit") {   // keep the reader's text selection: re-render only on a real change
     const sel = getSelection(), selecting = sel && !sel.isCollapsed && $("#doc-body").contains(sel.anchorNode);
     const vs = A.versions.get(docSel), last = vs && vs[vs.length - 1];
     if (!selecting && (docMode === "changes" || (last && last.hash !== docRendered))) renderDoc();
@@ -1048,8 +1077,8 @@ function nearestHeading(node) {
 }
 
 function renderDoc() {
-  const s = session(); if (!s || !docSel) return;
-  const A = artFor(s.name), vs = A.versions.get(docSel) || [];
+  if (!docSel || !docSess) return;
+  const A = artFor(docSess), vs = A.versions.get(docSel) || [];
   const cur = vs[vs.length - 1];
   $("#doc-title").textContent = docSel.split("/").pop();
   for (const b of $("#doc-modes").children) b.classList.toggle("on", b.dataset.mode === docMode);
@@ -1076,9 +1105,9 @@ function renderDoc() {
     const save = el("button", "primary", "Save");
     const base = cur.hash;
     save.onclick = async () => {
-      const { status, j } = await post({ action: "save", session: s.name, path: docSel, base_hash: base, text: ta.value });
+      const { status, j } = await post({ action: "save", session: docSess, path: docSel, base_hash: base, text: ta.value });
       if (status === 200) { toast("Saved"); docMode = "read"; await pollArtifacts(); }
-      else if (status === 409) showConflict(s.name, ta.value, j.current);
+      else if (status === 409) showConflict(docSess, ta.value, j.current);
       else toast(j.message || "Save failed", true);
     };
     body.replaceChildren(save, ta);
@@ -1110,12 +1139,12 @@ document.addEventListener("selectionchange", () => {
 });
 $("#doc-comment").onclick = () => {
   if (!docSelection || docSelection.path !== docSel) { docSelection = null; return; }
-  const s = session(), box = el("div", "doc-banner cbox");
+  const box = el("div", "doc-banner cbox");
   const ta = el("textarea"); ta.rows = 3; ta.placeholder = `Note for the lead about "${docSelection.quote.slice(0, 60)}"`;
   const send = el("button", "primary", "Send to lead"), cancel = el("button", "ghost", "Cancel");
   const sel = docSelection;
   send.onclick = async () => {
-    const { status, j } = await post({ action: "comment", session: s.name, path: sel.path, anchor: sel.anchor, quote: sel.quote, note: ta.value });
+    const { status, j } = await post({ action: "comment", session: docSess, path: sel.path, anchor: sel.anchor, quote: sel.quote, note: ta.value });
     toast(j.message || (status === 200 ? "Queued" : "Failed"), status !== 200);
     if (status === 200) { box.remove(); docSelection = null; $("#doc-comment").disabled = true; pollArtifacts(); }
   };
@@ -1182,8 +1211,8 @@ async function moveDoc(path, target) {
 
 async function pollIdeas() {
   const s = session(); if (!s) return;
-  const r = await api(`ideas?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const d = p.json;
   window.ideasOpen = d.open;
   const box = $("#ideas-box");
   if (!box.dataset.built) {
@@ -1236,8 +1265,12 @@ for (const b of $("#activity nav").querySelectorAll("button")) b.onclick = () =>
 
 async function pollActivity() {
   const s = session(); if (!s) return;
-  const r = await api(`runs?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const runs = (await r.json()).runs || [];
+  const p = await pollJSON(`runs?session=${encodeURIComponent(s.name)}`);
+  const stale = $("#act-stale");
+  stale.hidden = p.status !== 404;   // 404 = this server process predates the endpoint
+  if (p.status === 404) stale.textContent = "Server out of date — /api/runs is missing. Restart the board (tmux-dash stop && tmux-dash start).";
+  if (!p.ok) return;
+  const runs = p.json.runs || [];   // on 304 the last body; the sig below decides whether anything is rebuilt
   const failed = runs.filter((x) => x.exit !== null && x.exit !== 0);
   if (ACT.open || !ACT.seeded) failed.forEach((x) => ACT.seenFails.add(x.id));   // failures from before this page load are not news
   ACT.seeded = true;
@@ -1294,8 +1327,8 @@ function renderRuns(s, runs) {
 const usd = (v) => (v == null ? "unpriced" : `$${v.toFixed(2)}`);
 
 async function renderUsage(s) {
-  const r = await api(`usage?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`usage?session=${encodeURIComponent(s.name)}`); if (!p.ok) return;
+  const d = p.json;
   const sig = "u:" + JSON.stringify(d);   // rebuild only when the data changed, so sort order and scroll survive polls
   if (sig === ACT.sig) return;
   ACT.sig = sig;
@@ -1425,7 +1458,13 @@ function sortableTable(rows, cols, key) {
 
 // poll 2s after the previous answer, so a slow server never gets a pile of requests
 // (finally: a render error must not stop the polling)
-(async function poll() { try { await refresh(); await pollArtifacts(); await pollIdeas(); await pollActivity(); } catch (e) { console.error(e); } finally { setTimeout(poll, 2000); } })();
+const loggedErrors = new Set();   // log each distinct error once, not every 2 s
+function logOnce(e) { const k = String((e && e.message) || e); if (!loggedErrors.has(k)) { loggedErrors.add(k); console.error(e); } }
+(async function poll() {
+  try { if (await refresh()) { await pollArtifacts(); await pollIdeas(); await pollActivity(); } }
+  catch (e) { if (e instanceof TypeError && /fetch/i.test(e.message)) setOffline(true); else logOnce(e); }
+  finally { setTimeout(poll, 2000); }
+})();
 </script>
 </body>
 </html>

@@ -1,7 +1,12 @@
 source "${0:A:h}/lib.zsh"
 H="${TC_TEAMMATE_HOOK:-${0:A:h:h:h}/bin/tmux-teammate-window}"
 tt_setup claude shell
-tt set-hook -g after-split-window "run-shell -b '$H'"
+# unflagged teammate panes sitting in other windows, made BEFORE the hook exists so nothing moves them yet
+stray() {   # stray <window> <name>: a second window with a teammate pane sharing it
+  tt new-window -d -t '=tt:' -n "$1" && tt split-window -d -t "=tt:$1" "sh -c 'sleep 60; :' teammate --agent-name $2"
+}
+stray other1 stray-a; stray other2 stray-b; stray other3 stray-c
+tt set-hook -g after-split-window "run-shell -b '$H --hook #{pane_id}'"
 lead="$(tt display -p -t '=tt:claude' '#{window_index}')"
 win_of() { tt list-windows -t '=tt' -F '#{window_index} #{window_name}' | awk -v n="✦ $1" '$0 ~ n {print $1}' }
 # direct shape: the start command itself carries --agent-name. Copied from the real pane_start_command
@@ -23,4 +28,15 @@ before="$(tt list-panes -t '=tt:claude' | wc -l | tr -d ' ')"
 tt split-window -d -t '=tt:claude'
 sleep 2
 check "plain split stays"            test "$(tt list-panes -t '=tt:claude' | wc -l | tr -d ' ')" = $(( before + 1 ))
+check "--hook ignores other panes"   test -z "$(win_of stray-a)$(win_of stray-b)$(win_of stray-c)"
+"$H" --hook; tt_wait 12 test -n "$(win_of stray-a)"
+check "--hook without a pane scans"  test -n "$(win_of stray-a)"
+# the --hook scan above moved every stray; wait for that, then make a fresh one for the bare call
+tt_wait 12 test -n "$(win_of stray-b)" -a -n "$(win_of stray-c)"
+tt set-hook -gu after-split-window       # so the split hook can't move it: only the bare call may
+stray other4 stray-d
+sleep 1
+check "fresh stray not yet moved"    test -z "$(win_of stray-d)"
+"$H"; tt_wait 12 test -n "$(win_of stray-d)"
+check "bare call scans"              test -n "$(win_of stray-d)"
 tt_done

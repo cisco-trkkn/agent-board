@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-C="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt_setup
 (cd "$TT_DIR" && $C run tests true >/dev/null)            # create the bg session
 mark="$(tt capture-pane -p -t '=tt-bg:tests' | grep -c .)"

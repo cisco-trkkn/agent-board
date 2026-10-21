@@ -1,6 +1,6 @@
 source "${0:A:h}/lib.zsh"
-L="${TC_LAYOUT:-$HOME/.local/bin/tmux-dev-layout}"
-D="${TC_DEV:-$HOME/.local/bin/dev}"
+L="${TC_LAYOUT:-$TT_REPO/bin/tmux-dev-layout}"
+D="${TC_DEV:-$TT_REPO/bin/dev}"
 tt_setup                                     # old layout: claude shell tests
 wins() { tt list-windows -t "=$1" -F '#{window_name}' | sort | tr '\n' ' ' }
 fp="$(tt split-window -d -v -t '=tt:tests' -P -F '#{pane_id}' 'sleep 600')"; tt set-option -p -t "$fp" @tc_role feed
@@ -33,7 +33,7 @@ check "dev ready"        zsh -c 'print -r -- "$1" | grep -q ready' x "$out"
 check "dev windows"      test "$(wins proj)" = "claude shell "
 check "dev bg"           test "$(wins proj-bg)" = "shell tests "
 # race: layout migration and tmux-ctl's ensure_bg on a fresh session must not duplicate windows
-CT="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+CT="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt new-session -d -s race -n claude -c "$TT_DIR"; tt new-window -d -t '=race:' -n tests -c "$TT_DIR"
 tt_wait 3 test "$(tt display -p -t '=race:tests' '#{pane_current_command}')" = zsh
 "$L" race "$TT_DIR" & TC_SESSION=race "$CT" run tests true >/dev/null & wait

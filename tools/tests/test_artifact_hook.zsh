@@ -1,5 +1,5 @@
 source "${0:A:h}/lib.zsh"
-H="${TC_HOOK:-$HOME/.claude/hooks/artifact-register.sh}"
+H="${TC_HOOK:-$TT_REPO/claude/hooks/artifact-register.sh}"
 tt_setup claude
 tt rename-window -t '=tt:claude' '✦ impl'
 mkdir -p "$TT_DIR/r/docs/superpowers/plans" "$TT_DIR/sp/scratchpad"
@@ -26,6 +26,14 @@ ho="${TMPDIR:-/tmp}/tt-handoff-$$.md"; print h > "$ho"
 hook "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$ho\"}}"
 check "tmp handoff kind"    test "$(jq -r .kind "$m" | tail -1)" = handoff
 rm -f "$ho"
+# handoffs: the plugin skill writes under ~/.local/state/agent-board/handoffs, the old skill under ~/.claude/handoffs (scratch HOME)
+SH="$TT_DIR/home"; mkdir -p "$SH/.local/state/agent-board/handoffs" "$SH/.claude/handoffs"
+print h > "$SH/.local/state/agent-board/handoffs/new.md"; print h > "$SH/.claude/handoffs/old.md"
+TC_TMUX="$TT_BIN" HOME="$SH" hook "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$SH/.local/state/agent-board/handoffs/new.md\"}}"
+check "state handoff kind"  test "$(jq -r .kind "$m" | tail -1)" = handoff
+check "state handoff path"  test "$(jq -r .path "$m" | tail -1)" = "$SH/.local/state/agent-board/handoffs/new.md"
+TC_TMUX="$TT_BIN" HOME="$SH" hook "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$SH/.claude/handoffs/old.md\"}}"
+check "legacy handoff kind" test "$(jq -r .path "$m" | tail -1)" = "$SH/.claude/handoffs/old.md" -a "$(jq -r .kind "$m" | tail -1)" = handoff
 hook '{"tool_name":"Artifact","tool_input":{"file_path":"/x/page.html"},"tool_response":"Published https://claude.ai/code/artifact/abc-123 ok"}'
 check "published url"       test "$(jq -r .url "$m" | tail -1)" = "https://claude.ai/code/artifact/abc-123"
 ( unset TMUX TMUX_PANE; "$H" --path "$other" --kind other --agent you --project tt )

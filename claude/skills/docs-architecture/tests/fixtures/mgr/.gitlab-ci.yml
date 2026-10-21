@@ -1,0 +1,58 @@
+# Minimal root CI file. All logic is delegated to included files.
+
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+    on_job_failure: all
+
+stages:
+  - branch-policy
+  - validate
+  - ci-variables
+  - dev-integration
+  - staging-promotion-gate
+  - tenant-stage-bootstrap
+  - docs-release
+  - release-snapshot-sync
+  - stage-cohort
+  - prod-promotion-gate
+  - repo-health
+  - landing-zone-deploy
+  - update-translation-layer
+  - update-ingestion-layer
+  - update-transformation-layer
+  - update-ledger-layer
+  - rollout-fanout
+  - rollout-child
+  - onboard-fanout
+  - onboard-child
+  - offboard-fanout
+  - offboard-child
+  - mlops-fanout
+  - mlops-child
+  - tenant-secret-update-fanout
+  - tenant-secret-update-child
+  - deploy-pages
+
+include:
+  - local: 'ci/actions/landing-zone/.gitlab-ci-landing-zone.yml'
+  - local: 'ci/actions/validate/.gitlab-ci-validate.yml'
+  - local: 'ci/actions/validate/.gitlab-ci-branch-policy.yml'
+  - local: 'ci/actions/ci-variables/.gitlab-ci-ci-variables.yml'
+  - local: 'ci/actions/release/.gitlab-ci-release.yml'
+  - local: 'docs/.gitlab-ci-pages.yml'
+  - local: 'ci/actions/rollout/.gitlab-ci-rollout.yml'
+  - local: 'ci/actions/rollout/.gitlab-ci-rollout-single-tenant.yml'
+  - local: 'ci/actions/onboard/.gitlab-ci-onboard.yml'
+  - local: 'ci/actions/onboard/.gitlab-ci-onboard-single-tenant.yml'
+  - local: 'ci/actions/offboard/.gitlab-ci-offboard.yml'
+  - local: 'ci/actions/offboard/.gitlab-ci-offboard-single-tenant.yml'
+  - local: 'ci/translation-layer/.gitlab-ci-translation.yml'
+  - local: 'ci/ingestion-layer/.gitlab-ci-ingestion.yml'
+  - local: 'ci/transformation-layer/.gitlab-ci-transformation.yml'
+  - local: 'ci/ledger-layer/.gitlab-ci-ledger.yml'
+  - local: 'ci/actions/mlops/.gitlab-ci-mlops.yml'
+  - local: 'ci/actions/mlops/.gitlab-ci-mlops-single-tenant.yml'
+  - local: 'ci/actions/tenant-secrets/.gitlab-ci-tenant-secret-update.yml'
+  - local: 'ci/actions/tenant-secrets/.gitlab-ci-tenant-secret-update-single-tenant.yml'
+  - local: 'ci/actions/maintenance/.gitlab-ci-repo-health.yml'

@@ -4,15 +4,15 @@
 # Migrates old layouts: moves an idle `tests` window to -bg, closes feed/watch panes, drops status labels.
 # Optional .dev/windows lines `tests: <cmd>` / `shell: <cmd>` run as a watch pane in the -bg window.
 emulate -L zsh
+source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
 sess="$1" root="$2"
 [[ -n "$sess" && -n "$root" ]] || { print -u2 "usage: tmux-dev-layout <session> <root>"; exit 0 }
-TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
-t() { "$TMUX_BIN" "$@" }
+source "${0:A:h}/_tc_bins.zsh"
+t() { tc_tmux "$@" }
 t has-session -t "=$sess" 2>/dev/null || exit 0
 key="$(t display -p -t "=${sess}:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; key="${key:-$sess}"
 bg="$key-bg"
 has_win() { t list-windows -t "=$1" -F '#{window_name}' 2>/dev/null | grep -qxF -- "$2" }
-SHELLS='(zsh|bash|sh|fish|-zsh|-bash)'
 
 # old layout: feed/watch panes and status labels in the user's windows
 for win in shell tests; do
@@ -25,7 +25,7 @@ done
 
 # the hidden agent session (same shape as tmux-ctl ensure_bg); new-session is the atomic gate
 if ! { t has-session -t "=$bg" 2>/dev/null && [[ -n "$(t show-options -qv -t "=${bg}:" @tc_bg)" ]]; }; then
-  if has_win "$sess" tests && [[ "$(t display -p -t "=${sess}:tests" '#{pane_current_command}')" == ${~SHELLS} ]]; then
+  if has_win "$sess" tests && [[ "$(t display -p -t "=${sess}:tests" '#{pane_current_command}')" == ${~TC_SHELLS} ]]; then
     first=shell
   else
     first=tests
@@ -39,7 +39,7 @@ if ! { t has-session -t "=$bg" 2>/dev/null && [[ -n "$(t show-options -qv -t "=$
   fi
 fi
 if has_win "$sess" tests; then
-  if [[ "$(t display -p -t "=${sess}:tests" '#{pane_current_command}')" == ${~SHELLS} ]]; then
+  if [[ "$(t display -p -t "=${sess}:tests" '#{pane_current_command}')" == ${~TC_SHELLS} ]]; then
     t kill-window -t "=${sess}:tests"
   else
     print -u2 "tmux-dev-layout: '${sess}:tests' is busy; left in place (run again when it is idle)"

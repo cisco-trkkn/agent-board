@@ -2,7 +2,9 @@
 # dev [dir] — open (or reattach to) a tmux session for a project.
 # Windows: 1 claude · 2 shell (yours). Agent windows live in the hidden session <name>-bg.  Run it again and it just reattaches.
 emulate -L zsh
-TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
+source "${0:A:h}/_tc_bins.zsh"
+[[ "$1" == (-h|--help|help) ]] && { sed -n '2,3p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 }
+tc_tmux_resolve dedicated       # dev is an entry point: agent-board's own tmux server, wherever it was typed
 
 dir="${1:-$PWD}"
 dir="${dir:A}"
@@ -13,23 +15,31 @@ root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root="$dir"
 name="${root:t}"
 name="${name//[.:]/_}"          # tmux session names can't contain . or :
 
-if ! "$TMUX_BIN" has-session -t "=$name" 2>/dev/null; then
-  "$TMUX_BIN" new-session -d -s "$name" -n claude -c "$root"
-  "$TMUX_BIN" send-keys -t "=${name}:claude" "${DEV_CLAUDE_CMD:-claude-orchestrator}" Enter   # agent team by default
-  "$TMUX_BIN" new-window -d -t "=$name:" -n shell -c "$root"
-  "$TMUX_BIN" select-window -t "=${name}:claude"
+if ! tc_tmux has-session -t "=$name" 2>/dev/null; then
+  # a server this starts inherits this environment: keep the pane dev may be typed in out of it
+  ( unset TMUX TMUX_PANE; tc_tmux new-session -d -s "$name" -n claude -c "$root" )
+  tc_tmux send-keys -t "=${name}:claude" "${DEV_CLAUDE_CMD:-${(q)${0:A:h}}/claude-orchestrator}" Enter   # agent team by default
+  tc_tmux new-window -d -t "=$name:" -n shell -c "$root"
+  tc_tmux select-window -t "=${name}:claude"
 elif [[ -n "$DEV_CLAUDE_CMD" ]]; then
   print -ru2 -- "dev: session '$name' already exists — DEV_CLAUDE_CMD was not sent"
 fi
 
-"${TC_LAYOUT:-$HOME/.local/bin/tmux-dev-layout}" "$name" "$root" 2>/dev/null || true
+# the session's server, by socket: the layout child targets exactly it, whatever its own environment would resolve to
+sock="$(tc_tmux display -p -t "=${name}:" '#{socket_path}' 2>/dev/null)"
+TMUX_DASH_TMUX_ARGS="${sock:+-S ${(q)sock}}" "${TC_LAYOUT:-${0:A:h}/tmux-dev-layout}" "$name" "$root" 2>/dev/null || true
 
+# attach, or switch the client we are in. Typed in a pane of another tmux server, never nest: say how to attach.
+on_this_server() { [[ -n "$TMUX" && -n "$sock" && "${sock:A}" == "${${TMUX%%,*}:A}" ]] }
 if [[ -n "$DEV_NO_ATTACH" ]]; then        # used by tmux-dash: create only
   print -r -- "session '$name' ready"
+elif [[ -n "$TMUX" ]] && ! on_this_server; then
+  print -r -- "dev: session '$name' is ready on agent-board's tmux server, not the one this pane is on. Attach from another terminal:"
+  print -r -- "  tmux ${(j: :)TC_TMUX_SRV} attach -t $name"
 elif [[ -n "$DEV_CLIENT" ]]; then
-  exec "$TMUX_BIN" switch-client -c "$DEV_CLIENT" -t "=$name"
+  exec "${TC_TMUX_CMD[@]}" switch-client -c "$DEV_CLIENT" -t "=$name"
 elif [[ -n "$TMUX" ]]; then
-  exec "$TMUX_BIN" switch-client -t "=$name"
+  exec "${TC_TMUX_CMD[@]}" switch-client -t "=$name"
 else
-  exec "$TMUX_BIN" attach-session -t "=$name"
+  exec "${TC_TMUX_CMD[@]}" attach-session -t "=$name"
 fi
