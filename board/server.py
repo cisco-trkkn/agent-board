@@ -18,7 +18,8 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.server
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 HOME = Path.home()
@@ -32,6 +33,14 @@ from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, inpu
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
 import activity, artifacts, dirs, ideas, relay, usage  # noqa: E402
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
+
+class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        """HTTPServer.server_bind calls socket.getfqdn(), a reverse-DNS lookup that hung 30s+ on the macOS CI runner; the name is unused here."""
+        http.server.socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = host, port
+
 
 TOKEN = os.environ["TMUX_DASH_TOKEN"]
 PORT = int(os.environ.get("TMUX_DASH_PORT", "7700"))
