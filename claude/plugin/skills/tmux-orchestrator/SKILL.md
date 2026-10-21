@@ -36,7 +36,7 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
 | `tmux-ctl agents` | Each worker's state (working / WAITING ON USER / exited) and last lines |
 | `tmux-ctl artifact <path>` | Show a file in the board's artifacts panel |
 | `tmux-ctl idea "<text>"` | File an idea for later |
-| `tmux-ctl relay <doc>` | Used only by `/handoff` |
+| `tmux-ctl relay <doc>` | Used only by `/handoff`, and only the lead (the session's `claude` window) can run it: from any other window it refuses and prints the manual start command, which you give to the user |
 
 ## How to use it
 

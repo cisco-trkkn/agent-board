@@ -58,6 +58,7 @@ Never run the relay without a Yes from this question.
 
 ## 5. Relay
 
+- Relay is lead-only: `tmux-ctl relay` refuses from any window but the session's `claude` window (workers, teammates, lanes, shell) and prints the manual start command. If you are not the lead, give the user that printed command instead of relaying.
 - **On Yes:** run `tmux-ctl relay <doc> --old-session <id>`. Then end your turn with:
 
   ```

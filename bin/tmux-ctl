@@ -447,6 +447,14 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     [[ "$1" == --old-session && -n "$2" ]] && old="$2"
     [[ -f "$doc" ]] || die "no handoff doc '$doc'"
     warn_web_key
+    # lead-only: relay.py respawns the session's claude window as the lead. Called from a worker, teammate, lane or
+    # shell window it must leave the lead alone and hand the user the manual start instead.
+    cwin=; csess=
+    [[ -n "$TMUX_PANE" ]] && { cwin="$(t display -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)"; csess="$(t display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; }
+    if [[ "$cwin" != claude || "$csess" != "$FEEDKEY" ]]; then
+      print -u2 -r -- "tmux-ctl: relay refused: only the lead, from the session's claude window, can relay (this is ${cwin:-no tmux pane}). The lead was not touched. Give the user this to start the new lead by hand: ${(q)TC_REPO}/bin/claude-orchestrator 'Read $doc and continue from where the previous session left off.'"
+      exit 2
+    fi
     log="$STATE/relay-$FEEDKEY.log"
     sock="$(t display -p '#{socket_path}')"
     # detached: the lead that asked for the relay must finish its turn before its pane is replaced
