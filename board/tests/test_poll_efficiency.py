@@ -45,6 +45,7 @@ class Scratch:
         shim.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> {self.log}\nexec {REAL_TMUX} "$@"\n')
         shim.chmod(0o755)
         sock = f"poll-{os.getpid()}-{uuid.uuid4().hex[:8]}"   # one tmux server per test: a new-session must not race the previous test's kill-server on a shared socket
+        self.sock_path = None
         self.real = [REAL_TMUX, "-L", sock, "-f", "/dev/null"]
         self.port = free_port()
         (self.tmp / "state").mkdir()
@@ -62,6 +63,9 @@ class Scratch:
         r = subprocess.run(self.real + list(args), capture_output=True, text=True)
         if r.returncode:
             raise RuntimeError(f"{' '.join(self.real + list(args))} exited {r.returncode}: {r.stderr.strip()!r}")
+        if self.sock_path is None:   # the server exists after the first successful command: remember its socket file, close() removes it
+            q = subprocess.run(self.real + ["display", "-p", "#{socket_path}"], capture_output=True, text=True)
+            self.sock_path = q.stdout.strip() or None
         return r.stdout
 
     def layout(self):
@@ -89,6 +93,8 @@ class Scratch:
     def close(self):
         try:
             subprocess.run(self.real + ["kill-server"], capture_output=True)
+            if self.sock_path:
+                Path(self.sock_path).unlink(missing_ok=True)   # kill-server can leave the socket file behind
         finally:   # restore the environment even when kill-server can't run: a leaked TC_TMUX/TMUX_DASH_* breaks later test modules
             for k, v in self.saved.items():
                 if v is None:
