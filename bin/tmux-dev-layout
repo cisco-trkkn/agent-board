@@ -7,8 +7,8 @@ emulate -L zsh
 source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
 sess="$1" root="$2"
 [[ -n "$sess" && -n "$root" ]] || { print -u2 "usage: tmux-dev-layout <session> <root>"; exit 0 }
-TMUX_BIN="${TC_TMUX:-$HOME/.local/bin/tmux}"
-t() { "$TMUX_BIN" "$@" }
+source "${0:A:h}/_tc_bins.zsh"
+t() { tc_tmux "$@" }
 t has-session -t "=$sess" 2>/dev/null || exit 0
 key="$(t display -p -t "=${sess}:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; key="${key:-$sess}"
 bg="$key-bg"

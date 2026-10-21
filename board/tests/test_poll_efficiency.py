@@ -12,14 +12,18 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 BOARD = Path(__file__).resolve().parent.parent
-REAL_TMUX = os.environ.get("TC_REAL_TMUX") or str(Path.home() / ".local" / "bin" / "tmux")
-SOCK = f"poll-{os.getpid()}"
+sys.path.insert(0, str(BOARD))
+import paneclass  # noqa: E402  (tmux_bin: TC_TMUX, else ~/.local/bin/tmux if executable, else tmux on PATH)
+
+# Resolved before any test sets TC_TMUX to its logging shim, so the shim never execs itself.
+REAL_TMUX = os.environ.get("TC_REAL_TMUX") or paneclass.tmux_bin()
 TOKEN = "poll-test-token"
 
 
@@ -40,12 +44,14 @@ class Scratch:
         shim.parent.mkdir()
         shim.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> {self.log}\nexec {REAL_TMUX} "$@"\n')
         shim.chmod(0o755)
-        self.real = [REAL_TMUX, "-L", SOCK, "-f", "/dev/null"]
+        sock = f"poll-{os.getpid()}-{uuid.uuid4().hex[:8]}"   # one tmux server per test: a new-session must not race the previous test's kill-server on a shared socket
+        self.sock_path = None
+        self.real = [REAL_TMUX, "-L", sock, "-f", "/dev/null"]
         self.port = free_port()
         (self.tmp / "state").mkdir()
         (self.tmp / "cwd").mkdir()
         self.env = {"TMUX_DASH_TOKEN": TOKEN, "TMUX_DASH_PORT": str(self.port), "TC_TMUX": str(shim),
-                    "TMUX_DASH_TMUX_ARGS": f"-L {SOCK} -f /dev/null", "TC_STATE": str(self.tmp / "state")}
+                    "TMUX_DASH_TMUX_ARGS": f"-L {sock} -f /dev/null", "TC_STATE": str(self.tmp / "state")}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         spec = importlib.util.spec_from_file_location("tmux_dash_server_poll", BOARD / "server.py")
@@ -54,7 +60,13 @@ class Scratch:
         self.server.RELOAD_EVERY = 10 ** 9   # never re-exec the test process
 
     def tmux(self, *args):
-        return subprocess.run(self.real + list(args), capture_output=True, text=True, check=True).stdout
+        r = subprocess.run(self.real + list(args), capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError(f"{' '.join(self.real + list(args))} exited {r.returncode}: {r.stderr.strip()!r}")
+        if self.sock_path is None:   # the server exists after the first successful command: remember its socket file, close() removes it
+            q = subprocess.run(self.real + ["display", "-p", "#{socket_path}"], capture_output=True, text=True)
+            self.sock_path = q.stdout.strip() or None
+        return r.stdout
 
     def layout(self):
         """Project session `t`: 3 windows x 2 panes (6 panes), plus `t-bg` (tagged @tc_bg) with tests/shell windows."""
@@ -70,7 +82,7 @@ class Scratch:
         time.sleep(1.2)   # let the creation-second elapse, so the first build's captures can be reused
 
     def calls(self):
-        return [l for l in self.log.read_text().split("\n") if l]   # not splitlines(): the chain marker holds \x1e
+        return [l for l in self.log.read_text().split("\n") if l]   # not splitlines(): keep the split explicit; the chain marker is printable
 
     def during(self, fn):
         """(result, tmux calls made while fn ran)."""
@@ -79,14 +91,18 @@ class Scratch:
         return out, self.calls()[before:]
 
     def close(self):
-        subprocess.run(self.real + ["kill-server"], capture_output=True)
-        for k, v in self.saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        import shutil
-        shutil.rmtree(self.tmp, ignore_errors=True)
+        try:
+            subprocess.run(self.real + ["kill-server"], capture_output=True)
+            if self.sock_path:
+                Path(self.sock_path).unlink(missing_ok=True)   # kill-server can leave the socket file behind
+        finally:   # restore the environment even when kill-server can't run: a leaked TC_TMUX/TMUX_DASH_* breaks later test modules
+            for k, v in self.saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            import shutil
+            shutil.rmtree(self.tmp, ignore_errors=True)
 
 
 def pane_ids(state):

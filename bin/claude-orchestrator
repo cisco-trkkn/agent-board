@@ -2,7 +2,17 @@
 # claude-orchestrator — start Claude Code in orchestrator mode: agent team by default,
 # aware of the dev session's windows. Used by `dev` for its claude window.
 # Extra arguments pass through to claude (e.g. claude-orchestrator --continue).
-PROMPT_FILE="$HOME/.claude/orchestrator.md"
+source "${0:A:h}/_ab_claude.zsh"
+export PATH="$(ab_path)" AGENT_BOARD_REPO="$AB_REPO"
+# teammates inherit the tmux session environment, not this shell's exports (see the teammate-config-inheritance spec)
+if [[ -n "$TMUX" ]]; then
+  source "${0:A:h}/_tc_bins.zsh"
+  tc_tmux set-environment AGENT_BOARD_REPO "$AB_REPO" 2>/dev/null
+  tc_tmux set-environment PATH "$PATH" 2>/dev/null
+fi
+AB_ARGS=("${(@Q)${(z)$(ab_claude_args)}}")
+PROMPT_FILE="$HOME/.config/agent-board/orchestrator.md"   # a user override wins over the repo's rules
+[[ -r "$PROMPT_FILE" ]] || PROMPT_FILE="$AB_REPO/claude/orchestrator.md"
 # Fixed session name, so the title stays "orchestrator" whatever the task (Claude Code otherwise
 # retitles the session per task). Pass your own -n/--name to override.
 NAME_ARGS=(--name orchestrator)
@@ -11,8 +21,8 @@ NAME_ARGS=(--name orchestrator)
 MODEL_ARGS=(--model opus)
 (( ${@[(I)--model|--model=*]} )) && MODEL_ARGS=()
 if [[ -r "$PROMPT_FILE" ]]; then
-  exec claude "${NAME_ARGS[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$PROMPT_FILE" "$@"
+  exec claude "${NAME_ARGS[@]}" "${MODEL_ARGS[@]}" "${AB_ARGS[@]}" --append-system-prompt-file "$PROMPT_FILE" "$@"
 else
   print -u2 "claude-orchestrator: $PROMPT_FILE missing, starting plain claude"
-  exec claude "${NAME_ARGS[@]}" "${MODEL_ARGS[@]}" "$@"
+  exec claude "${NAME_ARGS[@]}" "${MODEL_ARGS[@]}" "${AB_ARGS[@]}" "$@"
 fi

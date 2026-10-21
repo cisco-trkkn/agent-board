@@ -14,7 +14,13 @@ from artifacts import state_dir
 HERE = Path(__file__).resolve().parent
 DEFAULT_ALERTS = {"context_pct": 80, "burn_per_hour": 15, "burn_window_s": 900, "session_total": 25,
                   "mismatch_efforts": ["low", "medium"], "mismatch_models": ["opus", "fable"], "live_s": 1800}
-ALERTS_PATH = Path.home() / ".claude" / "usage-alerts.json"
+ALERTS_PATH = None   # tests may point this at a file; None = alerts_path()
+
+
+def alerts_path():
+    """~/.config/agent-board/usage-alerts.json if it exists, else the legacy ~/.claude/usage-alerts.json."""
+    new = Path.home() / ".config" / "agent-board" / "usage-alerts.json"
+    return new if new.exists() else Path.home() / ".claude" / "usage-alerts.json"
 SCHEMA = """
 create table if not exists calls (request_id text primary key, session_id text, ts real, model text, effort text,
   agent_name text, team_name text, git_branch text, cwd text, sidechain int, subagent_file int,
@@ -161,7 +167,7 @@ def _valid_threshold(default, v):
 def thresholds(path=None):
     """(alert thresholds, warning or None). A missing file is the defaults; a bad one is the defaults plus a warning."""
     th = dict(DEFAULT_ALERTS)
-    p = Path(ALERTS_PATH if path is None else path)
+    p = Path(path or ALERTS_PATH or alerts_path())
     if not p.exists():
         return th, None
     try:
@@ -316,7 +322,7 @@ class Indexer:
 
     def __init__(self, root, db, alerts_path=None, on_snapshot=None):
         self.root, self.db = Path(root), Path(db)
-        self.alerts_path = alerts_path or ALERTS_PATH
+        self.alerts_path = alerts_path   # None: resolved on each pass
         self.on_snapshot = on_snapshot
         self.error = None
         self.warning = None

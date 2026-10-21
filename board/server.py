@@ -13,33 +13,41 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.server
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 HOME = Path.home()
-BIN = HOME / ".local" / "bin"
-TMUX = [os.environ.get("TC_TMUX") or str(BIN / "tmux")] + shlex.split(os.environ.get("TMUX_DASH_TMUX_ARGS", ""))
+HERE = Path(__file__).resolve().parent
+BIN = HERE.parent / "bin"
 TMUX_CTL = str(BIN / "tmux-ctl")
 DEV = str(BIN / "dev")
-HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
-from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text  # noqa: E402,F401
+from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, tmux_cmd  # noqa: E402,F401
+TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
 import activity, artifacts, dirs, ideas, relay, usage  # noqa: E402
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
+
+class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        """HTTPServer.server_bind calls socket.getfqdn(), a reverse-DNS lookup that hung 30s+ on the macOS CI runner; the name is unused here."""
+        http.server.socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = host, port
+
 
 TOKEN = os.environ["TMUX_DASH_TOKEN"]
 PORT = int(os.environ.get("TMUX_DASH_PORT", "7700"))
 TTYD_PORT = int(os.environ.get("TMUX_DASH_TTYD_PORT", "7701"))
 ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 
-SEP = "\x1f"
+SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 # Stale-server guard: remember when this process started and each module's mtime. On a request
 # (checked at most every RELOAD_EVERY seconds) a changed module makes the process re-exec itself,
@@ -121,7 +129,7 @@ def run_script(args, cwd=None, extra_env=None, timeout=30):
 
 
 LINES = 40   # rows captured per pane: the classifier reads the last 12, the preview the last 10 non-empty
-MARK = SEP + "\x1e"   # pane boundary in a chained capture; capture-pane -p never emits control characters
+MARK = SEP + "@@pane@@"   # pane boundary in a chained capture; printable, because tmux on Linux escapes control characters (SEP is printable for the same reason)
 
 
 def _rows(txt):

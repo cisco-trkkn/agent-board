@@ -7,7 +7,7 @@ source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/p
 n="$1"
 [[ "$n" =~ '^[A-Za-z0-9_-][A-Za-z0-9._-]*$' ]] || exit 0
 [[ "$n" == _web-* || "$n" == *-bg ]] && exit 0
-T="${TC_TMUX:-$HOME/.local/bin/tmux}"
+source "${0:A:h}/_tc_bins.zsh"; T=tc_tmux      # the resolved tmux command
 STATE="$TC_STATE_DIR"
 [[ -d "$STATE" ]] || exit 0
 # the project still lives if any session (a grouped view too) belongs to this canonical name

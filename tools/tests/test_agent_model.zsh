@@ -1,6 +1,6 @@
 # `tmux-ctl agent --model M --effort E` puts the claude flags on the launch line (default sonnet/medium).
 # Seam: isolated tmux server (lib.zsh, -f /dev/null) + a stub `claude` first on the panes' PATH that
-# records its argv instead of starting a session. Bad values are refused before any window exists.
+# records its argv instead of starting a session (first on tmux-ctl's PATH too: the launch line pins PATH to the repo's bin: plus the caller's). Bad values are refused before any window exists.
 here="${0:A:h}"; root="${here:h:h}"
 source "$here/lib.zsh"
 C="${TC_CTL:-$root/bin/tmux-ctl}"
@@ -22,7 +22,7 @@ for bad in "--model gpt" "--effort max" "--model" "--effort"; do
   check "no window after '$bad'" test -z "$(tt list-windows -F '#{window_name}' | grep -x bad1)"
 done
 
-(cd "$repo" && $C agent w1 --model haiku --effort low "$brief") >/dev/null 2>&1
+(cd "$repo" && PATH="$stub:$PATH" $C agent w1 --model haiku --effort low "$brief") >/dev/null 2>&1
 tt_wait 8 test -s "$TT_DIR/argv"
 line="$(tt capture-pane -p -J -t '=tt:w1' -S -20 | grep -F 'claude ' | head -1)"
 check "launch line has --model haiku"  grep -qF -- '--model haiku' <<<"$line"
@@ -31,7 +31,7 @@ check "argv: --model haiku"  grep -qx -- 'haiku' "$TT_DIR/argv"
 check "argv: --effort low"   grep -qx -- 'low' "$TT_DIR/argv"
 rm -f "$TT_DIR/argv"
 
-(cd "$repo" && $C agent w2 "$brief") >/dev/null 2>&1
+(cd "$repo" && PATH="$stub:$PATH" $C agent w2 "$brief") >/dev/null 2>&1
 tt_wait 8 test -s "$TT_DIR/argv"
 line="$(tt capture-pane -p -J -t '=tt:w2' -S -20 | grep -F 'claude ' | head -1)"
 check "default --model sonnet"  grep -qF -- '--model sonnet' <<<"$line"

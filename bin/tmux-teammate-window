@@ -9,7 +9,7 @@
 # and the window closes when Claude shuts the teammate down. Other splits are left alone.
 emulate -L zsh
 setopt extendedglob
-T="$HOME/.local/bin/tmux"
+source "${0:A:h}/_tc_bins.zsh"; T=tc_tmux      # the resolved tmux command: the server this hook fires on
 
 # --hook <pane>: the after-split hook names the pane it just split; check only that one. A bare
 # --hook (or no args) falls through to the full scan below.

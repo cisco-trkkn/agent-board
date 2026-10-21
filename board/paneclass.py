@@ -6,6 +6,7 @@ CLI: paneclass.py status <pane-id>   -> prints "<kind> <status>"
 """
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -18,7 +19,7 @@ SHELLS = tc_env.SHELLS
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")
 WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
 WORKING_RE = re.compile(r"esc to interrupt", re.I)
-SEP = "\x1f"
+SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 
 INPUT_RE = re.compile(r"^\s*[│|]?\s*[>❯]\s?(.*?)\s*[│|]?\s*$")
@@ -64,10 +65,39 @@ def classify(cmd, rows, bell):
     return "program", "waiting" if bell else "running"
 
 
+RESOLVER = Path(__file__).resolve().parent.parent / "bin" / "_tc_bins.zsh"
+
+
+def tmux_bin():
+    """The tmux binary, in the order bin/_tc_bins.zsh uses: $TC_TMUX, ~/.local/bin/tmux if executable, tmux on PATH."""
+    if os.environ.get("TC_TMUX"):
+        return os.environ["TC_TMUX"]
+    own = Path.home() / ".local" / "bin" / "tmux"
+    if os.access(own, os.X_OK) and own.is_file():
+        return str(own)
+    return shutil.which("tmux") or str(own)
+
+
+def tmux_cmd(extra=()):
+    """The tmux command every agent-board caller runs, as bin/_tc_bins.zsh resolves it (the one place that decides:
+    TC_TMUX for the binary; TMUX_DASH_TMUX_ARGS, else the server of $TMUX, else agent-board's own server).
+    Without zsh or the resolver (a copied board/): ~/.local/bin/tmux plus TMUX_DASH_TMUX_ARGS. extra args (e.g.
+    -S socket) go after; tmux lets the last -S/-L win."""
+    try:
+        r = subprocess.run(["zsh", "-f", "-c", 'source "$1" && print -rN -- "${TC_TMUX_CMD[@]}"', "_", str(RESOLVER)],
+                           capture_output=True, text=True, timeout=10)
+        words = [w for w in r.stdout.split("\0") if w]
+        if r.returncode == 0 and words:
+            return words + list(extra)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    base = [tmux_bin()]
+    return base + shlex.split(os.environ.get("TMUX_DASH_TMUX_ARGS", "")) + list(extra)
+
+
 def tmux_runner(extra=()):
     """A tmux(*args, check=False) -> stdout callable; extra args (e.g. -S socket) go before the command."""
-    base = [os.environ.get("TC_TMUX") or str(Path.home() / ".local" / "bin" / "tmux")]
-    base += shlex.split(os.environ.get("TMUX_DASH_TMUX_ARGS", "")) + list(extra)
+    base = tmux_cmd(extra)
 
     def run(*args, check=False):
         r = subprocess.run(base + list(args), capture_output=True, text=True)

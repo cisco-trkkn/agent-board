@@ -2,7 +2,7 @@
  "session_id": "s",
  "hook_event_name": "PostToolUse",
  "tool_name": "Bash",
- "cwd": "/Users/francisco.ruiz/proj",
+ "cwd": "__HOME__/proj",
  "tool_input": {
   "command": "pytest -q tests/unit"
  },
