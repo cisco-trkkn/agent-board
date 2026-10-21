@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+# agent-board <command> [args] — the single entry point; commands live next to this file.
+#
+#   agent-board dev [dir]      open (or reattach to) a project's tmux session
+#   agent-board ctl <cmd>      tmux-ctl: drive the other windows of a session
+#   agent-board dash [cmd]     the board: start, stop, status, url
+#   agent-board jump           fuzzy-jump to any window
+#   agent-board cleanup        close finished agent windows
+#   agent-board help           this list
+emulate -L zsh
+here="${0:A:h}"
+case "$1" in
+  dev)     shift; exec "$here/dev" "$@" ;;
+  ctl)     shift; exec "$here/tmux-ctl" "$@" ;;
+  dash)    shift; exec "$here/tmux-dash" "$@" ;;
+  jump)    shift; exec "$here/tmux-jump" "$@" ;;
+  cleanup) shift; exec "$here/tmux-agent-cleanup" "$@" ;;
+  help|-h|--help) sed -n '2,10p' "${0:A}" | sed 's/^# \{0,1\}//' ;;
+  *)       sed -n '2,10p' "${0:A}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

@@ -1,0 +1,20 @@
+captured from master-gcp-repo@d906a77a with git show
+infra/ledger/applied-events.tf
+infra/ledger/archive-monitoring.tf
+infra/ledger/extraction-routing.tf
+infra/ledger/main.tf
+infra/ledger/network.tf
+infra/ledger/outputs.tf
+infra/ledger/pipeline-events.tf
+infra/ledger/snapshot-writers.tf
+infra/ledger/variables.tf
+landing-zone/fast-bootstrap/identity.tf
+landing-zone/fast-bootstrap/main.tf
+landing-zone/fast-bootstrap/outputs.tf
+landing-zone/fast-bootstrap/security-access.tf
+landing-zone/fast-bootstrap/tenant-contracts.tf
+landing-zone/fast-bootstrap/variables.tf
+landing-zone/fast-bootstrap/versions.tf
+.gitlab-ci.yml
+ci/actions/landing-zone/.gitlab-ci-landing-zone.yml
+tools/cloudrun-ledger-layer/Procfile

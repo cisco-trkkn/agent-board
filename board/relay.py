@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
 import paneclass  # noqa: E402
+import tc_env  # noqa: E402
 
 SEP = paneclass.SEP
 ENDED = {"idle", "ready"}
@@ -55,10 +56,16 @@ def session_root(tmux, sess):
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else path
 
 
+def orchestrator():
+    """The lead's launcher by absolute path: on a fresh install only ~/.local/bin/agent-board is linked, so <repo>/bin is not on PATH."""
+    repo = os.environ.get("AGENT_BOARD_REPO") or str(Path(__file__).resolve().parent.parent)
+    return str(Path(repo) / "bin" / "claude-orchestrator")
+
+
 def respawn(tmux, pane, root, prompt=None):
     """Replace whatever runs in pane with a fresh shell in root, then start claude-orchestrator [prompt]."""
     tmux("respawn-pane", "-k", "-t", pane, "-c", root, check=True)  # no command: fresh default shell
-    cmd = "claude-orchestrator" + (f" {shlex.quote(prompt)}" if prompt else "")
+    cmd = shlex.quote(orchestrator()) + (f" {shlex.quote(prompt)}" if prompt else "")
     tmux("send-keys", "-t", pane, "-l", "--", cmd, check=True)
     tmux("send-keys", "-t", pane, "Enter", check=True)
 
@@ -77,7 +84,7 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", **wait):
 
 
 def default_state():
-    return os.environ.get("TC_STATE") or f"{os.environ.get('TMPDIR', '/tmp').rstrip('/')}/tmux-ctl-{os.getuid()}"
+    return str(tc_env.state_dir())
 
 
 def main(argv=None):
@@ -94,7 +101,7 @@ def main(argv=None):
         return 0
     except Exception as e:
         print(f"relay failed: {e}\nThe old session is untouched. Start the new lead by hand in the claude window:\n"
-              f"  claude-orchestrator {shlex.quote(prompt_for(a.doc))}", file=sys.stderr)
+              f"  {shlex.quote(orchestrator())} {shlex.quote(prompt_for(a.doc))}", file=sys.stderr)
         return 1
 
 

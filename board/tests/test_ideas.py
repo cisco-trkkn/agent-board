@@ -11,6 +11,62 @@ sys.path.insert(0, str(HERE))
 import ideas  # noqa: E402
 
 
+class IdeasLegacyTest(unittest.TestCase):
+    """Without TC_IDEAS_DIR: ~/.local/state/agent-board/ideas, reading the old ~/.claude/ideas until the first write."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self.old_env = {k: os.environ.pop(k, None) for k in ("TC_IDEAS_DIR",)}
+        self.old_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(self.home)
+        self.legacy = self.home / ".claude" / "ideas"
+        self.legacy.mkdir(parents=True)
+        self.old = "# Ideas: p\n\n- [ ] 2026-10-16 10:00 · old one\n  detail\n"
+        (self.legacy / "p.md").write_text(self.old)
+        self.new = self.home / ".local" / "state" / "agent-board" / "ideas" / "p.md"
+
+    def tearDown(self):
+        os.environ["HOME"] = self.old_home
+        for k, v in self.old_env.items():
+            if v is not None:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def test_load_reads_legacy_when_new_missing(self):
+        self.assertEqual([i["text"] for i in ideas.load("p")], ["old one"])
+        self.assertFalse(self.new.exists())
+
+    def test_first_write_copies_legacy_and_leaves_it(self):
+        ideas.add("p", "new one", now=0)
+        self.assertEqual([i["text"] for i in ideas.load("p")], ["old one", "new one"])
+        self.assertTrue(self.new.read_text().startswith(self.old))
+        self.assertEqual((self.legacy / "p.md").read_text(), self.old)
+
+    def test_edit_seeds_from_legacy_too(self):
+        key = ideas.load("p")[0]["key"]
+        ideas.edit("p", key, "changed")
+        self.assertEqual([i["text"] for i in ideas.load("p")], ["changed"])
+        self.assertEqual((self.legacy / "p.md").read_text(), self.old)
+
+    def test_new_file_wins_over_legacy(self):
+        self.new.parent.mkdir(parents=True)
+        self.new.write_text("# Ideas: p\n\n- [ ] 2026-10-17 10:00 · fresh\n")
+        self.assertEqual([i["text"] for i in ideas.load("p")], ["fresh"])
+        ideas.add("p", "more", now=0)
+        self.assertEqual([i["text"] for i in ideas.load("p")], ["fresh", "more"])
+
+    def test_tc_ideas_dir_wins_over_both(self):
+        d = self.home / "elsewhere"
+        os.environ["TC_IDEAS_DIR"] = str(d)
+        try:
+            self.assertEqual(ideas.load("p"), [])
+            ideas.add("p", "only", now=0)
+            self.assertEqual([i["text"] for i in ideas.load("p")], ["only"])
+            self.assertFalse(self.new.exists())
+        finally:
+            os.environ.pop("TC_IDEAS_DIR")
+
+
 class IdeasTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

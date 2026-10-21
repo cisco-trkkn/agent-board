@@ -3,3 +3,5 @@ __pycache__/
 *.pre-repo-*
 *.next
 .superpowers/
+.claude/worktrees/
+.DS_Store

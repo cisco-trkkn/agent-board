@@ -357,6 +357,7 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
       <section class="activity" id="activity">
         <button class="act-head" id="act-toggle"><b>Activity</b> <span class="fails" id="act-fails"></span> <span class="alerts" id="act-alerts"></span><span class="chev">▸</span></button>
         <div class="act-body">
+          <div class="doc-banner" id="act-stale" hidden></div>
           <nav class="tabs"><button data-tab="usage">Usage</button><button data-tab="runs">Runs</button></nav>
           <div id="act-usage" class="usage"></div>
           <div id="act-runs" hidden></div>
@@ -371,6 +372,8 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   <p>Starts Claude in its own window and git worktree (<code>claude -w</code>), so it can't collide with other agents.</p>
   <textarea id="agent-task" rows="4" placeholder="What should it do?" required></textarea>
   <input id="agent-name" placeholder="Name (optional, taken from the task if empty)" pattern="[A-Za-z0-9._-]{1,40}">
+  <div class="row"><label>Model <select id="agent-model"><option value="haiku">haiku</option><option value="sonnet" selected>sonnet</option><option value="opus">opus</option><option value="fable">fable</option></select></label>
+  <label>Effort <select id="agent-effort"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label></div>
   <div class="row"><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start agent</button></div>
 </form></dialog>
 
@@ -536,10 +539,12 @@ function btn(label, formKey, form, input) {
   return b;
 }
 
+let cardsStale = false;   // a render was skipped while an input had focus: the next poll must render even if nothing changed
 function renderCards() {
   const s = session(), agents = $("#agents"), cards = $("#cards");
   // keep focus while typing: don't rebuild if an input inside the cards is focused
-  if ((agents.contains(document.activeElement) || cards.contains(document.activeElement)) && document.activeElement.tagName === "INPUT") return;
+  if ((agents.contains(document.activeElement) || cards.contains(document.activeElement)) && document.activeElement.tagName === "INPUT") { cardsStale = true; return; }
+  cardsStale = false;
   agents.replaceChildren(); cards.replaceChildren(); $("#agent-count").textContent = "";
   if (!s) { cards.append(el("div", "empty", "Nothing to show yet.")); return; }
   $("#sess-path").textContent = s.path || "";
@@ -636,11 +641,14 @@ function setOffline(off) {
   $("#offline-banner").hidden = !off;
 }
 async function refresh() {
+  let p;
   try {
-    const r = await fetch(`${API}/state`, { cache: "no-store" });
-    data = await r.json();
+    p = await pollJSON("state");
+    if (!p.ok) throw new Error(`HTTP ${p.status}`);
   } catch (e) { setOffline(true); return false; }
   setOffline(false);
+  if (!p.changed && !cardsStale) return true;   // 304: the DOM already shows this state; the server is up
+  data = p.json;
   if (!session() && data.sessions[0]) current = data.sessions[0].name;
   const n = (session() || {}).usage_alert_count || 0;
   $("#act-alerts").textContent = n ? `${n} alert${n === 1 ? "" : "s"}` : "";
@@ -652,7 +660,8 @@ $("#btn-agent").onclick = () => { if (!session()) return toast("Open a project f
 $("#form-agent").addEventListener("submit", async (e) => {
   if (e.submitter && e.submitter.value !== "ok") return;
   e.preventDefault();
-  const ok = await action({ action: "agent", session: session().name, name: $("#agent-name").value, task: $("#agent-task").value });
+  const ok = await action({ action: "agent", session: session().name, name: $("#agent-name").value, task: $("#agent-task").value,
+    model: $("#agent-model").value, effort: $("#agent-effort").value });
   if (ok) { $("#dlg-agent").close(); $("#form-agent").reset(); }
 });
 const pathIn = $("#project-path"), acList = $("#ac-list");
@@ -915,6 +924,17 @@ const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(),
 let docBase = null, docSel = null, docSess = null, docMode = "read", docSelection = null, docRendered = null;
 if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", (n) => { if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); } });
 const api = (path) => fetch(`${API}/${path}`, { cache: "no-store" });
+// Polled endpoints carry an ETag; an unchanged answer is a 304 with no body, and the last body is reused.
+const POLL = new Map();   // url -> { etag, json }
+async function pollJSON(path) {
+  const url = `${API}/${path}`, last = POLL.get(url);
+  const r = await fetch(url, { cache: "no-store", headers: last ? { "If-None-Match": last.etag } : {} });
+  if (r.status === 304 && last) return { ok: true, status: 200, changed: false, json: last.json };
+  if (!r.ok) return { ok: false, status: r.status, changed: true, json: null };
+  const json = await r.json(), etag = r.headers.get("ETag");
+  if (etag) POLL.set(url, { etag, json });
+  return { ok: true, status: r.status, changed: true, json };
+}
 async function post(body) {
   const r = await fetch(`${API}/action`, { method: "POST", headers: { "Content-Type": "application/json", "X-Dash-Token": TOKEN }, body: JSON.stringify(body) });
   return { status: r.status, j: await r.json().catch(() => ({})) };
@@ -931,8 +951,8 @@ $("#side-toggle").textContent = $("#side").classList.contains("collapsed") ? "�
 async function pollArtifacts() {
   const s = session(); if (!s) return;
   const A = artFor(s.name);
-  const r = await api(`artifacts?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const d = p.json;
   Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
   const keep = new Set(d.items.map((it) => it.url || it.path));   // a moved document leaves the manifest view
@@ -1191,8 +1211,8 @@ async function moveDoc(path, target) {
 
 async function pollIdeas() {
   const s = session(); if (!s) return;
-  const r = await api(`ideas?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const d = p.json;
   window.ideasOpen = d.open;
   const box = $("#ideas-box");
   if (!box.dataset.built) {
@@ -1245,8 +1265,12 @@ for (const b of $("#activity nav").querySelectorAll("button")) b.onclick = () =>
 
 async function pollActivity() {
   const s = session(); if (!s) return;
-  const r = await api(`runs?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const runs = (await r.json()).runs || [];
+  const p = await pollJSON(`runs?session=${encodeURIComponent(s.name)}`);
+  const stale = $("#act-stale");
+  stale.hidden = p.status !== 404;   // 404 = this server process predates the endpoint
+  if (p.status === 404) stale.textContent = "Server out of date — /api/runs is missing. Restart the board (tmux-dash stop && tmux-dash start).";
+  if (!p.ok) return;
+  const runs = p.json.runs || [];   // on 304 the last body; the sig below decides whether anything is rebuilt
   const failed = runs.filter((x) => x.exit !== null && x.exit !== 0);
   if (ACT.open || !ACT.seeded) failed.forEach((x) => ACT.seenFails.add(x.id));   // failures from before this page load are not news
   ACT.seeded = true;
@@ -1303,8 +1327,8 @@ function renderRuns(s, runs) {
 const usd = (v) => (v == null ? "unpriced" : `$${v.toFixed(2)}`);
 
 async function renderUsage(s) {
-  const r = await api(`usage?session=${encodeURIComponent(s.name)}`); if (!r.ok) return;
-  const d = await r.json();
+  const p = await pollJSON(`usage?session=${encodeURIComponent(s.name)}`); if (!p.ok) return;
+  const d = p.json;
   const sig = "u:" + JSON.stringify(d);   // rebuild only when the data changed, so sort order and scroll survive polls
   if (sig === ACT.sig) return;
   ACT.sig = sig;

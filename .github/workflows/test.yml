@@ -1,0 +1,48 @@
+name: test
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONFAULTHANDLER: "1"   # a crash prints the Python stack
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux ttyd fzf jq zsh
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux ttyd fzf jq zsh
+      - name: Git identity
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          git config --global init.defaultBranch main
+      - name: install.sh --check (may fail only on MISSING claude)
+        shell: bash
+        run: |
+          rc=0
+          ./install.sh --check | tee check.out || rc=$?
+          other="$(grep '^MISSING' check.out | grep -v '^MISSING claude' || true)"
+          if [ -n "$other" ]; then echo "unexpected: $other"; exit 1; fi
+          if [ "$rc" -ne 0 ] && ! grep -q '^MISSING claude' check.out; then exit "$rc"; fi
+      - name: Board tests
+        run: python3 -m unittest discover -s board/tests
+      - name: install_lib tests
+        if: ${{ !cancelled() }}
+        run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
+      - name: tmux / hook tests
+        if: ${{ !cancelled() }}
+        run: zsh tools/tests/run-all.zsh

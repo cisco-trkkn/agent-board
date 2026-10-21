@@ -1,6 +1,6 @@
 source "${0:A:h}/lib.zsh"
 zmodload zsh/datetime
-C="${TC_CTL:-$HOME/.local/bin/tmux-ctl}"
+C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt_setup claude shell
 check "run goes to bg"       test "$($C run tests 'echo hi' | head -1)" = hi
 check "bg session exists"    tt has-session -t '=tt-bg'

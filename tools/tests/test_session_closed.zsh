@@ -1,9 +1,10 @@
 source "${0:A:h}/lib.zsh"
-S="${TC_SESSION_CLOSED:-$HOME/.local/bin/tmux-session-closed}"
+R="${0:A:h:h:h}"
+S="${TC_SESSION_CLOSED:-$R/bin/tmux-session-closed}"
 export TC_IDEAS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ttideas.XXXXXX")"
 tt_setup claude
-# register the very line the user's ~/.tmux.conf carries, not a copy
-grep '^set-hook -g session-closed' "${TC_CONF:-$HOME/.tmux.conf}" > "$TT_DIR/hook.conf"
+# register the very line config/tmux.conf carries, not a copy ($AGENT_BOARD_REPO comes from the harness server's env)
+grep '^set-hook -g session-closed' "${TC_CONF:-$R/config/tmux.conf}" > "$TT_DIR/hook.conf"
 check "conf has the hook line" test -s "$TT_DIR/hook.conf"
 tt source-file "$TT_DIR/hook.conf"
 mk() {   # mk <project>: per-session state files
