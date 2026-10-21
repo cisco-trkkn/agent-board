@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -23,7 +24,6 @@ import paneclass  # noqa: E402  (tmux_bin: TC_TMUX, else ~/.local/bin/tmux if ex
 
 # Resolved before any test sets TC_TMUX to its logging shim, so the shim never execs itself.
 REAL_TMUX = os.environ.get("TC_REAL_TMUX") or paneclass.tmux_bin()
-SOCK = f"poll-{os.getpid()}"
 TOKEN = "poll-test-token"
 
 
@@ -44,12 +44,13 @@ class Scratch:
         shim.parent.mkdir()
         shim.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> {self.log}\nexec {REAL_TMUX} "$@"\n')
         shim.chmod(0o755)
-        self.real = [REAL_TMUX, "-L", SOCK, "-f", "/dev/null"]
+        sock = f"poll-{os.getpid()}-{uuid.uuid4().hex[:8]}"   # one tmux server per test: a new-session must not race the previous test's kill-server on a shared socket
+        self.real = [REAL_TMUX, "-L", sock, "-f", "/dev/null"]
         self.port = free_port()
         (self.tmp / "state").mkdir()
         (self.tmp / "cwd").mkdir()
         self.env = {"TMUX_DASH_TOKEN": TOKEN, "TMUX_DASH_PORT": str(self.port), "TC_TMUX": str(shim),
-                    "TMUX_DASH_TMUX_ARGS": f"-L {SOCK} -f /dev/null", "TC_STATE": str(self.tmp / "state")}
+                    "TMUX_DASH_TMUX_ARGS": f"-L {sock} -f /dev/null", "TC_STATE": str(self.tmp / "state")}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         spec = importlib.util.spec_from_file_location("tmux_dash_server_poll", BOARD / "server.py")
