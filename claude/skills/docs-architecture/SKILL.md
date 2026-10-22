@@ -11,6 +11,8 @@ Load `anthropic-skills:docs` first and follow it for everything about the Doc it
 
 The first **Docs** call, before the inventory run or any repo read, births the Doc (title, byline, one `pending` "discovering the repo…" block); loading this skill and `anthropic-skills:docs` may precede it. Step 3 replaces that block with the frame. The Doc is never deleted: a halt replaces that pending block with what was found.
 
+**Guest mode.** Handed a guest brief by `docs-compose`, follow `../docs-compose/references/guest-contract.md` and change only this: skip the birth; step 1 reuses an `inventory.json` listed under the brief's discovery artefacts; step 2 takes the brief's interview answers; step 3 lays Layer 0–2 out in the owned blocks instead of building the page frame (an owned block may become several pending blocks of the frame, in place); step 5's stamp is the last block of the architecture group, and step 5.3 returns `Sources` entries instead of writing the tab. Without a brief, the skill runs standalone as written below.
+
 ## Hard rules
 
 - **Traceability.** Every drawn node and edge traces to an id in `inventory.json`, to an interview answer, or to a `file:<path>:<line>` the repo shows (for what the inventory lacks, such as a `gcloud run deploy` line). No invented components. The review in step 5 checks it.
@@ -19,7 +21,7 @@ The first **Docs** call, before the inventory run or any repo read, births the D
 - **One section per call** (the docs skill's watch-it-fill rule).
 - **A brief before each diagram, a rendered look after it.**
 - **Fresh-eyes review before the stamp.** A subagent when one can be spawned; otherwise review it yourself as a demanding outsider, tell the user, and say so in your report.
-- **Stamp** `As built from <repo>@<sha>, <date>` and an id map (step 5) close every doc.
+- **Stamp** `As built from <repo>@<sha>, <date>` and its `Sources` entries (step 5) close every doc.
 
 ## Workflow
 
@@ -41,7 +43,7 @@ Ask at most 5 questions, from `unknowns[]` first, then only what code cannot tel
 
 ### 3. Outline
 
-Read `references/diagram-set.md` (which diagrams, what each draws, the 12-node split rule) and decide the subsystems from `boundaries[]` and the interview. Replace the discovering block with the page frame as `pending` blocks, in the order `references/gcp-visual-grammar.md` § Page frame gives: Layer 0 hero context diagram and key-numbers strip; Layer 1 one section per subsystem with its zoom diagram; Layer 2 data flow, trust boundaries, deploy topology; the stamp. Each pending intent names its diagram.
+Read `references/diagram-set.md` (which diagrams, what each draws, the 12-node split rule) and decide the subsystems from `boundaries[]` and the interview. Replace the discovering block with the page frame as `pending` blocks, in the order `references/gcp-visual-grammar.md` § Page frame gives: Layer 0 hero context diagram and key-numbers strip; Layer 1 one section per subsystem with its zoom diagram; Layer 2 data flow, trust boundaries, deploy topology; the stamp. Each pending intent names its diagram. As a guest, the same frame goes into the owned blocks (Guest mode above).
 
 ### 4. Draw
 
@@ -57,8 +59,8 @@ The key-numbers strip is prose or a small table: services, projects, environment
 
 1. Dispatch a fresh-eyes subagent with the Doc link and `inventory.json`. It judges each diagram (right visual for the point, readable at a glance), the structure (the layers read top-down, the page frame is complete and in order, each zoom is named in its parent node's label) and samples at least 10 nodes, tracing each to an inventory id or interview answer. No subagent available: the fallback in Hard rules. Fix what it finds; redraw and look again.
 2. Stamp the last block: `As built from <repo>@<sha>, <date>` (`repo` = `meta.repo`, a name never a path; `sha` = `meta.sha`, full; add "inventory confidence low" when it was).
-3. Id map: a second tab `Id map` holding one ```json block, `{"<section heading>": {"ids": [...], "diagram": "<widget id>"}}` for every section and diagram, interview answers as `interview:<n>`, file sources as `file:<path>:<line>`. It is what refresh reads; keep it out of the main tab.
+3. Sources: one entry per section, in the schema of `../docs-compose/references/sources.md`: `{"type": "architecture", "stamp": "<the step 5.2 stamp>", "sources": [...], "diagram": "<widget id>"}`, each inventory id as `inventory:<id>`, interview answers as `interview:<n>`, file sources as `file:<path>:<line>`. Standalone: write them as a second tab `Sources` holding one ```json block and check it with `python3 <skills dir>/docs-compose/scripts/sources_check.py <file|->` until it exits 0. Guest: return them to the composer. It is what refresh reads; keep it out of the main tab.
 
 ## Refresh
 
-A doc that already carries a stamp is never regenerated silently; a fresh doc only when the user agrees. Follow `references/refresh.md`: it diffs the repo since the stamp sha and rewrites only the sections the diff touches, leaving the reader's own edits in place.
+A doc that already carries a stamp is never regenerated silently; a fresh doc only when the user agrees. Follow `references/refresh.md`: it reads the `Sources` tab (an older Doc's `Id map` tab when it has no `Sources`), diffs the repo since the stamp sha and rewrites only the architecture sections the diff touches, leaving the reader's own edits in place.

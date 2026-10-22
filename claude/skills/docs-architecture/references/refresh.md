@@ -1,11 +1,11 @@
 # Refresh mode
 
-Updates a stamped architecture doc to the repo's current HEAD by rewriting only what changed. Preconditions: the doc has a stamp (`As built from <repo>@<sha>, <date>`) and an `Id map` tab (SKILL.md step 5), and the repo's checkout is at hand (`<repo>` in the stamp is a name, not a path: when the checkout is not the cwd, ask the user for its path). Without a stamp or an id map there is nothing to diff against: tell the user; a fresh doc only when they agree, never silently.
+Updates a stamped architecture doc to the repo's current HEAD by rewriting only what changed. Preconditions: the doc has a stamp (`As built from <repo>@<sha>, <date>`) and a `Sources` tab with architecture entries, or an older doc's `Id map` tab (SKILL.md step 5), and the repo's checkout is at hand (`<repo>` in the stamp is a name, not a path: when the checkout is not the cwd, ask the user for its path). Without a stamp or an id map there is nothing to diff against: tell the user; a fresh doc only when they agree, never silently.
 
 ## 1. Read the stamp and the id map
 
-1. Read the doc (docs skill) and find the stamp block in the main tab; take `<sha>` (full) and `<date>`.
-2. `Id map` tab → its ```json block → `{section heading: {ids, diagram}}`. Interview answers appear as `interview:<n>`; they have no diff and stay as they are. File sources appear as `file:<path>:<line>`; step 2's source-file check covers them.
+1. Read the doc (docs skill) and find the architecture stamp block in the main tab (`As built from …`, the last block of the architecture sections); take `<sha>` (full) and `<date>`.
+2. `Sources` tab → its ```json block → the entries with `"type": "architecture"`; these are the **architecture sections**, and nothing else in the Doc is. The **id map** below is, per architecture section, its `inventory:<id>` sources as ids, its other sources and its `diagram`. When the doc has no `Sources` tab, the id map is the `Id map` tab's ```json block, `{section heading: {ids, diagram}}`, read exactly as before, and every section in it is an architecture section. Interview answers appear as `interview:<n>`; they have no diff and stay as they are. File sources appear as `file:<path>:<line>`; step 2's source-file check covers them.
 
 ## 2. Diff the repo
 
@@ -15,12 +15,14 @@ Updates a stamped architecture doc to the repo's current HEAD by rewriting only 
 - Output: `{since, head, components: {added, removed, changed}, edges: {added, removed, changed}}`; `since` and `head` are full shas. A changed component is one whose kind, name, project or env differ, listed with its new values. An edge is identified by `(from, to, kind, label)`; a changed edge has the same identity on both sides but another field differing (other than `source`, which moves with line numbers): the new edge plus `was: {field: old value}`. Every `iam` and `trust` edge carries `member`, the raw member expression, so a changed member condition shows as one changed edge.
 - **Exit 2, "inventory: unknown --since sha":** the stamp sha is not in this clone (shallow clone, rewritten history, a different repo). Stop and ask the user which repo or sha to diff against. Never substitute a sha, never diff against an earlier stamp, never regenerate.
 - Exit 2 on zero components: discovery is broken at HEAD; halt as SKILL.md says.
-- Source-file check, before treating an empty diff as empty: `git diff --name-only <sha> <head>` (full shas from the output). A changed path that is cited as a `file:<path>:<line>` source in the id map, or is the `source` file of an id in the id map (join: run a full `python3 <skill root>/scripts/inventory.py <repo> -o <scratch>/head.json` at head, and read each id's `source` from it; `--since` output carries no `source` for unchanged ids, and the creation-time `inventory.json` is usually gone), marks its section touched (step 3), even when the six lists are empty.
+- Source-file check, before treating an empty diff as empty: `git diff --name-only <sha> <head>` (full shas from the output). A changed path that is cited as a `file:<path>:<line>` source of an architecture section in the id map (other types' `file:` sources are theirs to refresh), or is the `source` file of an id in the id map (join: run a full `python3 <skill root>/scripts/inventory.py <repo> -o <scratch>/head.json` at head, and read each id's `source` from it; `--since` output carries no `source` for unchanged ids, and the creation-time `inventory.json` is usually gone), marks its section touched (step 3), even when the six lists are empty.
 - Empty diff (all six lists empty) **and** no touched section from the source-file check: say "no architecture change since <date>", move the stamp to `head` with today's date (step 5), nothing else.
 
 ## 3. Map the diff to sections
 
 For each entry in the diff, find every section whose id map lists the id (components by id; edges, whether added, removed or changed, by their `from`/`to` ids). An added id not in any section belongs to the section whose project or subsystem it sits in (`project`, `env`, the boundary it is a member of); if that is unclear, it is one of the refresh's interview questions (still at most 5 in total).
+
+Only architecture sections are ever touched. In a mixed Doc (a `Sources` tab with other types), every other section, the title, the Doc-level line and other types' `Sources` entries are left as they are, whatever the diff says; their own skills refresh them.
 
 Collect the set of touched sections. Each is rewritten whole, one section per call, in reading order:
 
@@ -37,6 +39,6 @@ Every rewrite of an existing block goes through the docs skill's guarded edit. A
 ## 5. Record and re-stamp
 
 1. Under the stamp, a `Changed since <date>` table, one row per change: `date · change · section` (`2026-10-20 · added cloud_run_service worker · Orders`). Append to the existing table when the doc has one.
-2. Move the stamp to the new sha and today's date: `As built from <repo>@<head>, <date>`.
-3. Update the `Id map` tab: add the new ids to their sections, remove the gone ones, keep interview entries.
+2. Move the architecture stamp, and only it, to the new sha and today's date: `As built from <repo>@<head>, <date>`.
+3. Update the tab step 1 read: in `Sources`, the architecture entries only (add each new id as `inventory:<id>` to its section, remove the gone ones, keep interview entries, set `stamp` to the moved stamp; then `sources_check.py` exits 0, SKILL.md step 5.3); in an `Id map` tab, the same as before (new ids added, gone ones removed, interview entries kept).
 4. Reply with the Changed rows and any block left as edited.
