@@ -13,10 +13,10 @@ Load `anthropic-skills:docs` first and follow it for everything about the Doc it
 
 ## Hard rules
 
-1. **Every command is cited.** A command in a step either appears in a cited file (`file:<path>:<line>`) or is a documented CLI form of a tool that a cited file invokes. In the second case, cite the line that invokes the tool and take the form from the tool's published reference. A command with neither source stays out of the procedure: the block keeps a pending intent naming what is missing.
+1. **Every command is cited.** A command in a step either appears in a cited file (`file:<path>:<line>`) or is a documented CLI form of a tool that a cited file invokes. A documented form calls the same tool as the cited line and differs only in subcommand, flags or arguments that the tool's help output names. Confirm it by running that help (rule 4), save the output to the scratch dir, and cite both the invoking line and `artefact:<path>` of the saved help. A command with neither source stays out of the procedure: the block keeps a pending intent naming what is missing.
 2. **Placeholders are `<UPPER_SNAKE>`, and each one names its source**: a Terraform output or variable, a CI variable or an interview answer, cited, e.g. `<PROJECT_ID>`: output `project_id`, `file:infra/outputs.tf:12`. *Before you start* lists them all.
 3. **Destructive steps carry a confirm line and a rollback.** A step is destructive when it deletes, overwrites, revokes, rotates, applies infrastructure or touches prod. Directly under its command, write a **Confirm:** line saying what will change and what the operator checks before running it. *Rollback* holds the matching undo, naming the step number it reverses. A destructive step with no undo says so in its Confirm line.
-4. **Commands are cited and reviewed, never executed.** This covers every command a runbook holds, including "to check it works": no dry run, no `--help`, no `plan`. You find a command's behaviour in the cited file and the tool's reference. *Expected* output comes from those sources or from an interview answer; when neither shows it, write the observable state to check and leave out the output.
+4. **Commands are cited and reviewed, never executed.** This covers every command a runbook holds, including "to check it works": no dry run, no `plan`, no step itself. The one invocation allowed is help output, to confirm a documented form (rule 1): `<tool> [sub…] --help`, `<tool> version` or `<tool> --version`, saved to the scratch dir. You find a command's behaviour in the cited file and the saved help. *Expected* output comes from those sources or from an interview answer; when neither shows it, write the observable state to check and leave out the output.
 
 Plus the shared rules of the guest contract (traceability, interview budget, fresh-eyes review, one section per call).
 
@@ -91,7 +91,7 @@ One procedure per call, in reading order. Fill the template in § Procedure shap
 Dispatch a fresh-eyes subagent with the Doc link and the repo path. If you cannot spawn one, use the guest contract's fallback. The review has two passes:
 
 1. **Cold walk.** Using only the Doc, the reviewer walks every procedure step by step as an operator who has never seen the system. For each step it asks: is every placeholder resolvable from what *Before you start* says, is every permission named, does a risky step say what to expect, does a destructive step have its Confirm line and its Rollback entry, and is there a path for each failure. It reports the first step at which it would get stuck, per procedure.
-2. **Citations.** Against the repo, it checks every command and placeholder against its cited line, all of them, not a sample. It runs none of them (hard rule 4).
+2. **Citations.** Against the repo, it checks every command and placeholder against its cited line, all of them, not a sample, and checks each documented form against its saved help `artefact:`. It runs none of them (hard rule 4).
 
 Fix what it finds and re-walk the procedures you changed. Done when the review reports no stuck step and no uncited command.
 
@@ -107,6 +107,6 @@ A stamped runbook is refreshed one procedure at a time, in place. You regenerate
 
 1. Read the stamp's `<sha>` and the `Sources` entries of type `runbook`. The precondition from step 2 applies at HEAD.
 2. Run `git diff --name-only <sha> HEAD`. If git does not know `<sha>`, stop and ask which repo or sha to diff against; never substitute one.
-3. A procedure is **touched** when a changed path is one of its `file:` sources. No touched procedure: say "no runbook change since <date>" and move the stamp to HEAD with today's date.
+3. A procedure is **touched** when a changed path is one of its `file:` sources. No touched procedure: say "no runbook change since <date>" and move the stamp to HEAD with today's date (step 5's `Sources` update applies).
 4. Re-check each touched procedure against HEAD (steps 2 and 5), then rewrite it in place, one call each, through the docs skill's guarded edit. On a guard refusal, follow `docs-architecture/references/refresh.md` § 4: their edit wins. Untouched procedures are never written and keep their block revisions.
-5. Re-run step 6 over the touched procedures. Then add a `Changed since <date>` row per change under the stamp (`refresh.md` § 5 item 1), move the stamp to HEAD with today's date, and update those procedures' `Sources` entries as the guest contract's refresh rule says.
+5. Re-run step 6 over the touched procedures. Then add a `Changed since <date>` row per change under the stamp (`refresh.md` § 5 item 1), move the stamp to HEAD with today's date. Untouched procedures are verified as of HEAD too, because none of their cited files changed between `<sha>` and HEAD. So set the new stamp on every `runbook` entry in `Sources`, update the touched procedures' sources, and run `sources_check.py` as the guest contract's refresh rule says.
