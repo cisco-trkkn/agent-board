@@ -11,7 +11,7 @@ Load `anthropic-skills:docs` first and follow it for everything about the Doc it
 
 The first **Docs** call, before any git read, `glab` call or cloud read, births the Doc (title, byline, one `pending` "gathering the record…" block); loading this skill and `anthropic-skills:docs` may precede it. Step 4 replaces that block with the outline. The Doc is never deleted: a halt replaces that pending block with what was found.
 
-**Guest mode.** Handed a guest brief by `docs-compose`, follow `../docs-compose/references/guest-contract.md` and change only this: skip the birth; step 1 takes the range from the owned blocks' intents and the brief's interview answers; step 2 reuses every discovery artefact the brief lists (a listed cloud log is passed as `--log` again, so its `n` numbering continues); step 3 asks nothing and uses the brief's interview answers; step 4 lays the six parts out in the owned blocks; step 5's stamp is the last block of the report group, and step 5.3 returns `Sources` entries instead of writing the tab. Without a brief, the skill runs standalone as written below.
+**Guest mode.** Handed a guest brief by `docs-compose`, follow `../docs-compose/references/guest-contract.md` and change only this: skip the birth; step 1 takes the range from the owned blocks' intents and the brief's interview answers; step 2 reuses every discovery artefact the brief lists (a listed cloud log is passed as `--log` again, so its `n` numbering continues); step 3 asks no interview questions and uses the brief's interview answers (the cloud question in step 2 is the one question a guest may still ask); step 4 lays the six parts out in the owned blocks; step 5's stamp is the last block of the report group, and step 5.3 returns `Sources` entries instead of writing the tab. Without a brief, the skill runs standalone as written below.
 
 Layout follows `docs-architecture` (birth first, guest mode, hard rules, five steps, review then stamp). Different: no diagrams by default (a chart only where step 4 allows one); the review checks every claim in *Outcome* and *What changed* against its cited source; frozen with dated updates instead of a refresh.
 
@@ -20,8 +20,8 @@ Layout follows `docs-architecture` (birth first, guest mode, hard rules, five st
 - **Traceability.** Every fact cites a source of a kind in `../docs-compose/references/sources.md` § Source kinds: `commit:`, `mr:`, `artefact:`, `interview:`, `cloud:`, `file:`. A claim with no source is cut or turned into a question.
 - **Read-only, everywhere.** Local git reads, `glab mr list` and `glab mr view`, file reads, and cloud reads only through `scripts/cloud_read.py` (step 2). Nothing here writes to a cloud resource, a repo or an MR.
 - **A refusal is a finding.** `cloud_read.py` exit 2 means the command was never run. Record the `refused: <reason>` line in *What was verified, and how* as a check not made; the next move is a different allowlisted read or the gap stated, and the refused command stays refused, in every form.
-- **One cloud question per session**, asked before the first cloud read (step 2).
-- **Interview: at most 5 questions** standalone; none as a guest.
+- **One cloud question per session**, asked before the first cloud read (step 2). It is a permission question, outside the interview and its pool, so a guest asks it too.
+- **Interview: at most 5 questions** standalone; none as a guest, whose only question is the cloud question.
 - **One section per call** (the docs skill's watch-it-fill rule).
 - **Fresh-eyes review before the stamp.** A subagent when one can be spawned; otherwise review it yourself as a demanding outsider, tell the user, and say so in your report.
 - **Stamp** `Report as of <date>, range <a>..<b>` and its `Sources` entries (step 5) close every report.
@@ -55,7 +55,7 @@ Read the four source kinds over the range. Each fact you keep gets its citation 
 2. **Agent artefacts.** Plans, specs, SDD ledgers, handoff docs and review reports under `docs/superpowers/` (and `.superpowers/sdd/`) in the repo and under `~/.claude/handoffs/`. In a ledger, `grep -n 'Ruling:'` finds the decisions; cite each as `artefact:<path>:<line>`.
 3. **Interview** (step 3) for what no file records.
 4. **Live cloud state**, read-only, only through the gate.
-   - First, once per session: ask the user whether you may read live cloud state, naming the project(s) you will read (from the repo's Terraform, the artefacts, or the request). A yes covers the named projects for the rest of the session; a new project is a new question. A no: make no cloud read, and *What was verified, and how* says `cloud state not checked`. As a guest, a consent answer already in the brief's interview answers counts as the question asked.
+   - First, once per session: ask the user whether you may read live cloud state, naming the project(s) you will read (from the repo's Terraform, the artefacts, or the request). A yes covers the named projects for the rest of the session; a new project is a new question. A no: make no cloud read, and *What was verified, and how* says `cloud state not checked`. As a guest: a consent answer in the brief's interview answers that names the project(s) counts as the question asked; without one, the guest asks the question itself, once, before its first cloud read, naming the project(s).
    - Each read is one line:
 
          python3 <skill root>/scripts/cloud_read.py --log <scratch>/cloud-log.json -- gcloud run services list --project=<PROJECT> --format=json
@@ -69,7 +69,7 @@ Done when every MR and commit in the range is either a candidate *What changed* 
 
 ### 3. Interview
 
-Standalone: ask at most 5 questions, in one round, only for what no source shows: the outcome as the owner sees it, open risks, owners, what was verified by hand, intent behind a change with no recorded *why*. Each answer is a source, `interview:<n>`. No question whose answer is in git, an MR or an artefact: cite that instead. As a guest: ask nothing; the brief's answers are the whole interview.
+Standalone: ask at most 5 questions, in one round, only for what no source shows: the outcome as the owner sees it, open risks, owners, what was verified by hand, intent behind a change with no recorded *why*. Each answer is a source, `interview:<n>`. No question whose answer is in git, an MR or an artefact: cite that instead. As a guest: ask no interview question; the brief's answers are the whole interview (the step 2 cloud question is separate).
 
 ### 4. Outline and write
 
