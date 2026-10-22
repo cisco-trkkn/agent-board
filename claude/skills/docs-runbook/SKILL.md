@@ -79,7 +79,7 @@ You need answers for intent and who may run each procedure, because code cannot 
 
 ### 4. Outline
 
-- **Guest:** your owned blocks, in brief order, are the outline. One procedure per block.
+- **Guest:** your owned blocks, in brief order, are the outline. One procedure per block; a block whose intent holds several procedures is split as the guest contract allows.
 - **Standalone:** replace the birth block with one `pending` block per procedure (intent `[runbook] <Verb> <object>`) and a pending stamp block last. Confirm the outline with the user only when the request was ambiguous.
 
 ### 5. Write
@@ -109,4 +109,4 @@ A stamped runbook is refreshed one procedure at a time, in place. You regenerate
 2. Run `git diff --name-only <sha> HEAD`. If git does not know `<sha>`, stop and ask which repo or sha to diff against; never substitute one.
 3. A procedure is **touched** when a changed path is one of its `file:` sources. No touched procedure: say "no runbook change since <date>" and move the stamp to HEAD with today's date.
 4. Re-check each touched procedure against HEAD (steps 2 and 5), then rewrite it in place, one call each, through the docs skill's guarded edit. On a guard refusal, follow `docs-architecture/references/refresh.md` § 4: their edit wins. Untouched procedures are never written and keep their block revisions.
-5. Re-run step 6 over the touched procedures. Then add a `Changed since <date>` row per change under the stamp (`refresh.md` § 5 item 1), move the stamp to HEAD with today's date, and update those procedures' `Sources` entries.
+5. Re-run step 6 over the touched procedures. Then add a `Changed since <date>` row per change under the stamp (`refresh.md` § 5 item 1), move the stamp to HEAD with today's date, and update those procedures' `Sources` entries as the guest contract's refresh rule says.
