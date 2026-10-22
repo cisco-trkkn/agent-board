@@ -28,6 +28,9 @@ ALLOWED = [
     ["bq", "query", "--dry_run=true", "SELECT 1"],
     ["gcloud", "alpha", "projects", "describe", "--project=p"],
     ["gcloud", "compute", "instances", "list", "--filter=name=x"],
+    ["gcloud", "iam", "workload-identity-pools", "providers", "list", "--workload-identity-pool=w"],
+    ["gcloud", "sql", "instances", "describe", "inst"],
+    ["bq", "--project_id=p", "--location=EU", "ls"],
 ]
 REFUSED = [
     ["gcloud", "projects", "create", "p"],
@@ -70,6 +73,14 @@ REFUSED = [
     ["gcloud", "list", "projects"],                          # verb is not after a group
     ["gcloud", "beta", "list"],                              # track only, no group
     ["gcloud", "Projects", "list"],                          # group token fails the pattern
+    # review round 2: bare bq global flag shifts the subcommand; gcloud write paths not in the allowlist
+    ["bq", "--project_id", "show", "rm", "-f", "ds.t"],
+    ["bq", "--location", "ls", "rm", "ds.t"],
+    ["gcloud", "logging", "write", "mylog", "list"],
+    ["gcloud", "compute", "instances", "attach-disk", "vm", "list"],
+    ["gcloud", "sql", "instances", "failover", "inst", "describe"],
+    ["gcloud", "storage", "objects", "list"],                # path not listed
+    ["gcloud", "beta", "logging", "write", "list"],
     # review round 1: dry-run flags, \r comments, EXTERNAL_QUERY, flag files
     ["bq", "query", "--dry_run", "--nodry_run", "DROP TABLE t"],
     ["bq", "query", "--dry_run", "--dry_run=false", "DROP TABLE t"],

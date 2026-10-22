@@ -8,6 +8,8 @@
 
 Allowed: `gcloud --version` alone, or a command whose non-flag tokens are exactly `[alpha|beta] <group…> <read verb> [<one resource arg>]`, with read verb one of `describe`, `list`, `get-iam-policy`, `get-ancestors`. Every group token must match `^[a-z][a-z0-9-]*$` and not be a deny word; the optional resource argument must not be a deny word. Anything else is refused, including a second positional after the verb, a read verb that is not the last verb, and any flag whose name contains `flagfile` or `flags-file` (a file can inject any flag).
 
+Command paths: the group tokens (between the optional `alpha`/`beta` and the read verb) must equal exactly one of these paths, so a write command that merely ends in `list` or `describe` is refused: `projects`, `organizations`, `resource-manager folders`, `services`, `run services`, `run jobs`, `run revisions`, `iam service-accounts`, `iam roles`, `iam workload-identity-pools`, `iam workload-identity-pools providers`, `pubsub topics`, `pubsub subscriptions`, `sql instances`, `sql databases`, `storage buckets`, `secrets`, `functions`, `compute instances`, `compute networks`, `container clusters`, `artifacts repositories`, `scheduler jobs`, `logging sinks`, `logging metrics`, `builds`, `builds triggers`, `dns managed-zones`, `bigquery datasets`. Add a path here, reviewed, to read more (and in `GCLOUD_PATHS` in the script).
+
 Deny words: `create delete update patch set-iam-policy add-iam-policy-binding remove-iam-policy-binding deploy apply import export ssh scp reset start stop resize enable disable undelete rollback cancel run set rm cp mv rsync publish execute call submit add-metadata remove-metadata replace invoke trigger`.
 
 Exception for `run`: it is not a deny word at the command-group position, which is the first non-flag token after `gcloud`, or the second when the first is a release track `alpha` or `beta` (Cloud Run's group is literally `run`). Everywhere else `run` is denied.
@@ -24,7 +26,7 @@ Refused examples: `gcloud storage rm gs://b/obj list`, `gcloud storage cp list g
 
 ## bq
 
-The subcommand is the first non-flag token after `bq` (global flags such as `--project_id=p` come before it).
+The subcommand is the first non-flag token after `bq`. Global flags before it must be written `--name=value` (`--project_id=p`); a bare flag there (`bq --project_id show …`) is refused, because bq would take `show` as its value and run the next token as the subcommand.
 
 - `show` and `ls`: allowed.
 - `query <sql>`: allowed when the SQL is one statement starting with `SELECT` or `WITH`, with none of these whole words, case-insensitive: `INSERT UPDATE DELETE MERGE CREATE DROP ALTER TRUNCATE GRANT REVOKE EXPORT CALL DECLARE SET BEGIN EXECUTE LOAD`. `--dry_run`, `--dry_run=…` and `--nodry_run` relax nothing: the SQL is checked the same with or without them, so `bq query --dry_run "DROP TABLE t"` is refused.

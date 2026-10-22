@@ -12,6 +12,12 @@ GCLOUD_DENY = set("""create delete update patch set-iam-policy add-iam-policy-bi
 remove-iam-policy-binding deploy apply import export ssh scp reset start stop resize enable
 disable undelete rollback cancel run set rm cp mv rsync publish execute call submit
 add-metadata remove-metadata replace invoke trigger""".split())
+GCLOUD_PATHS = {tuple(p.split()) for p in """projects|organizations|resource-manager folders|services|run services
+|run jobs|run revisions|iam service-accounts|iam roles|iam workload-identity-pools
+|iam workload-identity-pools providers|pubsub topics|pubsub subscriptions|sql instances|sql databases
+|storage buckets|secrets|functions|compute instances|compute networks|container clusters
+|artifacts repositories|scheduler jobs|logging sinks|logging metrics|builds|builds triggers
+|dns managed-zones|bigquery datasets""".replace("\n", "").split("|")}
 GROUP_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 TRACKS = {"alpha", "beta"}
 SQL_DENY = set("""INSERT UPDATE DELETE MERGE CREATE DROP ALTER TRUNCATE GRANT REVOKE EXPORT CALL
@@ -46,6 +52,8 @@ def _gcloud(args):
             return False, f"gcloud: deny word '{t}'"
     if resource and resource[0] in GCLOUD_DENY:
         return False, f"gcloud: deny word '{resource[0]}'"
+    if tuple(group) not in GCLOUD_PATHS:
+        return False, f"gcloud: command path '{' '.join(group)}' is not in the allowlist"
     return True, "ok"
 
 def _code_only(sql):
@@ -97,6 +105,9 @@ def _bq(args):
     toks = [t for t in args if not _flag(t)]
     if not toks:
         return False, "bq: no subcommand"
+    for t in args[:args.index(toks[0])]:
+        if "=" not in t:
+            return False, f"bq: global flag '{t}' must be written --name=value"
     sub = toks[0]
     if sub in ("show", "ls"):
         return True, "ok"
