@@ -50,3 +50,15 @@ class SourcesCheck(unittest.TestCase):
         for src, ok in cases.items():
             with self.subTest(src=src):
                 self.assertEqual(sources_check.source_ok(src), ok)
+
+    def test_non_list_sources_is_one_problem(self):
+        for bad in ("file:a:1", {"k": "file:a:1"}, 5):
+            with self.subTest(sources=bad):
+                doc = {"A": {"type": "report", "stamp": "s", "sources": bad}}
+                self.assertEqual(check(json.dumps(doc)), (1, "A: sources not a list\n"))
+
+    def test_non_string_stamp_is_empty_stamp(self):
+        for bad in (5, ["x"], {"a": 1}):
+            with self.subTest(stamp=bad):
+                doc = {"A": {"type": "report", "stamp": bad, "sources": ["interview:1"]}}
+                self.assertEqual(check(json.dumps(doc)), (1, "A: empty stamp\n"))

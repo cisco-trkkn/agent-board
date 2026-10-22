@@ -19,11 +19,16 @@ def problems(doc):
         sec = sec if isinstance(sec, dict) else {}
         if sec.get("type") not in TYPES:
             out.append(f"{name}: unknown type {sec.get('type')!r}")
-        if not str(sec.get("stamp") or "").strip():
+        stamp = sec.get("stamp")
+        if not (isinstance(stamp, str) and stamp.strip()):
             out.append(f"{name}: empty stamp")
-        if not sec.get("sources"):
+        srcs = sec.get("sources")
+        if not srcs:
             out.append(f"{name}: no sources")
-        out += [f"{name}: source {s!r} matches no kind" for s in sec.get("sources") or [] if not source_ok(s)]
+        elif not isinstance(srcs, list):
+            out.append(f"{name}: sources not a list")
+        else:
+            out += [f"{name}: source {s!r} matches no kind" for s in srcs if not source_ok(s)]
     return out
 
 def main(text):
