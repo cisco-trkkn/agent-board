@@ -51,7 +51,7 @@ Read the four source kinds over the range. Each fact you keep gets its citation 
 
 1. **Git history and MRs.**
    - `git log --format='%H %ad %s' --date=short <a>..<b>` (or `--since=<date> --until=<date>` for a date range), `git show --stat <sha>` per commit worth a row; cite `commit:<sha>`.
-   - `glab mr list --merged --repo=<group/project> --output=json` filtered to the range by `merged_at`, then `glab mr view <iid> --repo=<group/project>` for the description and discussion; cite `mr:<group/project>!<iid>`. The MR description is the first place to find a row's *why*.
+   - `glab mr list --merged --repo=<group/project> --output=json` filtered to the range by `merged_at`. Page (`--page=N`, `-p`; `--per-page`, `-P`) until the oldest MR returned predates the range start; never assume one page covers the range. Then `glab mr view <iid> --repo=<group/project>` for the description and discussion; cite `mr:<group/project>!<iid>`. The MR description is the first place to find a row's *why*.
 2. **Agent artefacts.** Plans, specs, SDD ledgers, handoff docs and review reports under `docs/superpowers/` (and `.superpowers/sdd/`) in the repo and under `~/.claude/handoffs/`. In a ledger, `grep -n 'Ruling:'` finds the decisions; cite each as `artefact:<path>:<line>`.
 3. **Interview** (step 3) for what no file records.
 4. **Live cloud state**, read-only, only through the gate.

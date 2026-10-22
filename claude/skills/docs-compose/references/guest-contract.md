@@ -11,7 +11,8 @@ The composer (`docs-compose`, step 5) fills this template, one per guest. Every 
     Main tab: <main tab id>
     Owned blocks (reading order):
       - <pending block id>: "<intent, [type] prefix included>"
-    Audience: <the Doc's audience line>
+    Audience: <the audience line confirmed at the outline step>
+    Cloud consent: <yes/no + projects | none>
     Interview answers:
       - interview:<n>: <question> → <answer>
     Discovery artefacts (reuse; do not rerun that discovery):

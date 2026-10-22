@@ -27,15 +27,15 @@ Create the Doc: title, byline, one `pending` block with intent "planning the out
 
 ### 2. Outline
 
-From the request, decide the sections and the type of each: `architecture`, `runbook`, `report`, `explainer`. Replace the planning block with **typed pending blocks**, one per section, each intent prefixed with its type: `[explainer] What this means for you`, `[architecture] System map`, `[runbook] Rotate the planner WIF binding`, `[report] Migration close-out, 2026-10`. Order is reader-first: an explainer leads, depth follows. A one-type request gets a one-type outline. Done when every section is a pending block with a `[type]` prefix.
+From the request, decide the sections and the type of each: `architecture`, `runbook`, `report`, `explainer`. Replace the planning block with **typed pending blocks**, one per section, each intent prefixed with its type: `[explainer] What this means for you`, `[architecture] System map`, `[runbook] Rotate the planner WIF binding`, `[report] Migration close-out, 2026-10`. Order is reader-first: an explainer leads, depth follows. A one-type request gets a one-type outline. Also write a one-line audience statement for the Doc, built from the request. Done when every section is a pending block with a `[type]` prefix and the audience line is written.
 
 ### 3. Confirm
 
-Ask the user one question: the outline as it stands, with "go / change". On a change (add, drop, reorder, retype), redo the pending blocks and ask again. Done on a "go".
+Ask the user one question: the outline as it stands and the audience line, with "go / change". On a change (add, drop, reorder, retype), redo the pending blocks and ask again. Done on a "go".
 
 ### 4. Interview pool
 
-For each confirmed type, read its skill's interview step and draft the questions it would ask about this Doc, after looking where its skill says to look first (code, history) so no question asks what the repo shows. To seed those questions you may run a guest's read-only discovery (such as `docs-architecture`'s `inventory.py` for `unknowns[]`); its output paths go in that guest's brief as discovery artefacts, so the guest reuses them instead of running discovery again. Merge duplicates, keep the 5 that most change what gets written, ask them in one round. Number the answers `interview:1`…`interview:<n>`; every guest may cite any of them. Done when at most 5 questions are asked and each answer has its `interview:<n>` number (zero questions is fine).
+For each confirmed type, read its skill's interview step and draft the questions it would ask about this Doc, after looking where its skill says to look first (code, history) so no question asks what the repo shows. To seed those questions you may run a guest's read-only discovery (such as `docs-architecture`'s `inventory.py` for `unknowns[]`); its output paths go in that guest's brief as discovery artefacts, so the guest reuses them instead of running discovery again. Merge duplicates, keep the 5 that most change what gets written, ask them in one round. If the outline holds a `[report]` section that may read the cloud, add one more question to the same round: may it read the cloud, naming the project(s). It sits outside the 5-question count, being a permission, and its answer goes in the report guest's brief as `Cloud consent`. Number the answers `interview:1`…`interview:<n>`; every guest may cite any of them. Done when at most 5 questions are asked and each answer has its `interview:<n>` number (zero questions is fine).
 
 ### 5. Delegate
 
