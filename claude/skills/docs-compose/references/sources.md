@@ -13,7 +13,7 @@ Every section's provenance lives in one tab of the Doc named `Sources`. Its body
 }
 ```
 
-Required per section: `type`, `stamp` (non-empty), `sources` (non-empty, every entry matches a kind). Other keys (such as `diagram`, or an explainer's `sourceDoc`: the link of the Doc its `section:` sources live in) are allowed and not checked.
+Required per section: `type`, `stamp` (non-empty), `sources` (non-empty, every entry matches a kind). Other keys (such as `diagram`, an explainer's `sourceDoc`: the link of the Doc its `section:` sources live in, or an explainer's `paragraphs`: `{"<block id>": ["<section heading>", …]}`, the source sections each derived paragraph cites) are allowed and not checked.
 
 Check it before closing the Doc: `scripts/sources_check.py <file|->` (file or stdin; reads the whole text as json, or its first ```json block). Exit 0 prints `ok <N> sections`; exit 1 prints one `<section>: <problem>` line per problem; exit 2 means unparseable.
 

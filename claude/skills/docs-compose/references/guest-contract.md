@@ -28,7 +28,7 @@ The composer (`docs-compose`, step 5) fills this template, one per guest. Every 
 - Leaves every other block as it found it: the title, the Doc-level line, other types' sections, and the `Sources` tab. It never births, renames or deletes the Doc, and never edits a block it does not own.
 - Asks the user no interview questions of its own: the brief's answers are the Doc's whole interview.
 - Runs its fresh-eyes review over its own sections before stamping them.
-- Ends its section group with its stamp (`references/sources.md` § Stamps) as the last block it owns.
+- Ends its section group with its stamp (`references/sources.md` § Stamps) as the last block it owns. A `Changed since <date>` row or table, when the type keeps one, goes immediately before the stamp.
 - Returns to the composer:
   1. its `Sources` entries, one per section it wrote, in the `references/sources.md` schema;
   2. the blocks it could not fill: each stays in the Doc as a pending block with its intent rewritten to say what is missing, never deleted.

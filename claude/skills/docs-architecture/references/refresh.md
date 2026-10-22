@@ -15,7 +15,7 @@ Updates a stamped architecture doc to the repo's current HEAD by rewriting only 
 - Output: `{since, head, components: {added, removed, changed}, edges: {added, removed, changed}}`; `since` and `head` are full shas. A changed component is one whose kind, name, project or env differ, listed with its new values. An edge is identified by `(from, to, kind, label)`; a changed edge has the same identity on both sides but another field differing (other than `source`, which moves with line numbers): the new edge plus `was: {field: old value}`. Every `iam` and `trust` edge carries `member`, the raw member expression, so a changed member condition shows as one changed edge.
 - **Exit 2, "inventory: unknown --since sha":** the stamp sha is not in this clone (shallow clone, rewritten history, a different repo). Stop and ask the user which repo or sha to diff against. Never substitute a sha, never diff against an earlier stamp, never regenerate.
 - Exit 2 on zero components: discovery is broken at HEAD; halt as SKILL.md says.
-- Source-file check, before treating an empty diff as empty: `git diff --name-only <sha> <head>` (full shas from the output). A changed path that is cited as a `file:<path>:<line>` source of an architecture section in the id map (other types' `file:` sources are theirs to refresh), or is the `source` file of an id in the id map (join: run a full `python3 <skill root>/scripts/inventory.py <repo> -o <scratch>/head.json` at head, and read each id's `source` from it; `--since` output carries no `source` for unchanged ids, and the creation-time `inventory.json` is usually gone), marks its section touched (step 3), even when the six lists are empty.
+- Source-file check, before treating an empty diff as empty: `git diff --name-only <sha> <head>` (full shas from the output). A changed path that is cited as a `file:<path>:<line>` source of an architecture section in the id map (other types' `file:` sources are theirs to refresh), or is the `source` file of an id in the id map (join: run a full `python3 <skill root>/scripts/inventory.py <repo> -o <scratch>/head.json` at head, and read each id's `source` from it; `--since` output carries no `source` for unchanged ids, and the creation-time `inventory.json` is usually gone), marks its section touched (step 3) only when the cited lines' content changed, even when the six lists are empty. A pure line shift (same text at new line numbers) updates the `file:` refs in `Sources` only, in every type's entries of that file, and rewrites nothing.
 - Empty diff (all six lists empty) **and** no touched section from the source-file check: say "no architecture change since <date>", move the stamp to `head` with today's date (step 5), nothing else.
 
 ## 3. Map the diff to sections
@@ -24,7 +24,7 @@ For each entry in the diff, find every section whose id map lists the id (compon
 
 Only architecture sections are ever touched. In a mixed Doc (a `Sources` tab with other types), every other section, the title, the Doc-level line and other types' `Sources` entries are left as they are, whatever the diff says; their own skills refresh them.
 
-Collect the set of touched sections. Each is rewritten whole, one section per call, in reading order:
+A section is touched only when (a) a changed component id or edge is drawn in it, or (b) the content of a line range it cites changed. Collect the set of touched sections. Each is rewritten whole, one section per call, in reading order:
 
 - redraw the diagram as the docs skill's redraw road says (the whole module, from the stored code), keeping every text id and anchor whose node remains, adding and removing nodes and edges as the diff says, under the same brief with the finding sentence updated;
 - rewrite the section's prose block to match;
@@ -38,7 +38,7 @@ Every rewrite of an existing block goes through the docs skill's guarded edit. A
 
 ## 5. Record and re-stamp
 
-1. Under the stamp, a `Changed since <date>` table, one row per change: `date · change · section` (`2026-10-20 · added cloud_run_service worker · Orders`). Append to the existing table when the doc has one.
+1. Immediately before the stamp (guest contract's stamp-last rule), a `Changed since <date>` table, one row per change: `date · change · section` (`2026-10-20 · added cloud_run_service worker · Orders`). Append to the existing table when the doc has one.
 2. Move the architecture stamp, and only it, to the new sha and today's date: `As built from <repo>@<head>, <date>`.
 3. Update the tab step 1 read. In `Sources`: **every** architecture entry gets the moved stamp as its `stamp`, touched or not; only the touched sections' entries get new `sources` (each new id added as `inventory:<id>`, gone ones removed, interview entries kept); then run `sources_check.py` as the guest contract's refresh rule says (`../../docs-compose/references/guest-contract.md`). In an older doc's `Id map` tab: the same as before (new ids added, gone ones removed, interview entries kept).
 4. Reply with the Changed rows and any block left as edited.
