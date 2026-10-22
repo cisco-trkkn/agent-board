@@ -25,6 +25,9 @@ ALLOWED = [
     ["bq", "query", "select 1;"],
     ["bq", "query", "SELECT 1 -- DROP TABLE t"],
     ["bq", "query", "SELECT 'DELETE; x' AS s"],
+    ["bq", "query", "--dry_run=true", "SELECT 1"],
+    ["gcloud", "alpha", "projects", "describe", "--project=p"],
+    ["gcloud", "compute", "instances", "list", "--filter=name=x"],
 ]
 REFUSED = [
     ["gcloud", "projects", "create", "p"],
@@ -56,6 +59,28 @@ REFUSED = [
     ["bq", "query", "--nodry_run", "DROP TABLE t"],
     ["bq", "query"],
     ["bq", "query", "SELECT 1", "SELECT 2"],
+    # review round 1: gcloud write verbs next to a read verb
+    ["gcloud", "storage", "rm", "gs://b/obj", "list"],
+    ["gcloud", "storage", "cp", "list", "gs://b/x"],
+    ["gcloud", "compute", "instances", "add-metadata", "vm", "--metadata=a=b", "describe"],
+    ["gcloud", "pubsub", "topics", "publish", "t", "--message", "m", "list"],
+    ["gcloud", "run", "jobs", "execute", "list"],
+    ["gcloud", "functions", "call", "list"],
+    ["gcloud", "projects", "list", "a", "b"],               # second positional after the verb
+    ["gcloud", "list", "projects"],                          # verb is not after a group
+    ["gcloud", "beta", "list"],                              # track only, no group
+    ["gcloud", "Projects", "list"],                          # group token fails the pattern
+    # review round 1: dry-run flags, \r comments, EXTERNAL_QUERY, flag files
+    ["bq", "query", "--dry_run", "--nodry_run", "DROP TABLE t"],
+    ["bq", "query", "--dry_run", "--dry_run=false", "DROP TABLE t"],
+    ["bq", "query", "--dry_run", "DROP TABLE t"],            # dry run relaxes nothing
+    ["bq", "query", "SELECT 1 --x\r; DROP TABLE t"],
+    ["bq", "query", "SELECT 1 #x\r; DROP TABLE t"],
+    ["bq", "query", "SELECT * FROM EXTERNAL_QUERY('c', 'DELETE FROM x')"],
+    ["bq", "query", "select * from external_query('c', 'x')"],
+    ["bq", "show", "--flagfile=/tmp/x", "ds.t"],
+    ["bq", "--flagfile", "ds.t", "ls"],
+    ["gcloud", "projects", "list", "--flags-file=/tmp/x.yaml"],
     ["terraform", "plan"], ["sh", "-c", "gcloud projects list"],
     ["/usr/bin/gcloud", "projects", "list"],
 ]

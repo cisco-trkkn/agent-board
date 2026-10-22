@@ -10,7 +10,9 @@ import datetime, json, os, re, shlex, subprocess, sys
 GCLOUD_READ = {"describe", "list", "get-iam-policy", "get-ancestors"}
 GCLOUD_DENY = set("""create delete update patch set-iam-policy add-iam-policy-binding
 remove-iam-policy-binding deploy apply import export ssh scp reset start stop resize enable
-disable undelete rollback cancel run set""".split())
+disable undelete rollback cancel run set rm cp mv rsync publish execute call submit
+add-metadata remove-metadata replace invoke trigger""".split())
+GROUP_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 TRACKS = {"alpha", "beta"}
 SQL_DENY = set("""INSERT UPDATE DELETE MERGE CREATE DROP ALTER TRUNCATE GRANT REVOKE EXPORT CALL
 DECLARE SET BEGIN EXECUTE LOAD""".split())
@@ -19,18 +21,31 @@ BQ_WRITE_FLAGS = ("--destination_", "--replace", "--append_table", "--schedule")
 def _flag(t):
     return t.startswith("-")
 
+def _flagfile(args):
+    return any(_flag(t) and ("flagfile" in t.lower() or "flags-file" in t.lower()) for t in args)
+
 def _gcloud(args):
     if args == ["--version"]:
         return True, "ok"
+    if _flagfile(args):
+        return False, "gcloud: flag files can inject flags"
     toks = [t for t in args if not _flag(t)]
-    if not toks:
-        return False, "gcloud: no command"
-    group = 1 if toks[0] in TRACKS and len(toks) > 1 else 0
-    for i, t in enumerate(toks):
-        if t in GCLOUD_DENY and not (t == "run" and i == group):
+    if toks[:1] and toks[0] in TRACKS:
+        toks = toks[1:]
+    # shape: <group...> <read verb> [<one resource arg>]
+    for v in (len(toks) - 1, len(toks) - 2):
+        if v >= 1 and toks[v] in GCLOUD_READ:
+            group, resource = toks[:v], toks[v + 1:]
+            break
+    else:
+        return False, "gcloud: not '<group...> <read verb> [<resource>]' (read verbs: describe, list, get-iam-policy, get-ancestors)"
+    for i, t in enumerate(group):
+        if not GROUP_RE.match(t):
+            return False, f"gcloud: '{t}' is not a command-group token"
+        if t in GCLOUD_DENY and not (t == "run" and i == 0):
             return False, f"gcloud: deny word '{t}'"
-    if not GCLOUD_READ & set(toks):
-        return False, "gcloud: no read verb (describe, list, get-iam-policy, get-ancestors)"
+    if resource and resource[0] in GCLOUD_DENY:
+        return False, f"gcloud: deny word '{resource[0]}'"
     return True, "ok"
 
 def _code_only(sql):
@@ -39,8 +54,8 @@ def _code_only(sql):
     while i < n:
         c = sql[i]
         if sql.startswith("--", i) or c == "#":
-            j = sql.find("\n", i)
-            i = n if j < 0 else j
+            m = re.compile(r"[\r\n]").search(sql, i)
+            i = n if m is None else m.start()
         elif sql.startswith("/*", i):
             j = sql.find("*/", i + 2)
             if j < 0:
@@ -59,15 +74,15 @@ def _code_only(sql):
             i += 1
     return "".join(out)
 
-def _sql_ok(sql, dry):
+def _sql_ok(sql):
+    if re.search(r"\bEXTERNAL_QUERY\b", sql, re.I):
+        return False, "bq: EXTERNAL_QUERY sends a string to another database"
     code = _code_only(sql)
     if code is None:
         return False, "bq: unterminated string or comment"
     stmts = [s for s in code.split(";") if s.strip()]
     if len(stmts) != 1:
         return False, "bq: query must be exactly one statement"
-    if dry:
-        return True, "ok"
     words = re.findall(r"[A-Za-z_]+", stmts[0])
     if not words or words[0].upper() not in ("SELECT", "WITH"):
         return False, "bq: query must start with SELECT or WITH"
@@ -77,6 +92,8 @@ def _sql_ok(sql, dry):
     return True, "ok"
 
 def _bq(args):
+    if _flagfile(args):
+        return False, "bq: flag files can inject flags"
     toks = [t for t in args if not _flag(t)]
     if not toks:
         return False, "bq: no subcommand"
@@ -85,14 +102,13 @@ def _bq(args):
         return True, "ok"
     if sub != "query":
         return False, f"bq: subcommand '{sub}' is not read-only"
-    flags = [t for t in args if _flag(t)]
-    if any(f.startswith(BQ_WRITE_FLAGS) for f in flags):
+    if any(f.startswith(BQ_WRITE_FLAGS) for f in args if _flag(f)):
         return False, "bq: query writes to a destination"
     rest = toks[1:]
     if len(rest) != 1:
         return False, "bq: query needs exactly one SQL argument"
-    dry = any(f == "--dry_run" or f.lower() == "--dry_run=true" for f in flags)
-    return _sql_ok(rest[0], dry)
+    # --dry_run/--nodry_run relax nothing: the SQL is checked the same either way.
+    return _sql_ok(rest[0])
 
 def allowed(argv):
     """(True, 'ok') when argv is a read-only gcloud/bq command, else (False, reason)."""
