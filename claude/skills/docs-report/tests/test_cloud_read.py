@@ -1,4 +1,4 @@
-import io, json, os, shutil, sys, tempfile, contextlib, unittest
+import io, json, os, re, shutil, subprocess, sys, tempfile, time, contextlib, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 import cloud_read  # noqa: E402
@@ -31,6 +31,14 @@ ALLOWED = [
     ["gcloud", "iam", "workload-identity-pools", "providers", "list", "--workload-identity-pool=w"],
     ["gcloud", "sql", "instances", "describe", "inst"],
     ["bq", "--project_id=p", "--location=EU", "ls"],
+    # final review C2: the bq flag allowlists
+    ["bq", "--format=json", "ls"],
+    ["bq", "query", "--nodry_run", "SELECT 1"],
+    ["bq", "query", "--nouse_legacy_sql", "SELECT 1"],
+    ["bq", "query", "--max_rows=10", "--maximum_bytes_billed=1000", "--location=EU", "--project_id=p",
+     "--format=json", "--parameter=x:INT64:1", "SELECT @x"],
+    ["bq", "ls", "--max_results=5", "--format=json", "--project_id=p", "--location=EU", "p:ds"],
+    ["bq", "show", "--format=prettyjson", "ds.t"],
 ]
 REFUSED = [
     ["gcloud", "projects", "create", "p"],
@@ -96,7 +104,53 @@ REFUSED = [
     ["gcloud", "projects", "list", "--flags-file=/tmp/x.yaml"],
     ["terraform", "plan"], ["sh", "-c", "gcloud projects list"],
     ["/usr/bin/gcloud", "projects", "list"],
+    # final review C1: a separate flag value swallows the read verb, gcloud runs the next token
+    ["gcloud", "iam", "roles", "--project", "list", "copy", "--source=roles/viewer", "--destination=x",
+     "--dest-project=p"],
+    ["gcloud", "iam", "roles", "--format", "list", "copy", "--source=roles/viewer", "--destination=x",
+     "--dest-project=p"],
+    ["gcloud", "projects", "--project", "list", "move"],
+    ["gcloud", "sql", "instances", "--format", "list", "restart"],
+    ["gcloud", "run", "services", "list", "--project", "p"],   # any flag without '=' is refused
+    ["gcloud", "projects", "list", "-q"],
+    # final review C2 + Minor 1: bq flags outside the allowlists, any dash spelling
+    ["bq", "query", "-destination_table=ds.t", "SELECT 1"],
+    ["bq", "query", "-replace", "--destination_table=ds.t", "SELECT 1"],
+    ["bq", "query", "-replace", "SELECT 1"],
+    ["bq", "query", "-append_table", "SELECT 1"],
+    ["bq", "query", "--batch", "SELECT 1"],
+    ["bq", "query", "--api=https://evil.example", "SELECT 1"],
+    ["bq", "--api=https://evil.example", "ls"],
+    ["bq", "--apilog=/tmp/x", "ls"],
+    ["bq", "-apilog=/tmp/x", "query", "SELECT 1"],
+    ["bq", "ls", "--filter=labels.a:b"],
+    ["bq", "show", "-j", "job_1"],
+    ["bq", "query", "--location", "SELECT 1"],              # value flag without '=' swallows the SQL
+    ["bq", "query", "--", "SELECT 1"],
 ]
+
+OFFLINE_ENV = dict(os.environ, CLOUDSDK_CORE_DISABLE_PROMPTS="1", PAGER="cat",
+                   CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK="1",
+                   CLOUDSDK_CORE_DISABLE_USAGE_REPORTING="true")
+
+def gate_command(argv):
+    """The gcloud command words the gate saw: non-flag tokens up to and including the read verb."""
+    toks = [t for t in argv[1:] if not t.startswith("-")]
+    return toks if toks[-1] in cloud_read.GCLOUD_READ else toks[:-1]
+
+def gcloud_command(argv):
+    """The command words real gcloud resolves argv to, from the SYNOPSIS of `<argv> --help` (offline)."""
+    out = subprocess.run(argv + ["--help"], capture_output=True, text=True, timeout=60,
+                         stdin=subprocess.DEVNULL, env=OFFLINE_ENV).stdout
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", out).splitlines()
+    synopsis = lines[lines.index("SYNOPSIS") + 1].split()
+    assert synopsis[0] == "gcloud", synopsis
+    words = []
+    for w in synopsis[1:]:
+        if not cloud_read.GROUP_RE.match(w):
+            break
+        words.append(w)
+    return words
 
 class CloudRead(unittest.TestCase):
     def setUp(self):
@@ -175,6 +229,16 @@ class CloudRead(unittest.TestCase):
         code, out = self.call(["gcloud", "--version"], cloud_read.subprocess.run)
         self.assertEqual(code, 0)
         self.assertIn("Google Cloud SDK", json.loads(out)["output"])
+
+    @unittest.skipUnless(shutil.which("gcloud"), "gcloud not on PATH")
+    def test_real_gcloud_parses_allowed_argv_as_the_gate_does(self):
+        start = time.monotonic()
+        for argv in ALLOWED:
+            if argv[0] != "gcloud" or argv == ["gcloud", "--version"]:
+                continue
+            with self.subTest(argv=argv):
+                self.assertEqual(gcloud_command(argv), gate_command(argv))
+        print(f"\n[real gcloud --help parse: {time.monotonic() - start:.1f}s]", file=sys.stderr)
 
 if __name__ == "__main__":
     unittest.main()

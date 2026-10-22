@@ -14,7 +14,7 @@ Deny words: `create delete update patch set-iam-policy add-iam-policy-binding re
 
 Exception for `run`: it is not a deny word at the command-group position, which is the first non-flag token after `gcloud`, or the second when the first is a release track `alpha` or `beta` (Cloud Run's group is literally `run`). Everywhere else `run` is denied.
 
-Flags that take a value must be written `--flag=value`: a separate value token (`--project p`) counts as a positional and is usually refused.
+Every flag must be written `--flag=value`: a flag token without `=` (`--project p`, `-q`) is always refused. gcloud takes a separate value token as the flag's value, so `gcloud iam roles --project list copy …` runs `iam roles copy`, while the gate would see `list` as the verb. No boolean flag is needed for a read. A test runs the real `gcloud <argv> --help` for each allowed form and checks that gcloud resolves the same command the gate saw.
 
 Allowed examples:
 - `gcloud projects describe trk-org-prod-0`
@@ -22,24 +22,34 @@ Allowed examples:
 - `gcloud beta run services list`
 - `gcloud projects get-iam-policy p`, `gcloud projects get-ancestors p`
 
-Refused examples: `gcloud storage rm gs://b/obj list`, `gcloud storage cp list gs://b/x`, `gcloud functions call list`, `gcloud projects list a b`, `gcloud projects create p`, `gcloud run services delete s`, `gcloud projects set-iam-policy p f.json`, `gcloud projects add-iam-policy-binding p …`, `gcloud run deploy s`, `gcloud compute ssh vm`, `gcloud scheduler jobs run x`, `gcloud projects list delete`, `gcloud projects` (no read verb).
+Refused examples: `gcloud iam roles --project list copy …`, `gcloud sql instances --format list restart`, `gcloud run services list --project p`, `gcloud storage rm gs://b/obj list`, `gcloud storage cp list gs://b/x`, `gcloud functions call list`, `gcloud projects list a b`, `gcloud projects create p`, `gcloud run services delete s`, `gcloud projects set-iam-policy p f.json`, `gcloud projects add-iam-policy-binding p …`, `gcloud run deploy s`, `gcloud compute ssh vm`, `gcloud scheduler jobs run x`, `gcloud projects list delete`, `gcloud projects` (no read verb).
 
 ## bq
 
 The subcommand is the first non-flag token after `bq`. Global flags before it must be written `--name=value` (`--project_id=p`); a bare flag there (`bq --project_id show …`) is refused, because bq would take `show` as its value and run the next token as the subcommand.
 
-- `show` and `ls`: allowed.
+Every flag must be on an allowlist. A flag's name is normalised before the match: strip the leading `-` or `--`, then a `no` prefix, then cut at `=`. bq accepts `-name`, `--name` and `--noname` alike, so `-destination_table=ds.t` normalises to `destination_table` and is refused. Any flag not listed is refused, including `--api=` (it sends the OAuth token to that host), `--apilog=`, `--destination_table`, `--replace`, `--append_table` and `--batch`.
+
+| Where | Allowed flags |
+|---|---|
+| before the subcommand | `project_id`, `location`, `format` |
+| `query` | `dry_run`, `use_legacy_sql`, `format`, `max_rows`, `maximum_bytes_billed`, `location`, `project_id`, `parameter` |
+| `show`, `ls` | `format`, `max_results`, `project_id`, `location` |
+
+Only `dry_run` and `use_legacy_sql` may be bare (`--dry_run`, `--nouse_legacy_sql`). Every other allowed flag must be written `--name=value`, wherever it appears: `bq query --location "SELECT 1"` is refused, because bq would take the SQL as the location.
+
+- `show` and `ls`: allowed, with the flags above.
 - `query <sql>`: allowed when the SQL is one statement starting with `SELECT` or `WITH`, with none of these whole words, case-insensitive: `INSERT UPDATE DELETE MERGE CREATE DROP ALTER TRUNCATE GRANT REVOKE EXPORT CALL DECLARE SET BEGIN EXECUTE LOAD`. `--dry_run`, `--dry_run=…` and `--nodry_run` relax nothing: the SQL is checked the same with or without them, so `bq query --dry_run "DROP TABLE t"` is refused.
 - `EXTERNAL_QUERY` anywhere in the SQL (checked on the raw text, case-insensitive) is refused: it sends a string to another database.
 - Any flag whose name contains `flagfile`, `flags-file` or `bigqueryrc` is refused: a flag file or `.bigqueryrc` can set default flags such as `--destination_table`.
-- `query` is refused with `--destination_table` (or any `--destination_*`, `--replace`, `--append_table`, `--schedule`), even with `--dry_run`, and when it has other than exactly one positional (the SQL).
+- `query` is refused when it has other than exactly one positional (the SQL).
 - Any other subcommand (`rm`, `mk`, `load`, `cp`, `update`…): refused.
 
 Before checking, comments (`--` and `#` end at `\r` or `\n`; `/* */`) are removed and the contents of quoted strings and identifiers are blanked, so `SELECT '--'; DROP TABLE t` is two statements and refused, and `SELECT 'DELETE; x'` is one statement and allowed. An unterminated string or comment is refused. Statements are split on `;`, empty parts dropped; exactly one must remain.
 
-Allowed examples: `bq --project_id=p show ds.t`, `bq ls p:ds`, `bq query --dry_run --use_legacy_sql=false "SELECT 1"`, `bq query --use_legacy_sql=false "WITH a AS (SELECT 1 AS x) SELECT x FROM a"`.
+Allowed examples: `bq --project_id=p show ds.t`, `bq ls --max_results=5 p:ds`, `bq query --dry_run --use_legacy_sql=false "SELECT 1"`, `bq query --use_legacy_sql=false "WITH a AS (SELECT 1 AS x) SELECT x FROM a"`.
 
-Refused examples: `bq rm ds.t`, `bq mk ds`, `bq load ds.t gs://b/f`, `bq query "DROP TABLE t"`, `bq query "SELECT 1; SELECT 2"`, `bq query --destination_table=ds.t "SELECT 1"`.
+Refused examples: `bq rm ds.t`, `bq mk ds`, `bq load ds.t gs://b/f`, `bq query "DROP TABLE t"`, `bq query "SELECT 1; SELECT 2"`, `bq query --destination_table=ds.t "SELECT 1"`, `bq query -destination_table=ds.t "SELECT 1"`, `bq query -replace "SELECT 1"`, `bq --api=https://host ls`, `bq ls --filter=labels.a:b`.
 
 ## Everything else
 

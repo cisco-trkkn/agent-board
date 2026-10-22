@@ -22,7 +22,12 @@ GROUP_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 TRACKS = {"alpha", "beta"}
 SQL_DENY = set("""INSERT UPDATE DELETE MERGE CREATE DROP ALTER TRUNCATE GRANT REVOKE EXPORT CALL
 DECLARE SET BEGIN EXECUTE LOAD""".split())
-BQ_WRITE_FLAGS = ("--destination_", "--replace", "--append_table", "--schedule")
+# bq flag allowlists, matched on _bq_name(); every other flag is refused. Booleans may be bare.
+BQ_GLOBAL_FLAGS = {"project_id", "location", "format"}
+BQ_QUERY_FLAGS = {"dry_run", "use_legacy_sql", "format", "max_rows", "maximum_bytes_billed", "location",
+                  "project_id", "parameter"}
+BQ_LIST_FLAGS = {"format", "max_results", "project_id", "location"}   # show and ls
+BQ_BOOL_FLAGS = {"dry_run", "use_legacy_sql"}
 
 def _flag(t):
     return t.startswith("-")
@@ -35,6 +40,10 @@ def _gcloud(args):
         return True, "ok"
     if _flagfile(args):
         return False, "gcloud: flag files can inject flags"
+    # A separate value (--project list) is the flag's value to gcloud, so the next token becomes the command.
+    for t in args:
+        if _flag(t) and "=" not in t:
+            return False, f"gcloud: flag '{t}' must be written --name=value"
     toks = [t for t in args if not _flag(t)]
     if toks[:1] and toks[0] in TRACKS:
         toks = toks[1:]
@@ -99,22 +108,43 @@ def _sql_ok(sql):
         return False, f"bq: SQL keyword {bad[0]}"
     return True, "ok"
 
+def _bq_name(t):
+    """Normalised bq flag name: absl takes -name and --name alike, and --noname for a boolean."""
+    name = t.lstrip("-")
+    if name.startswith("no"):
+        name = name[2:]
+    return name.split("=", 1)[0]
+
+def _bq_flags_ok(flags, allow, where):
+    for t in flags:
+        name = _bq_name(t)
+        if name not in allow:
+            return False, f"bq: flag '{t}' is not allowed {where}"
+        if "=" not in t and name not in BQ_BOOL_FLAGS:
+            return False, f"bq: flag '{t}' must be written --name=value"
+    return True, "ok"
+
 def _bq(args):
     if _flagfile(args):
         return False, "bq: flag files can inject flags"
     toks = [t for t in args if not _flag(t)]
     if not toks:
         return False, "bq: no subcommand"
-    for t in args[:args.index(toks[0])]:
+    i = args.index(toks[0])
+    for t in args[:i]:
         if "=" not in t:
             return False, f"bq: global flag '{t}' must be written --name=value"
-    sub = toks[0]
+    ok, why = _bq_flags_ok(args[:i], BQ_GLOBAL_FLAGS, "before the subcommand")
+    if not ok:
+        return ok, why
+    sub, flags = toks[0], [t for t in args[i + 1:] if _flag(t)]
     if sub in ("show", "ls"):
-        return True, "ok"
+        return _bq_flags_ok(flags, BQ_LIST_FLAGS, f"for {sub}")
     if sub != "query":
         return False, f"bq: subcommand '{sub}' is not read-only"
-    if any(f.startswith(BQ_WRITE_FLAGS) for f in args if _flag(f)):
-        return False, "bq: query writes to a destination"
+    ok, why = _bq_flags_ok(flags, BQ_QUERY_FLAGS, "for query")
+    if not ok:
+        return ok, why
     rest = toks[1:]
     if len(rest) != 1:
         return False, "bq: query needs exactly one SQL argument"
