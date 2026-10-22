@@ -9,6 +9,7 @@
 - Whenever `superpowers-extended-cc:test-driven-development` runs, also load
   `test-driven-development-extras` (isolation seam before the RED run of side-effecting code, leak check after,
   one real run of a deciding external command).
+- Whenever `anthropic-skills:docs` runs, also load `docs-compose` (typed outline, one confirm, guests per section type, Sources tab).
 
 # Local tooling gotchas
 
