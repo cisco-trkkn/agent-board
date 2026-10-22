@@ -90,7 +90,7 @@ One procedure per call, in reading order. Fill the template in § Procedure shap
 
 Dispatch a fresh-eyes subagent with the Doc link and the repo path. If you cannot spawn one, use the guest contract's fallback. The review has two passes:
 
-1. **Cold walk.** Using only the Doc, the reviewer walks every procedure step by step as an operator who has never seen the system. For each step it asks: is every placeholder resolvable from what *Before you start* says, is every permission named, does a risky step say what to expect, does a destructive step have its Confirm line and its Rollback entry, and is there a path for each failure. It reports the first step at which it would get stuck, per procedure.
+1. **Cold walk.** Using only the Doc, the reviewer walks every procedure step by step as an operator who has never seen the system. For each step it asks: is every placeholder resolvable from what *Before you start* says, does every `<UPPER_SNAKE>` placeholder name where its current value is read from, does every precondition name its command, is every permission named, does a risky step say what to expect, does a destructive step have its Confirm line and its Rollback entry, and is there a path for each failure. It reports the first step at which it would get stuck, per procedure.
 2. **Citations.** Against the repo, it checks every command and placeholder against its cited line, all of them, not a sample, and checks each documented form against its saved help `artefact:`, which must come from an installed CLI outside the repo tree in one of rule 4's help forms. It runs none of them (hard rule 4).
 
 Fix what it finds and re-walk the procedures you changed. Done when the review reports no stuck step and no uncited command.
