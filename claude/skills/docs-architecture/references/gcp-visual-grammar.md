@@ -106,6 +106,6 @@ Every doc, in this order:
 2. **Key-numbers strip** — four counts: services, projects, environments from `inventory.json` (projects as distinct resolved ids), external dependencies from the interview or `file:` sources.
 3. **Subsystem sections** — one `##` per subsystem, each opening with its zoom diagram, then the prose that explains it.
 4. **Layer-2 diagrams** — data flow, trust boundaries, deploy topology, each in its own section.
-5. **Stamp** — `As built from <repo>@<sha>, <date>`, plus the `Id map` tab (SKILL.md step 5; section → inventory ids) that refresh mode reads.
+5. **Stamp** — `As built from <repo>@<sha>, <date>`, plus the `Sources` entries (SKILL.md step 5.3; section → its sources) that refresh mode reads: the `Sources` tab when standalone, entries returned to the composer as a guest.
 
 Each diagram: title = the finding, a caption under the embed with what the picture is of, a key when colour or the marker carries meaning, and a brief written before it is drawn (`diagram-set.md`).

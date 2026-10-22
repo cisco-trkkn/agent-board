@@ -39,7 +39,7 @@ Read-only and offline: local git only, never `terraform`, `gcloud`, `glab` or th
 
 ### 2. Interview
 
-Ask at most 5 questions, from `unknowns[]` first, then only what code cannot tell: intent, owners, decision rationale, which flows matter most. Each answer is a traceable source (quote it in the id map as `interview:<n>`). No question whose answer is in the repo: cite that line as a `file:<path>:<line>` source instead.
+Ask at most 5 questions, from `unknowns[]` first, then only what code cannot tell: intent, owners, decision rationale, which flows matter most. Each answer is a traceable source (cite it in its section's `Sources` entry as `interview:<n>`, step 5.3). No question whose answer is in the repo: cite that line as a `file:<path>:<line>` source instead.
 
 ### 3. Outline
 
