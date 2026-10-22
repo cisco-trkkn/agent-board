@@ -35,7 +35,7 @@ Ask the user one question: the outline as it stands, with "go / change". On a ch
 
 ### 4. Interview pool
 
-For each confirmed type, read its skill's interview step and draft the questions it would ask about this Doc, after looking where its skill says to look first (code, history) so no question asks what the repo shows. Merge duplicates, keep the 5 that most change what gets written, ask them in one round. Number the answers `interview:1`…`interview:<n>`; every guest may cite any of them. Done when at most 5 questions are asked and each answer has its `interview:<n>` number (zero questions is fine).
+For each confirmed type, read its skill's interview step and draft the questions it would ask about this Doc, after looking where its skill says to look first (code, history) so no question asks what the repo shows. To seed those questions you may run a guest's read-only discovery (such as `docs-architecture`'s `inventory.py` for `unknowns[]`); its output paths go in that guest's brief as discovery artefacts, so the guest reuses them instead of running discovery again. Merge duplicates, keep the 5 that most change what gets written, ask them in one round. Number the answers `interview:1`…`interview:<n>`; every guest may cite any of them. Done when at most 5 questions are asked and each answer has its `interview:<n>` number (zero questions is fine).
 
 ### 5. Delegate
 

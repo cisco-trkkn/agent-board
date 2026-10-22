@@ -14,6 +14,8 @@ The composer (`docs-compose`, step 5) fills this template, one per guest. Every 
     Audience: <the Doc's audience line>
     Interview answers:
       - interview:<n>: <question> → <answer>
+    Discovery artefacts (reuse; do not rerun that discovery):
+      - <path>: <what produced it, e.g. inventory.py on <repo>@<sha>>
     Sources (current):
     ```json
     <the Sources json merged so far, {} for the first guest>
