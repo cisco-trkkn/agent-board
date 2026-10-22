@@ -1,7 +1,9 @@
-import io, json, os, sys, contextlib, unittest
+import io, json, os, subprocess, sys, tempfile, contextlib, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 import sources_check  # noqa: E402
+SCRIPT = os.path.join(os.path.dirname(HERE), "scripts", "sources_check.py")
+REAL_TAB = os.path.join(HERE, "fixtures", "sources-tab-real.md")   # Sources tab read back from the Task 9 Doc
 
 GOOD = {"System map": {"type": "architecture", "stamp": "As built from mgr@" + "a" * 40 + ", 2026-10-20",
                        "sources": ["inventory:infra/ledger/google_sql_database_instance.ledger", "interview:1",
@@ -62,3 +64,38 @@ class SourcesCheck(unittest.TestCase):
             with self.subTest(stamp=bad):
                 doc = {"A": {"type": "report", "stamp": bad, "sources": ["interview:1"]}}
                 self.assertEqual(check(json.dumps(doc)), (1, "A: empty stamp\n"))
+
+    def test_trailing_newline_in_a_source_is_rejected(self):
+        self.assertFalse(sources_check.source_ok("interview:1\n"))
+
+    def test_real_captured_tab(self):
+        self.assertEqual(check(open(REAL_TAB, encoding="utf-8").read()), (0, "ok 10 sections\n"))
+
+def cli(*args):
+    r = subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+class SourcesCheckCli(unittest.TestCase):
+    def test_real_captured_tab_by_path(self):
+        self.assertEqual(cli(REAL_TAB), (0, "ok 10 sections\n"))
+
+    def assert_unusable(self, path):
+        code, out = cli(path)
+        self.assertEqual(code, 2, out)
+        self.assertEqual(out.count("\n"), 1, out)
+        self.assertNotIn("Traceback", out)
+
+    def test_missing_file_is_exit_2(self):
+        self.assert_unusable("/nonexistent/sources.md")
+
+    def test_unreadable_path_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assert_unusable(d)
+
+    def test_non_utf8_file_is_exit_2(self):
+        with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as f:
+            f.write(b"\xff\xfe\x00bad")
+        try:
+            self.assert_unusable(f.name)
+        finally:
+            os.unlink(f.name)

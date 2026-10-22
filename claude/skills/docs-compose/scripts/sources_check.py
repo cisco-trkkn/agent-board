@@ -5,11 +5,11 @@ import json, re, sys
 TYPES = ("architecture", "runbook", "report", "explainer")
 KINDS = [r"file:[^:\s]+:\d+(-\d+)?", r"inventory:\S+", r"interview:\d+", r"cloud:\d+",
          r"mr:[\w./-]+!\d+", r"commit:[0-9a-f]{7,40}", r"artefact:[^:\s]+(:\d+)?", r"section:.+@rev\d+"]
-KIND = re.compile("^(" + "|".join(KINDS) + ")$")
+KIND = re.compile("|".join(KINDS))
 FENCE = re.compile(r"```json\s*\n(.*?)\n```", re.S)
 
 def source_ok(s):
-    return isinstance(s, str) and bool(KIND.match(s))
+    return isinstance(s, str) and bool(KIND.fullmatch(s))
 
 def problems(doc):
     if not isinstance(doc, dict):
@@ -49,4 +49,9 @@ def main(text):
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         sys.exit("usage: sources_check.py <file|->")
-    sys.exit(main(sys.stdin.read() if sys.argv[1] == "-" else open(sys.argv[1]).read()))
+    try:
+        text = sys.stdin.read() if sys.argv[1] == "-" else open(sys.argv[1], encoding="utf-8").read()
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"unreadable: {sys.argv[1]}: {e}")
+        sys.exit(2)
+    sys.exit(main(text))
