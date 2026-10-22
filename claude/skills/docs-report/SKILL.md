@@ -20,7 +20,7 @@ Layout follows `docs-architecture` (birth first, guest mode, hard rules, five st
 - **Traceability.** Every fact cites a source of a kind in `../docs-compose/references/sources.md` § Source kinds: `commit:`, `mr:`, `artefact:`, `interview:`, `cloud:`, `file:`. A claim with no source is cut or turned into a question.
 - **Read-only, everywhere.** Local git reads, `glab mr list` and `glab mr view`, file reads, and cloud reads only through `scripts/cloud_read.py` (step 2). Nothing here writes to a cloud resource, a repo or an MR.
 - **A refusal is a finding.** `cloud_read.py` exit 2 means the command was never run. Record the `refused: <reason>` line in *What was verified, and how* as a check not made; the next move is a different allowlisted read or the gap stated, and the refused command stays refused, in every form.
-- **One cloud question per session**, asked before the first cloud read (step 2). It is a permission question, outside the interview and its pool, so a guest asks it too.
+- **One cloud question per session**, asked before the first cloud read (step 2). It is a permission question, outside the interview and its pool, so a guest asks it too, unless the brief's `Cloud consent` names the project(s).
 - **Interview: at most 5 questions** standalone; none as a guest, whose only question is the cloud question.
 - **One section per call** (the docs skill's watch-it-fill rule).
 - **Fresh-eyes review before the stamp.** A subagent when one can be spawned; otherwise review it yourself as a demanding outsider, tell the user, and say so in your report.
