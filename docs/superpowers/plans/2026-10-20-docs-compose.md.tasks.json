@@ -93,12 +93,12 @@
   {
    "id": 11,
    "subject": "Task 11: Regression: refresh the existing Task 9 architecture Doc, then go live",
-   "status": "pending",
+   "status": "completed",
    "description": "**Goal:** The architecture Doc built before this plan (Id map tab, no Sources) still refreshes through the fallback; after merge, the four skills are linked live and listed, and the companion line is live.\n\n> **USER-ORDERED GATE \u2014 NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- None in the repo: reads (and only if the diff says so, edits) Doc `3ab3959b-abc5-4a8b-bf81-226e1c063fed`\n\n**Constraints:**\n- Aged real state: that Doc was built and refreshed on 2026-10-20 (stamp `7a42e580`, a dangling merge commit still in master-gcp-repo's object store). Refresh it with `--since 7a42e580` against a scratch detached worktree at current `origin/dev3`; never pushed; worktree removed.\n- The live link and `claude -p` listing happen only after the branch is merged to main (lead's finishing step); this task's last criterion is checked then.\n\n**Acceptance Criteria:**\n- [ ] the refresh reads the `Id map` tab (no `Sources` tab exists) and produces a section mapping from the `--since` diff (diff JSON and mapping in the report)\n- [ ] sections the diff does not touch keep their block revs (before/after reads of two of them)\n- [ ] after merge: `bin/claude-config-link` links `docs-compose`, `docs-runbook`, `docs-report`, `docs-explainer`, and `claude -p \"list your available skills by name only\" --max-turns 1` output contains all four names (grep count 4); `grep -c docs-compose ~/.claude/CLAUDE.md` \u2192 1\n\n**Verify:** report contains the diff JSON, the section mapping, the before/after rev reads, the worktree list; post-merge: the link output and `claude -p \u2026 | grep -c -E 'docs-(compose|runbook|report|explainer)'` \u2192 `4`\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"Id map fallback used, mapping from --since diff\", \"untouched sections keep revs\", \"post-merge: four skills linked and listed, companion line live\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"], \"subagentBrief\": \"Refresh Doc 3ab3959b via Id map fallback on a scratch worktree at origin/dev3; post-merge live link + listing.\"}\n```",
    "blockedBy": [
     4
    ]
   }
  ],
- "lastUpdated": "2026-10-22T15:00:34"
+ "lastUpdated": "2026-10-22T16:20:31"
 }
