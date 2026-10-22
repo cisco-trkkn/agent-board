@@ -23,7 +23,7 @@ The composer (`docs-compose`, step 5) fills this template, one per guest. Every 
 
 ## A guest
 
-- Writes only into its owned blocks, one section per call, replacing each pending block with its heading and body.
+- Writes only into its owned blocks, one section per call, replacing each pending block with its heading and body. It may split an owned pending block in place into several pending blocks; it then owns those too, and creates no block outside its owned range.
 - Leaves every other block as it found it: the title, the Doc-level line, other types' sections, and the `Sources` tab. It never births, renames or deletes the Doc, and never edits a block it does not own.
 - Asks the user no interview questions of its own: the brief's answers are the Doc's whole interview.
 - Runs its fresh-eyes review over its own sections before stamping them.
@@ -44,3 +44,4 @@ Every type, as guest or standalone:
 - **At most 5 interview questions per Doc**: pooled by the composer for a guest; the skill's own round when standalone.
 - **Fresh-eyes review before the stamp.** A subagent when one can be spawned; otherwise review as a demanding outsider, tell the user, and say so in the report.
 - **One section per call**, pending blocks first (the `anthropic-skills:docs` watch-it-fill rule).
+- **Refresh without a composer.** A type skill refreshing its sections rewrites only its own type's `Sources` entries, then runs `sources_check.py` on the tab until it exits 0.

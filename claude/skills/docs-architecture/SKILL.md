@@ -11,7 +11,7 @@ Load `anthropic-skills:docs` first and follow it for everything about the Doc it
 
 The first **Docs** call, before the inventory run or any repo read, births the Doc (title, byline, one `pending` "discovering the repo…" block); loading this skill and `anthropic-skills:docs` may precede it. Step 3 replaces that block with the frame. The Doc is never deleted: a halt replaces that pending block with what was found.
 
-**Guest mode.** Handed a guest brief by `docs-compose`, follow `../docs-compose/references/guest-contract.md` and change only this: skip the birth; step 1 reuses an `inventory.json` listed under the brief's discovery artefacts; step 2 takes the brief's interview answers; step 3 lays Layer 0–2 out in the owned blocks instead of building the page frame (an owned block may become several pending blocks of the frame, in place); step 5's stamp is the last block of the architecture group, and step 5.3 returns `Sources` entries instead of writing the tab. Without a brief, the skill runs standalone as written below.
+**Guest mode.** Handed a guest brief by `docs-compose`, follow `../docs-compose/references/guest-contract.md` and change only this: skip the birth; step 1 reuses an `inventory.json` listed under the brief's discovery artefacts; step 2 takes the brief's interview answers; step 3 lays Layer 0–2 out in the owned blocks instead of building the page frame; step 5's stamp is the last block of the architecture group, and step 5.3 returns `Sources` entries instead of writing the tab. Without a brief, the skill runs standalone as written below.
 
 ## Hard rules
 

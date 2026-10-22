@@ -40,5 +40,5 @@ Every rewrite of an existing block goes through the docs skill's guarded edit. A
 
 1. Under the stamp, a `Changed since <date>` table, one row per change: `date · change · section` (`2026-10-20 · added cloud_run_service worker · Orders`). Append to the existing table when the doc has one.
 2. Move the architecture stamp, and only it, to the new sha and today's date: `As built from <repo>@<head>, <date>`.
-3. Update the tab step 1 read: in `Sources`, the architecture entries only (add each new id as `inventory:<id>` to its section, remove the gone ones, keep interview entries, set `stamp` to the moved stamp; then `sources_check.py` exits 0, SKILL.md step 5.3); in an `Id map` tab, the same as before (new ids added, gone ones removed, interview entries kept).
+3. Update the tab step 1 read: in `Sources`, per the guest contract's refresh rule (`../../docs-compose/references/guest-contract.md`), add each new id as `inventory:<id>` to its section, remove the gone ones, keep interview entries, set `stamp` to the moved stamp; in an `Id map` tab, the same as before (new ids added, gone ones removed, interview entries kept).
 4. Reply with the Changed rows and any block left as edited.
