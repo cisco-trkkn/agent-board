@@ -90,6 +90,8 @@ REFUSED = [
     ["bq", "query", "SELECT * FROM EXTERNAL_QUERY('c', 'DELETE FROM x')"],
     ["bq", "query", "select * from external_query('c', 'x')"],
     ["bq", "show", "--flagfile=/tmp/x", "ds.t"],
+    ["bq", "--bigqueryrc=/tmp/rc", "query", "SELECT 1"],
+    ["bq", "--bigqueryrc=/tmp/rc", "ls"],
     ["bq", "--flagfile", "ds.t", "ls"],
     ["gcloud", "projects", "list", "--flags-file=/tmp/x.yaml"],
     ["terraform", "plan"], ["sh", "-c", "gcloud projects list"],

@@ -31,7 +31,7 @@ The subcommand is the first non-flag token after `bq`. Global flags before it mu
 - `show` and `ls`: allowed.
 - `query <sql>`: allowed when the SQL is one statement starting with `SELECT` or `WITH`, with none of these whole words, case-insensitive: `INSERT UPDATE DELETE MERGE CREATE DROP ALTER TRUNCATE GRANT REVOKE EXPORT CALL DECLARE SET BEGIN EXECUTE LOAD`. `--dry_run`, `--dry_run=…` and `--nodry_run` relax nothing: the SQL is checked the same with or without them, so `bq query --dry_run "DROP TABLE t"` is refused.
 - `EXTERNAL_QUERY` anywhere in the SQL (checked on the raw text, case-insensitive) is refused: it sends a string to another database.
-- Any flag whose name contains `flagfile` is refused.
+- Any flag whose name contains `flagfile`, `flags-file` or `bigqueryrc` is refused: a flag file or `.bigqueryrc` can set default flags such as `--destination_table`.
 - `query` is refused with `--destination_table` (or any `--destination_*`, `--replace`, `--append_table`, `--schedule`), even with `--dry_run`, and when it has other than exactly one positional (the SQL).
 - Any other subcommand (`rm`, `mk`, `load`, `cp`, `update`…): refused.
 

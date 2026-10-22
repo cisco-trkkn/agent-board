@@ -28,7 +28,7 @@ def _flag(t):
     return t.startswith("-")
 
 def _flagfile(args):
-    return any(_flag(t) and ("flagfile" in t.lower() or "flags-file" in t.lower()) for t in args)
+    return any(_flag(t) and any(w in t.lower() for w in ("flagfile", "flags-file", "bigqueryrc")) for t in args)
 
 def _gcloud(args):
     if args == ["--version"]:
