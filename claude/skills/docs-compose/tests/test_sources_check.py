@@ -1,0 +1,52 @@
+import io, json, os, sys, contextlib, unittest
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+import sources_check  # noqa: E402
+
+GOOD = {"System map": {"type": "architecture", "stamp": "As built from mgr@" + "a" * 40 + ", 2026-10-20",
+                       "sources": ["inventory:infra/ledger/google_sql_database_instance.ledger", "interview:1",
+                                   "file:ci/x.yml:35-37"], "diagram": "091b3624-40b0"}}
+
+def check(text):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = sources_check.main(text)
+    return code, out.getvalue()
+
+class SourcesCheck(unittest.TestCase):
+    def test_valid_object(self):
+        self.assertEqual(check(json.dumps(GOOD)), (0, "ok 1 sections\n"))
+
+    def test_valid_fenced_block_in_tab_text(self):
+        code, _ = check("Sources\n\n```json\n" + json.dumps(GOOD) + "\n```\n")
+        self.assertEqual(code, 0)
+
+    def test_each_problem_is_one_line(self):
+        bad = {"A": {"type": "howto", "stamp": "", "sources": []},
+               "B": {"type": "report", "stamp": "Report as of 2026-10-20, range a..b", "sources": ["jira:12"]}}
+        code, out = check(json.dumps(bad))
+        self.assertEqual(code, 1)
+        self.assertEqual(sorted(out.splitlines()), sorted([
+            "A: unknown type 'howto'", "A: empty stamp", "A: no sources",
+            "B: source 'jira:12' matches no kind"]))
+
+    def test_unparseable_is_exit_2(self):
+        self.assertEqual(check("not json")[0], 2)
+
+    def test_top_level_must_be_object(self):
+        self.assertEqual(check("[1]")[0], 1)
+
+    def test_kinds_accept_and_reject(self):
+        cases = {
+            "file:a/b.tf:12": True, "file:a/b.tf:12-14": True, "file:a/b.tf": False,
+            "inventory:env:prod": True, "inventory:": False,
+            "interview:3": True, "interview:x": False,
+            "cloud:4": True, "cloud:": False,
+            "mr:group/proj!123": True, "mr:proj123": False,
+            "commit:df19131a": True, "commit:xyz1234": False, "commit:abc": False,
+            "artefact:docs/superpowers/plans/p.md": True, "artefact:p.md:40": True, "artefact:": False,
+            "section:System map@rev12": True, "section:System map": False,
+        }
+        for src, ok in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(sources_check.source_ok(src), ok)
