@@ -39,10 +39,10 @@ The first Docs call births the Doc (title, byline, one `pending` "reading the so
 
 ### 2. Read the sources
 
-**Revisions.** Read the main tab with the docs skill's `read` outline: its `<doc rev='N'>` is the revision you derive from, and each source section is cited `section:<heading>@rev<N>` with that N. Read each source section's body in full (`view` with its heading's `parentId`, or the blocks under it) before you use it.
+**Revisions.** Read the **source Doc**'s main tab (this Doc as a guest; the linked source Doc when standalone from one) with the docs skill's `read` outline: its `<doc rev='N'>` is the revision you derive from, and each source section is cited `section:<heading>@rev<N>` with that N. Read each source section's body in full (`view` with its heading's `parentId`, or the blocks under it) before you use it.
 
 - **Guest:** every section of the Doc that is not yours is a candidate source; read them all, cite only those you use.
-- **Standalone:** ask for a source Doc or a repo (this is the first interview question). A source Doc: read it as above and link it in the explainer's lead. A repo: run `python3 <docs-architecture root>/scripts/inventory.py <repo> -o <scratch>/inventory.json` for counts only (services, environments, projects), cited `artefact:<path of that inventory.json>`; everything else comes from the interview.
+- **Standalone:** ask for a source Doc or a repo (this is the first interview question). A source Doc: read it as above and link it in the explainer's lead. A repo: under the precondition of `docs-architecture` SKILL.md step 1 (the paragraph starting "Before running it"), run `python3 <docs-architecture root>/scripts/inventory.py <repo> -o <scratch>/inventory.json` for counts only (services, environments, projects), cited `artefact:<path of that inventory.json>`; everything else comes from the interview.
 
 Done when every source section you will cite has been read whole at revision N.
 
@@ -66,15 +66,16 @@ Dispatch a fresh-eyes subagent with the Doc link; no subagent available: the gue
 
 ### 7. Stamp and Sources
 
-1. Stamp the last block you own: `Derived from §<heading> rev <N>[, §… rev <M>], <date>`, one `§<heading> rev <N>` per source section cited.
-2. One `Sources` entry per explainer section: `type: explainer`, the stamp, its `section:<heading>@rev<N>`, `interview:<n>` and `artefact:` sources, and `diagram` when it has one.
+1. Stamp the last block you own: `Derived from §<heading> rev <N>[, §… rev <M>], <date>`, one `§<heading> rev <N>` per source section cited. Standalone from a repo (no source section): `Derived from <repo>@<sha>, <date>`, `<repo>` a name never a path, `<sha>` the inventory's `meta.sha`.
+2. One `Sources` entry per explainer section: `type: explainer`, the stamp, its `section:<heading>@rev<N>`, `interview:<n>` and `artefact:` sources, `diagram` when it has one, and, standalone from a source Doc, `"sourceDoc": "<that Doc's link>"`.
 3. **Guest:** return the entries and the unfilled blocks to the composer. **Standalone:** write the `Sources` tab and run `python3 <docs-compose root>/scripts/sources_check.py <file|->` on it until it exits 0.
 
 ## Refresh
 
-An explainer moves only when a source section moves; nothing else triggers a rewrite.
+An explainer moves only when its sources move; nothing else triggers a rewrite.
 
-1. Read the `Sources` entries of type `explainer` and, for each cited `section:<heading>@rev<N>`, read the main tab with `{"kind":"view","sinceRev":N}`. The section has **moved** when any of its blocks appears changed or gone, or its heading is gone.
-2. No moved section: say "no source section changed since <date>" and stop; the explainer and its stamp stay as they are.
+1. Read the `Sources` entries of type `explainer`. Read the source sections where they live: the entries' `sourceDoc` when set, otherwise this Doc's main tab. For each cited `section:<heading>@rev<N>`, read that tab with `{"kind":"view","sinceRev":N}`. The section has **moved** when any of its blocks appears changed or gone, or its heading is gone. A `sourceDoc` you cannot read: stop and ask for access; never report "no change" from a Doc you did not read.
+   Standalone from a repo (stamp `Derived from <repo>@<sha>, …`): re-run the inventory at HEAD (step 2's command and precondition) and compare its counts with the ones the explainer states; a count that differs has moved, and only the sentences carrying it are re-derived (step 3).
+2. Nothing moved: say "no source changed since <date>" and stop; the explainer and its stamp stay as they are.
 3. Each moved section: say so in the reply ("§System map moved from rev 12 to rev 31"). Re-read it whole at the current rev, re-check every sentence of the explainer sections that cite it, and rewrite only the paragraphs it no longer carries, one call each, through the docs skill's guarded edit. On a guard refusal, follow `docs-architecture/references/refresh.md` § 4: their edit wins. Paragraphs drawn only from unmoved sections are never written.
-4. Re-run step 6 over the rewritten paragraphs. Add a `Changed since <date>` row per change under the stamp (`refresh.md` § 5 item 1), move the stamp's revs for the re-derived sections to the current rev with today's date, and update the entries as the guest contract's refresh rule says.
+4. Re-run step 6 over the rewritten paragraphs. Add a `Changed since <date>` row per change under the stamp (`refresh.md` § 5 item 1), and move the stamp: the re-derived sections' revs to the current rev (from a repo: HEAD's sha), today's date. **Every** explainer entry gets the moved stamp as its `stamp`; only the re-derived sections' entries get new sources; then run `sources_check.py` as the guest contract's refresh rule says.
