@@ -14,6 +14,10 @@ Real transcript format, observed 2026-10-25 over ~/.claude/projects (agent-board
     skill_mention, nested_memory.
   Hook attachments carry `hookEvent` (e.g. SessionStart); stop_hook_summary carries `hookInfos`
     (list of {command, durationMs}) and `hookAdditionalContext` (list).
+  FIXTURES (tests/fixtures) ARE REDACTED: free text is "x"*min(len,50) with the true length in `_len`,
+    which the parser ignores, so tool_result `size` and injection sizes in fixtures are capped/invented.
+    cwd is rewritten to /home/u/..., so fixtures only parse with repos=None. They hold few system lines.
+    Downstream tasks must never assert fixture sizes or counts; assert sizes on synthetic input instead.
   Subagents: <session>/subagents/agent-<id>.jsonl plus agent-<id>.meta.json.
 """
 import json, os, subprocess, sys, tempfile, unittest
@@ -76,6 +80,50 @@ class Synthetic(unittest.TestCase):
         tu = self.events("tool_use")[0]; tr = self.events("tool_result")[0]
         self.assertEqual((tu["tool"], tu["target"], len(tu["args_key"])), ("Read", "/r/repo/x.py", 12))
         self.assertEqual((tr["tool_use_id"], tr["size"], tr["is_error"]), ("t1", 4, False))
+
+    def _line(self, **kw):
+        d = {"cwd": self.repo, "sessionId": "s1", "timestamp": "2026-10-20T10:00:00Z"}
+        d.update(kw); return d
+
+    def test_attachment_injection_source_and_size(self):
+        a = {"type": "environment", "x": "y"}
+        write(self.proj, "s1.jsonl", [self._line(type="attachment", attachment=a)])
+        e = self.events("injection")
+        self.assertEqual(len(e), 1)
+        self.assertEqual((e[0]["source"], e[0]["size"]), ("attachment:environment", len(json.dumps(a))))
+        self.assertNotIn("hook_event", e[0])
+
+    def test_hook_additional_context_attachment_carries_hook_event(self):
+        a = {"type": "hook_additional_context", "content": ["abc"], "hookEvent": "SessionStart"}
+        b = {"type": "hook_additional_context", "content": ["abc"]}
+        write(self.proj, "s1.jsonl", [self._line(type="attachment", attachment=a), self._line(type="attachment", attachment=b)])
+        e = self.events("injection")
+        self.assertEqual([x["source"] for x in e], ["attachment:hook_additional_context"] * 2)
+        self.assertEqual([x["hook_event"] for x in e], ["SessionStart", None])
+
+    def test_system_hook_additional_context_event_name(self):
+        l1 = self._line(type="system", subtype="stop_hook_summary", hookAdditionalContext=["ctx"], hookInfos=[{"command": "c"}])
+        l2 = self._line(type="system", subtype="stop_hook_summary", hookAdditionalContext=["ctx"], hookInfos=[{"command": "c", "event": "Stop"}])
+        write(self.proj, "s1.jsonl", [l1, l2])
+        self.assertEqual([x["source"] for x in self.events("injection")], ["hook:unknown", "hook:Stop"])
+        sy = self.events("system")
+        self.assertEqual(sy[0]["subtype"], "stop_hook_summary")
+        self.assertIn("hookAdditionalContext", sy[0]["raw_keys"])
+        self.assertEqual(sy[0]["raw_keys"], sorted(sy[0]["raw_keys"]))
+
+    def test_system_reminder_span_is_injection_and_removed_from_prompt(self):
+        span = "<system-reminder>be nice</system-reminder>"
+        u = self._line(type="user", message={"content": "hello " + span + " world"})
+        write(self.proj, "s1.jsonl", [u])
+        inj = self.events("injection"); pr = self.events("prompt")
+        self.assertEqual([(x["source"], x["size"]) for x in inj], [("system-reminder", len(span))])
+        self.assertEqual(len(pr), 1)
+        self.assertEqual(pr[0]["text_head"], "hello  world")
+        self.assertEqual(pr[0]["size"], len("hello  world"))
+
+    def test_meta_user_line_is_not_a_prompt(self):
+        write(self.proj, "s1.jsonl", [self._line(type="user", isMeta=True, message={"content": "caveat text"})])
+        self.assertEqual(self.events("prompt"), [])
 
 class Fixtures(unittest.TestCase):
     def test_fixtures_parse_and_have_usage(self):

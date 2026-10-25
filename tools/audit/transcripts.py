@@ -122,7 +122,10 @@ def _line_events(d, path, ts, agent, session):
             yield dict(base, kind="prompt", size=len(human), text_head=human[:200])
     elif t == "attachment":
         a = d.get("attachment") if isinstance(d.get("attachment"), dict) else {}
-        yield dict(base, kind="injection", source="attachment:%s" % a.get("type"), size=len(json.dumps(a)))
+        ev = dict(base, kind="injection", source="attachment:%s" % a.get("type"), size=len(json.dumps(a)))
+        if a.get("type") == "hook_additional_context":
+            ev["hook_event"] = a.get("hookEvent")   # None when the attachment has no hookEvent
+        yield ev
     elif t == "system":
         yield dict(base, kind="system", subtype=d.get("subtype"), raw_keys=sorted(d.keys()))
         if d.get("hookAdditionalContext"):
