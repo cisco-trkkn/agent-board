@@ -2,10 +2,12 @@
 
 Window 2026-09-26..2026-10-25, toolkit a58d81b. Read-only audit. Sources: `~/.claude/settings.json`, enabled plugins, `agent-board/claude/plugin/hooks/hooks.json`, `audit-out/2026-10-25/injection_costs.json` (cited as `IC`), `~/.task-observer` (frontmatter and review files only).
 
+Scope rule for every transcript-derived count below (Stop events, Skill calls, tool calls): the toolkit's rule in `tools/audit/transcripts.py` (`in_repo`, `window_start`): a line counts when its `cwd` (last seen `cwd` in the file if the line has none) is `master-gcp-repo`, `agent-board`, or a worktree under their `.claude/worktrees/`, and its timestamp is within 2026-09-26..2026-10-25. Command: `python3 -I scope.py` (scratchpad script reusing `transcripts.candidate_files`, `in_repo`, `window_start`; it reads every line of the files with `tools/audit/transcripts.py`'s per-line filter and counts `tool_use` name `Skill` by `input.skill` and `subtype == stop_hook_summary` by `hookInfos[].command`). An earlier draft of this report read whole files with no per-line filter and gave 54/52 skill calls and 2,601 Stop events; those figures are withdrawn. Counts from `/tmp/claude-hooks/*.log` are not scoped by repo or window: the logs start 2026-10-15 and are labelled "trace" where used.
+
 Method notes:
 - Token figures marked "est." are chars/4 (derived), never measured.
 - Runtime probes use `/usr/bin/time -p`, 3 runs, dummy stdin, scratch dir. The harness floor for `bash -c true` is 0.15 s, so subtract it: raw seconds are shown with the floor-adjusted figure in brackets.
-- Stop-hook runtimes are not probes: they are `durationMs` from `stop_hook_summary` events in the transcripts (2,601 events).
+- Stop-hook runtimes are not probes: they are `durationMs` from `stop_hook_summary` events in the transcripts (2,378 `stop_hook_summary` events).
 - Per-hook PreToolUse/PostToolUse durations and counts are not recorded in `IC`; those cells say `unmeasured`.
 
 ## Mechanisms
@@ -13,10 +15,22 @@ Method notes:
 ### Hook count (recorded command)
 
 ```
-python3 count.py   # scratchpad script: loads settings.json, settings.local.json (absent),
-                   # hooks/hooks.json of each plugin in enabledPlugins:true that has an installPath
-                   # in ~/.claude/plugins/installed_plugins.json, and agent-board/claude/plugin/hooks/hooks.json;
-                   # counts every {type: command} entry
+python3 - <<'PY'
+import json,os
+H=os.path.expanduser
+ip=json.load(open(H('~/.claude/plugins/installed_plugins.json')))
+en=json.load(open(H('~/.claude/settings.json')))['enabledPlugins']
+files=[H('~/.claude/settings.json'),H('~/.claude/settings.local.json')]
+for k,v in ip.get('plugins',ip).items():
+    if en.get(k): files.append(v[0]['installPath']+'/hooks/hooks.json')
+files.append('/Users/francisco.ruiz/agent-board/claude/plugin/hooks/hooks.json')
+tot=0
+for f in files:
+    if not os.path.exists(f): print(f,'absent'); continue
+    n=sum(len(g.get('hooks',[])) for gs in json.load(open(f)).get('hooks',{}).values() for g in gs)
+    print(f,n); tot+=n
+print('TOTAL',tot)
+PY
 ```
 
 Output:
@@ -35,9 +49,9 @@ Table: 22 hook rows (H1-H22) plus 2 observer rows (O1-O2) = 24 rows. Columns: tr
 | ID | Hook (source line) | Trigger | Frequency | Impl. | Context cost | Runtime | Purpose | Outcome | Failure behaviour | Overlap |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | H1 | task-observer-session-start.sh (settings.json:68) | SessionStart | `IC hook:SessionStart` 340 sessions, count median 1, max 2 (key is shared with H11) | script | probe output 1,378 chars (est. 345 tokens); shared key median 8,393 chars | probe 0.26 s [0.11 s] | Inject the observer mandate, workspace path, open count | Makes every lead invoke the skill (see O1) | none: always prints JSON; `find` errors hidden (`task-observer-session-start.sh:8`) | orchestrator.md:64, :139; worker.md:15; skill description |
-| H2 | revise-claude-md-nudge.py (settings.json:79) | Stop | 2,184 runs in transcripts; blocks once per session at 40+ tool calls: 3 "Long session" blocks recorded in `hookErrors` | script | block reason is 3 events; no `IC` key (`attachment:hook_blocking_error` 2 sessions, 1,008 chars, not attributable). unmeasured, needs per-hook output size | measured from transcripts: median 114 ms, max 2,200 ms. Probe not run: writes a marker (`revise-claude-md-nudge.py:45`) | Prompt a CLAUDE.md revision after long sessions | 3 blocks in 2,184 runs | fail-open: bad JSON, no transcript return 0 (`:23-:40`) | none found |
-| H3 | superpowers-hook.sh stop-revalidate-user-gates.sh (settings.json:84) | Stop | 2,369 runs in transcripts; trace log: 3,003 enter, 3,002 pass, 0 block | script (dispatcher then bash) | no block output seen: 0 chars; blocks 0 | measured: median 1,072 ms, max 14,236 ms. Probe not run: writes `/tmp/claude-hooks/user-gate-trace.log` | Block "plan complete" claims when a user-gate task has no evidence | never fired | exit 0 when plugin not found (`superpowers-hook.sh:57`) | post-task-complete-revalidate (H8) covers the same gates at close time |
-| H4 | superpowers-hook.sh stop-wait-guard.sh (settings.json:88) | Stop | 2,369 runs; `wait-guard-trace.log` 0 block lines | script | 0 observed | measured: median 1,045 ms, max 11,934 ms. Probe not run: trace writes | Stop a turn that ends on a wait during plan execution | never fired | fail-open on read errors (script header) | none live (an orchestrator.md rule 3 on waiting is staged in the 10-21 round, not installed) |
+| H2 | revise-claude-md-nudge.py (settings.json:79) | Stop | 1,991 runs in scope (`scope.py`); blocks once per session at 40+ tool calls: 3 "Long session" blocks recorded in `hookErrors` | script | block reason is 3 events; no `IC` key (`attachment:hook_blocking_error` 2 sessions, 1,008 chars, not attributable). unmeasured, needs per-hook output size | measured from transcripts: median 115 ms, max 2,200 ms (in scope). Probe not run: writes a marker (`revise-claude-md-nudge.py:45`) | Prompt a CLAUDE.md revision after long sessions | 3 blocks in 2,184 runs | fail-open: bad JSON, no transcript return 0 (`:23-:40`) | none found |
+| H3 | superpowers-hook.sh stop-revalidate-user-gates.sh (settings.json:84) | Stop | 2,207 runs in scope (`scope.py`); trace log (unscoped, since 10-15): 3,003 enter, 3,002 pass, 0 block | script (dispatcher then bash) | no block output seen: 0 chars; blocks 0 | measured: median 1,064 ms, max 14,236 ms (in scope). Probe not run: writes `/tmp/claude-hooks/user-gate-trace.log` | Block "plan complete" claims when a user-gate task has no evidence | never fired | exit 0 when plugin not found (`superpowers-hook.sh:57`) | post-task-complete-revalidate (H8) covers the same gates at close time |
+| H4 | superpowers-hook.sh stop-wait-guard.sh (settings.json:88) | Stop | 2,207 runs in scope; `wait-guard-trace.log` (unscoped) 0 block lines | script | 0 observed | measured: median 1,038 ms, max 11,934 ms (in scope). Probe not run: trace writes | Stop a turn that ends on a wait during plan execution | never fired | fail-open on read errors (script header) | none live (an orchestrator.md rule 3 on waiting is staged in the 10-21 round, not installed) |
 | H5 | context-size-guard.sh (settings.json:98) | UserPromptSubmit | `IC hook:UserPromptSubmit` 34 sessions, median 3 per session, max 7 | script (jq) | 63,395 chars total, median 1,752 chars per session | probe against the largest main transcript (13.5 MB): 0.11-0.25 s [about 0.1 s] | Warn at 300K context, point at /handoff | 34 of 357 sessions warned | exits 0 when no transcript (`context-size-guard.sh:7`) | handoff skill + orchestrator.md:31 describe the restart |
 | H6 | bash-mirror.sh (settings.json:110) | PostToolUse Bash, async | one per Bash call: 11,193 Bash tool_use events (parser count) | script (zsh + python) | none (silent) | unmeasured, writes feed logs | Mirror Bash calls into the tests/shell window feeds | n/a | always exit 0 (`bash-mirror.sh:87`) | duplicate of H20 in agent-board sessions |
 | H7 | artifact-register.sh (settings.json:121) | PostToolUse Write/Edit/MultiEdit/Artifact, async | one per matching call: Write 419, Edit 505, Artifact 12 | script | none | unmeasured, appends jsonl | Register plans, specs, handoffs for the board | n/a | always exit 0 (`artifact-register.sh:99`) | duplicate of H21 |
@@ -56,7 +70,7 @@ Table: 22 hook rows (H1-H22) plus 2 observer rows (O1-O2) = 24 rows. Columns: tr
 | H20 | agent-board plugin bash-mirror.sh --scoped (PostToolUse Bash, async) | PostToolUse Bash | as H6 | script | none | unmeasured, writes feed logs | as H6 | as H6 | as H6 | duplicate of H6 |
 | H21 | agent-board plugin artifact-register.sh --scoped (PostToolUse Write/Edit/MultiEdit/Artifact, async) | PostToolUse | as H7 | script | none | unmeasured, appends jsonl | as H7 | as H7 | as H7 | duplicate of H7 |
 | H22 | agent-board plugin bash-mirror.sh --scoped (PostToolUseFailure Bash, async) | PostToolUseFailure Bash | as H9 | script | none | unmeasured | as H9 | as H9 | as H9 | duplicate of H9 |
-| O1 | task-observer skill, protocol run at session start | invoked by the model after H1 | 54 Skill calls in 52 sessions (`task-observer:task-observer` 38, `task-observer` 16); 36 lead sessions of 65 | model plus inline shell | SKILL.md 44,715 chars (est. 11,179 tokens) per call; its references (500,758 chars total) unmeasured, needs per-call tool_result sizes | unmeasured | Scan the log, offer review, write observations | 85 observations (see Observer value) | skipped silently if the model ignores H1 | H1, orchestrator.md:64, worker.md:15 |
+| O1 | task-observer skill, protocol run at session start | invoked by the model after H1 | 45 Skill calls in 44 sessions, in scope (`task-observer:task-observer` 29, `task-observer` 16); 29 calls in 28 lead sessions (of 65 lead sessions with a main request; 67 if sessions with a main prompt but no main request are counted), 16 calls in 16 teammate sessions | model plus inline shell | SKILL.md 44,715 chars (est. 11,179 tokens) per call; its references (500,758 chars total) unmeasured, needs per-call tool_result sizes | unmeasured | Scan the log, offer review, write observations | 85 observations (see Observer value) | skipped silently if the model ignores H1 | H1, orchestrator.md:64, worker.md:15 |
 | O2 | scheduled weekly review (launchd `com.user.task-observer-review`) | cron | runs 2026-10-16 (3), 10-19, 10-21, 10-23 | model (headless Claude) | not in transcripts scope; unmeasured, needs usage of the headless run | unmeasured (`scheduled-review.log` records only the 10-21 end time, 11:55) | Triage observations, stage skill patches | see Observer value | 10-23 run died on the weekly usage limit, exit 1 (`scheduled-review.log`) | none |
 
 The 4 entries of `claude/plugin/hooks/hooks.json` are H19-H22.
@@ -93,9 +107,9 @@ Largest injected sources per session (`IC sources`, median chars per session, al
 | `attachment:hook_success` | 349 | 9,481 | 3,660,729 |
 | `attachment:prompt_snapshot` | 348 | 126,633 | 50,236,444 |
 
-The skill listing alone (31,218 chars median) is larger than all five static files together (26,065 chars), and about 31 times the two CLAUDE.md files a lead reads in agent-board (4,019 chars). `skillOverrides` in `settings.json:43` already turns off 16 skills and sets one to name-only, so a trimming mechanism exists and is in use.
+The skill listing alone (31,218 chars median) is larger than all five static files together (26,065 chars), and 7.8 times the two CLAUDE.md files a lead reads in agent-board (31,218 / 4,019 chars; `~/.claude/CLAUDE.md` 2,672 + `agent-board/CLAUDE.md` 1,347). `skillOverrides` in `settings.json:43` already turns off 16 skills and sets one to name-only, so a trimming mechanism exists and is in use.
 
-Superpowers loading, read from `hooks/session-start` and `hooks.json`: Superpowers injects the full `using-superpowers` skill text via the SessionStart hook (matcher `startup|clear|compact`), not via a file the model reads. The probe of that hook printed 7,973 chars. Other skills load on demand through the Skill tool; the companion skills load as separate Skill calls (counts: test-driven-development 86, its extras 68; requesting-code-review 27, extras 23; writing-plans 26, extras 18, from tool_use `Skill` inputs).
+Superpowers loading, read from `hooks/session-start` and `hooks.json`: Superpowers injects the full `using-superpowers` skill text via the SessionStart hook (matcher `startup|clear|compact`), not via a file the model reads. The probe of that hook printed 7,973 chars. Other skills load on demand through the Skill tool; the companion skills load as separate Skill calls (counts in scope, `scope.py`: test-driven-development 83, its extras 65; requesting-code-review 26, extras 22; writing-plans 23, extras 16, from tool_use `Skill` inputs).
 
 ## Overlap matrix
 
@@ -125,8 +139,8 @@ Counts come from the YAML frontmatter only (`status`, `date`, `type`) of `observ
 
 Cost side (all from this report's measurements):
 - Every session pays H1's text: 1,378 chars (est. 345 tokens).
-- Each invocation loads SKILL.md: 44,715 chars (est. 11,179 tokens). 54 invocations is about 2.4 M chars (est. 603K tokens) over the window; this is derived from file size, not from measured tool_result sizes.
-- 16 of the 54 invocations are in teammate sessions that the hook text says should skip it.
+- Each invocation loads SKILL.md: 44,715 chars (est. 11,179 tokens). 45 invocations is about 2.0 M chars (est. 503K tokens) over the window; this is derived from file size, not from measured tool_result sizes.
+- 16 of the 45 invocations are in teammate sessions (all on 2026-10-16, 01:20-11:40, all under the bare skill name `task-observer`). They predate the exemption text in the hook (commit d73eca2, 2026-10-20 11:28) and the worker.md rule (commit 841282c, 2026-10-16 11:44); see F-sieve-3. No teammate session in scope calls it after 10-16 11:40.
 - Reference files (500,758 chars) load only if the protocol opens them: unmeasured.
 - The weekly review runs a headless model; its usage is not in the transcript scope: unmeasured.
 
@@ -140,17 +154,17 @@ Evidence: IC `attachment:skill_listing` 332 sessions, median 31,218 chars, total
 Component: skill_listing injection · Root cause: every installed skill's name and description is listed in each session, and descriptions are long (the observer and extras descriptions run to several lines) · Impact: about 7,800 tokens (est., chars/4) of a 34K first request; the CLAUDE.md files are 668+337 tokens (est.)
 Confidence: med (token share is an estimate) · Candidate change: set more `skillOverrides` entries to `name-only` or `off`, and shorten the longest descriptions · How to validate: re-run `injection_costs.py` and compare `skill_listing` median chars and first-request median
 
-### F-sieve-2: Two Stop hooks add about 2.1 s per Stop and have never blocked
+### F-sieve-2: Two Stop hooks add about 2.1 s per Stop (1,064 + 1,038 ms) and have never blocked
 Label: Measured
-Evidence: `stop_hook_summary` durationMs: stop-revalidate median 1,072 ms (max 14,236, 2,369 runs); stop-wait-guard median 1,045 ms (max 11,934, 2,369 runs); `/tmp/claude-hooks/user-gate-trace.log` 3,002 pass, 0 block; `wait-guard-trace.log` 0 block lines
+Evidence: `stop_hook_summary` durationMs: in scope (`scope.py`, 2,378 Stop events): stop-revalidate median 1,064 ms (max 14,236, 2,207 runs); stop-wait-guard median 1,038 ms (max 11,934, 2,207 runs); `/tmp/claude-hooks/user-gate-trace.log` (unscoped, since 10-15) 3,002 pass, 0 block; `wait-guard-trace.log` 0 block lines
 Component: H3, H4 (settings.json:84-88 via superpowers-hook.sh) · Root cause: both are registered globally and scan the transcript on every Stop, but only act when a plan or user-gate is in play (`stop-wait-guard.sh` is armed only after executing-plans) · Impact: up to 2.1 s per Stop if the two run one after the other; whether they run in parallel is unmeasured, needs a wall-clock Stop timer. No blocking benefit seen in the window logs, which start 2026-10-15
 Confidence: med · Candidate change: register them only in sessions that run executing-plans, or short-circuit on a cheap marker before scanning the transcript · How to validate: compare Stop `durationMs` before and after, and keep the trace block counts
 
-### F-sieve-3: The observer costs every session a little and each lead session a lot, and teammates ignore the exemption
+### F-sieve-3: The observer costs every session a little and each lead session a lot; the teammate calls pre-date the exemption
 Label: Measured
-Evidence: probe of `task-observer-session-start.sh` output 1,378 chars; `~/.claude/plugins/synced/.../task-observer/SKILL.md` 44,715 chars; Skill tool_use inputs: `task-observer:task-observer` 38 + `task-observer` 16 = 54 calls in 52 sessions, 36 in lead sessions (65 lead sessions), 16 in teammate sessions; IC `hook:SessionStart` 340 sessions
-Component: H1, O1 · Root cause: the hook asks for a full skill load plus a protocol run before the first tool call, and the skill body is 44.7K chars; the teammate exemption lives in prose that the model does not always follow, and the hook text only gained the worker rule through observation #41 (staged 10-21, not installed) · Impact: est. 11,179 tokens per invocation, 54 invocations, est. 603K tokens over the window (derived from file size); reference-file loads and the headless review job are unmeasured, needs per-call tool_result sizes and headless usage
-Confidence: med · Candidate change: make the hook output a short protocol stub and load the full SKILL.md only when a review or write is due; install the staged worker exemption · How to validate: count task-observer Skill calls in teammate sessions after the exemption is installed; compare `hook:SessionStart` median
+Evidence: probe of `task-observer-session-start.sh` output 1,378 chars; `~/.claude/plugins/synced/.../task-observer/SKILL.md` 44,715 chars; in scope (`scope.py`): Skill `task-observer:task-observer` 29 + `task-observer` 16 = 45 calls in 44 sessions, 29 calls in 28 lead sessions (65 lead sessions with a main request), 16 calls in 16 teammate sessions, all 16 dated 2026-10-16 01:20-11:40; IC `hook:SessionStart` 340 sessions
+Component: H1, O1 · Root cause: (a) Verified: the hook asks for a full skill load plus a protocol run before the first tool call, and the skill body is 44.7K chars. (b) Verified: the live hook already carries the teammate exemption (`claude/hooks/task-observer-session-start.sh:10`, "a teammate or subagent dispatched by a lead session ... does not run the protocol"; added in commit d73eca2, 2026-10-20 11:28; working tree clean). The earlier hook (`~/.claude/hooks/task-observer-session-start.sh.bak-20261019`) has no such text, and `worker.md` gained its "don't invoke task-observer" rule in commit 841282c (2026-10-16 11:44). (c) Verified: all 16 teammate calls fall on 2026-10-16 between 01:20 and 11:40, before both of those commits, and none occurs afterwards in scope; so the 16 calls are not evidence that the exemption is ignored today. (d) Hypothesis: before 10-20 the mandate was the "Task observer" block in `~/.claude/CLAUDE.md` (backup `CLAUDE.md.bak-20261019:1-16`), which every teammate also reads; the same backup's line 10 carries the teammate exception, but the backup's mtime is 10-16 13:31, after the calls, so whether that exception existed at 01:20-11:40 is unknown. (e) Hypothesis: the 12 teammate sessions from 09:52 on (and the 4 earlier ones) read the global block without the exception; a trigger path through the skill description ("invoke before the FIRST tool call of any session") is a second candidate, since 10-16 teammates called the bare name `task-observer`, not the plugin name · Impact: est. 11,179 tokens per invocation, 45 invocations, est. 503K tokens over the window (derived from file size); reference-file loads and the headless review job are unmeasured, needs per-call tool_result sizes and headless usage
+Confidence: med · Candidate change: make the hook output a short protocol stub and load the full SKILL.md only when a review or write is due. The staged observation #41 change (worker condition on `TC_ROLE=worker`, `grep -c TC_ROLE` on the live hook = 0) would add a second exemption path; it is not needed to explain the 16 calls · How to validate: count task-observer Skill calls in teammate sessions in the next window (expected 0 after 10-16 11:40; the current scope shows 0); compare `hook:SessionStart` median
 
 ### F-sieve-4: Observer output is real but mostly staged, not live
 Label: Verified
