@@ -57,11 +57,53 @@ class Compaction(unittest.TestCase):
         self.assertIsNone(d["min"]); self.assertIn("min_reason", d)
 
 
+DOC = "/Users/u/.local/state/agent-board/handoffs/2026-10-25-x.md"
+RELAY = "Read %s and continue from where the previous session left off." % DOC
+
+
+class Linking(unittest.TestCase):
+    def test_relay_trigger_and_doc_link_beats_time(self):
+        e = [use("W", 10, "Write", DOC), usage("W", 11, 250000),
+             usage("Z", 50, 99999), use("Z", 51, "Read", "/zz"),          # unrelated, later-ending, same project
+             prompt("B", 1000, RELAY), use("B", 1001, "Edit", "/f")]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"], h["trigger"]), ("W", "doc", "relay"))
+        self.assertEqual(h["previous_context"], 250000)
+
+    def test_doc_writer_in_worktree_project_dir(self):
+        wt = "/p/-Users-u-repo--claude-worktrees-w1"
+        e = [use("W", 10, "Write", DOC, proj=wt), usage("W", 11, 120000, proj=wt),
+             prompt("B", 1000, RELAY, proj="/p/-Users-u-repo"), use("B", 1001, "Edit", "/f", proj="/p/-Users-u-repo")]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"]), ("W", "doc"))
+
+    def test_time_fallback_across_worktree_dir(self):
+        wt = "/p/-Users-u-repo--claude-worktrees-w1"
+        e = [usage("W", 11, 120000, proj=wt),
+             prompt("B", 1000, RELAY, proj="/p/-Users-u-repo"), use("B", 1001, "Edit", "/f", proj="/p/-Users-u-repo")]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"]), ("W", "time"))
+
+    def test_unrelated_repo_not_linked(self):
+        e = [usage("W", 11, 1, proj="/p/-Users-u-other"), prompt("B", 1000, RELAY, proj="/p/-Users-u-repo")]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"]), (None, None))
+        self.assertIn("previous_session_reason", h)
+
+    def test_user_typed_resumption_is_keyword(self):
+        e = [prompt("B", 1000, "follow the handoff file in the worktree")]
+        self.assertEqual(H.trace(e)["handoffs"][0]["trigger"], "keyword")
+
+    def test_doc_must_be_written_not_read(self):
+        e = [use("R", 10, "Read", DOC), usage("R", 11, 5), prompt("B", 1000, RELAY)]
+        self.assertEqual(H.trace(e)["handoffs"][0]["link_method"], "time")
+
+
 class Handoff(unittest.TestCase):
     def setUp(self):
         self.e = [
             usage("A", 100, 280000), use("A", 101, "Read", "/f1"), use("A", 102, "Read", "/f2"), usage("A", 103, 285000),
-            prompt("B", 1000, "Read /h/.local/state/agent-board/handoffs/x.md and continue"),
+            prompt("B", 1000, RELAY),
             usage("B", 1001, 20000, out=5), use("B", 1002, "Read", "/f1"), use("B", 1003, "Read", "/f3"),
             usage("B", 1004, 30000, out=7), use("B", 1010, "Edit", "/f1"), usage("B", 1010, 40000, out=1),
             use("B", 1020, "Read", "/f9"),
@@ -113,7 +155,7 @@ class Cli(unittest.TestCase):
         root = tempfile.mkdtemp(); repo = "/r/repo"; proj = os.path.join(root, "-r-repo"); os.makedirs(proj)
         ln = lambda d: json.dumps(dict({"cwd": repo, "sessionId": "s1", "timestamp": "2026-10-20T10:00:00Z"}, **d)) + "\n"
         with open(os.path.join(proj, "s1.jsonl"), "w") as fh:
-            fh.write(ln({"type": "user", "message": {"content": "Read /x/handoffs/a.md and continue"}}))
+            fh.write(ln({"type": "user", "message": {"content": "Read /x/handoffs/a.md and continue from where the previous session left off."}}))
         out = os.path.join(tempfile.mkdtemp(), "sub", "h.json")
         p = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), "handoff_trace.py"), "--root", root,
                             "--repo", repo, "--days", "3650", "--out", out], capture_output=True, text=True)

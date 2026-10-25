@@ -13,18 +13,29 @@ Findings that shape the detection rules (checked 2026-10-25):
   a first prompt whose text_head contains "handoff" (path contains /handoffs/).
 - A session's repo is its transcript's project directory (dirname of the .jsonl, above any /subagents/); events carry
   no cwd. Worktrees therefore count as separate repos for linking.
+- Linking: first by the handoff doc (the .md path in the first prompt; the previous session is the latest-ending
+  earlier session, in any project dir, that Write/Edit/NotebookEdit-ed a file with that basename) -> link_method "doc";
+  else by time (latest-ending earlier session in the same repo, a repo's worktree project dirs counting as one repo)
+  -> "time"; else null with previous_session_reason. `trigger` is "relay" (the exact tmux-ctl relay prompt wording)
+  or "keyword" (any other first prompt mentioning handoff, e.g. user-typed).
+- Only the main agent is inspected for handoff detection, resumed metrics and compaction. Read-before-edit counts use the
+  Read tool only (not Grep/Glob/Bash cat). tokens_to_first_edit includes cache reads of the replayed context: it is
+  total tokens processed, not new work.
 - Usage events are emitted after line events, so they are ordered by ts; tool_use events keep stream order.
 Every metric carries source measured|derived; unavailable values are null with <field>_reason.
 """
 import argparse
 import json
 import os
+import re
 import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import transcripts as T  # noqa: E402
 
+DOC_RE = re.compile(r"(\S+\.md)\b")
+RELAY_MARK = "and continue from where the previous session left off"
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit")
 CONTINUED = "This session is being continued"
 
@@ -39,6 +50,11 @@ def _m(value, source, reason=None):
 
 def _project(f):
     return os.path.dirname(f.split("/subagents/")[0])
+
+
+def _repo_key(project):
+    base = os.path.basename(project)
+    return base.split("--claude-worktrees-")[0]
 
 
 def _main_usage(evs):
@@ -105,17 +121,33 @@ def trace(events):
         if first is not None and "handoff" in first["text_head"].lower():
             h = {"session": sid, "source": "derived"}
             prev = None
-            if info[sid]["first"] is None:
-                h["previous_session"] = None; h["previous_session_reason"] = "session has no timestamps"
-            else:
-                cands = [(i["last"], s) for s, i in info.items()
-                         if s != sid and i["project"] == info[sid]["project"] and i["last"] is not None and i["last"] < info[sid]["first"]]
+            h["trigger"] = "relay" if first["text_head"].startswith("Read ") and RELAY_MARK in first["text_head"] else "keyword"
+            h["link_method"] = None
+            first_ts = info[sid]["first"]
+
+            def earlier(s2):
+                return s2 != sid and (first_ts is None or info[s2]["last"] is None or info[s2]["last"] < first_ts)
+            m = DOC_RE.search(first["text_head"])
+            if m:
+                base = os.path.basename(m.group(1))
+                writers = [(info[s2]["last"] or 0, s2) for s2 in info if earlier(s2) and any(
+                    e["kind"] == "tool_use" and e["tool"] in EDIT_TOOLS and isinstance(e["target"], str)
+                    and os.path.basename(e["target"]) == base for e in info[s2]["evs"])]
+                if writers:
+                    prev = max(writers)[1]; h["link_method"] = "doc"
+            if prev is None and first_ts is not None:
+                cands = [(i["last"], s2) for s2, i in info.items()
+                         if s2 != sid and _repo_key(i["project"]) == _repo_key(info[sid]["project"])
+                         and i["last"] is not None and i["last"] < first_ts]
                 if cands:
-                    prev = max(cands)[1]
-                    h["previous_session"] = prev
-                    h["previous_context"] = _before(_main_usage(info[prev]["evs"]), None)
-                else:
-                    h["previous_session"] = None; h["previous_session_reason"] = "no earlier session in same project directory"
+                    prev = max(cands)[1]; h["link_method"] = "time"
+            h["previous_session"] = prev
+            if prev:
+                h["previous_context"] = _before(_main_usage(info[prev]["evs"]), None)
+            elif first_ts is None:
+                h["previous_session_reason"] = "session has no timestamps and no doc writer found"
+            else:
+                h["previous_session_reason"] = "no doc writer and no earlier session in same repo"
             handoffs.append(h)
             prev_reads = {e["target"] for e in info[prev]["evs"] if e["kind"] == "tool_use" and e["tool"] == "Read"} if prev else set()
             row["resumed"] = _resumed(evs, prev_reads, prev is not None)
