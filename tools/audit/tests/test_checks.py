@@ -44,5 +44,28 @@ class Checks(unittest.TestCase):
         r = run("bash", os.path.join(AUDIT, "redact_check.sh"), tmp("nothing here\n"))
         self.assertEqual(r.returncode, 0); self.assertIn("redact: clean (1 files)", r.stdout)
 
+    def test_redact_flags_json_password(self):
+        r = run("bash", os.path.join(AUDIT, "redact_check.sh"), tmp('{"password": "hunter2hunter2"}\n'))
+        self.assertEqual(r.returncode, 1)
+
+    def test_redact_flags_api_key(self):
+        r = run("bash", os.path.join(AUDIT, "redact_check.sh"), tmp("api_key=abcdef123456\n"))
+        self.assertEqual(r.returncode, 1)
+
+    def test_redact_flags_bearer_and_jwt(self):
+        r = run("bash", os.path.join(AUDIT, "redact_check.sh"), tmp("Authorization: Bearer " + "a" * 24 + "\n"))
+        self.assertEqual(r.returncode, 1)
+        r = run("bash", os.path.join(AUDIT, "redact_check.sh"), tmp("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig\n"))
+        self.assertEqual(r.returncode, 1)
+
+    def test_redact_missing_file_is_error(self):
+        r = run("bash", os.path.join(AUDIT, "redact_check.sh"), "/nonexistent/x.md")
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("clean", r.stdout)
+
+    def test_redact_allows_usage_token_keys(self):
+        r = run("bash", os.path.join(AUDIT, "redact_check.sh"), tmp('{"input_tokens": 2, "output_tokens": 72}\n'))
+        self.assertEqual(r.returncode, 0)
+
 if __name__ == "__main__":
     unittest.main()
