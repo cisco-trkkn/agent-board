@@ -10,12 +10,17 @@ Findings that shape the detection rules (checked 2026-10-25):
   >= CLAUDE_CONTEXT_WARN_TOKENS (default 300000) and recommends /handoff. The /handoff skill writes a doc to
   ~/.local/state/agent-board/handoffs/ (older: ~/.claude/handoffs/) and `tmux-ctl relay` restarts the window with the prompt
   "Read <doc> and continue from where the previous session left off.". The marker in the new transcript is therefore
-  a first prompt whose text_head contains "handoff" (path contains /handoffs/).
-- A session's repo is its transcript's project directory (dirname of the .jsonl, above any /subagents/); events carry
-  no cwd. Worktrees therefore count as separate repos for linking.
+  a first prompt (command lines such as /clear skipped) that has the relay wording, whatever the doc path
+  (~/.local/state/..., ~/.claude/handoffs/, /var/folders/.../handoff-*.md, or a name without "handoff"); any other first
+  prompt mentioning handoff is a "keyword" start.
+- A session's repo is the in-scope repo of its lines' cwd (worktrees fold into their repo), NOT its transcript's project
+  directory: a lead started in ~ and moved into a worktree is stored under the home project dir (checked 2026-10-25:
+  8 of 32 relay-started leads, plus 2 in master-gcp-repo whose first prompt line is a /clear command). `scan_meta`
+  reads that per-session meta (repo, first non-command main prompt) straight from the files; events carry no cwd.
+  Without meta (unit tests on bare events) the project directory is the fallback, worktree project dirs folding together.
 - Linking: first by the handoff doc (the .md path in the first prompt; the previous session is the latest-ending
   session, in any project dir, whose Write/Edit/NotebookEdit of a file with that basename was latest and before this session started; the writer may still be active afterwards, and previous_context is its last main request at or before this session's start) -> link_method "doc";
-  else by time (latest-ending earlier session in the same repo, a repo's worktree project dirs counting as one repo)
+  else by time (latest-ending earlier session in the same repo)
   -> "time"; else null with previous_session_reason. `trigger` is "relay" (the exact tmux-ctl relay prompt wording)
   or "keyword" (any other first prompt mentioning handoff, e.g. user-typed).
 - Only the main agent is inspected for handoff detection, resumed metrics and compaction. Read-before-edit counts use the
@@ -57,6 +62,52 @@ def _repo_key(project):
     return base.split("--claude-worktrees-")[0]
 
 
+def _is_command(head):
+    return head.startswith(("<command-", "<local-command"))
+
+
+def _is_relay(head):
+    return head.startswith("Read ") and RELAY_MARK in head
+
+
+def _fold(cwd, repos):
+    for repo in repos:
+        if T.in_repo(cwd, [repo]):
+            return repo.rstrip("/")
+    return None
+
+
+def scan_meta(root, repos, days):
+    """Per session, straight from the files and independent of line scope: the repo of its first in-scope cwd
+    (worktrees folded into the repo) and its first non-command main prompt event (or None)."""
+    meta = {}
+    for path in sorted(T.candidate_files(root, days), key=os.path.getmtime):
+        if "/subagents/" in path:
+            continue
+        with open(path, "rb") as fh:
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    continue
+                try:
+                    d = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                sid = T._session(path, d)
+                m = meta.setdefault(sid, {"repo": None, "first_prompt": None})
+                if m["repo"] is None and d.get("cwd"):
+                    m["repo"] = _fold(d["cwd"], repos)
+                if d.get("type") != "user":
+                    continue
+                for e in T._line_events(d, path, T._ts(d.get("timestamp")), T._agent(path, d), sid):
+                    if e["kind"] == "prompt" and e["agent"] == "main" and not _is_command(e["text_head"]):
+                        fp = m["first_prompt"]
+                        if fp is None or (e["ts"] is not None and (fp["ts"] is None or e["ts"] < fp["ts"])):
+                            m["first_prompt"] = e
+    return meta
+
+
 def _main_usage(evs):
     u = [e for e in evs if e["kind"] == "usage" and e["agent"] == "main" and e["ts"] is not None]
     return sorted(u, key=lambda e: e["ts"])
@@ -95,14 +146,17 @@ def _resumed(evs, prev_reads, has_prev):
             "reads_before_first_edit": _m(len(reads), "measured"), "reread_overlap": ov}
 
 
-def trace(events):
+def trace(events, meta=None):
+    meta = meta or {}
     by = {}
     for e in events:
         by.setdefault(e["session"], []).append(e)
     info = {}
     for sid, evs in by.items():
         tss = [e["ts"] for e in evs if e["ts"] is not None]
+        m = meta.get(sid) or {}
         info[sid] = {"evs": evs, "project": _project(evs[0]["file"]),
+                     "repo": ("cwd", m["repo"]) if m.get("repo") else ("project", _repo_key(_project(evs[0]["file"]))),
                      "first": min(tss) if tss else None, "last": max(tss) if tss else None}
     compactions, handoffs, sessions = [], [], []
     for sid in sorted(by):
@@ -116,14 +170,17 @@ def trace(events):
             if p["kind"] == "prompt" and p["agent"] == "main" and p["text_head"].startswith(CONTINUED):
                 compactions.append({"session": sid, "rule": "continued_prompt", "ts": p["ts"],
                                     "context_before": _before(mu, p["ts"]), "source": "derived"})
-        first = next((e for e in evs if e["kind"] == "prompt" and e["agent"] == "main"), None)
+        first = (meta.get(sid) or {}).get("first_prompt") or next(
+            (e for e in evs if e["kind"] == "prompt" and e["agent"] == "main" and not _is_command(e["text_head"])), None)
         row = {"session": sid}
-        if first is not None and "handoff" in first["text_head"].lower():
+        if first is not None and (_is_relay(first["text_head"]) or "handoff" in first["text_head"].lower()):
             h = {"session": sid, "source": "derived"}
             prev = None
-            h["trigger"] = "relay" if first["text_head"].startswith("Read ") and RELAY_MARK in first["text_head"] else "keyword"
+            h["trigger"] = "relay" if _is_relay(first["text_head"]) else "keyword"
             h["link_method"] = None
             first_ts = info[sid]["first"]
+            if first.get("ts") is not None:
+                first_ts = first["ts"] if first_ts is None else min(first_ts, first["ts"])
 
             m = DOC_RE.search(first["text_head"])
             if m:
@@ -136,7 +193,7 @@ def trace(events):
                     prev = max(writers)[1]; h["link_method"] = "doc"
             if prev is None and first_ts is not None:
                 cands = [(i["last"], s2) for s2, i in info.items()
-                         if s2 != sid and _repo_key(i["project"]) == _repo_key(info[sid]["project"])
+                         if s2 != sid and i["repo"] == info[sid]["repo"]
                          and i["last"] is not None and i["last"] < first_ts]
                 if cands:
                     prev = max(cands)[1]; h["link_method"] = "time"
@@ -168,7 +225,7 @@ def main(argv=None):
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
-    res = trace(T.iter_events(a.root, a.repo, a.days))
+    res = trace(T.iter_events(a.root, a.repo, a.days), scan_meta(a.root, a.repo, a.days))
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "w") as fh:
         json.dump(res, fh, indent=1)

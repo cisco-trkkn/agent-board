@@ -160,6 +160,89 @@ class Handoff(unittest.TestCase):
         self.assertEqual(out["handoffs"], [])
 
 
+VAR_DOC = "/var/folders/2p/x/T/handoff-x.md"
+PLAIN_DOC = "/var/folders/2p/x/T/notes-x.md"      # no "handoff" anywhere: only the relay wording identifies it
+HOME_PROJ = "/p/-Users-u"                          # transcript stored under the home project dir
+META = lambda sid, repo, first=None: {"repo": repo, "first_prompt": first}
+
+
+class CwdScope(unittest.TestCase):
+    def test_home_dir_lead_with_repo_cwd_is_linked_by_time(self):
+        e = [usage("W", 11, 120000, proj="/p/-Users-u-repo"),
+             prompt("B", 1000, RELAY, proj=HOME_PROJ), use("B", 1001, "Edit", "/f", proj=HOME_PROJ)]
+        meta = {"W": META("W", "/Users/u/repo"), "B": META("B", "/Users/u/repo")}
+        h = H.trace(e, meta)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"], h["trigger"]), ("W", "time", "relay"))
+
+    def test_home_dir_lead_links_doc_writer_in_other_project_dir(self):
+        e = [use("W", 10, "Write", DOC, proj="/p/-Users-u-repo"), usage("W", 11, 90000, proj="/p/-Users-u-repo"),
+             prompt("B", 1000, RELAY, proj=HOME_PROJ)]
+        meta = {"W": META("W", "/Users/u/repo"), "B": META("B", "/Users/u/repo")}
+        h = H.trace(e, meta)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"], h["previous_context"]), ("W", "doc", 90000))
+
+    def test_worktree_cwd_folds_into_repo(self):
+        e = [usage("W", 11, 5, proj=HOME_PROJ), prompt("B", 1000, RELAY, proj="/p/-Users-u-other")]
+        meta = {"W": META("W", "/Users/u/repo"), "B": META("B", "/Users/u/repo")}
+        self.assertEqual(H.trace(e, meta)["handoffs"][0]["previous_session"], "W")
+
+    def test_different_cwd_repo_not_linked_even_in_same_project_dir(self):
+        e = [usage("W", 11, 5), prompt("B", 1000, RELAY)]
+        meta = {"W": META("W", "/Users/u/one"), "B": META("B", "/Users/u/two")}
+        self.assertIsNone(H.trace(e, meta)["handoffs"][0]["previous_session"])
+
+    def test_var_folders_doc_detected_and_linked(self):
+        r = "Read %s and continue from where the previous session left off." % VAR_DOC
+        e = [use("W", 10, "Write", VAR_DOC), prompt("B", 1000, r)]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"], h["trigger"]), ("W", "doc", "relay"))
+
+    def test_relay_prompt_detected_without_handoff_in_the_text(self):
+        r = "Read %s and continue from where the previous session left off." % PLAIN_DOC
+        e = [use("W", 10, "Write", PLAIN_DOC), prompt("B", 1000, r)]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"], h["trigger"]), ("W", "doc", "relay"))
+
+    def test_relay_prompt_after_clear_command_is_the_first_prompt(self):
+        r = "Read %s and continue from where the previous session left off." % PLAIN_DOC
+        e = [prompt("B", 900, "<command-name>/clear</command-name> <command-message>clear</command-message>"),
+             prompt("B", 1000, r)]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["session"], h["trigger"]), ("B", "relay"))
+
+    def test_relay_prompt_outside_scoped_events_comes_from_meta(self):
+        r = "Read %s and continue from where the previous session left off." % PLAIN_DOC
+        e = [use("W", 10, "Write", PLAIN_DOC), usage("B", 1100, 7), prompt("B", 1200, "carry on")]
+        meta = {"B": META("B", "/Users/u/repo", {"kind": "prompt", "agent": "main", "ts": 1000, "text_head": r, "session": "B"})}
+        h = H.trace(e, meta)["handoffs"][0]
+        self.assertEqual((h["session"], h["previous_session"], h["link_method"], h["trigger"]), ("B", "W", "doc", "relay"))
+
+
+class CwdScopeCli(unittest.TestCase):
+    """Transcript shaped like the real ones: stored under the home project dir, the relay prompt line has
+    cwd=$HOME (outside scope) and the session only moves into the repo afterwards."""
+    def test_cli_home_dir_session_with_late_repo_cwd(self):
+        root = tempfile.mkdtemp(); repo = "/r/repo"
+        home = os.path.join(root, "-r"); rp = os.path.join(root, "-r-repo"); os.makedirs(home); os.makedirs(rp)
+        ln = lambda sid, cwd, ts, d: json.dumps(dict({"cwd": cwd, "sessionId": sid, "timestamp": ts}, **d)) + "\n"
+        doc = "/var/folders/zz/T/handoff-q.md"
+        with open(os.path.join(rp, "w1.jsonl"), "w") as fh:
+            fh.write(ln("w1", repo, "2026-10-20T09:00:00Z", {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": doc}}]}}))
+        with open(os.path.join(home, "b1.jsonl"), "w") as fh:
+            fh.write(ln("b1", "/r", "2026-10-20T10:00:00Z", {"type": "user", "message": {"content":
+                "Read %s and continue from where the previous session left off." % doc}}))
+            fh.write(ln("b1", repo + "/.claude/worktrees/w", "2026-10-20T10:01:00Z", {"type": "user", "message": {"content": "go on"}}))
+        out = os.path.join(tempfile.mkdtemp(), "h.json")
+        p = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), "handoff_trace.py"), "--root", root,
+                            "--repo", repo, "--days", "3650", "--out", out], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(out) as fh:
+            hs = json.load(fh)["handoffs"]
+        self.assertEqual([(h["session"], h["previous_session"], h["link_method"], h["trigger"]) for h in hs],
+                         [("b1", "w1", "doc", "relay")])
+
+
 class Cli(unittest.TestCase):
     def test_cli(self):
         root = tempfile.mkdtemp(); repo = "/r/repo"; proj = os.path.join(root, "-r-repo"); os.makedirs(proj)
