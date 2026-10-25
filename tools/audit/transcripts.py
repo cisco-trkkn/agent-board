@@ -15,11 +15,13 @@ Semantics aligned with the independent tools/usage-sum.py (no code shared):
 Non-usage events are emitted per line as read, with the same scope/window test; a line without cwd
 inherits the last cwd seen in its file (for non-usage events only: usage-sum does not inherit).
 """
+import argparse
 import glob
 import hashlib
 import json
 import os
 import re
+import sys
 from datetime import datetime, timedelta
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
@@ -138,8 +140,7 @@ def _line_events(d, path, ts, agent, session):
 
 def iter_events(root, repos, days):
     start = window_start(days) if days is not None else None
-    files = glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)
-    files = [f for f in files if start is None or os.path.getmtime(f) >= start]
+    files = candidate_files(root, days)
     usage = {}
     for path in sorted(files, key=os.path.getmtime):
         last_cwd = ""
@@ -179,3 +180,41 @@ def iter_events(root, repos, days):
                "input": u.get("input_tokens") or 0, "output": u.get("output_tokens") or 0,
                "cache_read": u.get("cache_read_input_tokens") or 0,
                "cache_creation": u.get("cache_creation_input_tokens") or 0}
+
+
+def candidate_files(root, days):
+    """Transcript files whose mtime falls in the window (all files when days is None)."""
+    start = window_start(days) if days is not None else None
+    files = glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)
+    return [f for f in files if start is None or os.path.getmtime(f) >= start]
+
+
+def build_manifest(root, repos, days, sha):
+    """Scope, window, file count, event counts per kind and toolkit sha of one run (read-only)."""
+    counts = {}
+    for e in iter_events(root, repos, days):
+        counts[e["kind"]] = counts.get(e["kind"], 0) + 1
+    start = window_start(days) if days is not None else None
+    return {"scope": repos, "days": days,
+            "window_start": datetime.fromtimestamp(start).date().isoformat() if start is not None else None,
+            "files": len(candidate_files(root, days)), "event_counts": counts, "toolkit_sha": sha,
+            "generated": datetime.now().astimezone().isoformat(timespec="seconds")}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--manifest", action="store_true", required=True)
+    ap.add_argument("--root", default=os.path.expanduser("~/.claude/projects"))
+    ap.add_argument("--repo", action="append", required=True)
+    ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--sha", default="unknown")
+    ap.add_argument("--out", required=True)
+    a = ap.parse_args(argv)
+    m = build_manifest(a.root, a.repo, a.days, a.sha)
+    with open(a.out, "w") as fh:
+        json.dump(m, fh, indent=2)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
