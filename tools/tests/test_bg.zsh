@@ -59,4 +59,9 @@ check "stale lock then reclaimed"          test "$($C run tests 'echo after' | h
 s0=$EPOCHREALTIME
 $C send shell 'echo x' >/dev/null
 check "send returns fast"                  test $(( (EPOCHREALTIME - s0) < 2 )) = 1
+# output is cut at an end marker, not by dropping the last line (two-line prompt, no trailing newline)
+# (set through send: run wraps its command in a subshell, where a PS1 assignment would not stick)
+$C send tests "PS1=\$'top\\nbot> '; PROMPT=\$PS1" >/dev/null; sleep 1
+check "two-line prompt: only the output" test "$($C run tests 'echo x')" = $'x\n[exit 0]'
+check "no trailing newline kept"         test "$($C run tests 'printf y')" = $'y\n[exit 0]'
 tt_done
