@@ -129,8 +129,10 @@ class Manifest(unittest.TestCase):
     def test_manifest_counts_files_events_and_scope(self):
         root = tempfile.mkdtemp(); repo = "/r/repo"
         write(os.path.join(root, "-r-repo"), "s1.jsonl", [asst("r1", repo), asst("r2", repo)])
+        write(os.path.join(root, "-other"), "s2.jsonl", [asst("r3", "/other/repo")])
         m = T.build_manifest(root, [repo], 3650, "abc1234")
-        self.assertEqual(m["files"], 1)
+        self.assertEqual(m["files_in_window"], 2)
+        self.assertEqual(m["files_in_scope"], 1)
         self.assertEqual(m["event_counts"]["usage"], 2)
         self.assertEqual(m["scope"], [repo])
         self.assertEqual(m["days"], 3650)

@@ -192,12 +192,15 @@ def candidate_files(root, days):
 def build_manifest(root, repos, days, sha):
     """Scope, window, file count, event counts per kind and toolkit sha of one run (read-only)."""
     counts = {}
+    in_scope = set()
     for e in iter_events(root, repos, days):
         counts[e["kind"]] = counts.get(e["kind"], 0) + 1
+        in_scope.add(e["file"])
     start = window_start(days) if days is not None else None
     return {"scope": repos, "days": days,
             "window_start": datetime.fromtimestamp(start).date().isoformat() if start is not None else None,
-            "files": len(candidate_files(root, days)), "event_counts": counts, "toolkit_sha": sha,
+            "files_in_window": len(candidate_files(root, days)), "files_in_scope": len(in_scope),
+            "event_counts": counts, "toolkit_sha": sha,
             "generated": datetime.now().astimezone().isoformat(timespec="seconds")}
 
 
