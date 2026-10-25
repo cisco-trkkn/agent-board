@@ -14,7 +14,7 @@ Findings that shape the detection rules (checked 2026-10-25):
 - A session's repo is its transcript's project directory (dirname of the .jsonl, above any /subagents/); events carry
   no cwd. Worktrees therefore count as separate repos for linking.
 - Linking: first by the handoff doc (the .md path in the first prompt; the previous session is the latest-ending
-  earlier session, in any project dir, that Write/Edit/NotebookEdit-ed a file with that basename) -> link_method "doc";
+  session, in any project dir, whose Write/Edit/NotebookEdit of a file with that basename was latest and before this session started; the writer may still be active afterwards, and previous_context is its last main request at or before this session's start) -> link_method "doc";
   else by time (latest-ending earlier session in the same repo, a repo's worktree project dirs counting as one repo)
   -> "time"; else null with previous_session_reason. `trigger` is "relay" (the exact tmux-ctl relay prompt wording)
   or "keyword" (any other first prompt mentioning handoff, e.g. user-typed).
@@ -125,14 +125,13 @@ def trace(events):
             h["link_method"] = None
             first_ts = info[sid]["first"]
 
-            def earlier(s2):
-                return s2 != sid and (first_ts is None or info[s2]["last"] is None or info[s2]["last"] < first_ts)
             m = DOC_RE.search(first["text_head"])
             if m:
                 base = os.path.basename(m.group(1))
-                writers = [(info[s2]["last"] or 0, s2) for s2 in info if earlier(s2) and any(
-                    e["kind"] == "tool_use" and e["tool"] in EDIT_TOOLS and isinstance(e["target"], str)
-                    and os.path.basename(e["target"]) == base for e in info[s2]["evs"])]
+                writers = [(e["ts"] or 0, s2) for s2 in info if s2 != sid for e in info[s2]["evs"]
+                           if e["kind"] == "tool_use" and e["tool"] in EDIT_TOOLS and isinstance(e["target"], str)
+                           and os.path.basename(e["target"]) == base
+                           and (first_ts is None or e["ts"] is None or e["ts"] < first_ts)]
                 if writers:
                     prev = max(writers)[1]; h["link_method"] = "doc"
             if prev is None and first_ts is not None:
@@ -143,7 +142,7 @@ def trace(events):
                     prev = max(cands)[1]; h["link_method"] = "time"
             h["previous_session"] = prev
             if prev:
-                h["previous_context"] = _before(_main_usage(info[prev]["evs"]), None)
+                h["previous_context"] = _before(_main_usage(info[prev]["evs"]), first_ts)
             elif first_ts is None:
                 h["previous_session_reason"] = "session has no timestamps and no doc writer found"
             else:

@@ -70,6 +70,16 @@ class Linking(unittest.TestCase):
         self.assertEqual((h["previous_session"], h["link_method"], h["trigger"]), ("W", "doc", "relay"))
         self.assertEqual(h["previous_context"], 250000)
 
+    def test_writer_session_still_active_after_new_session_starts(self):
+        e = [use("W", 10, "Write", DOC), usage("W", 11, 250000), usage("W", 1100, 400000), use("W", 1200, "Read", "/late"),
+             prompt("B", 1000, RELAY), use("B", 1001, "Edit", "/f")]
+        h = H.trace(e)["handoffs"][0]
+        self.assertEqual((h["previous_session"], h["link_method"], h["previous_context"]), ("W", "doc", 250000))
+
+    def test_doc_written_after_new_session_start_is_not_a_link(self):
+        e = [use("W", 1500, "Write", DOC), prompt("B", 1000, RELAY)]
+        self.assertNotEqual(H.trace(e)["handoffs"][0]["link_method"], "doc")
+
     def test_doc_writer_in_worktree_project_dir(self):
         wt = "/p/-Users-u-repo--claude-worktrees-w1"
         e = [use("W", 10, "Write", DOC, proj=wt), usage("W", 11, 120000, proj=wt),
