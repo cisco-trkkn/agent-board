@@ -106,7 +106,7 @@
     {
       "id": 12,
       "subject": "Task 12: Independent evidence review (probe)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `docs/superpowers/reports/runtime-audit/probe-review.md` re-checks the report's evidence independently of its authors.\n\n**Files:**\n- Create: `docs/superpowers/reports/runtime-audit/probe-review.md`\n\n**Acceptance Criteria:**\n- [ ] Sample of \u2265 10 findings, including every Verified finding in the report's top 5\n- [ ] Per sampled finding a `### F-\u2026` block with `Label:` (the label the evidence supports), `Evidence:` (what was re-checked and the observed value), `Confidence:`, and a verdict line `Verdict: holds | relabel <label> | drop`\n- [ ] A `## Summary` with counts per verdict\n- [ ] An all/none claim (e.g. \"every hook is listed\") is checked against uncapped output with its count\n\n**Verify:** `python3 tools/audit/check_findings.py docs/superpowers/reports/runtime-audit/probe-review.md --require-heading Summary --min-findings 10 && grep -c '^Verdict: ' docs/superpowers/reports/runtime-audit/probe-review.md` \u2192 `OK n findings` with n \u2265 10, and a Verdict count equal to n\n\n**Constraints:** the reviewer did not author Tasks 8\u201311. Use superpowers-extended-cc:requesting-code-review with requesting-code-review-extras. Re-run evidence yourself: open each cited file:line, re-read each cited metric key from `audit-out/<date>/`, open each cited session. Do not edit `report.md`. Commit: `docs(audit): probe evidence review` + attribution trailer.\n\nPlan: docs/superpowers/plans/2026-10-21-runtime-audit-baseline.md \u00a7 Task 12 (full steps)\n\n```json:metadata\n{\"files\": [\"docs/superpowers/reports/runtime-audit/probe-review.md\"], \"verifyCommand\": \"python3 tools/audit/check_findings.py docs/superpowers/reports/runtime-audit/probe-review.md --require-heading Summary --min-findings 10 && grep -c '^Verdict: ' docs/superpowers/reports/runtime-audit/probe-review.md\", \"acceptanceCriteria\": [\">=10 sampled incl. all Verified top-5\", \"per-finding re-check with Verdict line\", \"summary verdict counts\", \"all/none claims on uncapped output\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         11
@@ -122,5 +122,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-25T07:06:55.213514+00:00"
+  "lastUpdated": "2026-10-25T07:19:50.242463+00:00"
 }
