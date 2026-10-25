@@ -74,6 +74,32 @@ class Metrics(unittest.TestCase):
         self.assertIsNone(s3["peak_context"]["value"])   # no main requests
         self.assertGreater(out["totals"]["by_agent_kind"]["team"]["output"], 0)
 
+    def test_per_agent_tokens_models_and_peak_context(self):
+        ag = {a["agent"]: a for a in self.s["agents"]}
+        x = ag["sub:x"]
+        self.assertEqual(x["peak_context"], {"value": 56, "source": "measured"})   # 4 + 50 + 2
+        self.assertEqual(x["tokens_by_model"]["claude-haiku-5"]["output"], 3)
+        self.assertEqual(x["tokens"]["cache_creation"], 2)
+        self.assertEqual(ag["main"]["peak_context"]["value"], 320)
+        self.assertEqual(ag["main"]["tokens"]["cache_read"], 400)
+        self.assertEqual(set(ag["main"]["tokens_by_model"]), {"claude-opus-5-5"})
+
+    def test_agent_without_requests_has_null_peak_with_reason(self):
+        write(self.proj, "s4.jsonl", [dict(prompt(self.repo, "2026-10-20T10:00:00Z", sid="s4"), agentName="solo")])
+        s4 = [s for s in M.compute(T.iter_events(self.root, [self.repo], days=3650))["sessions"] if s["session"] == "s4"][0]
+        a = s4["agents"][0]
+        self.assertIsNone(a["peak_context"]["value"]); self.assertTrue(a["peak_context"]["value_reason"])
+        self.assertEqual(a["tokens"]["output"], 0)
+
+    def test_every_token_dict_and_totals_carry_source(self):
+        self.assertEqual(self.out["totals"]["source"], "measured")
+        self.assertEqual(self.out["totals"]["tokens"]["source"], "measured")
+        for grp in (self.out["totals"]["by_agent_kind"], self.out["totals"]["by_model"], self.s["tokens_by_model"], self.s["tokens_by_agent"]):
+            for d in grp.values(): self.assertEqual(d["source"], "measured")
+        for a in self.s["agents"]:
+            self.assertEqual(a["source"], "measured"); self.assertEqual(a["tokens"]["source"], "measured")
+            for d in a["tokens_by_model"].values(): self.assertEqual(d["source"], "measured")
+
     def test_cli_writes_json(self):
         out = os.path.join(tempfile.mkdtemp(), "m.json")
         subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), "session_metrics.py"), "--root", self.root,
