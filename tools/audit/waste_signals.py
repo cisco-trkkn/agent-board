@@ -35,9 +35,12 @@ def _session(evs):
     reads = {}
     for u in uses:
         if _is_read(u):
-            k = (u["agent"], u["target"])
-            reads[k] = reads.get(k, 0) + 1
-    repeat_reads = [{"agent": a, "target": t, "count": n} for (a, t), n in sorted(reads.items(), key=lambda kv: (-kv[1], str(kv[0]))) if n >= 3]
+            ak = reads.setdefault((u["agent"], u["target"]), {})
+            ak[u["args_key"]] = ak.get(u["args_key"], 0) + 1
+    repeat_reads = [{"agent": a, "target": t, "count": sum(ak.values()), "distinct_args": len(ak),
+                     "identical_count": max(ak.values())}
+                    for (a, t), ak in sorted(reads.items(), key=lambda kv: (-sum(kv[1].values()), str(kv[0])))
+                    if sum(ak.values()) >= 3]
 
     cmds, fails = {}, {}
     for u in uses:
@@ -48,10 +51,10 @@ def _session(evs):
             c = cmds.setdefault((u["args_key"], r["size"], bool(r["is_error"])), {"target": u["target"], "count": 0})
             c["count"] += 1
         if r["is_error"]:
-            f = fails.setdefault(u["args_key"], {"tool": u["tool"], "target": u["target"], "count": 0})
+            f = fails.setdefault((u["tool"], u["args_key"]), {"tool": u["tool"], "target": u["target"], "count": 0})
             f["count"] += 1
     repeat_commands = [dict(args_key=k[0], size=k[1], is_error=k[2], **v) for k, v in sorted(cmds.items(), key=lambda kv: (-kv[1]["count"], kv[0][0])) if v["count"] >= 2]
-    repeat_failures = [dict(args_key=k, **v) for k, v in sorted(fails.items(), key=lambda kv: (-kv[1]["count"], kv[0])) if v["count"] >= 2]
+    repeat_failures = [dict(args_key=k[1], **v) for k, v in sorted(fails.items(), key=lambda kv: (-kv[1]["count"], kv[0])) if v["count"] >= 2]
 
     tool_sz = sum(e["size"] for e in evs if e["kind"] == "tool_result")
     other_sz = sum(e["size"] for e in evs if e["kind"] in ("prompt", "injection"))

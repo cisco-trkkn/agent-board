@@ -39,6 +39,18 @@ class Signals(unittest.TestCase):
         got = {(x["agent"], x["target"]): x["count"] for x in r["value"]}
         self.assertEqual(got, {("main", "/a.py"): 3, ("main", "cat /c.txt"): 3})
 
+    def test_repeat_reads_distinguishes_identical_rereads(self):
+        ev = pair("Read", "same", "/a.py") + pair("Read", "same", "/a.py") + pair("Read", "slice2", "/a.py")
+        (x,) = sess(W.signals(ev))["repeat_reads"]["value"]
+        self.assertEqual((x["count"], x["distinct_args"], x["identical_count"]), (3, 2, 2))
+
+    def test_repeat_failures_not_merged_across_tools(self):
+        ev = pair("Bash", "shared", "x", err=True) + pair("Read", "shared", "x", err=True)
+        self.assertEqual(sess(W.signals(ev))["repeat_failures"]["value"], [])
+        ev += pair("Bash", "shared", "x", err=True)
+        (f,) = sess(W.signals(ev))["repeat_failures"]["value"]
+        self.assertEqual((f["tool"], f["count"]), ("Bash", 2))
+
     def test_repeat_reads_split_by_agent(self):
         ev = []
         for _ in range(2): ev += pair("Read", "k", "/a", agent="main")
