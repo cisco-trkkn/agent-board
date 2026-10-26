@@ -115,12 +115,12 @@
     {
       "id": 13,
       "subject": "Task 13: Apply review and publish the Claude Doc (lens)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The corrected report is published as the Claude Doc \"Claude Code Runtime Audit \u2014 Baseline 2026-10\", and its link is recorded in the repo.\n\n**Files:**\n- Modify: `docs/superpowers/reports/runtime-audit/report.md`\n- Create: `docs/superpowers/reports/runtime-audit/PUBLISHED.md` (doc link, date, toolkit sha, `audit-out` date)\n\n**Acceptance Criteria:**\n- [ ] Every `drop` verdict in `probe-review.md` is removed from `report.md`; every `relabel` is applied (diff shows it)\n- [ ] `report.md` still passes the Task 11 Verify\n- [ ] The Claude Doc exists with the eight sections, opened for the user, link in `PUBLISHED.md`\n- [ ] Redaction check passes on `report.md` immediately before publishing\n\n**Verify:** `python3 tools/audit/check_findings.py docs/superpowers/reports/runtime-audit/report.md --require-heading Summary --require-heading Roadmap --min-findings 8 && bash tools/audit/redact_check.sh docs/superpowers/reports/runtime-audit/report.md && grep -E 'https://claude\\.ai/' docs/superpowers/reports/runtime-audit/PUBLISHED.md` \u2192 `OK n findings`, `redact: clean (1 files)`, the doc URL\n\n**Constraints:** load the `anthropic-skills:docs` skill before any Claude Docs call and follow it (skeleton first, then fill sections). Charts use the JSON rows from `audit-out/`, not images. Commit: `docs(audit): publish runtime audit` + attribution trailer.\n\nPlan: docs/superpowers/plans/2026-10-21-runtime-audit-baseline.md \u00a7 Task 13 (full steps)\n\n```json:metadata\n{\"files\": [\"docs/superpowers/reports/runtime-audit/report.md\", \"docs/superpowers/reports/runtime-audit/PUBLISHED.md\"], \"verifyCommand\": \"python3 tools/audit/check_findings.py docs/superpowers/reports/runtime-audit/report.md --require-heading Summary --require-heading Roadmap --min-findings 8 && bash tools/audit/redact_check.sh docs/superpowers/reports/runtime-audit/report.md && grep -E 'https://claude\\\\.ai/' docs/superpowers/reports/runtime-audit/PUBLISHED.md\", \"acceptanceCriteria\": [\"drops removed, relabels applied\", \"report passes Task 11 checks\", \"Claude Doc with eight sections, link recorded\", \"redaction clean before publish\"], \"modelTier\": \"frontier\"}\n```",
       "blockedBy": [
         12
       ]
     }
   ],
-  "lastUpdated": "2026-10-25T07:19:50.242463+00:00"
+  "lastUpdated": "2026-10-26T14:37:58.413615+00:00"
 }
