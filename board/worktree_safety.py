@@ -6,6 +6,7 @@ worktree `kept` with the reason.
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -89,7 +90,7 @@ def _ref_exists(repo, ref):
 def _panes(servers_env=None):
     """(paths, error): the cwd of every tmux pane on every server, or the reason we could not read them."""
     one = os.environ.get("AW_TMUX")
-    servers = [[one]] if one else [list(tmux_cmd()), ["tmux"]]
+    servers = [shlex.split(one)] if one else [list(tmux_cmd()), ["tmux"]]
     paths = []
     for cmd in servers:
         try:
@@ -101,7 +102,8 @@ def _panes(servers_env=None):
             return paths, f"can't check tmux panes: {e}"
         if r.returncode != 0:
             msg = (r.stderr or r.stdout).strip()
-            if "no server running" in msg:
+            # no server yet: "no server running on …", or "error connecting to … (No such file or directory)"
+            if "no server running" in msg or (msg.startswith("error connecting to") and msg.endswith("(No such file or directory)")):
                 continue
             return paths, f"can't check tmux panes: {msg or 'exit %d' % r.returncode}"
         for line in r.stdout.splitlines():
@@ -118,9 +120,9 @@ def _inside(pane, wt):
 
 def _squash_mr(repo, branch, sha):
     """(mr iid or None, error). Is there a merged MR from `branch` whose head sha equals `sha`?"""
-    glab = os.environ.get("AW_GLAB") or "glab"
+    glab = shlex.split(os.environ.get("AW_GLAB") or "glab")
     try:
-        r = _run([glab, "mr", "list", "--merged", "--source-branch", branch, "--output", "json"], repo)
+        r = _run([*glab, "mr", "list", "--merged", "--source-branch", branch, "--output", "json"], repo)
     except subprocess.TimeoutExpired:
         return None, "can't verify MR: glab timed out"
     except OSError as e:
@@ -230,9 +232,10 @@ def classify(repo, fetch=True, now=None):
     base = _git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").stdout.strip()
     base = base[len("origin/"):] if base.startswith("origin/") else (base or "main")
     ctx = _Ctx(main, base, current, fetch, fetch_err, now)
+    agent_root = os.path.realpath(main) + AGENT_DIR
     items = []
     for wt in blocks[1:]:
-        if AGENT_DIR not in wt["path"]:
+        if not wt["path"].startswith(agent_root):
             continue
         try:
             items.append(_classify_one(ctx, wt))

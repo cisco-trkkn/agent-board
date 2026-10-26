@@ -202,14 +202,41 @@ class ClassifyStates(Base):
 
     def test_default_servers_are_both_checked(self):
         wt = add_worktree(self.repo, "w1")
-        own = tmux_stub(self.bin / "own", [(1, str(wt))])
-        plain = tmux_stub(self.bin / "tmux", [])
+        log = Path(self.tmp) / "queried"
+        own = write_stub(self.bin / "own", f'echo own >> "{log}"\n')
+        plain = write_stub(self.bin / "tmux", f'echo plain >> "{log}"\nprintf \'1\\t%s\\n\' \'{wt}\'\n')
         env = {k: v for k, v in os.environ.items() if k != "AW_TMUX"}
         env["PATH"] = f"{self.bin}:{env['PATH']}"
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(ws, "tmux_cmd", return_value=[own]):
             self.assertEqual(self.one()["state"], "in_use")
-        self.assertTrue(plain)
+        self.assertEqual(sorted(log.read_text().split()), ["own", "plain"])
+
+    def test_aw_tmux_is_word_split(self):
+        add_worktree(self.repo, "w1")
+        stub = write_stub(self.bin / "tmuxargs", '[ "$1" = "-L" ] && [ "$2" = "sock" ] || { echo bad args >&2; exit 1; }\n')
+        self.set_env(AW_TMUX=f"{stub} -L sock")
+        self.assertEqual(self.one()["state"], "safe")
+
+    def test_missing_socket_error_means_no_panes(self):
+        add_worktree(self.repo, "w1")
+        # real text from `~/.local/bin/tmux -L aw-nosock-91091 -f /dev/null list-panes -a` (rc 1), 2026-10-26
+        msg = "error connecting to /private/tmp/tmux-503/aw-nosock-91091 (No such file or directory)"
+        self.set_env(AW_TMUX=tmux_stub(self.bin / "tmux2", fail=msg))
+        self.assertEqual(self.one()["state"], "safe")
+
+    def test_other_connect_error_still_fails_closed(self):
+        add_worktree(self.repo, "w1")
+        msg = "error connecting to /tmp/tmux-503/default (Permission denied)"
+        self.set_env(AW_TMUX=tmux_stub(self.bin / "tmux2", fail=msg))
+        self.assertEqual(self.one()["state"], "kept")
+
+    def test_agent_dir_segment_elsewhere_not_listed(self):
+        add_worktree(self.repo, "w1")
+        far = Path(self.tmp) / "other" / ".claude" / "worktrees" / "far"
+        git("worktree", "add", str(far), "-b", "far", cwd=self.repo)
+        res = ws.classify(str(self.repo), fetch=False, now=NOW)
+        self.assertEqual([i["name"] for i in res["items"]], ["w1"])
 
     def test_worktree_outside_claude_worktrees_not_listed(self):
         other = Path(self.tmp) / "elsewhere"
@@ -246,6 +273,13 @@ class Squash(Base):
         self.set_env(AW_GLAB=glab_stub(self.bin / "glab", head(self.wt)))
         item = self.one(fetch=True)
         self.assertEqual((item["state"], item["squash"]), ("safe", True))
+
+    def test_aw_glab_is_word_split(self):
+        sha = head(self.wt)
+        stub = write_stub(self.bin / "glabargs", '[ "$1" = "--flag" ] || exit 1\nshift\n'
+                          'echo \'[{"iid":1,"sha":"%s","state":"merged"}]\'\n' % sha)
+        self.set_env(AW_GLAB=f"{stub} --flag")
+        self.assertEqual(self.one(fetch=True)["squash"], True)
 
     def test_other_sha_is_kept(self):
         self.set_env(AW_GLAB=glab_stub(self.bin / "glab", "0" * 40))
