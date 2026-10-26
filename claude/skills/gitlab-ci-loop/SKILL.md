@@ -54,6 +54,8 @@ agent-ci finish -m "feat: …"    # green → squash, set the final MR title, th
   so the merge stays in history; `--no-squash` keeps commits on any branch.
   `--no-follow` returns right after marking ready; `postmerge.follow: false` turns following off for a repo;
   `agent-ci follow [--mr IID]` follows an MR that is already open.
+  If the user merges while `finish` is still running, `finish` finds the merged MR and goes to `postmerge`.
+  It does not try to open a new MR, and a merge is never an error exit.
 - `finish`/`follow` exit codes after the merge are `postmerge`'s (below); 3 also means the MR was closed
   without merging, and 4 means it wasn't merged within `--merge-timeout` (default 7 days).
 - `cycle` exit codes:
@@ -67,6 +69,14 @@ agent-ci finish -m "feat: …"    # green → squash, set the final MR title, th
 | 4 | timeout | run `agent-ci watch` again or report |
 | 5 | max red rounds reached | **stop** and summarize the failures for the user |
 
+- **Red only on the runner, and the log says nothing.** The process is silent, or the error doesn't name a
+  cause. The next push adds instrumentation so the failure describes itself, not a guessed fix. For example,
+  a stack dump on timeout (`PYTHONFAULTHANDLER=1`, and the harness sends SIGABRT), or the child's stderr in
+  the assertion message. Each remote round costs a full pipeline, so spend it on evidence.
+- **`agent-ci check` runs only the checks whose `paths` match the changed files.** A changed file that no
+  check maps, or a new test directory with no check, is not run locally. When you cite `agent-ci check` as
+  evidence for a change that adds a test or edits CI files, confirm that its output lists the check covering
+  that file. Otherwise run the test directly, or add the mapping.
 - Read the exit code from `agent-ci` itself. Piping it through `| tail` reports `tail`'s 0, so a refusal looks
   like a finished run; use `set -o pipefail` or read the output.
 - **Dirty tree the user wants left alone.** `cycle` pushes only committed work and refuses (code 2) while
@@ -166,6 +176,8 @@ agent-ci postmerge --note "<signature part>" "<what you changed and why>"   # lo
 - **Unexpanded-variable signatures** (marked "CI variable reached the job unexpanded"; a literal `'$NAME'` in
   the error): the variable was unset where a trigger forwarded it as `X: $X`. Fix the caller that creates the
   pipeline, or the bridge's forwarding, not the consumer.
+- **Red on unchanged code right after CI variables were created or changed.** First compare the new keys
+  with the failing test's environment. Test fixtures that copy `os.environ` inherit every project variable.
 - **Infra signatures** (marked "looks like infra/IAM/state"; permission denied, WIF, state/outputs):
   gather read-only GCP context first (`gcloud … describe/list/get-iam-policy`, `gcloud logging read`,
   `terraform state list/show`, `terraform output`) and propose the change. **Do not apply** IAM, Terraform or
@@ -183,6 +195,12 @@ changes: bridge children, plus the API pipelines that `dispatch-<plan hash>-<tar
 their `RELEASE_PLAN_ID`/`RELEASE_TARGET_ID`), up to 3 levels deep. Only GET requests. Changed CI files are linted one by one. Errors that a standalone
 include fragment can't avoid (an unresolved `include: local`, or a stage defined in the root file) are only
 warnings, because the pipeline validates them.
+
+**Guards that read a job trace.** A guard that watches a job trace for a line (for example, cancel an apply
+when the replan differs) must strip GitLab's per-line timestamp and stream prefix, and ANSI colour codes,
+before matching. Test it on a real captured trace line. A real line looks like
+`2026-10-20T19:36:01.296042Z 01O \e[1mPlan:\e[0m 52 to add, 0 to change, 0 to destroy.`
+A plan-then-apply job leaves only seconds to cancel, so a check inside the pipeline is safer than an outside watcher.
 
 **MR titles.** `mr_title_style: auto | bracketed | plain` (default `auto`). Conventional subjects become
 `[type(scope)]: subject` (bracketed) or `type(scope): subject` (plain). `auto` follows the majority of the
@@ -208,7 +226,7 @@ mr_title_style: auto         # auto | bracketed ("[fix(x)]: …") | plain ("fix(
 mr_draft: false              # MRs open ready for review; true opens them as drafts until finish
 python_venv: true            # checks run inside .agent-ci/venv-<version> (setup pip installs land there)
 python_version: "3.11"       # match the CI image; uv fetches it if missing
-setup: []                    # global one-time setup (cached by content hash)
+setup: []                    # global one-time setup (cached; the key is listed below the block)
 checks:
   - name: pytest-foo
     paths: ["pipelines/foo/src/**"]   # or `always: true`
@@ -220,6 +238,12 @@ checks:
 ```
 
 Setup is cached per check, and first runs of heavy stacks (Airflow) take a few minutes.
+The cache key covers the setup commands, the venv path, the values of the check's `env` keys,
+and the content of every file a pip command reads with `-r`, `--requirement`, `-c` or `--constraint`.
+A leading `cd <dir> &&` sets where such a file is looked up, and files that a requirements file includes count too.
+A missing file counts as "missing", so creating it later re-runs setup.
+Other inputs are not in the key (for example `pyproject.toml` read by `pip install .`, or a lock file read by another tool).
+When one of those changes, run `agent-ci check --resetup`. It passes through to `local-check.py` and forces setup to re-run.
 Failed setups re-run next time.
 If a check fails locally on a version conflict, compare with the CI image before blaming the code.
 The same conflict usually fails in CI too.

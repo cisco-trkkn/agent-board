@@ -2,6 +2,7 @@
 # Fixture test for task-observer-session-start.sh: the single task-observer mandate. Runs against temp workspaces;
 # the README check reads the real workspace (TASK_OBSERVER_WORKSPACE or ~/.task-observer).
 set -u
+unset TC_ROLE   # the lead's mandate is under test; a worker's environment would hide it
 H="${HOOK:-$HOME/.claude/hooks/task-observer-session-start.sh}"
 T=$(mktemp -d)
 pass=0; fail=0
@@ -33,6 +34,12 @@ check "fresh: no review offer" "$(text "$fresh" | grep -c 'Offer the review')" "
 check "fresh: open count" "$(text "$fresh" | grep -c '1 open observations')" "1"
 check "never reviewed: offer" "$(text "$never" | grep -c 'last review: never. Offer the review.')" "1"
 check "quote in workspace path: still valid JSON" "$(text "$quoted" | grep -cF 'with "quote"')" "1"
+wout=$(TC_ROLE=worker TASK_OBSERVER_WORKSPACE="$overdue" sh "$H" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])')
+check "worker: valid JSON" "$?" "0"
+check "worker: exemption text" "$(printf '%s' "$wout" | grep -cF 'do not invoke task-observer')" "1"
+check "worker: no mandate" "$(printf '%s' "$wout" | grep -cF 'Before the first tool call')" "0"
+check "worker: no review offer" "$(printf '%s' "$wout" | grep -c 'Offer the review')" "0"
+check "TC_ROLE=other: mandate kept" "$(TC_ROLE=lead TASK_OBSERVER_WORKSPACE="$empty" sh "$H" | grep -cF 'Before the first tool call')" "1"
 
 rm -rf "$T"
 echo "passed=$pass failed=$fail"

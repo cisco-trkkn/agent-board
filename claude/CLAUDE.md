@@ -26,6 +26,10 @@
   expansion: `echo ===` fails with "== not found" and aborts a `&&` chain, so
   quote it (`echo '==='`). An unquoted `$VAR` is not word-split: `grep $FLAGS`
   with `FLAGS='-rn -E'` passes one argument; use `${=FLAGS}` or an array.
+- Checking that a secret variable is set: use `[ -n "$T" ] && echo set || echo EMPTY`
+  or its length `${#T}`. Never put a secret inside `${T:-…}`, `${T:=…}` or a bare `$T`
+  in echo, printf or a log line: `${T:-EMPTY}` expands to the secret when it is set,
+  and one such "presence check" printed a whole ID token.
 - tmux session-scoped options need the trailing colon: `show-options -t '=name:'`.
 - The `~/.local/bin`, `~/.local/share/tmux-*` and `~/.claude` tool files are not
   under git: back them up (`F.bak-YYYYMMDD`) and stage live ones as `F.next`

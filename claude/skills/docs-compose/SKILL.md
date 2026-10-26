@@ -1,5 +1,5 @@
 ---
-name: docs-compose
+name: "docs-compose"
 description: Use for any doc request that may mix kinds (architecture, runbook or how-to, report or handover, client explainer), used alongside `anthropic-skills:docs`. Builds one Claude Doc from a confirmed, typed outline and hands each section to its type skill as a guest; for one type alone, that type's skill may run standalone.
 ---
 
@@ -12,7 +12,7 @@ Load `anthropic-skills:docs` first and follow it for everything about the Doc it
 ## Rules
 
 - **Birth first.** The first Docs call births the Doc (title, byline, one `pending` "planning the outline…" block), before any repo read, inventory run or cloud read; loading skills may precede it. The Doc is never deleted: a halt replaces the planning block with what was found.
-- **No section before the yes.** Step 3's answer gates every non-pending write.
+- **No section before the yes.** Step 3's answer gates every non-pending write, including when you cannot reach the user yourself (step 3).
 - **At most 5 interview questions per Doc**, pooled across all guests in one round.
 - **Guests write the sections.** The composer writes the title, the outline, the Doc-level line and the `Sources` tab, and no section body, diagram or stamp.
 - **Fresh-eyes review before each stamp**, run by each guest over its own section group (guest contract).
@@ -32,6 +32,8 @@ From the request, decide the sections and the type of each: `architecture`, `run
 ### 3. Confirm
 
 Ask the user one question: the outline as it stands and the audience line, with "go / change". On a change (add, drop, reorder, retype), redo the pending blocks and ask again. Done on a "go".
+
+Without a user channel (you run as a teammate or subagent), send the outline and the audience line to whoever can ask the user, usually the lead, and wait for the answer they relay. A spec, a plan or an earlier decision is never the "go", and neither is a general rule to make a reasonable choice and keep going. Example: a teammate published a Doc because "the spec's sections stood as the go", and the user never saw the outline.
 
 ### 4. Interview pool
 

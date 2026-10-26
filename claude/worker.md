@@ -36,7 +36,8 @@ Run test suites and long builds with `tmux-ctl run [-t secs] [-C dir] tests "<cm
 the window). It runs in the hidden session `<project>-bg`, in your own worktree unless `-C` says
 otherwise, and the user sees every run in the Agent Board's Activity drawer; if `tests` is busy you get
 a lane window `tests·<you>`. Use your Bash tool for everything else. Never type into the user's own
-`shell` window.
+`shell` window. The reason: the Bash tool stops foreground commands at 120s, so a full suite run
+there times out, and the user cannot see it.
 
 ## Processes
 

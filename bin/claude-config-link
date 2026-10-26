@@ -1,6 +1,7 @@
 #!/usr/bin/env zsh
 # claude-config-link [--dry-run] — symlink the tracked claude/ config into ~/.claude.
-# Per path: absent -> link; regular file/dir -> back up as F.bak-YYYYMMDD (or .2, .3 … if taken, never overwritten), then link;
+# Per path: absent -> link; regular file/dir -> back up to ~/.claude/backups/config-link-YYYYMMDD/<path under ~/.claude>
+# (or .2, .3 … if taken, never overwritten), then link. Never beside the item: a skills/<name>.bak-* dir is loaded as a skill;
 # link to this repo -> leave; link elsewhere -> refuse (exit 1, other paths still processed).
 # settings.json is never linked (Claude Code writes it); use claude-config-sync.
 emulate -L zsh
@@ -10,9 +11,10 @@ gc="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/nu
 dry=0; [[ "$1" == --dry-run ]] && dry=1
 stamp="$(date +%Y%m%d)"; rc=0
 
-free_backup() {   # first unused F.bak-DATE, F.bak-DATE.2, …  (-e || -L: a dangling link also holds a name)
-  local b="$1.bak-$stamp" n=2
-  while [[ -e "$b" || -L "$b" ]]; do b="$1.bak-$stamp.$n"; (( n++ )); done
+free_backup() {   # first unused backups/config-link-DATE/<rel>, then <rel>.2, …  (-e || -L: a dangling link also holds a name)
+  local b="$live/backups/config-link-$stamp/${1#$live/}" n=2 base
+  base="$b"
+  while [[ -e "$b" || -L "$b" ]]; do b="$base.$n"; (( n++ )); done
   print -r -- "$b"
 }
 
@@ -25,7 +27,7 @@ link_one() {   # link_one <repo file/dir> <live path>
   fi
   if [[ -e "$to" ]]; then
     bak="$(free_backup "$to")"
-    if (( dry )); then print -r -- "would backup $to -> $bak"; else mv -n "$to" "$bak" && print -r -- "backup  $to -> $bak" || { print -ru2 -- "REFUSE  could not back up $to"; rc=1; return; }; fi
+    if (( dry )); then print -r -- "would backup $to -> $bak"; else mkdir -p "${bak:h}" && mv -n "$to" "$bak" && print -r -- "backup  $to -> $bak" || { print -ru2 -- "REFUSE  could not back up $to"; rc=1; return; }; fi
   fi
   if (( dry )); then print -r -- "would link   $to -> $from"
   else mkdir -p "${to:h}" && ln -s "$from" "$to" && print -r -- "link    $to -> $from"; fi

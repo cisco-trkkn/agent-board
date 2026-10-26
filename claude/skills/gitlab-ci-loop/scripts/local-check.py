@@ -122,11 +122,50 @@ def build_env(root: str, cfg: dict, extra: dict | None, chk: dict | None = None)
     return env
 
 
+PIP_FILE_RE = re.compile(r"(?:^|\s)(?:-r|--requirement|-c|--constraint)(?:\s+|=)['\"]?([^\s'\"]+)")
+CD_PREFIX_RE = re.compile(r"^\s*cd\s+(\S+)\s*&&")
+
+
+def setup_file_digests(root: str, cmds) -> list[tuple[str, str]]:
+    """Content hash of every file a pip setup command reads via -r/--requirement/-c/--constraint.
+
+    Paths resolve against root, or against the directory of a leading `cd <dir> &&`.
+    A missing file gets the marker "missing". Files that a requirements file includes are followed."""
+    lines = [cmds] if isinstance(cmds, str) else list(cmds)
+    found: dict[str, str] = {}
+
+    def add(path: str) -> None:
+        rel = os.path.relpath(os.path.normpath(path), root)
+        if rel in found:
+            return
+        if not os.path.isfile(path):
+            found[rel] = "missing"
+            return
+        with open(path, "rb") as fh:
+            data = fh.read()
+        found[rel] = hashlib.sha1(data).hexdigest()
+        for line in data.decode(errors="replace").splitlines():
+            for m in PIP_FILE_RE.finditer(line):
+                add(os.path.join(os.path.dirname(path), m[1]))
+
+    for line in (ln for cmd in lines for ln in str(cmd).splitlines()):
+        if "pip" not in line:
+            continue
+        cd = CD_PREFIX_RE.match(line)
+        cwd = os.path.join(root, cd[1]) if cd else root
+        for m in PIP_FILE_RE.finditer(line):
+            add(os.path.join(cwd, m[1]))
+    return sorted(found.items())
+
+
 def run_setup(root: str, label: str, cmds, env: dict, force: bool, extra_keys=()) -> bool:
     if not cmds:
         return True
     script = as_script(cmds)
     key = script + repr(sorted((k, env.get(k)) for k in ("VIRTUAL_ENV", *extra_keys)))
+    files = setup_file_digests(root, cmds)
+    if files:
+        key += repr(files)
     stamp = os.path.join(root, STATE_DIR, "setup", hashlib.sha1(key.encode()).hexdigest())
     if os.path.exists(stamp) and not force:
         return True

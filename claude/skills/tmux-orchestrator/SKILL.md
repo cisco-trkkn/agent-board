@@ -73,7 +73,8 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
   long multi-line brief (observed at ~1.5 KB) arrives cut off, the shell sits at a continuation prompt,
   and `agents` then reports `exited`, which looks like a worker that ran and quit. Until `tmux-ctl`
   passes the brief by file, write the full brief to a file and give `agent` a one-line task that points
-  at it ("Read <path> and do the task it describes").
+  at it ("Read <path> and do the task it describes"). Write the brief with the Write tool, never with an
+  unquoted heredoc (`<<EOF`): the shell runs every backticked span in the Markdown as a command.
 - **Worker base branch:** `claude -w` cuts the worktree from the repo's default branch (origin HEAD,
   usually `main`), not from the branch you have checked out. When you work on another branch (an
   integration branch such as `dev3`), tell the worker in the brief to run `git reset --hard <branch>`

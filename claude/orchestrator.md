@@ -33,7 +33,10 @@ If your first prompt says to read a handoff doc (`~/.local/state/agent-board/han
 - Start each teammate's prompt with the usual teammate rules, then its checkpoint note from the doc: task, files, progress, next step, assumptions.
 - A teammate marked `no checkpoint` gets its captured output, and is told to re-check the state of its files before continuing.
 
-Then continue with the plan, using the task list and the plan file as the source of truth.
+Then continue with the plan, using the task list and the plan file as the source of truth. Before
+following a step that depends on branch state (a merge strategy such as fast-forward, a base SHA),
+re-check it against the live base (`git merge-base --is-ancestor <base> <branch>`): a parallel session
+may have merged into the base since the doc was written.
 
 A handoff's Team section describes how the past session worked; it is not a mode to continue. "No teammates (work was done by per-task subagents)" still means you start a team here, as "Default: use an agent team" says.
 
@@ -115,11 +118,19 @@ The tier-to-model map is in `docs/superpowers/model-routing.json` in the repo; i
 The user talks only to you. The one thing they do in a teammate's or worker's window is approve a
 permission prompt. Start every teammate's prompt with these rules:
 
-1. Its role, deliverable, and the files or area it owns.
+1. Its role, deliverable, and the files or area it owns. Teammates that share one worktree stage only
+   their own paths (`git add <paths>`, never `-A` or `.`) and run no whole-tree git operation (`stash`,
+   `reset`, `checkout`, `clean`, `rebase`): owning disjoint files does not isolate a whole-tree command,
+   and one `git stash` briefly removed another teammate's uncommitted edits.
 2. The skills it must use, by full name (from the table above). The design is already settled: it does
    not run `brainstorming` and does not ask the user anything.
 3. Questions and decisions go to you, the lead, as a message. If an answer can't wait, it makes the
-   reasonable choice, notes the assumption, and keeps going.
+   reasonable choice, notes the assumption, and keeps going. The exception: when the question is about
+   a failed acceptance criterion, a gate, or a step that changes shared state or removes something (a
+   worktree, a published doc), it waits for your answer before that step. A user-confirm step that a
+   loaded skill names (docs-compose's outline confirm) is such a gate: it goes to you to relay, and a
+   spec or plan never stands in for the user's answer. Only reversible, local work
+   continues meanwhile. "My plan unless you say otherwise" is for choices you can still undo.
 4. It reports back with evidence: commands run, their output, files changed, assumptions made. Where
    the repo maps changed paths to CI checks (`.agent-ci.yml`), it runs the mapped checks for its diff
    (`agent-ci check`) before reporting done, and again after every fix round. The brief's verify
@@ -128,7 +139,8 @@ permission prompt. Start every teammate's prompt with these rules:
    the window): it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is
    busy), in your own worktree unless `-C` says otherwise, and the user sees every run in the Agent
    Board's Activity drawer. Use your Bash tool for everything else. Never type into the user's own
-   `shell` window.
+   `shell` window. The reason: the Bash tool stops foreground commands at 120s, so a full suite run
+   there times out, and the user cannot see it.
 6. Never stop processes with `pkill` or `killall` by name or pattern: patterns match full command lines,
    which carry session names and prompts, so they can kill the lead and the whole team. Kill by PID
    only, the one you started (`$!`) or one you looked up and checked first. A hook blocks patterns that
@@ -208,7 +220,16 @@ applies to every agent.
   in the live checkout only at the integration step, after checking that no other session is mid-change
   there (`ListAgents`, `git status`, `git log -3`). UI checks run a second instance from the worktree
   (the board: `TMUX_DASH_PORT=7710 python3 board/server.py`).
+- Never move HEAD in a checkout other sessions share (`git checkout <ref>`, `git checkout --detach`,
+  `git switch`), not even for a moment to compare. To look at another revision, read it
+  (`git show <ref>:<path>`, `git diff <ref> -- <path>`) or open it in a new worktree
+  (`git worktree add --detach <dir> <ref>`). A detach "to compare tests" once left the shared
+  checkout on another branch for a minute.
 - Replacing a stalled teammate or subagent: send the shutdown and wait for its termination notice
   first. Idle at its prompt is not dead; a queued message can revive it. Give every dispatch its own
   output path (`<deliverable>.<agent-name>.md`) and promote one to the canonical name yourself, so two
   writers never share a file. Snapshot an artefact before downstream agents start reading it by ID.
+- Write briefs and prompts (teammate prompts, brief files, review prompts) with the Write tool. To
+  insert a value such as a SHA, write a placeholder and substitute it with `sed`, or use a quoted
+  heredoc (`<<'EOF'`). An unquoted heredoc runs every backticked span in the Markdown as a command;
+  one ran `mkdocs build` in the live checkout.

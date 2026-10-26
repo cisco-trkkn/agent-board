@@ -1,6 +1,6 @@
 ---
 name: "writing-plans-extras"
-description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. It overrides three base rules. Step granularity follows each task's modelTier (frontier tasks get goal, constraints and acceptance criteria instead of code). Audit or discovery tasks are exempt from code in every step. In autonomous sessions the execution handoff is a printed kickoff prompt instead of AskUserQuestion. It also requires every e2e task to check real, aged state and not only a fresh scratch fixture, and commit steps to name the harness attribution trailer instead of a literal model line. Steps that copy another component name the differences, event consumers state their delivery semantics, and each Verify line matches its verifyCommand.
+description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. It overrides three base rules. Step granularity follows each task's modelTier (frontier tasks get goal, constraints and acceptance criteria instead of code). Audit or discovery tasks are exempt from code in every step. In autonomous sessions the execution handoff is a printed kickoff prompt instead of AskUserQuestion. It also adds plan-content rules. e2e tasks check real, aged state; commit steps name the harness attribution trailer; copy-X steps name the differences; event consumers state delivery semantics; each Verify line matches its verifyCommand; plan-authored tests and snippets are run once by the author and name the mutation that fails them; external-tool values cite a probe; migrations, CI variables and runbooks state their gates and preconditions; security gates state the shape they accept and the bypasses tried; repeat-count runs time one iteration first.
 ---
 
 # writing-plans extras
@@ -62,8 +62,49 @@ For any task whose component consumes events or messages (Pub/Sub push, queues, 
 
 Example: "retire every other active snapshot" let a redelivered older message retire a newer snapshot. Six task reviews passed; only the final whole-branch review found the race.
 
+## 8. Code the plan carries is run once by its author
+
+A mechanical-tier executor copies plan code verbatim, so the plan's tests are the test suite and its snippets run as written.
+
+- Next to each plan-authored test of a guard, branch or absence ("no call made", "nothing written"), name the mutation that makes it fail: "remove the shrink check → `test_truncated_file_is_reread` fails". The implementer's RED step runs that mutation and reports the failure. If no mutation can make the test fail, rewrite the assertion. Example: an absence check on `args[0]` of every mocked `subprocess.run` call could never fail, because `args[0]` was always the hook path.
+- Before committing the plan, run each plan-authored check line and shell snippet once, in the agents' shell (zsh), against the current code. RED must fail for the stated reason, not for a missing builtin (`sh -c "print …"`: `sh` has no `print`). Bash idioms zsh breaks: `for f in $LIST` loops once over the whole string (use `${(f)LIST}` or `while read -r f`), and `${k:+--kind "$k"}` expands to one word (use an array, `kopt=(--kind "$k")` and `"${kopt[@]}"`).
+- A safety check whose success means "no matches" also prints how many items it checked, so it cannot pass on an empty input.
+
+## 9. Values from external tools cite a probe
+
+A step that writes an external tool's variable, flag or hook context into code or config cites a one-line probe run in a scratch instance, with its output. Example: a plan wrote `#{hook_pane}` into an after-split-window hook and its tests; on tmux 3.8 it expands empty there, which only the implementer's real run showed.
+
+## 10. Migrations, CI variables and runbooks state their gates
+
+- Add/switch/remove migration of a config key: gate the remove step on the earliest state in which every remaining reader of the old value fails closed, and name that state. "After the new code is everywhere" is later than needed.
+- A step that adds CI or project variables also runs the suites of every script that reads those keys, with the keys exported to dummy values, before the variables MR merges. A new variable reaches every later job, including test fixtures that copy `os.environ`.
+- A task that writes a runbook lists each precondition with the command or file that creates it, or marks it as a human gate and says why it cannot be derived from source.
+
+## 11. Security gates are specified by the shape they accept
+
+For a task that specifies a security gate (an allowlist or deny list, a sandbox, a read-only wrapper around a CLI):
+
+- State the gate as the exact form it accepts (`<group…> <verb> [<one arg>]`, with token shapes and a flag allowlist matched after normalising the flag name), never as "contains an allowed word and no denied word". The second form fails open for every bad word nobody listed.
+- List the bypass attempts the plan's author tried, with their results: an unlisted write verb plus a read-verb positional, a flag whose separate value hides the verb, repeated or contradictory flags (last one wins), single- and double-dash spellings, quoting tricks and flag files.
+- Check the ALLOWED list against the deny list for contradictions.
+- Where the gate re-implements another tool's argv parsing, add one test that resolves each allowed argv with the real tool's parser (offline, e.g. `--help`), not only the gate's own model of it.
+
+Example: a read-only gcloud wrapper built to "a read verb anywhere and no deny word" passed its own tests and allowed `gcloud storage rm gs://b/obj list`; after a structural fix, `--project list copy …` still hid the verb.
+
+## 12. Repeat-count runs are sized and recorded per iteration
+
+For a task that proves a fix by repeating a run N times (a flake count, a stress or soak run):
+
+- Step 0 times one iteration under the same load. Size the time cap from that measurement, and split the count into chunks so no single call runs longer than about 30 minutes.
+- Each iteration appends its result, a wall-clock timestamp and its duration to a tally file as it goes. The timestamps let a stall be lined up with sleep/wake lines (`pmset -g log`) at once.
+- A non-pass iteration saves its full output and a process snapshot (`ps`), never only `tail -1`.
+- A background load generator is started with its PID saved and killed in a `trap`, early stop included; afterwards its current child and any scratch tmux server or test process it left are killed by PID and checked with `ps`.
+- Long runs keep the machine awake (`caffeinate -w <pid>`). `caffeinate` does not stop a closed laptop on battery from sleeping, so a run that must not stall stays on power with the lid open.
+
+Example: 120 loaded runs at about 37 s each were given one 3600 s call; it timed out with no tally and left its load loop running for a day and a half. The retry kept only `tail -1` per iteration, so its two failures, during a sleep, had no output.
+
 ## Before you finish
 
-Re-read the plan's tasks: every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, and an autonomous session ends with a printed prompt, not a question.
+Re-read the plan's tasks: every security gate is stated as an accepted shape with its tried bypasses, every repeat-count task sizes its cap from a timed iteration and records each iteration, every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, every plan-authored guard test names its mutation, every snippet and external-tool value was run once, and an autonomous session ends with a printed prompt, not a question.
 
 Then check that each task's `**Verify:**` command is byte-identical to its json:metadata `verifyCommand`, or that the Verify line says "see verifyCommand". Two different commands give the executor two acceptance numbers. Mechanical check: extract both per task and diff them.

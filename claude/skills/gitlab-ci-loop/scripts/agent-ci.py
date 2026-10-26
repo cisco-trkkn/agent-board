@@ -824,19 +824,39 @@ def merged_mr_for_head(b: str) -> dict | None:
     return next((m for m in mrs if m.get("sha") == sha), None)
 
 
+def merged_mr_since(b: str, since: str) -> dict | None:
+    """The most recently updated MR for this branch merged since `since` (UTC ISO time), if no MR is open.
+
+    No sha match: a squash on the server changes the sha. The time bound keeps an older use of a reused branch name out."""
+    if find_mr(b):
+        return None
+    mrs = api(f"projects/:id/merge_requests?state=merged&source_branch={urllib.parse.quote(b, safe='')}"
+              f"&updated_after={urllib.parse.quote(since, safe='')}&order_by=updated_at&sort=desc&per_page=5")
+    return mrs[0] if mrs else None
+
+
+def finish_merged(cfg: dict, args, merged: dict) -> int:
+    """The MR is merged (by the user): nothing left to squash, push or retitle. Follow it to postmerge."""
+    say(f"MR !{merged['iid']} was already merged into {merged['target_branch']}; skipping squash and title")
+    if args.no_follow or not (cfg.get("postmerge") or {}).get("follow", True):
+        return 0
+    return cmd_follow(cfg, argparse.Namespace(mr=merged["iid"], merge_timeout=args.merge_timeout,
+                                              merge_interval=args.merge_interval, timeout=3600,
+                                              interval=20, tail=40))
+
+
 def cmd_finish(cfg: dict, args) -> int:
     b = guard_branch(cfg)
     ensure_auth()
+    # A merge that happens while finish runs leaves an MR updated after this moment (2 min allows for clock skew).
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 120))
     merged = merged_mr_for_head(b)
     if merged:
-        # The user merged before finish ran: nothing left to squash, push or retitle.
-        say(f"MR !{merged['iid']} was already merged into {merged['target_branch']}; skipping squash and title")
-        if args.no_follow or not (cfg.get("postmerge") or {}).get("follow", True):
-            return 0
-        return cmd_follow(cfg, argparse.Namespace(mr=merged["iid"], merge_timeout=args.merge_timeout,
-                                                  merge_interval=args.merge_interval, timeout=3600,
-                                                  interval=20, tail=40))
+        return finish_merged(cfg, args, merged)
     ensure_clean()
+    merged = merged_mr_since(b, started)
+    if merged:
+        return finish_merged(cfg, args, merged)
     pl = pipeline_for(head_sha())
     if not args.force and (not pl or pl["status"] != "success"):
         fail(f"HEAD pipeline is {pl['status'] if pl else 'missing'}; finish only after green (or --force).", 1)
@@ -859,7 +879,17 @@ def cmd_finish(cfg: dict, args) -> int:
         sh(*git_net("push", "--quiet", "--force-with-lease", "origin", "HEAD"), capture=False)
     elif commits:
         sh(*git_net("push", "--quiet", "origin", "HEAD"), check=False)
-    mr = ensure_mr(cfg, b)
+    # The user may have merged while the squash and push ran: creating an MR now would fail (source branch deleted).
+    merged = merged_mr_since(b, started)
+    if merged:
+        return finish_merged(cfg, args, merged)
+    try:
+        mr = ensure_mr(cfg, b)
+    except SystemExit:
+        merged = merged_mr_since(b, started)  # merged between the lookup and the create
+        if merged:
+            return finish_merged(cfg, args, merged)
+        raise
     title = format_mr_title(args.message.splitlines()[0], mr_title_style(cfg, target_for(cfg, b)))
     api(f"projects/:id/merge_requests/{mr['iid']}", "PUT",
         fields={"title": title})  # also drops a "Draft:" prefix (mr_draft: true, or older MRs)

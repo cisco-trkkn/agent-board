@@ -5,6 +5,12 @@
 # scheduled jobs and the skill-creator rule live in <workspace>/README.md, which the text points to. Adapted from task-observer references/environments.md ("A session-start hook").
 ws="${TASK_OBSERVER_WORKSPACE:-$HOME/.task-observer}"
 d="$ws/skill-observations"
+# A worker started by `tmux-ctl agent` carries TC_ROLE=worker (bin/tmux-ctl). Workers do not run the
+# protocol, so the mandate is replaced by the exemption instead of sitting next to it.
+if [ "${TC_ROLE:-}" = worker ]; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Worker session (TC_ROLE=worker): do not invoke task-observer or write to its log; put any skill findings in your final report."}}'
+  exit 0
+fi
 open=$(find "$d/observation-log" -maxdepth 1 -name '*.md' -exec grep -l '^status: open$' {} + 2>/dev/null | wc -l | tr -d ' ')
 last=$(cat "$d/last-review-date.txt" 2>/dev/null || echo never)
 msg='Task observer. Before the first tool call of this session, and again before writing or proposing a plan (not merely before executing one), invoke the task-observer skill AND execute its Session Start Protocol (storage check, frontmatter scan, review trigger). Loading the skill and running the protocol are separate steps: a session that loads the file and stops has activated nothing. Any turn that will involve a tool call counts; do not classify the session as too simple from its opening message. Invoke it with no Skill arguments: arguments rewrite $1…$9 in its inline shell and awk snippets. Exception: a teammate or subagent dispatched by a lead session (Agent tool, tmux-ctl worker) does not run the protocol, offer a review or write to the log; it puts skill findings in its final report for the lead to log.'

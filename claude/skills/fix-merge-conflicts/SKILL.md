@@ -1,5 +1,5 @@
 ---
-name: fix-merge-conflicts
+name: "fix-merge-conflicts"
 description: Resolve merge conflicts non-interactively, validate build and tests, and finalize conflict resolution
 ---
 
@@ -16,7 +16,8 @@ Branch has unresolved merge conflicts and needs a reliable path to a buildable s
 3. Prefer preserving both sides when safe. Otherwise, choose the variant that compiles and keeps public behavior stable.
 4. Regenerate lockfiles with package manager tools instead of hand-editing.
 5. Run compile, lint, and relevant tests.
-6. Stage resolved files and summarize key decisions.
+6. Run the test suites once more with a scratch HOME and a PATH without user-local bins (`HOME=$(mktemp -d) PATH=/usr/bin:/bin <test command>`, keeping the toolchain's own path). Tests that came in clean from the other side were checked only on their author's machine; a hard-coded `~/.local/bin/<tool>` passes locally and fails on every CI runner.
+7. Stage resolved files and summarize key decisions.
 
 ## Guardrails
 
@@ -29,4 +30,4 @@ Branch has unresolved merge conflicts and needs a reliable path to a buildable s
 
 - Files resolved
 - Notable resolution choices
-- Build/test outcome
+- Build/test outcome, including the scratch-HOME run

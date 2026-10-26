@@ -464,6 +464,87 @@ class AlreadyMergedTests(unittest.TestCase):
             self.assertIsNone(agent.merged_mr_for_head("agent/sync"))
 
 
+class MergedDuringFinishTests(unittest.TestCase):
+    """The user merges while finish runs (delete-source-branch on): finish must follow, never POST a new MR."""
+    NEW = {"iid": 153, "sha": "squashed", "target_branch": "dev3"}
+    ARGS = dict(message="m", force=False, no_follow=False, no_squash=False, merge_timeout=1, merge_interval=0)
+
+    def _finish(self, merged_after_start, ensure_mr=None, **kw):
+        endpoints, posts = [], []
+        def fake_api(endpoint, method="GET", raw=False, fields=None):
+            endpoints.append(endpoint)
+            if method == "POST":
+                posts.append(endpoint)
+                raise AssertionError(f"unexpected POST {endpoint}")
+            if method != "GET":
+                return {}
+            if "state=opened" in endpoint:
+                return []
+            if "updated_after=" in endpoint:
+                return merged_after_start
+            return [{"iid": 150, "sha": "old", "target_branch": "dev3"}]  # an earlier use of the branch name
+        def fake_sh(*cmd, **k):
+            return {"merge-base": "mb"}.get(cmd[1], "c2\nc1" if cmd[1] == "rev-list" else "")
+        patches = [patch.object(agent, "guard_branch", return_value="agent/sync"), patch.object(agent, "ensure_auth"),
+                   patch.object(agent, "ensure_clean"), patch.object(agent, "head_sha", return_value="head"),
+                   patch.object(agent, "pipeline_for", return_value={"status": "success"}),
+                   patch.object(agent, "base_ref", return_value="origin/dev3"),
+                   patch.object(agent, "target_for", return_value="dev3"),
+                   patch.object(agent, "sh", side_effect=fake_sh),
+                   patch.object(agent, "git_net", side_effect=lambda *a: ["git", *a]),
+                   patch.object(agent, "mr_title_style", return_value="plain"),
+                   patch.object(agent, "bump_rounds"),
+                   patch.object(agent, "api", side_effect=fake_api)]
+        if ensure_mr is not None:
+            patches.append(patch.object(agent, "ensure_mr", ensure_mr))
+        with patch.object(agent, "cmd_follow", return_value=7) as follow:
+            for p in patches:
+                p.start(); self.addCleanup(p.stop)
+            rc = agent.cmd_finish(CFG, Namespace(**{**self.ARGS, **kw}))
+        return rc, follow, endpoints, posts
+
+    def test_merge_during_finish_goes_to_follow_without_posting(self):
+        rc, follow, endpoints, posts = self._finish([self.NEW])
+        self.assertEqual(7, rc)
+        self.assertEqual([], posts)
+        self.assertEqual(153, follow.call_args.args[1].mr)
+
+    def test_merge_found_when_create_fails_goes_to_follow(self):
+        calls = []
+        def merged_since(b, since):
+            calls.append(since)  # the merge lands after the first two lookups
+            return self.NEW if len(calls) >= 3 else None
+        def create_fails(cfg, b):
+            raise SystemExit(1)  # POST merge_requests: source_branch does not exist
+        with patch.object(agent, "merged_mr_since", side_effect=merged_since):
+            rc, follow, _, _ = self._finish([], ensure_mr=create_fails)
+        self.assertEqual(7, rc)
+        self.assertEqual(153, follow.call_args.args[1].mr)
+
+    def test_failed_create_without_a_merge_still_exits_with_the_error(self):
+        def boom(cfg, b):
+            raise SystemExit(1)
+        with self.assertRaises(SystemExit) as cm:
+            self._finish([], ensure_mr=boom)
+        self.assertEqual(1, cm.exception.code)
+
+    def test_lookup_asks_for_merges_since_finish_started_most_recent_first(self):
+        _, _, endpoints, _ = self._finish([self.NEW])
+        merged = [e for e in endpoints if "state=merged" in e and "updated_after=" in e]
+        self.assertTrue(merged)
+        self.assertIn("source_branch=agent%2Fsync", merged[0])
+        self.assertIn("order_by=updated_at", merged[0])
+
+    def test_older_merged_mr_of_a_reused_branch_name_does_not_block_a_new_mr(self):
+        created = []
+        def fake_ensure_mr(cfg, b):
+            created.append(b)
+            return {"iid": 1, "web_url": "u"}
+        rc, follow, _, _ = self._finish([], ensure_mr=fake_ensure_mr, no_follow=True)
+        self.assertEqual(["agent/sync"], created)
+        follow.assert_not_called()
+
+
 class TreeTests(unittest.TestCase):
     """Live tree: bridge children plus API pipelines matched to dispatch-<plan hash>-<target id> jobs."""
 
