@@ -690,7 +690,14 @@ class SweepRecent(StateBase):
         self._no_state_dir_env()
         with mock.patch.object(os, "confstr", return_value=str(tmpdir) + "/") as cs:
             self.assertEqual(ws.sweep_recent(), ["removed m1"])
-        cs.assert_called_with("CS_DARWIN_USER_TEMP_DIR")
+        cs.assert_called_with(65537)   # _CS_DARWIN_USER_TEMP_DIR: Python has no name for it in os.confstr_names
+
+    @unittest.skipUnless(sys.platform == "darwin", "the per-user temp dir is a macOS confstr value")
+    def test_darwin_fallback_with_the_real_confstr(self):
+        # found by the e2e run: the patched test above hid that os.confstr('CS_DARWIN_USER_TEMP_DIR') raises ValueError
+        self._no_state_dir_env()
+        real = os.confstr(65537)
+        self.assertEqual(ws.recent_dir(), Path(real.rstrip("/")) / f"tmux-ctl-{os.getuid()}")
 
     def test_lock_and_log_stay_under_home_state_dir_when_unset(self):
         home = self._no_state_dir_env()

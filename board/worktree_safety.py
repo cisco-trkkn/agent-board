@@ -23,6 +23,7 @@ from paneclass import tmux_cmd  # noqa: E402
 TIMEOUT = 20          # seconds, for every subprocess
 STALE_DAYS = 7        # unmerged and clean, last commit this old: stale
 AGENT_DIR = "/.claude/worktrees/"
+DARWIN_USER_TEMP_DIR = 65537   # _CS_DARWIN_USER_TEMP_DIR in <unistd.h>
 STATES = ("safe", "stale", "in_use", "dirty", "kept")
 
 
@@ -324,8 +325,8 @@ def recent_dir():
     if os.environ.get("AW_STATE_DIR"):
         return Path(os.environ["AW_STATE_DIR"])
     if not (os.environ.get("TC_STATE") or os.environ.get("TMPDIR")):
-        try:
-            user_tmp = os.confstr("CS_DARWIN_USER_TEMP_DIR")
+        try:   # _CS_DARWIN_USER_TEMP_DIR: Python lists no name for it, but os.confstr takes the number
+            user_tmp = os.confstr(DARWIN_USER_TEMP_DIR) if sys.platform == "darwin" else ""
         except (AttributeError, ValueError, OSError):
             user_tmp = ""
         if user_tmp:
