@@ -20,7 +20,7 @@ agent-board installs from a clone of this repo with one script, `install.sh`, an
 | `~/.config/agent-board/` | **not created**; optional overrides you write yourself ([CUSTOMIZATION](CUSTOMIZATION.md)) | none |
 | `~/.claude/projects/` (your transcripts) | **read only**, by the board's Usage tab | none: nothing is written there |
 
-How the rest reaches Claude without touching `~/.claude`: every Claude that agent-board starts gets `--settings` with the settings file in `<clone>/claude/` (agent teams, `teammateMode`, the `AGENT_BOARD=1` marker) and `--plugin-dir <clone>/claude/plugin` (the `bash-mirror`, `artifact-register` and `kill-guard` hooks, the `tmux-orchestrator` and `handoff` skills, the `effort-low`/`-medium`/`-high` agent types). That covers the lead, the workers started by `tmux-ctl agent`, and the teammates, which Claude Code starts with the lead's own `--settings` and `--plugin-dir` flags. Plain `claude` outside agent-board loads none of it.
+How the rest reaches Claude without touching `~/.claude`: every Claude that agent-board starts gets `--settings` with the settings file in `<clone>/claude/` (agent teams, `teammateMode`, the `AGENT_BOARD=1` marker) and `--plugin-dir <clone>/claude/plugin` (the `bash-mirror`, `artifact-register`, `kill-guard` and `worktree-sweep` hooks, the `tmux-orchestrator` and `handoff` skills, the `effort-low`/`-medium`/`-high` agent types). That covers the lead, the workers started by `tmux-ctl agent`, and the teammates, which Claude Code starts with the lead's own `--settings` and `--plugin-dir` flags. Plain `claude` outside agent-board loads none of it.
 
 > **Used the author's earlier global setup, or an earlier version of this guide?** Run `./install.sh --migrate` (see [Migrating](#migrating-from-the-global-setup)). Otherwise the old global hooks run next to the new ones.
 
@@ -103,12 +103,25 @@ Detach with the usual `Ctrl-b d`. agent-board's tmux server uses tmux's default 
 
 **Your own setup is untouched:**
 
-Nothing under `~/.claude` was written by `./install.sh`. In a plain `claude` session started outside agent-board, `/hooks` lists none of the three agent-board hooks. In the agent-board lead, `/hooks` lists them.
+Nothing under `~/.claude` was written by `./install.sh`. In a plain `claude` session started outside agent-board, `/hooks` lists none of the four agent-board hooks. In the agent-board lead, `/hooks` lists them.
 
 ### Things to know
 
 - **The session `PATH`.** `claude-orchestrator` puts the clone's `bin/` first on `PATH` and also sets it as the `PATH` of the agent-board tmux session (`tmux set-environment`). Workers started by `tmux-ctl agent` get the same `PATH` on their command line. Every window opened in that session afterwards, yours included, finds `tmux-ctl` and the other agent-board commands without a path, and sees the clone's `bin/` ahead of the rest of your `PATH` there. It reaches no other session or server.
 - **Teammates.** They get the lead's `--settings` and `--plugin-dir` flags from Claude Code. The tmux session environment carries only `PATH` and `AGENT_BOARD_REPO`, which is why they are set on the session.
+
+### Daily worktree cleanup (optional)
+
+Merged agent worktrees are removed automatically after a merge or pull and when you stop a worker. To also sweep every recent project once a day at 04:00, install the LaunchAgent:
+
+```zsh
+cd ~/agent-board                          # the main checkout, not a worktree
+agent-board worktrees schedule install    # writes ~/Library/LaunchAgents/com.user.agent-worktree-sweep.plist and loads it
+agent-board worktrees schedule status     # state and last exit code, or "not installed"
+agent-board worktrees schedule uninstall
+```
+
+Run it from `~/agent-board` (the main checkout), not from a worktree: the plist points at the `agent-board` beside the CLI you ran (or at `~/.local/bin/agent-board` when that link exists), and a worktree is the kind of directory the sweep removes. `install` refuses, and writes nothing, when neither is executable. `agent-board worktrees classify` and `sweep --dry-run` show what a sweep would do without removing anything.
 
 ## Migrating from the global setup
 
@@ -123,10 +136,10 @@ Only for a machine that has the author's earlier install: agent-board hooks in `
 
 | What | What `--migrate` does |
 | --- | --- |
-| the three agent-board hooks (`kill-guard.sh`, `bash-mirror.sh`, `artifact-register.sh`) in `~/.claude/settings.json` | removes those entries, **only if the file round-trips exactly through JSON re-serialisation**. Otherwise it leaves `settings.json` untouched, prints the entries to remove by hand, and exits 1. When it does change the file, it first keeps a backup `settings.json.bak-YYYYMMDD`. Your own hooks, such as `superpowers-hook.sh` registrations, are left alone. |
+| the four agent-board hooks (`kill-guard.sh`, `bash-mirror.sh`, `artifact-register.sh`, `worktree-sweep.sh`) in `~/.claude/settings.json` | removes those entries, **only if the file round-trips exactly through JSON re-serialisation**. Otherwise it leaves `settings.json` untouched, prints the entries to remove by hand, and exits 1. When it does change the file, it first keeps a backup `settings.json.bak-YYYYMMDD`. Your own hooks, such as `superpowers-hook.sh` registrations, are left alone. |
 | agent-board lines in `~/.tmux.conf` | strips the two hooks and the bindings `W`, `f` and `D` (which called tools in `~/.local/bin` that no longer exist). Backup `.tmux.conf.bak-YYYYMMDD` is kept. The rest of your file is left alone. |
 | your **running** tmux server | not touched. `--migrate` prints the commands to run, `tmux set-hook -gu after-split-window; tmux set-hook -gu session-closed; tmux unbind W; tmux unbind f; tmux unbind D`, or you can restart tmux. |
-| links in `~/.local/bin` (`claude-orchestrator`, `dev`, `tmux-*`, 10 in all) and `~/.claude` (`hooks/{bash-mirror,artifact-register,kill-guard}.sh`, `orchestrator.md`, `worker.md`) that point into this clone | removes them. A link that points elsewhere is kept. A link that `settings.json` or `~/.tmux.conf` still names, because that file could not be updated, is kept too. |
+| links in `~/.local/bin` (`claude-orchestrator`, `dev`, `tmux-*`, 10 in all) and `~/.claude` (`hooks/{bash-mirror,artifact-register,kill-guard,worktree-sweep}.sh`, `orchestrator.md`, `worker.md`) that point into this clone | removes them. A link that points elsewhere is kept. A link that `settings.json` or `~/.tmux.conf` still names, because that file could not be updated, is kept too. |
 | `~/.claude/skills/tmux-orchestrator`, `~/.claude/skills/handoff`, `~/.claude/agents/effort-{low,medium,high}.md` | moves them (never deletes) to `~/.local/state/agent-board/migrated-YYYYMMDD/`, because the agent-board plugin now ships them. A `handoff` that is a real directory rather than a link is kept, with a note. `--keep-agents` leaves the `effort-*` agents in `~/.claude/agents/`. |
 
 Moving the `effort-*` agents means plain `claude` sessions outside agent-board no longer have them; use `--keep-agents` if you rely on them there.
