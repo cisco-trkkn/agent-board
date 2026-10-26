@@ -541,6 +541,21 @@ class DismissActionTest(Base):
                 self.act(action="art_dismiss_session", session="p", epoch=ep)
         self.assertEqual(len(artifacts.entries("p")), 4)
 
+    def test_dismissed_must_be_a_json_bool(self):
+        for v in ("false", "true", 0, 1, None, "yes"):
+            with self.assertRaises(Exception, msg=repr(v)):
+                self.act(action="art_dismiss", session="p", keys=[str(self.spec)], dismissed=v)
+        with self.assertRaises(Exception):   # missing is not a bool either
+            self.act(action="art_dismiss", session="p", keys=[str(self.spec)])
+        self.assertEqual(len(artifacts.entries("p")), 4)
+
+    def test_keys_are_capped_at_500(self):
+        keys = [f"/k/{i}.md" for i in range(501)]
+        with self.assertRaises(Exception) as cm:
+            self.act(action="art_dismiss", session="p", keys=keys, dismissed=True)
+        self.assertIn("500", str(cm.exception))   # refused for the cap, not for an unknown key
+        self.assertEqual(len(artifacts.entries("p")), 4)
+
     def test_http_unknown_key_is_400_with_message(self):
         httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         port = httpd.server_address[1]

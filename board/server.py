@@ -572,9 +572,12 @@ def _act(body):
         keys = body.get("keys")
         if not isinstance(keys, list) or not keys or not all(isinstance(k, str) and k for k in keys):
             raise RuntimeError("keys: a list of artifact paths or urls")
-        restore = body.get("dismissed") is False
-        n = artifacts.dismiss(sess, keys, not restore)
-        return f"{'restored' if restore else 'dismissed'} {n}"
+        if len(keys) > 500:
+            raise RuntimeError("keys: at most 500 at a time")
+        if type(body.get("dismissed")) is not bool:
+            raise RuntimeError("dismissed: true or false")
+        n = artifacts.dismiss(sess, keys, body["dismissed"])
+        return f"{'dismissed' if body['dismissed'] else 'restored'} {n}"
     if a in ("save", "comment", "idea") and not NAME_RE.fullmatch(sess):
         raise RuntimeError("bad session")
     if a == "idea":
