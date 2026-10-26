@@ -143,6 +143,8 @@ main.with-term .term { display: flex; }
 .wt-row b, .wt-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wt-row .tags { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .wt-row > button { white-space: nowrap; }
+.wt-bar { display: flex; gap: 12px; align-items: center; padding: 8px 14px; }
+.wt-bar small { color: var(--muted); }
 @container (max-width: 520px) {
   .wt-row { grid-template-columns: minmax(0, 1fr) auto; }
   .wt-row .tags { grid-column: 1; grid-row: 2; justify-content: flex-start; }
@@ -559,6 +561,18 @@ function renderWorktrees() {
   const wt = s && s.worktrees;
   $("#wt-note").textContent = wt ? (wt.current && wt.current !== wt.base ? `merged = in ${wt.current} or ${wt.base}` : `merged = in ${wt.base}`) : "";
   if (!wt) { box.append(el("div", "empty", "This session isn't in a git repo.")); return; }
+  const safeN = wt.items.filter((i) => i.state === "safe").length, ls = data.last_sweep;
+  if (wt.items.length || ls) {
+    const bar = el("div", "wt-bar");
+    if (wt.items.length) {
+      const all = el("button", null, `Remove safe (${safeN})`);
+      all.title = "Merged, clean worktrees nobody is using. The count is a hint: the sweep re-checks online (fetch, MR lookup) before removing.";
+      all.onclick = () => action({ action: "remove_safe_worktrees", session: s.name });
+      bar.append(all);
+    }
+    if (ls) bar.append(el("small", null, `last sweep ${ls.at}: removed ${ls.removed}, ${ls.stale} stale`));
+    box.append(bar);
+  }
   if (!wt.items.length) { box.append(el("div", "empty", "No agent worktrees. Finished workers show up here for cleanup.")); return; }
   for (const it of wt.items) {
     const row = el("div", "wt-row");
@@ -566,6 +580,8 @@ function renderWorktrees() {
     const tags = el("div", "tags");
     tags.append(el("span", "pill " + (it.merged ? "ready" : "running"), it.merged ? "Merged" : "Not merged"));
     if (it.dirty) tags.append(el("span", "pill waiting", "Uncommitted"));
+    if (it.state === "stale") tags.append(el("span", "pill waiting", `stale ${it.age_days}d`));
+    else if (it.state === "in_use") { const b = el("span", "pill running", "In use"); b.title = it.reason || ""; tags.append(b); }
     const rm = el("button", null, "Remove"); rm.disabled = it.dirty;
     rm.title = it.dirty ? "Has uncommitted changes — commit or discard them first" : (it.merged ? "Remove worktree and delete its merged branch" : "Remove worktree; the unmerged branch is kept");
     rm.onclick = () => { if (confirm(`Remove worktree ${it.name}?${it.merged ? "" : "\nIts branch is not merged and will be kept."}`)) action({ action: "remove_worktree", session: s.name, path: it.path }); };

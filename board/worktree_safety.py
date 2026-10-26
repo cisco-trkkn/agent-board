@@ -274,10 +274,11 @@ def classify(repo, fetch=True, now=None, only=None, skip_fetch=False):
 
 # ---- remove ----
 
-def remove(repo, path, force_branch=False):
+def remove(repo, path, force_branch=False, proc_args_fn=None):
     """Remove one agent worktree the user (or a sweep) chose. Needs only: under .claude/worktrees/, clean, no live
     Claude lock. A stale lock is lifted and put back if git refuses. Never `--force`. Returns the message the board shows;
-    raises RuntimeError on refusal (and NotARepo). force_branch: `branch -D` instead of `-d` (verified squash only)."""
+    raises RuntimeError on refusal (and NotARepo). force_branch: `branch -D` instead of `-d` (verified squash only).
+    proc_args_fn: the `ps` reader for the lock check (the board passes its own so its tests can patch it)."""
     main, blocks = _worktrees(repo)
     want = os.path.realpath(path)
     wt = next((b for b in blocks[1:] if os.path.realpath(b["path"]) == want and b["path"].startswith(_agent_root(main))), None)
@@ -293,7 +294,7 @@ def remove(repo, path, force_branch=False):
         pid = claude_lock_owner(reason)
         if pid is None:
             raise RuntimeError(f"locked by something other than Claude ({reason}); unlock it yourself")
-        if not lock_is_stale(pid):
+        if not lock_is_stale(pid, proc_args_fn):
             raise RuntimeError(f"in use by a running Claude session (pid {pid})")
         _git(main, "worktree", "unlock", wpath)
         note = f"unlocked stale lock (pid {pid}); "

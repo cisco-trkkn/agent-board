@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 import http.server
 from http.server import BaseHTTPRequestHandler
@@ -254,6 +255,32 @@ def deliver_comments(sessions):
                                  input_has_text=lambda pane: _input_busy(pane))
 
 
+def last_sweep(max_bytes=65536):
+    """Counts of the latest sweep run in the engine's log: {"at": "HH:MM", "removed": n, "stale": n}, or None.
+    A run is the trailing lines within 10 minutes of the last one; would-remove (dry-run) lines don't count."""
+    try:
+        with open(worktree_safety.state_dir() / "worktree-sweep.log", "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - max_bytes))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    rows = []
+    for line in text.splitlines():
+        f = line.split("\t")
+        if len(f) == 5 and f[2] != "would-remove":
+            try:
+                rows.append((datetime.fromisoformat(f[0]), f[2]))
+            except ValueError:
+                pass
+    if not rows:
+        return None
+    last = rows[-1][0]
+    run = [r for r in rows if 0 <= (last - r[0]).total_seconds() <= 600]
+    return {"at": run[0][0].strftime("%H:%M"), "removed": sum(1 for r in run if r[1] == "removed"),
+            "stale": sum(1 for r in run if r[1] == "stale")}
+
+
 def build_state():
     fmt = SEP.join([
         "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}",
@@ -297,7 +324,7 @@ def build_state():
     snap = INDEXER.snapshot() if INDEXER else []
     usage.card_alerts(out, snap)
     usage.card_labels(out, snap)
-    return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}}
+    return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}, "last_sweep": last_sweep()}
 
 
 
@@ -374,13 +401,19 @@ def worktrees(path):
                 for ref in {current, base} if ref]
     merged_set = {l for f in merged_f for l in f.result().stdout.splitlines()}
     ages = dict(l.split("\t", 1) for l in ages_f.result().stdout.splitlines() if "\t" in l)
+    try:   # offline: the poll never runs `git fetch` or glab
+        states = {i["path"]: i for i in worktree_safety.classify(main, fetch=False)["items"]}
+    except Exception:
+        states = {}
     items = []
     for b, d in zip(agents, dirty_f):
         br = b.get("branch")
         age = ages.get(br) if br else git(b["path"], "log", "-1", "--format=%cr").stdout.strip()
         items.append({"path": b["path"], "name": Path(b["path"]).name, "branch": br,
                       "dirty": bool(d.result().stdout.strip()), "merged": bool(br) and br in merged_set,
-                      "age": age or "", "locked": b.get("locked")})
+                      "age": age or "", "locked": b.get("locked"),
+                      "state": states.get(b["path"], {}).get("state"), "reason": states.get(b["path"], {}).get("reason", ""),
+                      "age_days": states.get(b["path"], {}).get("age_days")})
     return {"repo": main, "current": current, "base": base, "items": items}
 
 
@@ -511,6 +544,11 @@ def _act(body):
     if a == "remove_worktree":
         wt = session_worktree(sess, body["path"])
         return remove_agent_worktree(wt["repo"], wt["item"])
+    if a == "remove_safe_worktrees":
+        try:
+            return sweep_report(worktree_safety.sweep(project_repo(sess)))
+        finally:
+            forget_worktrees()
     if a == "dev":
         path = os.path.expanduser(body["path"].strip())
         if not os.path.isdir(path):
@@ -596,6 +634,17 @@ def _windows_named(sess, name):
     return found
 
 
+def _agent_worktree_of(window_id):
+    """The .claude/worktrees/<name> directory the window's pane is in, or None."""
+    try:
+        path = tmux("display-message", "-p", "-t", window_id, "#{pane_current_path}").strip()
+    except Exception:
+        return None
+    head, sep, tail = path.partition("/.claude/worktrees/")
+    name = tail.split("/", 1)[0]
+    return f"{head}{sep}{name}" if sep and name else None
+
+
 def stop_agent(sess, name):
     """Close one worker window (tagged @tc_agent by tmux-ctl agent), by window id. Its worktree stays."""
     _check_project(sess)
@@ -606,8 +655,20 @@ def stop_agent(sess, name):
         raise RuntimeError(f"more than one window named {name}; close it from its terminal")
     if not hits[0]["agent"]:
         raise RuntimeError(f"{name} is not a worker")
+    wt = _agent_worktree_of(hits[0]["id"])   # read before the window is gone
     tmux("kill-window", "-t", hits[0]["id"], check=True)
-    return f"shut down worker {name}; its worktree and branch are still in Worktrees"
+    if not wt:
+        return f"shut down worker {name}; its worktree and branch are still in Worktrees"
+    try:   # a merged worker goes at once; an unmerged one stays in Worktrees
+        line = worktree_safety.sweep(wt, only=wt)
+        line = line[0] if line else "no worktree found"
+    except Exception as e:
+        line = f"kept ({e})"
+    finally:
+        forget_worktrees()
+    if line.startswith("removed "):
+        return f"shut down worker {name}; removed its worktree"
+    return f"shut down worker {name}; worktree kept in Worktrees: {line}"
 
 
 def ask_shutdown(sess, name):
@@ -674,29 +735,19 @@ def lock_is_stale(pid):
 
 
 def remove_agent_worktree(repo, item):
-    path, reason, note = item["path"], item.get("locked"), ""
-    if reason:
-        pid = claude_lock_owner(reason)
-        if pid is None:
-            raise RuntimeError(f"locked by something other than Claude ({reason}); unlock it yourself")
-        if not lock_is_stale(pid):
-            raise RuntimeError(f"in use by a running Claude session (pid {pid})")
-        git(repo, "worktree", "unlock", path)
+    try:
+        return worktree_safety.remove(repo, item["path"], proc_args_fn=lambda p: proc_args(p))
+    finally:
         forget_worktrees()
-        note = f"unlocked stale lock (pid {pid}); "
-    r = git(repo, "worktree", "remove", path)
-    if r.returncode != 0:
-        if reason:
-            git(repo, "worktree", "lock", "--reason", reason, path)
-        raise RuntimeError((r.stderr or r.stdout).strip() or "git refused (uncommitted changes?)")
-    msg = f"{note}removed worktree {item['name']}"
-    br = item.get("branch")
-    if br:
-        d = git(repo, "branch", "-d", br)
-        msg += f"; deleted branch {br}" if d.returncode == 0 else f"; kept branch {br} (not merged)"
-    git(repo, "worktree", "prune")
-    forget_worktrees()
-    return msg
+
+
+def sweep_report(lines):
+    """One toast line from the engine's sweep lines."""
+    if lines == ["sweep already running"]:
+        return "a sweep is already running"
+    removed = [l[8:] for l in lines if l.startswith("removed ")]
+    rest = [l for l in lines if not l.startswith("removed ")]
+    return "; ".join([f"removed {', '.join(removed) if removed else 'nothing'}"] + rest)
 
 
 def session_worktree(sess, path):
