@@ -83,6 +83,8 @@ def _parse_worktrees(text):
             cur["branch"] = line[18:]
         elif line.startswith("locked"):
             cur["locked"] = line[7:] or "locked"
+        elif line.startswith("prunable"):
+            cur["prunable"] = line[9:] or "prunable"
         elif not line and cur:
             blocks.append(cur)
             cur = {}
@@ -205,7 +207,8 @@ class _Ctx:
 
 def _classify_one(ctx, wt):
     path, sha, branch = wt["path"], wt.get("head", ""), wt.get("branch")
-    ct = _git(path, "log", "-1", "--format=%ct").stdout.strip()
+    missing = bool(wt.get("prunable")) or not os.path.isdir(path)
+    ct = "" if missing else _git(path, "log", "-1", "--format=%ct").stdout.strip()
     age = max(0, int((ctx.now - datetime.fromtimestamp(int(ct), timezone.utc)).total_seconds() // 86400)) if ct else None
     out = {"path": path, "name": Path(path).name, "branch": branch, "head": sha,
            "state": "kept", "reason": "", "age_days": age, "squash": False}
@@ -214,6 +217,8 @@ def _classify_one(ctx, wt):
         out["state"], out["reason"] = state, reason
         return out
 
+    if missing:   # no git call may run with a missing directory as cwd
+        return done("kept", "directory missing (prunable)")
     st = _git(path, "status", "--porcelain")
     if st.returncode != 0:
         return done("kept", f"can't read status: {st.stderr.strip()[:120]}")
@@ -286,10 +291,11 @@ def classify(repo, fetch=True, now=None, only=None, skip_fetch=False):
             continue
         try:
             items.append(_classify_one(ctx, wt))
-        except subprocess.TimeoutExpired as e:
+        except (subprocess.TimeoutExpired, OSError) as e:
+            why = f"timed out: {' '.join(map(str, e.cmd))[:80]}" if isinstance(e, subprocess.TimeoutExpired) else f"error: {e}"
             items.append({"path": wt["path"], "name": Path(wt["path"]).name, "branch": wt.get("branch"),
                           "head": wt.get("head", ""), "state": "kept", "age_days": None, "squash": False,
-                          "reason": f"timed out: {' '.join(map(str, e.cmd))[:80]}"})
+                          "reason": why})
     return {"repo": main, "base": base, "current": current, "items": items}
 
 
@@ -306,6 +312,8 @@ def remove(repo, path, force_branch=False, proc_args_fn=None):
     if wt is None:
         raise RuntimeError(f"not an agent worktree under .claude/worktrees/: {path}")
     wpath, reason, branch, name, note = wt["path"], wt.get("locked"), wt.get("branch"), Path(wt["path"]).name, ""
+    if wt.get("prunable") or not os.path.isdir(wpath):
+        raise RuntimeError(f"{name}: directory missing (prunable); `git worktree prune` clears the stale entry")
     st = _git(wpath, "status", "--porcelain")
     if st.returncode != 0:
         raise RuntimeError(f"can't read status of {name}: {st.stderr.strip()[:120]}")

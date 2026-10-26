@@ -18,7 +18,10 @@ export AW_TMUX="$T/tmux-stub" AW_GLAB="$T/glab-stub"   # the engine never reache
 export AW_STATE_DIR="$T/state"   # the engine's sweep log goes here, not to the real ~/.local/state
 print -r -- $'#!/bin/sh\nwhile :; do sleep 1; done' > "$T/claude-fake"; chmod +x "$T/claude-fake"
 
-mk() { git -C "$repo" worktree add -q "$repo/.claude/worktrees/$1" -b "$1" }
+# a branch younger than 24 h with no commit is kept ("new, no commits yet"); a reflog entry is stamped with the wall
+# clock, so the fixtures' creation entries are rewritten to two days ago
+aged() { perl -pi -e 's/> \d+ /"> " . (time - 172800) . " "/e' "$1/.git/logs/refs/heads/$2"; }
+mk() { git -C "$repo" worktree add -q "$repo/.claude/worktrees/$1" -b "$1" && aged "$repo" "$1" }
 dead() { true & local p=$!; wait $p; print $p }
 "$T/claude-fake" & live=$!; started+=($live)
 sleep 0.3
@@ -47,7 +50,7 @@ check "dirty: file untouched" test "$(cat $repo/.claude/worktrees/dirty/keep.txt
 # remove-all-safe row: a merged worktree goes, an unmerged one stays, a 9-day-old unmerged one shows `stale 9d`
 repo2="$T/repo2"; mkdir -p "$repo2"
 git -C "$repo2" init -qb main && git -C "$repo2" commit -q --allow-empty -m init
-mk2() { git -C "$repo2" worktree add -q "$repo2/.claude/worktrees/$1" -b "$1" }
+mk2() { git -C "$repo2" worktree add -q "$repo2/.claude/worktrees/$1" -b "$1" && aged "$repo2" "$1" }
 mk2 merged; mk2 unmerged; mk2 old
 git -C "$repo2/.claude/worktrees/unmerged" commit -q --allow-empty -m wip
 old_d="$(date -v-9d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '9 days ago' +%Y-%m-%dT%H:%M:%S)"

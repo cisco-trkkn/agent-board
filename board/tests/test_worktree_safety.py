@@ -985,5 +985,81 @@ class Schedule(Base):
         self.assertFalse(self.plist.exists())
 
 
+class MissingDir(StateBase):
+    """An agent worktree whose directory was deleted: git lists it `prunable`, and any git call with it as cwd raises."""
+
+    def gone(self, name):
+        wt = add_worktree(self.repo, name)
+        shutil.rmtree(wt)
+        return wt
+
+    def test_classify_lists_it_kept_and_does_not_raise(self):
+        self.gone("ghost")
+        add_worktree(self.repo, "merged")
+        res = ws.classify(str(self.repo), fetch=False, now=NOW)
+        by = {i["name"]: i for i in res["items"]}
+        self.assertEqual((by["ghost"]["state"], by["ghost"]["reason"]), ("kept", "directory missing (prunable)"))
+        self.assertEqual(by["merged"]["state"], "safe")
+
+    def test_no_git_call_runs_inside_the_missing_directory(self):
+        wt = self.gone("ghost")
+        real = ws.subprocess.run
+        cwds = []
+
+        def spy(cmd, *a, **k):
+            cwds.append(k.get("cwd"))
+            return real(cmd, *a, **k)
+        with mock.patch.object(ws.subprocess, "run", spy):
+            ws.classify(str(self.repo), fetch=False, now=NOW)
+        self.assertNotIn(str(wt), [str(c) for c in cwds])
+
+    def test_any_other_oserror_in_one_item_keeps_it_and_continues(self):
+        add_worktree(self.repo, "a")
+        add_worktree(self.repo, "b")
+        real = ws._classify_one
+
+        def flaky(ctx, wt):
+            if Path(wt["path"]).name == "a":
+                raise PermissionError("denied")
+            return real(ctx, wt)
+        with mock.patch.object(ws, "_classify_one", flaky):
+            by = {i["name"]: i for i in ws.classify(str(self.repo), fetch=False, now=NOW)["items"]}
+        self.assertEqual(by["a"]["state"], "kept")
+        self.assertIn("denied", by["a"]["reason"])
+        self.assertEqual(by["b"]["state"], "safe")
+
+    def test_sweep_still_removes_a_merged_sibling_and_keeps_the_ghost(self):
+        self.gone("ghost")
+        add_worktree(self.repo, "merged")
+        lines = ws.sweep(str(self.repo))
+        self.assertIn("removed merged", lines)
+        self.assertIn("kept ghost (directory missing (prunable))", lines)
+        self.assertIn("ghost", git("worktree", "list", cwd=self.repo).stdout)   # never pruned by us
+
+    def test_remove_on_a_missing_dir_raises_a_clear_error(self):
+        wt = self.gone("ghost")
+        with self.assertRaisesRegex(RuntimeError, "directory missing"):
+            ws.remove(str(self.repo), str(wt))
+
+    def test_recent_continues_to_the_next_repo(self):
+        self.gone("ghost")
+        other = Path(self.tmp) / "r2"
+        other.mkdir()
+        git("init", "-b", "main", cwd=other)
+        git("commit", "--allow-empty", "-m", "init", cwd=other)
+        add_worktree(other.resolve(), "m2")
+        self.state.mkdir(exist_ok=True)
+        (self.state / "recent-projects.json").write_text(json.dumps([str(self.repo), str(other.resolve())]))
+        lines = ws.sweep_recent()
+        self.assertIn("removed m2", lines)
+
+    def test_cli_sweep_exits_zero_with_a_ghost(self):
+        self.gone("ghost")
+        env = {**os.environ, "AW_TMUX": self.tmux, "AW_STATE_DIR": str(self.state)}
+        r = subprocess.run([sys.executable, str(CLI), "sweep", str(self.repo)], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("kept ghost", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
