@@ -31,7 +31,8 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, ideas, relay, usage  # noqa: E402
+import activity, artifacts, dirs, ideas, relay, usage, worktree_safety  # noqa: E402
+from worktree_safety import claude_lock_owner  # noqa: E402,F401
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 
 class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
@@ -663,27 +664,13 @@ def restart_orchestrator(sess, confirm):
     return msg
 
 
-CLAUDE_LOCK = re.compile(r"^claude \S+ .+ \(pid (\d+)( start .+)?\)$")
-
-
-def claude_lock_owner(reason):
-    m = CLAUDE_LOCK.match(reason or "")
-    return int(m.group(1)) if m else None
-
-
 def proc_args(pid):
-    r = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True)
-    return r.stdout.strip()
+    return worktree_safety.proc_args(pid)
 
 
 def lock_is_stale(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        pass   # alive, owned by someone else
-    return "claude" not in proc_args(pid).lower()   # alive but not Claude: the pid was reused
+    # the engine owns the rule; the ps reader is looked up here so tests can patch server.proc_args
+    return worktree_safety.lock_is_stale(pid, lambda p: proc_args(p))
 
 
 def remove_agent_worktree(repo, item):

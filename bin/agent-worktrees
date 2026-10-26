@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""agent-worktrees: report and clean up agent worktrees (.claude/worktrees/*)."""
+import argparse
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "board"))
+import worktree_safety as ws  # noqa: E402
+
+
+def cmd_classify(a):
+    try:
+        res = ws.classify(os.path.abspath(a.dir), fetch=not a.offline)
+    except ws.NotARepo as e:
+        print(f"agent-worktrees: not a git repo: {e}", file=sys.stderr)
+        return 2
+    if a.json:
+        print(json.dumps(res))
+    else:
+        for i in res["items"]:
+            print(f"{i['name']}\t{i['state']}\t{i['reason']}")
+    return 0
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="agent-worktrees")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("classify", help="state of each agent worktree")
+    c.add_argument("dir", nargs="?", default=".")
+    c.add_argument("--json", action="store_true")
+    c.add_argument("--offline", action="store_true", help="no git fetch, no glab")
+    c.set_defaults(fn=cmd_classify)
+    a = p.parse_args(argv)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
