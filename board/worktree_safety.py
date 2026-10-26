@@ -508,8 +508,29 @@ def _launchctl(*args):
         return subprocess.CompletedProcess(args, 127, "", str(e))
 
 
+def _executable(path):
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def agent_board_candidates(home=None):
+    """Where the scheduled job's `agent-board` may live, best first: the user's ~/.local/bin link, then the one
+    beside this CLI (AW_BIN_DIR is the test seam for that directory)."""
+    beside = Path(os.environ.get("AW_BIN_DIR") or Path(os.path.realpath(__file__)).parent.parent / "bin")
+    return [Path(home or _home()) / ".local" / "bin" / "agent-board", beside / "agent-board"]
+
+
+def agent_board_path(home=None):
+    """The first executable candidate, or raises RuntimeError naming every path checked."""
+    cands = agent_board_candidates(home)
+    for c in cands:
+        if _executable(c):
+            return c
+    raise RuntimeError("no executable agent-board to schedule; checked " + ", ".join(str(c) for c in cands))
+
+
 def schedule_install():
     home = _home()
+    target = agent_board_path(home)   # before anything is written
     plist = _plist_path(home)
     plist.parent.mkdir(parents=True, exist_ok=True)
     (home / ".local" / "state" / "agent-board").mkdir(parents=True, exist_ok=True)
@@ -518,7 +539,7 @@ def schedule_install():
         bak = plist.with_name(f"{plist.name}.bak-{datetime.now():%Y%m%d}")
         shutil.copy2(plist, bak)
         lines.append(f"backed up the old plist to {bak}")
-    plist.write_bytes(plist_text(home / ".local" / "bin" / "agent-board", str(home)))
+    plist.write_bytes(plist_text(target, str(home)))
     uid = os.getuid()
     _launchctl("bootout", f"gui/{uid}/{LABEL}")   # not loaded yet is fine
     r = _launchctl("bootstrap", f"gui/{uid}", str(plist))
@@ -543,4 +564,9 @@ def schedule_status():
     # the service's own keys sit one tab deep; nested blocks (event triggers, endpoints) are deeper
     keep = [l.strip() for l in r.stdout.splitlines()
             if re.match(r"^\t(state|last exit code) = ", l)]
-    return keep or ["installed"]
+    keep = keep or ["installed"]
+    try:
+        target = Path(plistlib.loads(_plist_path().read_bytes())["ProgramArguments"][0])
+    except (OSError, ValueError, KeyError, IndexError):
+        return keep
+    return keep + ([] if _executable(target) else [f"target missing: {target}"])

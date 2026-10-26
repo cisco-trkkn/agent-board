@@ -780,7 +780,12 @@ class Schedule(Base):
         self.stub = write_stub(self.bin / "launchctl", f'echo "$@" >> "{self.calls}"\n'
                                f'case "$1" in print) [ -f "{self.tmp}/loaded" ] && {{ printf "%b" \'{LAUNCHCTL_PRINT.replace(chr(10), "\\n").replace(chr(9), "\\t")}\'; exit 0; }}; echo "Could not find service" >&2; exit 113;; '
                                f'bootout) exit 3;; bootstrap) touch "{self.tmp}/loaded"; exit 0;; esac\n')
-        self.set_env(AW_LAUNCHCTL=self.stub, AW_HOME=str(self.home))
+        self.sibling = Path(self.tmp) / "sibling-bin"   # where "the agent-board beside this CLI" is looked up
+        self.sibling.mkdir()
+        self.link = self.home / ".local" / "bin" / "agent-board"
+        self.link.parent.mkdir(parents=True)
+        write_stub(self.link, "exit 0\n")
+        self.set_env(AW_LAUNCHCTL=self.stub, AW_HOME=str(self.home), AW_BIN_DIR=str(self.sibling))
         self.plist = self.home / "Library" / "LaunchAgents" / "com.user.agent-worktree-sweep.plist"
         real = Path.home() / "Library" / "LaunchAgents" / "com.user.agent-worktree-sweep.plist"
         before = (real.exists(), real.stat().st_mtime if real.exists() else None)
@@ -818,6 +823,46 @@ class Schedule(Base):
                                          f"bootstrap gui/{uid} {self.plist}"])
         self.assertTrue((self.home / ".local" / "state" / "agent-board").is_dir())
         self.assertTrue(lines)
+
+    def test_install_falls_back_to_the_agent_board_beside_the_cli(self):
+        self.link.unlink()
+        beside = self.sibling / "agent-board"
+        write_stub(beside, "exit 0\n")
+        ws.schedule_install()
+        self.assertEqual(plistlib.loads(self.plist.read_bytes())["ProgramArguments"][0], str(beside))
+
+    def test_home_link_wins_over_the_sibling(self):
+        write_stub(self.sibling / "agent-board", "exit 0\n")
+        ws.schedule_install()
+        self.assertEqual(plistlib.loads(self.plist.read_bytes())["ProgramArguments"][0], str(self.link))
+
+    def test_install_refuses_when_no_agent_board_is_executable(self):
+        self.link.unlink()
+        (self.sibling / "agent-board").write_text("not executable")   # present but not executable
+        with self.assertRaises(RuntimeError) as cm:
+            ws.schedule_install()
+        self.assertIn(str(self.link), str(cm.exception))
+        self.assertIn(str(self.sibling / "agent-board"), str(cm.exception))
+        self.assertFalse(self.plist.exists())
+        self.assertEqual(self.called(), [])
+
+    def test_cli_install_refuses_with_exit_1(self):
+        self.link.unlink()
+        env = {**os.environ, "AW_LAUNCHCTL": self.stub, "AW_HOME": str(self.home), "AW_BIN_DIR": str(self.sibling)}
+        r = subprocess.run([sys.executable, str(CLI), "schedule", "install"], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("agent-board", r.stderr)
+        self.assertFalse(self.plist.exists())
+
+    def test_status_says_when_the_target_is_missing(self):
+        ws.schedule_install()
+        self.link.unlink()
+        out = ws.schedule_status()
+        self.assertIn("state = running", out)
+        self.assertIn(f"target missing: {self.link}", out)
+
+    def test_status_without_plist_does_not_mention_a_target(self):
+        self.assertEqual(ws.schedule_status(), ["not installed"])
 
     def test_install_backs_up_an_existing_plist(self):
         self.plist.parent.mkdir(parents=True)
