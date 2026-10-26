@@ -79,7 +79,9 @@ The other states:
 - A stale Claude lock (dead or reused pid) is unlocked first.
 - `git worktree remove <path>` runs without `--force`. If git refuses, any lock that was lifted is put
   back, and the result is `kept: <git's message>`.
-- `git worktree prune` runs at the end.
+- `git worktree prune` does not run: it is repo-wide and would drop the metadata of worktrees outside
+  `.claude/worktrees/` (the e2e run lost a scratchpad entry that way). A successful `git worktree remove`
+  already deletes that worktree's own admin directory.
 
 ### Failure behaviour
 

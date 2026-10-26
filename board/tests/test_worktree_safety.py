@@ -470,7 +470,21 @@ class Remove(StateBase):
             ws.remove(str(self.repo), str(wt))
         self.assertTrue([a for a in seen if a[:2] == ("worktree", "remove")])
         self.assertFalse([a for a in seen if "--force" in a or "-f" in a or "-D" in a])
-        self.assertTrue([a for a in seen if a[:2] == ("worktree", "prune")])
+        self.assertFalse([a for a in seen if a[:2] == ("worktree", "prune")], "remove() must not prune repo-wide")
+
+    def test_prunable_worktree_outside_agent_dir_survives_a_removal(self):
+        # the scratchpad `frozen` entry of the e2e run: directory gone, metadata left, outside .claude/worktrees/
+        outside = Path(self.tmp) / "outside"
+        git("worktree", "add", "--detach", str(outside), cwd=self.repo)
+        shutil.rmtree(outside)
+        before = git("worktree", "list", cwd=self.repo).stdout
+        self.assertIn("prunable", before)
+        wt = add_worktree(self.repo, "w1")
+        ws.remove(str(self.repo), str(wt))
+        after = git("worktree", "list", cwd=self.repo).stdout
+        self.assertIn("outside", after)
+        self.assertIn("prunable", after)
+        self.assertFalse(self.listed("w1"))
 
 
 class Sweep(StateBase):
@@ -579,6 +593,14 @@ class Sweep(StateBase):
             self.sweep()
         self.assertTrue([a for a in seen if a[:3] == ("branch", "-d", "merged")])
         self.assertFalse([a for a in seen if "-D" in a])
+
+    def test_sweep_leaves_a_prunable_outside_worktree_listed(self):
+        outside = Path(self.tmp) / "outside"
+        git("worktree", "add", "--detach", str(outside), cwd=self.repo)
+        shutil.rmtree(outside)
+        add_worktree(self.repo, "merged")
+        self.assertEqual(self.sweep(), ["removed merged"])
+        self.assertIn("outside", git("worktree", "list", cwd=self.repo).stdout)
 
     def test_stale_never_removed_even_with_old_age(self):
         add_worktree(self.repo, "old", commits=1, age_days=30)

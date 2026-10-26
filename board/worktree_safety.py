@@ -309,7 +309,6 @@ def remove(repo, path, force_branch=False, proc_args_fn=None):
     if branch:
         d = _git(main, "branch", "-D" if force_branch else "-d", branch)
         msg += f"; deleted branch {branch}" if d.returncode == 0 else f"; kept branch {branch} (not merged)"
-    _git(main, "worktree", "prune")
     return msg
 
 
