@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tc_env  # noqa: E402
 from paneclass import tmux_cmd  # noqa: E402
 
 TIMEOUT = 20          # seconds, for every subprocess
@@ -315,6 +316,21 @@ def state_dir():
     return Path(os.environ.get("AW_STATE_DIR") or Path.home() / ".local" / "state" / "agent-board")
 
 
+def recent_dir():
+    """Where board/dirs.py keeps recent-projects.json: AW_STATE_DIR (test seam), else tc_env.state_dir()
+    ($TC_STATE, else ${TMPDIR}/tmux-ctl-<uid>). Without TMPDIR (launchd), the per-user temp dir stands in for it."""
+    if os.environ.get("AW_STATE_DIR"):
+        return Path(os.environ["AW_STATE_DIR"])
+    if not (os.environ.get("TC_STATE") or os.environ.get("TMPDIR")):
+        try:
+            user_tmp = os.confstr("CS_DARWIN_USER_TEMP_DIR")
+        except (AttributeError, ValueError, OSError):
+            user_tmp = ""
+        if user_tmp:
+            return Path(f"{user_tmp.rstrip('/')}/tmux-ctl-{os.getuid()}")
+    return tc_env.state_dir()
+
+
 def sweep_lockdir(repo):
     return state_dir() / ("sweep-" + hashlib.sha1(os.path.realpath(repo).encode()).hexdigest()[:12] + ".lock")
 
@@ -354,12 +370,16 @@ def _take_lock(lockdir):
     return False
 
 
-def _log(main, lines):
-    state_dir().mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
-    with open(state_dir() / "worktree-sweep.log", "a") as f:
-        for line in lines:
-            f.write(f"{stamp} {main} {line}\n")
+def _log(main, action, name, reason=""):
+    """Append `<ISO time>\t<repo>\t<action>\t<name>\t<reason>` to the sweep log. A failure only warns."""
+    try:
+        state_dir().mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        clean = lambda t: str(t).replace("\t", " ").replace("\n", " ")
+        with open(state_dir() / "worktree-sweep.log", "a") as f:
+            f.write("\t".join([stamp, main, action, clean(name), clean(reason)]) + "\n")
+    except OSError as e:
+        print(f"agent-worktrees: can't write the sweep log: {e}", file=sys.stderr)
 
 
 def sweep(repo, only=None, dry_run=False, now=None):
@@ -371,34 +391,39 @@ def sweep(repo, only=None, dry_run=False, now=None):
         return ["sweep already running"]
     try:
         lines = []
+
+        def note(action, name, reason="", shown=None):
+            lines.append(shown or f"{action} {name}")
+            _log(main, action, name, reason)
+
         for item in classify(main, fetch=True, now=now, only=only)["items"]:
             name, state = item["name"], item["state"]
             if state == "safe":
                 if dry_run:
-                    lines.append(f"would-remove {name}")
+                    note("would-remove", name)
                     continue
                 again = classify(main, fetch=True, now=now, only=item["path"], skip_fetch=True)["items"]
                 cur = again[0] if again else None
                 if cur is None or cur["state"] != "safe":
-                    lines.append(f"kept {name} ({cur['reason'] if cur else 'gone'}; changed since the first check)")
+                    why = f"{cur['reason'] if cur else 'gone'}; changed since the first check"
+                    note("kept", name, why, f"kept {name} ({why})")
                     continue
                 try:
                     remove(main, cur["path"], force_branch=cur["squash"])
-                    lines.append(f"removed {name}")
+                    note("removed", name)
                 except RuntimeError as e:
-                    lines.append(f"kept {name} ({e})")
+                    note("kept", name, str(e), f"kept {name} ({e})")
             elif state == "stale":
-                lines.append(f"stale {name} ({item['age_days']}d)")
+                note("stale", name, f"{item['age_days']}d", f"stale {name} ({item['age_days']}d)")
             else:
-                lines.append(f"kept {name} ({item['reason']})")
-        _log(main, lines)
+                note("kept", name, item["reason"], f"kept {name} ({item['reason']})")
         return lines
     finally:
         shutil.rmtree(lockdir, ignore_errors=True)
 
 
 def _recent_paths():
-    f = state_dir() / "recent-projects.json"
+    f = recent_dir() / "recent-projects.json"
     try:
         text = f.read_text()
     except FileNotFoundError:

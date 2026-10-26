@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -491,21 +492,58 @@ class Sweep(StateBase):
             self.assertTrue(self.listed(n), n)
         self.assertNotIn("merged", self.branches())
 
-    def test_log_lines_appended(self):
+    def test_log_lines_are_five_tab_separated_fields(self):
         add_worktree(self.repo, "merged")
         add_worktree(self.repo, "fresh", commits=1, age_days=2)
+        add_worktree(self.repo, "old", commits=1, age_days=9)
         self.sweep(now=NOW)
-        log = self.log_lines()
-        self.assertEqual(len(log), 2)
-        self.assertTrue(any(str(self.repo) in l and l.endswith("removed merged") for l in log), log)
-        self.assertTrue(any(l.endswith("kept fresh (not merged)") for l in log), log)
+        rows = {}
+        for l in self.log_lines():
+            f = l.split("\t")
+            self.assertEqual(len(f), 5, l)
+            rows[f[3]] = f
+        self.assertEqual(set(rows), {"merged", "fresh", "old"})
+        datetime.fromisoformat(rows["merged"][0])
+        for f in rows.values():
+            self.assertEqual(f[1], str(self.repo))
+        self.assertEqual(rows["merged"][2:], ["removed", "merged", ""])
+        self.assertEqual(rows["fresh"][2:], ["kept", "fresh", "not merged"])
+        self.assertEqual(rows["old"][2:], ["stale", "old", "9d"])
+
+    def test_log_line_written_as_each_item_is_decided(self):
+        add_worktree(self.repo, "a")
+        add_worktree(self.repo, "b")
+        real = ws.remove
+        n = []
+
+        def boom(*args, **kw):
+            n.append(1)
+            if len(n) == 2:
+                raise ValueError("boom")
+            return real(*args, **kw)
+        with mock.patch.object(ws, "remove", boom):
+            with self.assertRaises(ValueError):
+                self.sweep()
+        log = [l.split("\t") for l in self.log_lines()]
+        self.assertEqual(len(log), 1, log)
+        self.assertEqual(log[0][2], "removed")
+
+    def test_log_write_failure_does_not_fail_the_sweep(self):
+        add_worktree(self.repo, "merged")
+        (self.state / "worktree-sweep.log").mkdir(parents=True)   # opening it for append raises OSError
+        err = io.StringIO()
+        with mock.patch.object(sys, "stderr", err):
+            lines = self.sweep()
+        self.assertEqual(lines, ["removed merged"])
+        self.assertFalse(self.listed("merged"))
+        self.assertIn("log", err.getvalue())
 
     def test_dry_run_removes_nothing(self):
         add_worktree(self.repo, "merged")
         lines = self.sweep(dry_run=True)
         self.assertEqual(lines, ["would-remove merged"])
         self.assertTrue(self.listed("merged"))
-        self.assertTrue(self.log_lines()[0].endswith("would-remove merged"))
+        self.assertEqual(self.log_lines()[0].split("\t")[2:], ["would-remove", "merged", ""])
 
     def test_pane_appearing_between_checks_keeps_it(self):
         wt = add_worktree(self.repo, "merged")
@@ -615,6 +653,47 @@ class SweepRecent(StateBase):
         self.assertIn("removed m2", lines)
         self.assertIn(f"skip {notrepo} (not a repo)", lines)
         self.assertEqual(len([l for l in lines if l.startswith("skip")]), 1)
+
+    def _no_state_dir_env(self, **extra):
+        home = Path(self.tmp) / "home"
+        home.mkdir(exist_ok=True)
+        p = mock.patch.dict(os.environ, {"HOME": str(home), **extra})
+        p.start()
+        self.addCleanup(p.stop)
+        for k in ("AW_STATE_DIR", "TC_STATE", "TMPDIR"):
+            if k not in extra:
+                os.environ.pop(k, None)
+        return home
+
+    def test_recent_file_read_from_tc_state_when_aw_state_dir_unset(self):
+        add_worktree(self.repo, "m1")
+        tc = Path(self.tmp) / "tc"
+        tc.mkdir()
+        (tc / "recent-projects.json").write_text(json.dumps([str(self.repo)]))
+        self._no_state_dir_env(TC_STATE=str(tc))
+        self.assertEqual(ws.sweep_recent(), ["removed m1"])
+
+    def test_recent_file_read_from_tmpdir_when_tc_state_unset(self):
+        add_worktree(self.repo, "m1")
+        tmpdir = Path(self.tmp) / "T"
+        (tmpdir / f"tmux-ctl-{os.getuid()}").mkdir(parents=True)
+        (tmpdir / f"tmux-ctl-{os.getuid()}" / "recent-projects.json").write_text(json.dumps([str(self.repo)]))
+        self._no_state_dir_env(TMPDIR=str(tmpdir) + "/")
+        self.assertEqual(ws.sweep_recent(), ["removed m1"])
+
+    def test_recent_file_falls_back_to_darwin_user_temp_dir(self):
+        add_worktree(self.repo, "m1")
+        tmpdir = Path(self.tmp) / "dt"
+        (tmpdir / f"tmux-ctl-{os.getuid()}").mkdir(parents=True)
+        (tmpdir / f"tmux-ctl-{os.getuid()}" / "recent-projects.json").write_text(json.dumps([str(self.repo)]))
+        self._no_state_dir_env()
+        with mock.patch.object(os, "confstr", return_value=str(tmpdir) + "/") as cs:
+            self.assertEqual(ws.sweep_recent(), ["removed m1"])
+        cs.assert_called_with("CS_DARWIN_USER_TEMP_DIR")
+
+    def test_lock_and_log_stay_under_home_state_dir_when_unset(self):
+        home = self._no_state_dir_env()
+        self.assertEqual(ws.state_dir(), home / ".local" / "state" / "agent-board")
 
     def test_missing_recent_file_is_empty(self):
         self.set_env(AW_TMUX=tmux_stub(self.bin / "t3"))
