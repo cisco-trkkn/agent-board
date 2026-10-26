@@ -42,4 +42,27 @@ hook 'not json'; rc=$?
 check "bad input exit 0"    test $rc -eq 0
 out="$( unset TMUX TMUX_PANE; print -r -- "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$plan\"}}" | "$H"; print rc=$? )"
 check "outside tmux silent" test "$out" = "rc=0"
+FX="$TT_REPO/tools/tests/fixtures/docs-hook"
+want_url="$(jq -r '.tool_response[0].text|split("\n")[0]|fromjson|.frame.url' "$FX/create.json")"
+want_slug="$(jq -r '.tool_input.container.id' "$FX/update.json")"
+n0=$(wc -l < "$m")
+hook "$(<"$FX/create.json")"
+check "doc create recorded"  test "$(jq -r .kind "$m" | tail -1)" = doc -a "$(wc -l < "$m")" -eq $(( n0 + 1 ))
+check "doc url and path"     test "$(jq -r .url "$m" | tail -1)" = "$want_url" -a "$(jq -r .path "$m" | tail -1)" = "$want_url"
+check "doc title"            test "$(jq -r .title "$m" | tail -1)" = "agent-board hook fixture (delete me)"
+check "doc slug"             test "$(jq -r .slug "$m" | tail -1)" = "$want_slug"
+hook "$(<"$FX/update.json")"
+check "doc edit recorded"    test "$(jq -r .url "$m" | tail -1)" = "$want_url" -a "$(wc -l < "$m")" -eq $(( n0 + 2 ))
+check "doc edit kind slug"   test "$(jq -r '.kind+" "+.slug+" ["+.title+"]"' "$m" | tail -1)" = "doc $want_slug []"
+n1=$(wc -l < "$m")
+hook "$(<"$FX/read.json")"
+check "doc read ignored"     test "$(wc -l < "$m")" -eq "$n1"
+hook '{"tool_name":"mcp__claude_ai_Claude_Docs__batch","tool_input":{},"tool_response":"no link here"}'
+check "doc without url"      test "$(wc -l < "$m")" -eq "$n1"
+hook "$(jq -c '.tool_input.container.id="00000000-unknown"' "$FX/update.json")"
+check "update unknown slug"  test "$(wc -l < "$m")" -eq "$n1"
+hook '{"tool_name":"mcp__other__create","tool_input":{},"tool_response":"https://claude.ai/x/y"}'
+check "other mcp ignored"    test "$(wc -l < "$m")" -eq "$n1"
+hook "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$plan\"}}"
+check "file lines have title" test "$(jq -r 'select(.kind=="plan") | has("title")' "$m" | tail -1)" = true
 tt_done

@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
 # artifact-register.sh — record session artifacts for the Agent Board.
-#   hook mode (PostToolUse Write|Edit|MultiEdit|Artifact): reads the hook JSON on stdin
+#   hook mode (PostToolUse Write|Edit|MultiEdit|Artifact|Claude Docs batch/create/update): reads the hook JSON on stdin
 #   manual mode: artifact-register.sh --path P [--kind K] [--agent A] [--project NAME]
-# Appends {ts,path,kind,agent,hash,url,session_id,epoch} to $STATE/artifacts-<project>.jsonl.
+# Appends {ts,path,kind,agent,hash,url,title,slug,session_id,epoch} to $STATE/artifacts-<project>.jsonl.
 # epoch = lines in $STATE/lineage-<project>.jsonl (one per handoff relay). Silent; always exits 0.
 emulate -L zsh
 _tcenv="${${(%):-%x}:A:h:h:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
@@ -45,9 +45,9 @@ else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME
   if (( manual )); then payload='{}'; else payload="$(cat)"; fi
   line="$(print -r -- "$payload" | python3 -I -c '
 import hashlib, json, os, re, sys, time
-manual, path, kind, agent, epoch, home, tmp = sys.argv[1:8]
+manual, path, kind, agent, epoch, home, tmp, manifest = sys.argv[1:9]
 manual = manual == "1"
-url = sid = ""
+url = sid = title = slug = ""
 if not manual:
     try:
         d = json.load(sys.stdin)
@@ -62,6 +62,36 @@ if not manual:
             sys.exit(0)
         url, kind = m.group(0), "published"
         path = ti.get("file_path") or url
+    elif tool.startswith("mcp__claude_ai_Claude_Docs__") and tool.rsplit("__", 1)[1] in ("batch", "create", "update"):
+        try:
+            resp = d.get("tool_response")
+            m = re.search(r"https://claude\.ai/[\w/.-]+", json.dumps(resp or ""))
+            cont = ti.get("container") if isinstance(ti.get("container"), dict) else {}
+            if m:
+                url = m.group(0)
+                try:
+                    first = json.loads(resp[0]["text"].split("\n")[0])
+                    slug = (first.get("frame") or {}).get("slug") or ""
+                except Exception:
+                    pass
+                slug = slug or cont.get("id") or ""
+                title = ((cont.get("create") or {}).get("name")) or ""
+            elif cont.get("id"):
+                slug = cont["id"]
+                with open(manifest) as f:      # edit: reuse the URL of the last line for this doc
+                    for ln in f:
+                        try:
+                            e = json.loads(ln)
+                        except Exception:
+                            continue
+                        if e.get("kind") == "doc" and e.get("slug") == slug and e.get("url"):
+                            url = e["url"]
+            if not url:
+                sys.exit(0)
+        except Exception:
+            sys.exit(0)
+        kind, path = "doc", url
+        title = title if isinstance(title, str) else ""
     elif tool in ("Write", "Edit", "MultiEdit"):
         path = ti.get("file_path") or ""
     else:
@@ -92,8 +122,8 @@ if not url:
     with open(path, "rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()
 print(json.dumps({"ts": time.time(), "path": path, "kind": kind, "agent": agent, "hash": digest,
-                  "url": url, "session_id": sid, "epoch": int(epoch)}))
-' "$manual" "$apath" "$kind" "$agent" "$epoch" "$HOME" "${TMPDIR:-/tmp}")"
+                  "url": url, "title": title, "slug": slug, "session_id": sid, "epoch": int(epoch)}))
+' "$manual" "$apath" "$kind" "$agent" "$epoch" "$HOME" "${TMPDIR:-/tmp}" "$STATE/artifacts-$project.jsonl")"
   [[ -n "$line" ]] && print -r -- "$line" >> "$STATE/artifacts-$project.jsonl"
 } >/dev/null 2>&1
 exit 0
