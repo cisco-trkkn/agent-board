@@ -374,5 +374,315 @@ class Cli(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class StateBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.state = Path(self.tmp) / "state"
+        self.set_env(AW_STATE_DIR=str(self.state))
+
+    def log_lines(self):
+        f = self.state / "worktree-sweep.log"
+        return f.read_text().splitlines() if f.exists() else []
+
+    def listed(self, name):
+        return name in git("worktree", "list", cwd=self.repo).stdout
+
+    def branches(self):
+        return git("branch", "--format=%(refname:short)", cwd=self.repo).stdout.split()
+
+
+class Remove(StateBase):
+    def test_clean_merged_worktree_removed_with_branch(self):
+        wt = add_worktree(self.repo, "w1")
+        msg = ws.remove(str(self.repo), str(wt))
+        self.assertEqual(msg, "removed worktree w1; deleted branch w1")
+        self.assertFalse(self.listed("w1"))
+        self.assertNotIn("w1", self.branches())
+
+    def test_unmerged_branch_is_kept_not_force_deleted(self):
+        wt = add_worktree(self.repo, "w1", commits=1, age_days=1)
+        msg = ws.remove(str(self.repo), str(wt))
+        self.assertEqual(msg, "removed worktree w1; kept branch w1 (not merged)")
+        self.assertIn("w1", self.branches())
+
+    def test_dirty_is_refused_without_force(self):
+        wt = add_worktree(self.repo, "w1")
+        (wt / "x.txt").write_text("x")
+        with self.assertRaisesRegex(RuntimeError, "uncommitted"):
+            ws.remove(str(self.repo), str(wt))
+        self.assertTrue(wt.exists())
+
+    def test_outside_agent_dir_is_refused(self):
+        other = Path(self.tmp) / "elsewhere"
+        git("worktree", "add", str(other), "-b", "other", cwd=self.repo)
+        with self.assertRaisesRegex(RuntimeError, "not an agent worktree"):
+            ws.remove(str(self.repo), str(other))
+        self.assertTrue(other.exists())
+
+    def test_live_claude_lock_is_refused(self):
+        wt = add_worktree(self.repo, "w1")
+        reason = WITH_START.format(n="w1", pid=self.sleeper())
+        self.lock(wt, reason)
+        with mock.patch.object(ws, "proc_args", return_value="/usr/bin/claude -w w1"):
+            with self.assertRaisesRegex(RuntimeError, "in use"):
+                ws.remove(str(self.repo), str(wt))
+        self.assertTrue(wt.exists())
+
+    def test_manual_lock_is_refused(self):
+        wt = add_worktree(self.repo, "w1")
+        self.lock(wt, "manual hold")
+        with self.assertRaisesRegex(RuntimeError, "locked by something other than Claude"):
+            ws.remove(str(self.repo), str(wt))
+
+    def test_stale_lock_is_unlocked_then_removed(self):
+        wt = add_worktree(self.repo, "w1")
+        self.lock(wt, WITH_START.format(n="w1", pid=self.dead_pid()))
+        msg = ws.remove(str(self.repo), str(wt))
+        self.assertIn("unlocked stale lock", msg)
+        self.assertFalse(self.listed("w1"))
+
+    def test_lock_put_back_when_git_refuses(self):
+        wt = add_worktree(self.repo, "w1")
+        reason = WITH_START.format(n="w1", pid=self.dead_pid())
+        self.lock(wt, reason)
+        real = ws._git
+
+        def refuse(cwd, *args):
+            if args[:2] == ("worktree", "remove"):
+                return subprocess.CompletedProcess(args, 1, "", "fatal: refused")
+            return real(cwd, *args)
+        with mock.patch.object(ws, "_git", refuse):
+            with self.assertRaisesRegex(RuntimeError, "refused"):
+                ws.remove(str(self.repo), str(wt))
+        self.assertIn(reason, git("worktree", "list", "--porcelain", cwd=self.repo).stdout)
+
+    def test_never_passes_force(self):
+        wt = add_worktree(self.repo, "w1")
+        real = ws._git
+        seen = []
+
+        def spy(cwd, *args):
+            seen.append(args)
+            return real(cwd, *args)
+        with mock.patch.object(ws, "_git", spy):
+            ws.remove(str(self.repo), str(wt))
+        self.assertTrue([a for a in seen if a[:2] == ("worktree", "remove")])
+        self.assertFalse([a for a in seen if "--force" in a or "-f" in a or "-D" in a])
+        self.assertTrue([a for a in seen if a[:2] == ("worktree", "prune")])
+
+
+class Sweep(StateBase):
+    def sweep(self, **kw):
+        return ws.sweep(str(self.repo), **kw)
+
+    def test_safe_removed_others_kept(self):
+        add_worktree(self.repo, "merged")
+        add_worktree(self.repo, "fresh", commits=1, age_days=2)
+        add_worktree(self.repo, "old", commits=1, age_days=9)
+        dirty = add_worktree(self.repo, "dirty")
+        (dirty / "x").write_text("x")
+        lines = self.sweep(now=NOW)
+        self.assertIn("removed merged", lines)
+        self.assertIn("kept fresh (not merged)", lines)
+        self.assertIn("stale old (9d)", lines)
+        self.assertTrue(any(l.startswith("kept dirty (") for l in lines))
+        self.assertFalse(self.listed("merged"))
+        for n in ("fresh", "old", "dirty"):
+            self.assertTrue(self.listed(n), n)
+        self.assertNotIn("merged", self.branches())
+
+    def test_log_lines_appended(self):
+        add_worktree(self.repo, "merged")
+        add_worktree(self.repo, "fresh", commits=1, age_days=2)
+        self.sweep(now=NOW)
+        log = self.log_lines()
+        self.assertEqual(len(log), 2)
+        self.assertTrue(any(str(self.repo) in l and l.endswith("removed merged") for l in log), log)
+        self.assertTrue(any(l.endswith("kept fresh (not merged)") for l in log), log)
+
+    def test_dry_run_removes_nothing(self):
+        add_worktree(self.repo, "merged")
+        lines = self.sweep(dry_run=True)
+        self.assertEqual(lines, ["would-remove merged"])
+        self.assertTrue(self.listed("merged"))
+        self.assertTrue(self.log_lines()[0].endswith("would-remove merged"))
+
+    def test_pane_appearing_between_checks_keeps_it(self):
+        wt = add_worktree(self.repo, "merged")
+        panes = Path(self.tmp) / "panes"
+        panes.write_text("")
+        self.set_env(AW_TMUX=write_stub(self.bin / "tmuxf", f'cat "{panes}"\n'))
+        real = ws.classify
+        calls = []
+
+        def wrapped(*a, **k):
+            r = real(*a, **k)
+            calls.append(k)
+            if len(calls) == 1:
+                panes.write_text(f"1\t{wt}\n")
+            return r
+        with mock.patch.object(ws, "classify", wrapped):
+            lines = self.sweep()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(self.listed("merged"))
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("kept merged ("), lines)
+
+    def test_ancestor_safe_uses_branch_d_squash_uses_D(self):
+        add_worktree(self.repo, "merged")
+        real = ws._git
+        seen = []
+
+        def spy(cwd, *a):
+            seen.append(a)
+            return real(cwd, *a)
+        with mock.patch.object(ws, "_git", spy):
+            self.sweep()
+        self.assertTrue([a for a in seen if a[:3] == ("branch", "-d", "merged")])
+        self.assertFalse([a for a in seen if "-D" in a])
+
+    def test_stale_never_removed_even_with_old_age(self):
+        add_worktree(self.repo, "old", commits=1, age_days=30)
+        self.sweep(now=NOW)
+        self.assertTrue(self.listed("old"))
+
+    def test_only_sweeps_just_that_worktree(self):
+        a = add_worktree(self.repo, "a")
+        add_worktree(self.repo, "b")
+        lines = self.sweep(only=str(a))
+        self.assertEqual(lines, ["removed a"])
+        self.assertTrue(self.listed("b"))
+
+    def test_lock_held_by_live_pid_prints_already_running(self):
+        add_worktree(self.repo, "merged")
+        lockdir = ws.sweep_lockdir(str(self.repo))
+        lockdir.mkdir(parents=True)
+        (lockdir / "pid").write_text(str(self.sleeper()))
+        self.assertEqual(self.sweep(), ["sweep already running"])
+        self.assertTrue(self.listed("merged"))
+
+    def test_lock_with_dead_pid_is_taken_over_and_released(self):
+        add_worktree(self.repo, "merged")
+        lockdir = ws.sweep_lockdir(str(self.repo))
+        lockdir.mkdir(parents=True)
+        (lockdir / "pid").write_text(str(self.dead_pid()))
+        self.assertEqual(self.sweep(), ["removed merged"])
+        self.assertFalse(lockdir.exists())
+
+    def test_lock_released_after_error(self):
+        with mock.patch.object(ws, "classify", side_effect=ws.NotARepo("x")):
+            with self.assertRaises(ws.NotARepo):
+                self.sweep()
+        self.assertFalse(ws.sweep_lockdir(str(self.repo)).exists())
+
+
+class SweepSquash(StateBase):
+    def test_squash_safe_removed_with_branch_D(self):
+        origin = Path(self.tmp) / "origin.git"
+        git("init", "--bare", "-b", "main", str(origin), cwd=self.tmp)
+        git("remote", "add", "origin", str(origin), cwd=self.repo)
+        git("push", "-u", "origin", "main", cwd=self.repo)
+        wt = add_worktree(self.repo, "w1", commits=1, age_days=1)
+        git("push", "-u", "origin", "w1", cwd=wt)
+        git("push", "origin", "--delete", "w1", cwd=self.repo)
+        git("fetch", "--prune", cwd=self.repo)
+        self.set_env(AW_GLAB=glab_stub(self.bin / "glab", head(wt)))
+        lines = ws.sweep(str(self.repo))
+        self.assertEqual(lines, ["removed w1"])
+        self.assertNotIn("w1", self.branches())
+
+
+class SweepRecent(StateBase):
+    def other_repo(self, name):
+        d = Path(self.tmp) / name
+        d.mkdir()
+        git("init", "-b", "main", cwd=d)
+        git("commit", "--allow-empty", "-m", "init", cwd=d)
+        return d.resolve()
+
+    def test_recent_file_plus_sessions_deduped_and_skips_non_repos(self):
+        r2 = self.other_repo("r2")
+        add_worktree(self.repo, "m1")
+        add_worktree(r2, "m2")
+        notrepo = Path(self.tmp) / "plain"
+        notrepo.mkdir()
+        self.state.mkdir()
+        (self.state / "recent-projects.json").write_text(json.dumps([str(self.repo), str(notrepo)]))
+        sess = write_stub(self.bin / "tmuxs", f'[ "$1" = list-sessions ] && {{ printf "%s\\n" "{r2}" "{self.repo}"; exit 0; }}\nexit 0\n')
+        self.set_env(AW_TMUX=sess)
+        lines = ws.sweep_recent()
+        self.assertEqual(sum(1 for l in lines if l == "removed m1"), 1, lines)
+        self.assertIn("removed m2", lines)
+        self.assertIn(f"skip {notrepo} (not a repo)", lines)
+        self.assertEqual(len([l for l in lines if l.startswith("skip")]), 1)
+
+    def test_missing_recent_file_is_empty(self):
+        self.set_env(AW_TMUX=tmux_stub(self.bin / "t3"))
+        self.assertEqual(ws.sweep_recent(), [])
+
+    def test_corrupt_recent_file_raises(self):
+        self.state.mkdir()
+        (self.state / "recent-projects.json").write_text("{not json")
+        with self.assertRaises(ws.StateError):
+            ws.sweep_recent()
+
+
+class CliSweep(StateBase):
+    def run_cli(self, *args):
+        env = {**os.environ, "AW_TMUX": self.tmux, "AW_STATE_DIR": str(self.state)}
+        return subprocess.run([sys.executable, str(CLI), *args], capture_output=True, text=True, env=env)
+
+    def test_sweep_prints_lines_exit_zero(self):
+        add_worktree(self.repo, "merged")
+        r = self.run_cli("sweep", str(self.repo))
+        self.assertEqual((r.returncode, r.stdout.splitlines()), (0, ["removed merged"]), r.stderr)
+
+    def test_sweep_dry_run(self):
+        add_worktree(self.repo, "merged")
+        r = self.run_cli("sweep", str(self.repo), "--dry-run")
+        self.assertEqual(r.stdout.splitlines(), ["would-remove merged"])
+        self.assertTrue(self.listed("merged"))
+
+    def test_sweep_not_a_repo_exits_2(self):
+        self.assertEqual(self.run_cli("sweep", self.tmp).returncode, 2)
+
+    def test_sweep_busy_exits_zero(self):
+        add_worktree(self.repo, "merged")
+        lockdir = ws.sweep_lockdir(str(self.repo)) if False else None
+        env = {**os.environ, "AW_STATE_DIR": str(self.state)}
+        with mock.patch.dict(os.environ, env):
+            lockdir = ws.sweep_lockdir(str(self.repo))
+        lockdir.mkdir(parents=True)
+        (lockdir / "pid").write_text(str(self.sleeper()))
+        r = self.run_cli("sweep", str(self.repo))
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "sweep already running"))
+
+    def test_sweep_only_and_dir_conflict_with_recent_exit_2(self):
+        self.assertEqual(self.run_cli("sweep", "--recent", self.tmp).returncode, 2)
+
+    def test_sweep_recent_cli(self):
+        add_worktree(self.repo, "merged")
+        self.state.mkdir()
+        (self.state / "recent-projects.json").write_text(json.dumps([str(self.repo)]))
+        r = self.run_cli("sweep", "--recent")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("removed merged", r.stdout)
+
+    def test_remove_cli(self):
+        wt = add_worktree(self.repo, "w1")
+        r = self.run_cli("remove", str(wt))
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "removed worktree w1; deleted branch w1"), r.stderr)
+
+    def test_remove_cli_refusal_exits_1(self):
+        wt = add_worktree(self.repo, "w1")
+        (wt / "x").write_text("x")
+        r = self.run_cli("remove", str(wt))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("uncommitted", r.stderr)
+
+    def test_remove_cli_bad_path_exits_2(self):
+        self.assertEqual(self.run_cli("remove", self.tmp).returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

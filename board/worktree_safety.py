@@ -3,12 +3,15 @@
 classify() reads state and changes nothing. It fails closed: a check that cannot run makes that
 worktree `kept` with the reason.
 """
+import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +26,10 @@ STATES = ("safe", "stale", "in_use", "dirty", "kept")
 
 class NotARepo(Exception):
     pass
+
+
+class StateError(Exception):
+    """The engine's own state (recent-projects list) is unreadable."""
 
 
 # ---- Claude session locks (moved from server.py) ----
@@ -87,10 +94,15 @@ def _ref_exists(repo, ref):
     return _git(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}").returncode == 0
 
 
+def _servers():
+    """tmux commands to query: AW_TMUX (one server, word-split) or agent-board's own server plus the default one."""
+    one = os.environ.get("AW_TMUX")
+    return [shlex.split(one)] if one else [list(tmux_cmd()), ["tmux"]]
+
+
 def _panes(servers_env=None):
     """(paths, error): the cwd of every tmux pane on every server, or the reason we could not read them."""
-    one = os.environ.get("AW_TMUX")
-    servers = [shlex.split(one)] if one else [list(tmux_cmd()), ["tmux"]]
+    servers = _servers()
     paths = []
     for cmd in servers:
         try:
@@ -137,6 +149,24 @@ def _squash_mr(repo, branch, sha):
         if isinstance(mr, dict) and mr.get("sha") == sha:
             return mr.get("iid"), None
     return None, None
+
+
+def _worktrees(repo):
+    """(main checkout path, all worktree blocks) of the repo containing `repo`. Raises NotARepo."""
+    try:
+        r = _git(repo, "worktree", "list", "--porcelain")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise NotARepo(f"{repo}: {e}")
+    if r.returncode != 0:
+        raise NotARepo((r.stderr or r.stdout).strip() or str(repo))
+    blocks = _parse_worktrees(r.stdout)
+    if not blocks:
+        raise NotARepo(str(repo))
+    return blocks[0]["path"], blocks
+
+
+def _agent_root(main):
+    return os.path.realpath(main) + AGENT_DIR
 
 
 class _Ctx:
@@ -207,21 +237,13 @@ def _classify_one(ctx, wt):
     return done("kept", "not merged")
 
 
-def classify(repo, fetch=True, now=None):
-    """State of each agent worktree of the repo containing `repo`. Never changes anything but remote-tracking refs."""
+def classify(repo, fetch=True, now=None, only=None, skip_fetch=False):
+    """State of each agent worktree of the repo containing `repo`. Never changes anything but remote-tracking refs.
+    only: classify just the worktree at that path. skip_fetch: online (glab allowed) but no `git fetch` (a re-check)."""
     now = now or datetime.now(timezone.utc)
-    try:
-        r = _git(repo, "worktree", "list", "--porcelain")
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise NotARepo(f"{repo}: {e}")
-    if r.returncode != 0:
-        raise NotARepo((r.stderr or r.stdout).strip() or str(repo))
-    blocks = _parse_worktrees(r.stdout)
-    if not blocks:
-        raise NotARepo(str(repo))
-    main = blocks[0]["path"]
+    main, blocks = _worktrees(repo)
     fetch_err = None
-    if fetch and _git(main, "remote").stdout.strip():
+    if fetch and not skip_fetch and _git(main, "remote").stdout.strip():
         try:
             f = _git(main, "fetch", "--prune")
             if f.returncode != 0:
@@ -232,10 +254,13 @@ def classify(repo, fetch=True, now=None):
     base = _git(main, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").stdout.strip()
     base = base[len("origin/"):] if base.startswith("origin/") else (base or "main")
     ctx = _Ctx(main, base, current, fetch, fetch_err, now)
-    agent_root = os.path.realpath(main) + AGENT_DIR
+    agent_root = _agent_root(main)
+    want = os.path.realpath(only) if only else None
     items = []
     for wt in blocks[1:]:
         if not wt["path"].startswith(agent_root):
+            continue
+        if want and os.path.realpath(wt["path"]) != want:
             continue
         try:
             items.append(_classify_one(ctx, wt))
@@ -244,3 +269,179 @@ def classify(repo, fetch=True, now=None):
                           "head": wt.get("head", ""), "state": "kept", "age_days": None, "squash": False,
                           "reason": f"timed out: {' '.join(map(str, e.cmd))[:80]}"})
     return {"repo": main, "base": base, "current": current, "items": items}
+
+
+# ---- remove ----
+
+def remove(repo, path, force_branch=False):
+    """Remove one agent worktree the user (or a sweep) chose. Needs only: under .claude/worktrees/, clean, no live
+    Claude lock. A stale lock is lifted and put back if git refuses. Never `--force`. Returns the message the board shows;
+    raises RuntimeError on refusal (and NotARepo). force_branch: `branch -D` instead of `-d` (verified squash only)."""
+    main, blocks = _worktrees(repo)
+    want = os.path.realpath(path)
+    wt = next((b for b in blocks[1:] if os.path.realpath(b["path"]) == want and b["path"].startswith(_agent_root(main))), None)
+    if wt is None:
+        raise RuntimeError(f"not an agent worktree under .claude/worktrees/: {path}")
+    wpath, reason, branch, name, note = wt["path"], wt.get("locked"), wt.get("branch"), Path(wt["path"]).name, ""
+    st = _git(wpath, "status", "--porcelain")
+    if st.returncode != 0:
+        raise RuntimeError(f"can't read status of {name}: {st.stderr.strip()[:120]}")
+    if st.stdout.strip():
+        raise RuntimeError(f"{name} has uncommitted or untracked files")
+    if reason:
+        pid = claude_lock_owner(reason)
+        if pid is None:
+            raise RuntimeError(f"locked by something other than Claude ({reason}); unlock it yourself")
+        if not lock_is_stale(pid):
+            raise RuntimeError(f"in use by a running Claude session (pid {pid})")
+        _git(main, "worktree", "unlock", wpath)
+        note = f"unlocked stale lock (pid {pid}); "
+    r = _git(main, "worktree", "remove", wpath)
+    if r.returncode != 0:
+        if reason:
+            _git(main, "worktree", "lock", "--reason", reason, wpath)
+        raise RuntimeError((r.stderr or r.stdout).strip() or "git refused (uncommitted changes?)")
+    msg = f"{note}removed worktree {name}"
+    if branch:
+        d = _git(main, "branch", "-D" if force_branch else "-d", branch)
+        msg += f"; deleted branch {branch}" if d.returncode == 0 else f"; kept branch {branch} (not merged)"
+    _git(main, "worktree", "prune")
+    return msg
+
+
+# ---- sweep ----
+
+def state_dir():
+    return Path(os.environ.get("AW_STATE_DIR") or Path.home() / ".local" / "state" / "agent-board")
+
+
+def sweep_lockdir(repo):
+    return state_dir() / ("sweep-" + hashlib.sha1(os.path.realpath(repo).encode()).hexdigest()[:12] + ".lock")
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def _take_lock(lockdir):
+    """True when this process now holds the lockdir. A lockdir whose pid is dead is taken over."""
+    lockdir.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            os.mkdir(lockdir)
+        except FileExistsError:
+            try:
+                pid = int((lockdir / "pid").read_text().strip())
+            except (OSError, ValueError):
+                try:   # no pid yet: its owner may be between mkdir and write
+                    if time.time() - lockdir.stat().st_mtime < 30:
+                        return False
+                except OSError:
+                    continue
+                pid = None
+            if pid is not None and _pid_alive(pid):
+                return False
+            shutil.rmtree(lockdir, ignore_errors=True)
+            continue
+        (lockdir / "pid").write_text(str(os.getpid()))
+        return True
+    return False
+
+
+def _log(main, lines):
+    state_dir().mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    with open(state_dir() / "worktree-sweep.log", "a") as f:
+        for line in lines:
+            f.write(f"{stamp} {main} {line}\n")
+
+
+def sweep(repo, only=None, dry_run=False, now=None):
+    """Remove the safe agent worktrees of the repo. Returns report lines (also appended to the sweep log):
+    `removed X` / `would-remove X` / `kept X (reason)` / `stale X (Nd)`. Each removal re-checks that one worktree first."""
+    main, _ = _worktrees(repo)
+    lockdir = sweep_lockdir(main)
+    if not _take_lock(lockdir):
+        return ["sweep already running"]
+    try:
+        lines = []
+        for item in classify(main, fetch=True, now=now, only=only)["items"]:
+            name, state = item["name"], item["state"]
+            if state == "safe":
+                if dry_run:
+                    lines.append(f"would-remove {name}")
+                    continue
+                again = classify(main, fetch=True, now=now, only=item["path"], skip_fetch=True)["items"]
+                cur = again[0] if again else None
+                if cur is None or cur["state"] != "safe":
+                    lines.append(f"kept {name} ({cur['reason'] if cur else 'gone'}; changed since the first check)")
+                    continue
+                try:
+                    remove(main, cur["path"], force_branch=cur["squash"])
+                    lines.append(f"removed {name}")
+                except RuntimeError as e:
+                    lines.append(f"kept {name} ({e})")
+            elif state == "stale":
+                lines.append(f"stale {name} ({item['age_days']}d)")
+            else:
+                lines.append(f"kept {name} ({item['reason']})")
+        _log(main, lines)
+        return lines
+    finally:
+        shutil.rmtree(lockdir, ignore_errors=True)
+
+
+def _recent_paths():
+    f = state_dir() / "recent-projects.json"
+    try:
+        text = f.read_text()
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        raise StateError(f"{f}: {e}")
+    try:
+        v = json.loads(text)
+    except ValueError as e:
+        raise StateError(f"{f}: {e}")
+    if not isinstance(v, list):
+        raise StateError(f"{f}: not a list")
+    return [p for p in v if isinstance(p, str)]
+
+
+def _session_paths():
+    out = []
+    for cmd in _servers():
+        try:
+            r = subprocess.run([*cmd, "list-sessions", "-F", "#{session_path}"], capture_output=True, text=True,
+                               timeout=TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0:
+            out += [l for l in r.stdout.splitlines() if l.strip()]
+    return out
+
+
+def sweep_recent(dry_run=False, now=None):
+    """Sweep every repo in recent-projects.json and the open tmux sessions' paths, each once."""
+    lines, seen_repos, seen_paths = [], set(), set()
+    for path in _recent_paths() + _session_paths():
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        try:
+            main, _ = _worktrees(path)
+        except NotARepo:
+            lines.append(f"skip {path} (not a repo)")
+            continue
+        key = os.path.realpath(main)
+        if key in seen_repos:
+            continue
+        seen_repos.add(key)
+        lines += sweep(main, dry_run=dry_run, now=now)
+    return lines

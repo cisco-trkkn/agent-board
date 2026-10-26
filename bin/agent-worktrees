@@ -24,6 +24,35 @@ def cmd_classify(a):
     return 0
 
 
+def cmd_remove(a):
+    try:
+        print(ws.remove(os.path.abspath(a.path), os.path.abspath(a.path)))
+    except ws.NotARepo as e:
+        print(f"agent-worktrees: not a git repo: {e}", file=sys.stderr)
+        return 2
+    except RuntimeError as e:
+        print(f"agent-worktrees: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_sweep(a):
+    try:
+        if a.recent:
+            lines = ws.sweep_recent(dry_run=a.dry_run)
+        else:
+            lines = ws.sweep(os.path.abspath(a.dir), only=a.only, dry_run=a.dry_run)
+    except ws.NotARepo as e:
+        print(f"agent-worktrees: not a git repo: {e}", file=sys.stderr)
+        return 2
+    except ws.StateError as e:
+        print(f"agent-worktrees: {e}", file=sys.stderr)
+        return 1
+    for line in lines:
+        print(line)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="agent-worktrees")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -32,7 +61,20 @@ def main(argv=None):
     c.add_argument("--json", action="store_true")
     c.add_argument("--offline", action="store_true", help="no git fetch, no glab")
     c.set_defaults(fn=cmd_classify)
+    r = sub.add_parser("remove", help="remove one agent worktree (clean, no live Claude lock)")
+    r.add_argument("path")
+    r.set_defaults(fn=cmd_remove)
+    w = sub.add_parser("sweep", help="remove the safe agent worktrees")
+    w.add_argument("dir", nargs="?")
+    w.add_argument("--recent", action="store_true", help="every repo in recent-projects.json and open tmux sessions")
+    w.add_argument("--only", metavar="PATH", help="sweep just this worktree")
+    w.add_argument("--dry-run", action="store_true")
+    w.set_defaults(fn=cmd_sweep)
     a = p.parse_args(argv)
+    if a.cmd == "sweep":
+        if a.recent and (a.dir or a.only):
+            p.error("--recent takes no dir or --only")
+        a.dir = a.dir or "."
     return a.fn(a)
 
 
