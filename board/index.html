@@ -950,10 +950,16 @@ $("#side-toggle").onclick = () => {
 };
 $("#side-toggle").textContent = $("#side").classList.contains("collapsed") ? "▶" : "◀";
 
+let artShown = null;   // the project whose artifacts the pane last rendered
 async function pollArtifacts() {
   const s = session(); if (!s) return;
   const A = artFor(s.name);
-  const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok) return;
+  if (!p.changed) {   // a 304 for this project's cached ETag: the data is current, but the pane may still show the project we switched from
+    if (artShown !== s.name) { artShown = s.name; renderArtifacts(); }
+    return;
+  }
+  artShown = s.name;
   const d = p.json;
   Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [], sections: d.sections || [], dismissed: d.dismissed || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
