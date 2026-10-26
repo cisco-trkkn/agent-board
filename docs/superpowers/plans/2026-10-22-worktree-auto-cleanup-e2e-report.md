@@ -92,8 +92,40 @@ Afterwards the fixture had only `picker-fresh` left, and the scratch sweep log h
 
 ## Real sweep
 
-Not run. Waiting for the user's go-ahead (relayed by the lead). Open question for that go-ahead: the dry-run also lists `runtime-audit` (branch `audit/runtime-baseline`, merged by b2151bd, no pane or lock), which was not in the brief's expectations.
+Run by the user, not by the engine teammate: the Claude Code permission classifier denied `bin/agent-worktrees sweep ~/agent-board` in the teammate's session ("Irreversible Local Destruction"), and the user answered "Sweep both" to the lead's question about `runtime-audit`. The dry-run just before (run again by the teammate) listed exactly `would-remove docs-compose` and `would-remove runtime-audit`, with `wt-cleanup` kept. Output below is the user's, relayed by the lead, and the after-state was re-read by the teammate afterwards.
+
+Before, `git -C ~/agent-board worktree list`:
+
+    /Users/francisco.ruiz/agent-board                                     445696e [main]
+    …/scratchpad/frozen                                                   8179153 (detached HEAD) prunable
+    …/agent-board/.claude/worktrees/docs-compose                          71b2c12 [feat/docs-compose]
+    …/agent-board/.claude/worktrees/runtime-audit                         e423fc7 [audit/runtime-baseline]
+    …/agent-board/.claude/worktrees/wt-cleanup                            b5c760b [feat/worktree-auto-cleanup]
+
+The sweep (`bin/agent-worktrees sweep ~/agent-board`, from the plan worktree's `bin/`):
+
+    removed docs-compose
+    removed runtime-audit
+    kept wt-cleanup (uncommitted or untracked files)
+
+After (re-read by the teammate):
+
+    /Users/francisco.ruiz/agent-board                                     445696e [main]
+    …/agent-board/.claude/worktrees/wt-cleanup                            b5c760b [feat/worktree-auto-cleanup]
+
+    $ git -C ~/agent-board branch --list feat/docs-compose audit/runtime-baseline
+    (empty)
+
+Sweep log (`~/.local/state/agent-board/worktree-sweep.log`, new lines, fields time, action, name, reason):
+
+    2026-10-26T13:05:14-04:00  removed  docs-compose
+    2026-10-26T13:05:15-04:00  removed  runtime-audit
+    2026-10-26T13:05:15-04:00  kept     wt-cleanup  uncommitted or untracked files
+
+Both removed worktrees' branches were deleted with `git branch -d` (merged branches), and the directories under `.claude/worktrees/` are gone; only `wt-cleanup` remains.
+
+**Observed side effect, not fixed:** the `frozen` scratchpad entry (`prunable`, outside `.claude/worktrees/`) also disappeared from the list. The sweep ends with `git worktree prune`, which drops the metadata of any worktree whose directory is gone from git's view; here `frozen`'s metadata was dropped (its directory still exists on disk). The engine never lists or removes worktrees outside `.claude/worktrees/`, but `git worktree prune` is repo-wide. Left as is for the final review to rule on.
 
 ## Schedule
 
-Not run. `agent-board worktrees schedule install` happens after the branch is merged to main, on the user's go-ahead. On this host `~/.local/bin/agent-board` does not exist, so the install will target the `agent-board` beside the CLI.
+Not run (pending). `agent-board worktrees schedule install` happens after the branch is merged to main, on the user's go-ahead. On this host `~/.local/bin/agent-board` does not exist, so the install will target the `agent-board` beside the CLI.
