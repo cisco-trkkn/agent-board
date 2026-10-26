@@ -1,0 +1,1 @@
+../plugin/scripts/worktree-sweep.sh

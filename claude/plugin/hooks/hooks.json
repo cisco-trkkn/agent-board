@@ -12,7 +12,8 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/bash-mirror.sh\" --scoped", "timeout": 5, "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/bash-mirror.sh\" --scoped", "timeout": 5, "async": true },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-sweep.sh\" --scoped", "timeout": 5, "async": true }
         ]
       },
       {
