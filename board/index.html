@@ -211,6 +211,7 @@ dialog .row[hidden] { display: none; }   /* .row sets display:flex, which would 
 .art .dot { width: 7px; height: 7px; border-radius: 50%; background: #e5534b; flex: none; }
 .badge { font-size: 11px; color: var(--muted); background: var(--panel-2); border-radius: 6px; padding: 1px 6px; }
 .art .badge.sess { opacity: .7; }
+.art-foot { display: block; font-size: 12px; color: var(--muted); padding: 6px 8px; cursor: pointer; }
 .pending { font-size: 12px; color: var(--muted); padding: 2px 8px; }
 .doc { display: none; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); flex-direction: column; min-height: 0; overflow: hidden; }
 main.with-doc .doc { display: flex; }
@@ -954,7 +955,7 @@ async function pollArtifacts() {
   const A = artFor(s.name);
   const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
   const d = p.json;
-  Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [], sections: d.sections || [] });
+  Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [], sections: d.sections || [], dismissed: d.dismissed || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
   const keep = new Set(d.items.map((it) => it.url || it.path));   // a moved document leaves the manifest view
   for (const k of [...A.items.keys()]) if (!keep.has(k)) { A.items.delete(k); A.versions.delete(k); A.seen.delete(k); }
@@ -990,10 +991,19 @@ function artButton(A, it) {
   if (!it.url && vs && A.seen.get(it.path) !== vs[vs.length - 1].hash) b.append(el("span", "dot"));
   b.title = it.url || it.path;
   b.onclick = () => it.url ? window.open(it.url, "_blank", "noopener") : openDoc(it.path);
-  if (it.path && /\/docs\/superpowers\/(plans|specs)\//.test(it.path) && !/\/\.claude\/worktrees\//.test(it.path)) {
-    b.dataset.key = "art:" + it.path;
-    bindAgentMenu(b, () => otherProjects().map((p) => ({ label: `Move to ${p}`, run: () => moveDoc(it.path, p) })));
-  }
+  const key = it.url || it.path, pinned = !it.url && it.path === A.plan, movable = it.path && /\/docs\/superpowers\/(plans|specs)\//.test(it.path) && !/\/\.claude\/worktrees\//.test(it.path);
+  b.dataset.key = "art:" + key;
+  bindAgentMenu(b, () => {
+    const out = [];
+    if (it.dismissed) out.push({ label: "Restore", run: () => dismissArt([key], false) });
+    else if (!pinned) {
+      const n = (it.latest.epoch ?? 0);
+      out.push({ label: "Dismiss", run: () => dismissArt([key], true) },
+               { label: `Dismiss all from S${n + 1}`, run: () => dismissSession(n) });
+    }
+    if (movable) out.push(...otherProjects().map((p) => ({ label: `Move to ${p}`, run: () => moveDoc(it.path, p) })));
+    return out;
+  });
   return b;
 }
 
@@ -1027,7 +1037,33 @@ function renderArtifacts() {
     for (const it of its) g.append(artButton(A, it));
     box.append(g);
   }
+  const dis = (A.dismissed || []).map((k) => A.items.get(k)).filter(Boolean);
+  if (showDismissed(s.name) && dis.length) {
+    const g = el("details", "art-group dismissed"), sum = el("summary");
+    sum.append(el("h4", "", `Dismissed · ${dis.length}`));
+    g.append(sum);
+    try { g.open = localStorage.getItem(openKey("dismissed")) === "open"; } catch (err) {}   // collapsed unless opened; the 2 s rebuild keeps the choice
+    g.addEventListener("toggle", () => { try { if (g.open) localStorage.setItem(openKey("dismissed"), "open"); else localStorage.removeItem(openKey("dismissed")); } catch (err) {} });
+    for (const it of dis) g.append(artButton(A, it));
+    box.append(g);
+  }
   if (!A.items.size) box.append(el("div", "pending", "No artifacts yet in this session."));
+  const foot = el("label", "art-foot"), cb = el("input"); cb.type = "checkbox"; cb.id = "show-dismissed";
+  cb.checked = showDismissed(s.name);
+  cb.onchange = () => { try { if (cb.checked) localStorage.setItem(`dash.art.${s.name}.showDismissed`, "1"); else localStorage.removeItem(`dash.art.${s.name}.showDismissed`); } catch (err) {} renderArtifacts(); };
+  foot.append(cb, ` Show dismissed${(A.dismissed || []).length ? ` (${A.dismissed.length})` : ""}`);
+  box.append(foot);
+}
+function showDismissed(name) { try { return localStorage.getItem(`dash.art.${name}.showDismissed`) === "1"; } catch (err) { return false; } }
+async function dismissArt(keys, dismissed) {
+  const { status, j } = await post({ action: "art_dismiss", session: session().name, keys, dismissed });
+  toast(j.message || (status === 200 ? "Done" : "Failed"), status !== 200);
+  pollArtifacts();
+}
+async function dismissSession(epoch) {
+  const { status, j } = await post({ action: "art_dismiss_session", session: session().name, epoch });
+  toast(j.message || (status === 200 ? "Done" : "Failed"), status !== 200);
+  pollArtifacts();
 }
 
 async function openDoc(path) {
