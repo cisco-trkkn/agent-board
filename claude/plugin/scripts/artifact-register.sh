@@ -67,14 +67,17 @@ if not manual:
             resp = d.get("tool_response")
             cont = ti.get("container") if isinstance(ti.get("container"), dict) else {}
             frame = {}
+            on_claude = lambda u: isinstance(u, str) and u.startswith("https://claude.ai/")   # the panel opens this URL: never javascript:
             for it in (resp if isinstance(resp, list) else []):   # first item whose first line is the frame JSON
                 try:
                     fr = (json.loads(it["text"].split("\n")[0]).get("frame")) or {}
                 except Exception:
                     continue
-                if isinstance(fr, dict) and (fr.get("url") or fr.get("artifactUrl")):
-                    frame = fr
-                    break
+                if isinstance(fr, dict):
+                    fu = next((u for u in (fr.get("url"), fr.get("artifactUrl")) if on_claude(u)), "")
+                    if fu:
+                        frame = dict(fr, url=fu)
+                        break
             if frame:
                 url = frame.get("url") or frame.get("artifactUrl")
                 slug = frame.get("slug") or cont.get("id") or ""

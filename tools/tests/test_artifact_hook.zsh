@@ -77,6 +77,11 @@ check "edit stray link -> manifest url" test "$(jq -r .url "$m" | tail -1)" = "$
 # fallback regex (no parsable frame, no container id) drops a sentence-ending dot
 hook '{"tool_name":"mcp__claude_ai_Claude_Docs__batch","tool_input":{},"tool_response":"Made it: https://claude.ai/artifact/FALLBACK-1."}'
 check "fallback url trims dot"  test "$(jq -r .url "$m" | tail -1)" = "https://claude.ai/artifact/FALLBACK-1"
+# a frame url off claude.ai is never recorded: every claude.ai link in the fixture becomes javascript:, so the frame falls
+# through to the container id (none in create.json) and the regex (no claude.ai link left): nothing is appended
+n4=$(wc -l < "$m")
+hook "$(jq -c '.tool_response[0].text |= gsub("https://claude\\.ai/[^\\s\"]+"; "javascript:alert(1)")' "$FX/create.json")"
+check "off-claude frame url dropped" test "$(wc -l < "$m")" -eq "$n4" -a "$(grep -c javascript "$m")" -eq 0
 # manifest missing / garbled: nothing appended, rc 0 (scratch manifest only)
 cp "$m" "$m.keep"; rm -f "$m"
 hook "$(<"$FX/update.json")"; rc=$?
