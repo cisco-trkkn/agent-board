@@ -1,12 +1,11 @@
 #!/usr/bin/env zsh
 # tmux-agent-cleanup [dir] — pick finished Claude agent worktrees to remove.
-# Only touches worktrees under .claude/worktrees/. Never forces:
-#   - a worktree with uncommitted changes is kept (git refuses to remove it)
-#   - a locked worktree is removed only if its Claude lock is stale (dead or reused pid)
-#   - its branch is deleted only if already merged (git branch -d)
+# The safety rules (clean, no live Claude lock or tmux pane, merged) live in the engine, bin/agent-worktrees:
+# this picker lists its `classify` rows and removes through its `remove` / `sweep`. Never forces.
 emulate -L zsh
 source "${0:A:h}/_tc_bins.zsh"
 FZF_BIN="${FZF_BIN:-$(tc_bin fzf FZF_BIN)}"
+AW="${AW_CLI:-${0:A:h}/agent-worktrees}"
 
 dir="${1:-$PWD}"
 main_wt="$(git -C "$dir" worktree list --porcelain 2>/dev/null | awk 'NR==1{print $2}')"
@@ -14,71 +13,47 @@ if [[ -z "$main_wt" ]]; then
   print "Not inside a git repo: $dir"; [[ -t 0 ]] && read -k1 "?Press any key…"; exit 1
 fi
 cd "$main_wt"
-base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo main)"
-current="$(git branch --show-current)"
 
-rows=()
-wt="" br="" lk=""
-while IFS= read -r line; do
-  case "$line" in
-    worktree\ *) wt="${line#worktree }" ;;
-    branch\ *)   br="${line#branch refs/heads/}" ;;
-    locked*)     lk="${line#locked}"; lk="${lk# }"; [[ -z "$lk" ]] && lk="locked" ;;
-    "")
-      if [[ "$wt" == */.claude/worktrees/* ]]; then
-        state="clean"
-        [[ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]] && state="UNCOMMITTED CHANGES"
-        merged="not merged"
-        if [[ -n "$br" ]]; then
-          if git merge-base --is-ancestor "$br" "$current" 2>/dev/null || git merge-base --is-ancestor "$br" "$base" 2>/dev/null; then
-            merged="merged"
-          fi
-        fi
-        age="$(git -C "$wt" log -1 --format=%cr 2>/dev/null)"
-        rows+=("$wt	${wt:t}	${br:-detached}	$merged	$state	$age	$lk")
-      fi
-      wt="" br="" lk="" ;;
-  esac
-done < <(git worktree list --porcelain; echo)
+# rows: kind<TAB>path<TAB>display ; fzf shows field 3 only. kind: all | wt
+parsed="$("$AW" classify --offline --json "$main_wt" 2>/dev/null | python3 -I -c '
+import sys, json
+d = json.load(sys.stdin)
+items = d["items"]
+n = sum(1 for i in items if i["state"] == "safe")
+if items:
+    print("all\t-\t⟳ remove all safe (%d)" % n)
+for i in items:
+    st = i["state"]
+    label = ("stale %dd" % i["age_days"]) if st == "stale" else st.replace("_", " ")
+    why = i["reason"] if st not in ("stale",) else ""
+    print("wt\t%s\t%-28s %-9s %s" % (i["path"], i["name"], label, why))
+print("#base\t%s\t%s" % (d["base"], d["current"]))
+')"
+meta="${parsed##*$'\n'#base	}"; base="${meta%%	*}"; current="${meta#*	}"
+rows=("${(@f)${parsed%$'\n'#base*}}")
 
-if (( ${#rows} == 0 )); then
+if (( ${#rows} == 0 )) || [[ -z "${rows[1]}" ]]; then
   print "No Claude agent worktrees in $main_wt — nothing to clean up."; [[ -t 0 ]] && read -k1 "?Press any key…"; exit 0
 fi
 
 picked=("${(@f)$(print -l -- "${rows[@]}" |
-  "$FZF_BIN" --multi --layout=reverse --delimiter='\t' --with-nth=2,4,5,6 --tabstop=2 \
+  "$FZF_BIN" --multi --layout=reverse --delimiter='\t' --with-nth=3 --tabstop=2 \
     --prompt='clean up › ' \
-    --header=$'Tab = mark · Enter = remove marked · Esc = cancel\n(merged into '"$current"' or '"$base"' are safe to remove)' \
+    --header=$'Tab = mark · Enter = remove marked · Esc = cancel\n⟳ = remove every merged, clean, unused worktree\n(merged into '"$current"' or '"$base"' are safe to remove)' \
     --color='bg+:#313244,fg+:#cdd6f4,hl:#f38ba8,prompt:#cba6f7,pointer:#f5c2e7,marker:#a6e3a1,header:#6c7086')}")
 [[ -z "${picked[1]}" ]] && exit 0
 
+swept=0
 for row in "${picked[@]}"; do
-  path_="${row%%	*}"
-  branch="$(print -r -- "$row" | cut -f3)"
-  print "\n› ${path_:t}"
-  lk="$(print -r -- "$row" | cut -f7)"
-  if [[ -n "$lk" ]]; then
-    if [[ "$lk" =~ '^claude [^ ]+ .+ \(pid ([0-9]+)( start .+)?\)$' ]]; then
-      pid="$match[1]"
-      if { kill -0 "$pid" 2>&1 | grep -q 'not permitted'; } || { kill -0 "$pid" 2>/dev/null && ps -o args= -p "$pid" | grep -qi claude; }; then
-        print "  kept (in use by a running Claude session, pid $pid)"; continue
-      fi
-      git worktree unlock "$path_" && print "  unlocked stale lock (pid $pid)"
-    else
-      print "  kept (locked: $lk)"; continue
-    fi
-  fi
-  if err="$(git worktree remove "$path_" 2>&1)"; then
-    print "  removed worktree"
-    if [[ "$branch" != detached ]]; then
-      git branch -d "$branch" >/dev/null 2>&1 && print "  deleted branch $branch" \
-        || print "  kept branch $branch (not merged — delete it yourself if you're sure)"
-    fi
-  else
-    [[ -n "$lk" ]] && git worktree lock --reason "$lk" "$path_"
-    print "  kept: $err"
-  fi
+  [[ "${row%%	*}" == all ]] && { swept=1; print "\n› remove all safe"; "$AW" sweep "$main_wt" 2>&1 | sed 's/^/  /'; }
 done
-git worktree prune
+for row in "${picked[@]}"; do
+  [[ "${row%%	*}" == wt ]] || continue
+  path_="$(print -r -- "$row" | cut -f2)"
+  [[ $swept == 1 && ! -e "$path_" ]] && continue   # the sweep already took it
+  print "\n› ${path_:t}"
+  if msg="$("$AW" remove "$path_" 2>&1)"; then print "  $msg"
+  else print "  kept: ${msg#agent-worktrees: }"; fi
+done
 [[ -t 0 ]] && read -k1 "?Done. Press any key…"
 exit 0
