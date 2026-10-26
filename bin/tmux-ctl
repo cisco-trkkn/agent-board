@@ -434,7 +434,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     warn_web_key
     # no --kind: the hook's kind_of() decides (plan, spec, handoff, report), else "other"
     "${0:A:h:h}/claude/hooks/artifact-register.sh" --path "$p" "${kopt[@]}" --project "$FEEDKEY"
-    k="$(jq -r --arg p "$p" 'select(.path==$p)|.kind' "$STATE/artifacts-$FEEDKEY.jsonl" 2>/dev/null | tail -1)"
+    k="$(jq -r --arg p "$p" 'select(.path==$p and .kind)|.kind' "$STATE/artifacts-$FEEDKEY.jsonl" 2>/dev/null | tail -1)"
     print -r -- "registered $p (${k:-unknown})" ;;
 
   idea)

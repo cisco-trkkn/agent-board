@@ -35,7 +35,7 @@ Redact secrets and personal data.
 **Find the previous session id.** The Write tool's hook records the doc together with this session's id. Read it back, retrying for up to about 5 seconds because the hook runs async:
 
 ```bash
-jq -r --arg p "<doc absolute realpath>" 'select(.path==$p) | .session_id' \
+jq -r --arg p "<doc absolute realpath>" 'select(.path==$p and .session_id) | .session_id' \
   "${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}/artifacts-<project>.jsonl" | tail -1
 ```
 
