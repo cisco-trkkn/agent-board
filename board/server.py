@@ -634,6 +634,28 @@ def _windows_named(sess, name):
     return found
 
 
+WORKER_EXIT_WAIT = 5.0   # seconds stop_agent waits for the closed window's processes before it sweeps
+
+
+def _window_pids(window_id):
+    try:
+        out = tmux("list-panes", "-t", window_id, "-F", "#{pane_pid}")
+    except Exception:
+        return []
+    return [int(l) for l in out.split() if l.isdigit()]
+
+
+def _wait_gone(pids, timeout):
+    """Poll (0.2 s) until none of the pids is running; returns the pids still alive at the deadline."""
+    deadline = time.monotonic() + timeout
+    alive = list(pids)
+    while True:
+        alive = [p for p in alive if worktree_safety._pid_alive(p)]
+        if not alive or time.monotonic() >= deadline:
+            return alive
+        time.sleep(0.2)
+
+
 def _agent_worktree_of(window_id):
     """The .claude/worktrees/<name> directory the window's pane is in, or None."""
     try:
@@ -656,9 +678,11 @@ def stop_agent(sess, name):
     if not hits[0]["agent"]:
         raise RuntimeError(f"{name} is not a worker")
     wt = _agent_worktree_of(hits[0]["id"])   # read before the window is gone
+    pids = _window_pids(hits[0]["id"]) if wt else []
     tmux("kill-window", "-t", hits[0]["id"], check=True)
     if not wt:
         return f"shut down worker {name}; its worktree and branch are still in Worktrees"
+    alive = _wait_gone(pids, WORKER_EXIT_WAIT)   # its Claude holds the worktree lock until it exits
     try:   # a merged worker goes at once; an unmerged one stays in Worktrees
         line = worktree_safety.sweep(wt, only=wt)
         line = line[0] if line else "no worktree found"
@@ -666,6 +690,8 @@ def stop_agent(sess, name):
         line = f"kept ({e})"
     finally:
         forget_worktrees()
+    if alive:
+        return f"shut down worker {name}; its process was still running after {WORKER_EXIT_WAIT:g}s, worktree kept in Worktrees: {line}"
     if line.startswith("removed "):
         return f"shut down worker {name}; removed its worktree"
     return f"shut down worker {name}; worktree kept in Worktrees: {line}"

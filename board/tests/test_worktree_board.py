@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,8 +141,8 @@ class RemoveActions(BoardBase):
 
 
 class Fake:
-    def __init__(self, wt_path):
-        self.wt_path, self.calls = wt_path, []
+    def __init__(self, wt_path, pane_pids=(), on_kill=None):
+        self.wt_path, self.calls, self.pane_pids, self.on_kill = wt_path, [], pane_pids, on_kill
 
     def tmux(self, *args, check=False):
         self.calls.append(args)
@@ -148,6 +150,10 @@ class Fake:
             return f"@4{SEP}fix-login{SEP}1{SEP}\n"
         if args[0] == "display-message":
             return self.wt_path + "\n"
+        if args[0] == "list-panes":
+            return "".join(f"{p}\n" for p in self.pane_pids)
+        if args[0] == "kill-window" and self.on_kill:
+            self.on_kill()
         return ""
 
 
@@ -186,6 +192,50 @@ class StopAgent(BoardBase):
         msg, _ = self.stop(self.repo)
         self.assertEqual(msg, "shut down worker fix-login; its worktree and branch are still in Worktrees")
         self.assertTrue(self.listed("w1"))
+
+
+class StopWaitsForExit(BoardBase):
+    """The worker's Claude still holds its lock for a moment after kill-window; the sweep waits for it to exit."""
+
+    def setUp(self):
+        super().setUp()
+        self.wt = add_worktree(self.repo, "w1")
+        self.proc = subprocess.Popen(["sleep", "30"])
+        self.procs.append(self.proc)
+        git("worktree", "lock", "--reason", WITH_START.format(n="w1", pid=self.proc.pid), str(self.wt), cwd=self.repo)
+        p = mock.patch.object(server.worktree_safety, "proc_args", return_value="/usr/bin/claude -w w1")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def stop(self, on_kill):
+        fake = Fake(str(self.wt), pane_pids=[self.proc.pid], on_kill=on_kill)
+        with mock.patch.object(server, "tmux", fake.tmux):
+            return server._act({"action": "stop_agent", "session": "proj", "window": "fix-login"})
+
+    def die(self):
+        self.proc.kill()
+        self.proc.wait()
+
+    def test_exits_after_the_kill_then_the_merged_worktree_is_removed(self):
+        def late_exit():   # the process outlives kill-window by ~0.6 s
+            threading.Timer(0.6, self.die).start()
+        msg = self.stop(late_exit)
+        self.assertIn("removed", msg)
+        self.assertFalse(self.listed("w1"))
+
+    def test_still_running_at_the_deadline_is_kept_and_says_so(self):
+        with mock.patch.object(server, "WORKER_EXIT_WAIT", 0.5):
+            msg = self.stop(lambda: None)
+        self.assertIn("kept", msg)
+        self.assertIn("still running", msg)
+        self.assertTrue(self.listed("w1"))
+
+    def test_no_wait_when_the_pane_pids_are_already_gone(self):
+        self.die()
+        t = time.monotonic()
+        with mock.patch.object(server, "WORKER_EXIT_WAIT", 5):
+            self.stop(lambda: None)
+        self.assertLess(time.monotonic() - t, 3)
 
 
 class LastSweep(BoardBase):
