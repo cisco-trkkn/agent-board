@@ -645,12 +645,24 @@ def _window_pids(window_id):
     return [int(l) for l in out.split() if l.isdigit()]
 
 
-def _wait_gone(pids, timeout):
-    """Poll (0.2 s) until none of the pids is running; returns the pids still alive at the deadline."""
+def _lock_owner(wt):
+    """The pid in the worktree's Claude session lock, or None."""
+    try:
+        _, blocks = worktree_safety._worktrees(wt)
+    except Exception:
+        return None
+    real = os.path.realpath(wt)
+    return next((claude_lock_owner(b.get("locked")) for b in blocks if os.path.realpath(b["path"]) == real), None)
+
+
+def _wait_gone(pids, owner, timeout):
+    """Poll (0.2 s) until the pane pids are gone and the lock owner is dead or reused; returns what is still
+    running at the deadline."""
     deadline = time.monotonic() + timeout
-    alive = list(pids)
     while True:
-        alive = [p for p in alive if worktree_safety._pid_alive(p)]
+        alive = [p for p in pids if worktree_safety._pid_alive(p)]
+        if owner and not worktree_safety.lock_is_stale(owner):
+            alive.append(owner)
         if not alive or time.monotonic() >= deadline:
             return alive
         time.sleep(0.2)
@@ -679,10 +691,12 @@ def stop_agent(sess, name):
         raise RuntimeError(f"{name} is not a worker")
     wt = _agent_worktree_of(hits[0]["id"])   # read before the window is gone
     pids = _window_pids(hits[0]["id"]) if wt else []
+    owner = _lock_owner(wt) if wt else None
     tmux("kill-window", "-t", hits[0]["id"], check=True)
     if not wt:
         return f"shut down worker {name}; its worktree and branch are still in Worktrees"
-    alive = _wait_gone(pids, WORKER_EXIT_WAIT)   # its Claude holds the worktree lock until it exits
+    # the pane's shell dies with the window, but Claude (the lock's owner, a child of that shell) can linger
+    alive = _wait_gone(pids, owner, WORKER_EXIT_WAIT)
     try:   # a merged worker goes at once; an unmerged one stays in Worktrees
         line = worktree_safety.sweep(wt, only=wt)
         line = line[0] if line else "no worktree found"
@@ -690,11 +704,10 @@ def stop_agent(sess, name):
         line = f"kept ({e})"
     finally:
         forget_worktrees()
-    if alive:
-        return f"shut down worker {name}; its process was still running after {WORKER_EXIT_WAIT:g}s, worktree kept in Worktrees: {line}"
     if line.startswith("removed "):
         return f"shut down worker {name}; removed its worktree"
-    return f"shut down worker {name}; worktree kept in Worktrees: {line}"
+    note = f"its process was still running after {WORKER_EXIT_WAIT:g}s; " if alive else ""
+    return f"shut down worker {name}; {note}worktree kept in Worktrees: {line}"
 
 
 def ask_shutdown(sess, name):

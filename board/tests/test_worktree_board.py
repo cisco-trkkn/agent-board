@@ -195,43 +195,56 @@ class StopAgent(BoardBase):
 
 
 class StopWaitsForExit(BoardBase):
-    """The worker's Claude still holds its lock for a moment after kill-window; the sweep waits for it to exit."""
+    """tmux-ctl send-keys `claude -w` into the pane's shell: #{pane_pid} is that shell and the worktree lock's pid is
+    Claude, a different process that can outlive kill-window. The sweep waits for both."""
 
     def setUp(self):
         super().setUp()
         self.wt = add_worktree(self.repo, "w1")
-        self.proc = subprocess.Popen(["sleep", "30"])
-        self.procs.append(self.proc)
-        git("worktree", "lock", "--reason", WITH_START.format(n="w1", pid=self.proc.pid), str(self.wt), cwd=self.repo)
+        self.shell = subprocess.Popen(["sleep", "30"])     # stands in for the pane's shell
+        self.claude = subprocess.Popen(["sleep", "30"])    # holds the lock
+        self.procs += [self.shell, self.claude]
+        git("worktree", "lock", "--reason", WITH_START.format(n="w1", pid=self.claude.pid), str(self.wt), cwd=self.repo)
         p = mock.patch.object(server.worktree_safety, "proc_args", return_value="/usr/bin/claude -w w1")
         p.start()
         self.addCleanup(p.stop)
 
     def stop(self, on_kill):
-        fake = Fake(str(self.wt), pane_pids=[self.proc.pid], on_kill=on_kill)
+        fake = Fake(str(self.wt), pane_pids=[self.shell.pid], on_kill=on_kill)
         with mock.patch.object(server, "tmux", fake.tmux):
             return server._act({"action": "stop_agent", "session": "proj", "window": "fix-login"})
 
-    def die(self):
-        self.proc.kill()
-        self.proc.wait()
+    @staticmethod
+    def die(proc):
+        proc.kill()
+        proc.wait()
 
-    def test_exits_after_the_kill_then_the_merged_worktree_is_removed(self):
-        def late_exit():   # the process outlives kill-window by ~0.6 s
-            threading.Timer(0.6, self.die).start()
-        msg = self.stop(late_exit)
-        self.assertIn("removed", msg)
+    def test_shell_dies_at_the_kill_claude_a_moment_later_then_removed(self):
+        def on_kill():
+            self.die(self.shell)
+            threading.Timer(0.6, self.die, args=(self.claude,)).start()
+        msg = self.stop(on_kill)
+        self.assertEqual(msg, "shut down worker fix-login; removed its worktree")
         self.assertFalse(self.listed("w1"))
 
-    def test_still_running_at_the_deadline_is_kept_and_says_so(self):
+    def test_lock_owner_outlives_the_deadline_is_kept_and_says_so(self):
         with mock.patch.object(server, "WORKER_EXIT_WAIT", 0.5):
-            msg = self.stop(lambda: None)
+            msg = self.stop(lambda: self.die(self.shell))
         self.assertIn("kept", msg)
         self.assertIn("still running", msg)
         self.assertTrue(self.listed("w1"))
 
-    def test_no_wait_when_the_pane_pids_are_already_gone(self):
-        self.die()
+    def test_still_running_pane_pid_with_a_dead_lock_owner_still_sweeps_without_a_note(self):
+        self.die(self.claude)
+        # the pane shell outlives the deadline, but the worktree is clean and merged, and its lock owner is gone
+        with mock.patch.object(server, "WORKER_EXIT_WAIT", 0.5):
+            msg = self.stop(lambda: None)
+        self.assertEqual(msg, "shut down worker fix-login; removed its worktree")
+        self.assertFalse(self.listed("w1"))
+
+    def test_no_wait_when_everything_is_already_gone(self):
+        self.die(self.shell)
+        self.die(self.claude)
         t = time.monotonic()
         with mock.patch.object(server, "WORKER_EXIT_WAIT", 5):
             self.stop(lambda: None)
