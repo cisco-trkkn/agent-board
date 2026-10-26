@@ -65,4 +65,24 @@ hook '{"tool_name":"mcp__other__create","tool_input":{},"tool_response":"https:/
 check "other mcp ignored"    test "$(wc -l < "$m")" -eq "$n1"
 hook "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$plan\"}}"
 check "file lines have title" test "$(jq -r 'select(.kind=="plan") | has("title")' "$m" | tail -1)" = true
+# stray claude.ai links never win over frame.url (create) or the manifest URL (edit by slug)
+n2=$(wc -l < "$m")
+hook "$(jq -c '.tool_response[0].text += "\n\nsee https://claude.ai/artifact/PROSE-LINK."' "$FX/create.json")"
+check "prose link after frame"  test "$(jq -r .url "$m" | tail -1)" = "$want_url" -a "$(wc -l < "$m")" -eq $(( n2 + 1 ))
+hook "$(jq -c '.tool_response = [{"type":"text","text":"https://claude.ai/artifact/STRAY-FIRST"}] + .tool_response' "$FX/create.json")"
+check "stray item before frame" test "$(jq -r .url "$m" | tail -1)" = "$want_url" -a "$(wc -l < "$m")" -eq $(( n2 + 2 ))
+n3=$(wc -l < "$m")
+hook "{\"tool_name\":\"mcp__claude_ai_Claude_Docs__batch\",\"tool_input\":{\"container\":{\"kind\":\"project\",\"id\":\"$want_slug\"},\"batch\":[]},\"tool_response\":[{\"type\":\"text\",\"text\":\"done, see https://claude.ai/artifact/STRAY-EDIT.\"}]}"
+check "edit stray link -> manifest url" test "$(jq -r .url "$m" | tail -1)" = "$want_url" -a "$(wc -l < "$m")" -eq $(( n3 + 1 ))
+# fallback regex (no parsable frame, no container id) drops a sentence-ending dot
+hook '{"tool_name":"mcp__claude_ai_Claude_Docs__batch","tool_input":{},"tool_response":"Made it: https://claude.ai/artifact/FALLBACK-1."}'
+check "fallback url trims dot"  test "$(jq -r .url "$m" | tail -1)" = "https://claude.ai/artifact/FALLBACK-1"
+# manifest missing / garbled: nothing appended, rc 0 (scratch manifest only)
+cp "$m" "$m.keep"; rm -f "$m"
+hook "$(<"$FX/update.json")"; rc=$?
+check "update, manifest missing" test $rc -eq 0 -a ! -e "$m"
+print 'garbage{' > "$m"
+hook "$(<"$FX/update.json")"; rc=$?
+check "update, manifest garbled" test $rc -eq 0 -a "$(wc -l < "$m")" -eq 1
+mv "$m.keep" "$m"
 tt_done

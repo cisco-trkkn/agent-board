@@ -65,16 +65,19 @@ if not manual:
     elif tool.startswith("mcp__claude_ai_Claude_Docs__") and tool.rsplit("__", 1)[1] in ("batch", "create", "update"):
         try:
             resp = d.get("tool_response")
-            m = re.search(r"https://claude\.ai/[\w/.-]+", json.dumps(resp or ""))
             cont = ti.get("container") if isinstance(ti.get("container"), dict) else {}
-            if m:
-                url = m.group(0)
+            frame = {}
+            for it in (resp if isinstance(resp, list) else []):   # first item whose first line is the frame JSON
                 try:
-                    first = json.loads(resp[0]["text"].split("\n")[0])
-                    slug = (first.get("frame") or {}).get("slug") or ""
+                    fr = (json.loads(it["text"].split("\n")[0]).get("frame")) or {}
                 except Exception:
-                    pass
-                slug = slug or cont.get("id") or ""
+                    continue
+                if isinstance(fr, dict) and (fr.get("url") or fr.get("artifactUrl")):
+                    frame = fr
+                    break
+            if frame:
+                url = frame.get("url") or frame.get("artifactUrl")
+                slug = frame.get("slug") or cont.get("id") or ""
                 title = ((cont.get("create") or {}).get("name")) or ""
             elif cont.get("id"):
                 slug = cont["id"]
@@ -86,6 +89,10 @@ if not manual:
                             continue
                         if e.get("kind") == "doc" and e.get("slug") == slug and e.get("url"):
                             url = e["url"]
+            else:
+                m = re.search(r"https://claude\.ai/[\w/.-]*[\w/]", json.dumps(resp or ""))
+                if m:
+                    url = m.group(0)
             if not url:
                 sys.exit(0)
         except Exception:
