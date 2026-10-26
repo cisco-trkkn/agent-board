@@ -1155,7 +1155,8 @@ $("#doc-comment").onclick = () => {
 // ── ideas box ──
 window.ideasOpen = 0;
 let ideaEditing = null,   // {session, key} of the row being edited
-    ideaShowDropped = false;
+    ideaShowDropped = false,
+    ideasShown = null;   // the project the box last rendered: an unchanged (304) reply still needs a render after a switch
 try { ideaShowDropped = localStorage.getItem("dash.ideas.dropped") === "1"; } catch (e) {}
 
 // open projects other than the current one, for the "Move to" items
@@ -1209,7 +1210,7 @@ async function moveDoc(path, target) {
 
 async function pollIdeas() {
   const s = session(); if (!s) return;
-  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || (!p.changed && ideasShown === s.name)) return;
   const d = p.json;
   window.ideasOpen = d.open;
   const box = $("#ideas-box");
@@ -1232,6 +1233,7 @@ async function pollIdeas() {
   box.querySelector(".art-group").replaceChildren(el("h4", "", `Ideas · ${d.open}`));
   if (ideaEditing && ideaEditing.session === s.name) return;
   ideaEditing = null;   // don't rebuild the row being edited
+  ideasShown = s.name;
   const list = box.querySelector(".ideas-list"); list.replaceChildren();
   const addRow = (i, cls) => {
     const row = el("div", cls, i.text); row.dataset.key = "idea:" + i.key;
