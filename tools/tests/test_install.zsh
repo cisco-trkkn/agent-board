@@ -33,7 +33,7 @@ seed_global() {
   mkdir -p "$H/.local/bin" "$H/.claude/hooks" "$H/.claude/skills/tmux-orchestrator" "$H/.claude/agents" "$H/.agents/skills/handoff"
   for n in claude-orchestrator dev tmux-agent-cleanup tmux-ctl tmux-dash tmux-dev-layout tmux-jump tmux-session-closed tmux-teammate-window tmux-web-attach; do
     ln -s "$repo/bin/$n" "$H/.local/bin/$n"; done
-  for n in bash-mirror artifact-register kill-guard; do ln -s "$repo/claude/hooks/$n.sh" "$H/.claude/hooks/$n.sh"; done
+  for n in bash-mirror artifact-register kill-guard worktree-sweep; do ln -s "$repo/claude/hooks/$n.sh" "$H/.claude/hooks/$n.sh"; done
   ln -s "$repo/claude/orchestrator.md" "$H/.claude/orchestrator.md"; ln -s "$repo/claude/worker.md" "$H/.claude/worker.md"
   print "# own hook" > "$H/.claude/hooks/context-size-guard.sh"
   print "skill" > "$H/.claude/skills/tmux-orchestrator/SKILL.md"
@@ -136,14 +136,14 @@ check "migrate: says tmux-ctl is kept because .tmux.conf still calls it, and pri
 check "migrate: the kept-because line is printed verbatim (backslashes intact)" test -n "$(print -r -- "$out" | grep -F 'export TMUX=\"#{socket_path}')"
 check "migrate: the tmux lines that call no migrated link are not mentioned as kept" test -z "$(print -r -- "$out" | grep -F 'kept' | grep -F '.local/bin/dev')"
 check "migrate: agent-board link points into DIR" test "$(readlink "$H/.local/bin/agent-board")" = "$FAKE/bin/agent-board"
-check "migrate: hook and rules links gone" test ! -L "$H/.claude/hooks/bash-mirror.sh" -a ! -L "$H/.claude/hooks/artifact-register.sh" -a ! -L "$H/.claude/hooks/kill-guard.sh" -a ! -L "$H/.claude/orchestrator.md" -a ! -L "$H/.claude/worker.md"
+check "migrate: hook and rules links gone" test ! -L "$H/.claude/hooks/bash-mirror.sh" -a ! -L "$H/.claude/hooks/artifact-register.sh" -a ! -L "$H/.claude/hooks/kill-guard.sh" -a ! -L "$H/.claude/hooks/worktree-sweep.sh" -a ! -L "$H/.claude/orchestrator.md" -a ! -L "$H/.claude/worker.md"
 check "migrate: unrelated hook file kept" test -f "$H/.claude/hooks/context-size-guard.sh"
 M="$H/.local/state/agent-board/migrated-$STAMP"
 check "migrate: tmux-orchestrator skill moved" test -f "$M/tmux-orchestrator/SKILL.md" -a ! -e "$H/.claude/skills/tmux-orchestrator"
 check "migrate: handoff skill link moved, target kept" test -L "$M/handoff" -a ! -L "$H/.claude/skills/handoff" -a -f "$H/.agents/skills/handoff/SKILL.md"
 check "migrate: effort-* moved" test -f "$M/effort-low.md" -a -f "$M/effort-medium.md" -a -f "$M/effort-high.md" -a ! -e "$H/.claude/agents/effort-low.md"
 check "migrate: other agents untouched" test -f "$H/.claude/agents/mine.md"
-check "migrate: output names each removed hook" test "$(print -r -- "$out" | grep -cF 'hooks/bash-mirror.sh')" -ge 2 -a -n "$(print -r -- "$out" | grep -F 'hooks/kill-guard.sh')" -a -n "$(print -r -- "$out" | grep -F 'hooks/artifact-register.sh')"
+check "migrate: output names each removed hook" test "$(print -r -- "$out" | grep -cF 'hooks/bash-mirror.sh')" -ge 2 -a -n "$(print -r -- "$out" | grep -F 'hooks/kill-guard.sh')" -a -n "$(print -r -- "$out" | grep -F 'hooks/artifact-register.sh')" -a -n "$(print -r -- "$out" | grep -F 'hooks/worktree-sweep.sh')"
 check "migrate: output prints each removed tmux line" test -n "$(print -r -- "$out" | grep -F 'tmux-agent-cleanup')" -a -n "$(print -r -- "$out" | grep -F 'tmux-jump')" -a -n "$(print -r -- "$out" | grep -F 'DEV_CLIENT')" -a -n "$(print -r -- "$out" | grep -F 'tmux-session-closed')"
 check "migrate: output says which tmux commands to run" test -n "$(print -r -- "$out" | grep -F 'tmux set-hook -gu after-split-window')" -a -n "$(print -r -- "$out" | grep -F 'tmux set-hook -gu session-closed')" -a -n "$(print -r -- "$out" | grep -F 'unbind')"
 check "migrate: output says dev now uses the dedicated server" test -n "$(print -r -- "$out" | grep -i 'dedicated')"
@@ -163,10 +163,26 @@ newhome; seed_global "$FAKE"
 { print '// my notes'; cat "$FIX/settings.seed.json" } > "$H/.claude/settings.json"; cp "$H/.claude/settings.json" "$SCR/bad-settings"
 out="$(inst --repo "$FAKE" --migrate 2>&1)"; rc=$?
 check "bad settings: exit 1, file untouched" rc1_same $rc "$H/.claude/settings.json" "$SCR/bad-settings"
-check "bad settings: hook links kept (settings still names them)" test -L "$H/.claude/hooks/kill-guard.sh" -a -L "$H/.claude/hooks/bash-mirror.sh" -a -L "$H/.claude/hooks/artifact-register.sh"
+check "bad settings: hook links kept (settings still names them)" test -L "$H/.claude/hooks/kill-guard.sh" -a -L "$H/.claude/hooks/bash-mirror.sh" -a -L "$H/.claude/hooks/artifact-register.sh" -a -L "$H/.claude/hooks/worktree-sweep.sh"
 check "bad settings: says what was kept and why" test -n "$(print -r -- "$out" | grep -F 'kept' | grep -F 'kill-guard.sh')"
 check "bad settings: tmux lines still migrated" cmp -s "$H/.tmux.conf" "$FIX/tmux.expected.conf"
 check "bad settings: ~/.local/bin links still migrated" test ! -L "$H/.local/bin/dev"
+# a settings.json that also registers the worktree-sweep hook (the live file may carry it): migrate removes it too
+newhome; seed_global "$FAKE"
+python3 - "$FIX/settings.seed.json" "$H/.claude/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for e in d["hooks"]["PostToolUse"]:
+    if any(h["command"].endswith("hooks/bash-mirror.sh") for h in e["hooks"]):
+        e["hooks"].append({"type": "command", "command": "~/.claude/hooks/worktree-sweep.sh", "timeout": 5, "async": True})
+        break
+else:
+    raise SystemExit("seed has no bash-mirror PostToolUse entry")
+open(sys.argv[2], "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+PY
+out="$(inst --repo "$FAKE" --migrate 2>&1)"; rc=$?
+check "migrate: a worktree-sweep entry in settings.json is removed too" test $rc -eq 0 -a -z "$(grep -F worktree-sweep "$H/.claude/settings.json")"
+check "migrate: ...and the rest of settings.json still equals the expected file" cmp -s "$H/.claude/settings.json" "$FIX/settings.expected.json"
 # valid JSON, not in json.dumps layout (inline array): left byte-identical, entries printed for hand removal
 newhome; seed_global "$FAKE"
 python3 - "$FIX/settings.seed.json" "$H/.claude/settings.json" <<'PY'

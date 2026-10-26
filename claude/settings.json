@@ -90,12 +90,6 @@
             "command": "~/.claude/hooks/bash-mirror.sh",
             "timeout": 5,
             "async": true
-          },
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/worktree-sweep.sh",
-            "timeout": 5,
-            "async": true
           }
         ]
       },

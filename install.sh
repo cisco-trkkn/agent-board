@@ -5,7 +5,7 @@
 #   ./install.sh --check          list the dependencies: "ok <path>" or "MISSING <name>"; exit 1 if any is missing
 #   ./install.sh --uninstall      remove ~/.local/bin/agent-board, if it links into this checkout
 #   ./install.sh --migrate        install, then retire the old global setup (the author's pre-plugin install):
-#                                   - the 3 hooks in ~/.claude/settings.json, the hook and rules links in ~/.claude
+#                                   - the 4 hooks in ~/.claude/settings.json, the hook and rules links in ~/.claude
 #                                   - the 10 old links in ~/.local/bin that point into this checkout
 #                                   - the agent-board hook and 3 bindings in ~/.tmux.conf (config/tmux.conf has them)
 #                                   - the global tmux-orchestrator and handoff skills and the effort-* agents, which the
@@ -111,7 +111,7 @@ do_migrate() {
   local -A held   # ~/.local/bin link name -> "<file>: <line>" of a line that stays and still calls it
   do_install || rc=1
   # settings.json: the agent-board hooks
-  for n in bash-mirror artifact-register kill-guard; do cmds+=("~/.claude/hooks/$n.sh" "$HOME/.claude/hooks/$n.sh"); done
+  for n in bash-mirror artifact-register kill-guard worktree-sweep; do cmds+=("~/.claude/hooks/$n.sh" "$HOME/.claude/hooks/$n.sh"); done
   if [[ -f "$S" ]]; then
     out="$(python3 "$LIB" settings "$S" ${${(M)TEAM:#1}:+--team} --dry-run "${cmds[@]}" 2>&1)"; lrc=$?
     gone=("${(@f)out}")
@@ -152,7 +152,7 @@ do_migrate() {
   # links into this checkout
   for n in claude-orchestrator dev tmux-agent-cleanup tmux-ctl tmux-dash tmux-dev-layout tmux-jump tmux-session-closed tmux-teammate-window tmux-web-attach; do
     old+=("$HOME/.local/bin/$n"); done
-  for n in bash-mirror artifact-register kill-guard; do old+=("$HOME/.claude/hooks/$n.sh"); done
+  for n in bash-mirror artifact-register kill-guard worktree-sweep; do old+=("$HOME/.claude/hooks/$n.sh"); done
   old+=("$HOME/.claude/orchestrator.md" "$HOME/.claude/worker.md")
   for f in "${old[@]}"; do
     if [[ "$f" == "$HOME"/.claude/hooks/* ]] && (( ! settings_ok )) && points_into_repo "$f"; then
