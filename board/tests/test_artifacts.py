@@ -108,6 +108,41 @@ class SummaryTest(Base):
         s = artifacts.summary("none")
         self.assertEqual((s["epoch"], s["items"], s["active_plan"], s["started_from"]), (0, [], None, None))
 
+    def test_sections_split_and_skip_active_plan(self):
+        s = artifacts.summary("p")
+        self.assertEqual(s["sections"], [
+            {"name": "specs", "items": [str(self.spec)]},
+            {"name": "docs", "items": ["https://claude.ai/code/artifact/a"]},
+        ])
+
+    def test_older_plans_newest_registered_first(self):
+        (self.state / "artifacts-s.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+            {"ts": 1, "path": "/a.md", "kind": "plan", "agent": "claude", "epoch": 0},
+            {"ts": 2, "path": "/b.md", "kind": "plan", "agent": "claude", "epoch": 0},
+            {"ts": 3, "path": "/c.md", "kind": "plan", "agent": "claude", "epoch": 0},
+            {"ts": 4, "path": "/a.md", "kind": "plan", "agent": "claude", "epoch": 0},   # /a.md written last, registered first
+            {"ts": 5, "path": "/h.md", "kind": "handoff", "agent": "claude", "epoch": 0},
+            {"ts": 6, "path": "https://claude.ai/doc/d1", "url": "https://claude.ai/doc/d1", "title": "Report", "kind": "doc", "agent": "claude", "epoch": 0},
+        ]))
+        s = artifacts.summary("s")
+        self.assertEqual(s["active_plan"], "/a.md")
+        self.assertEqual(s["sections"], [
+            {"name": "plans", "items": ["/c.md", "/b.md"]},
+            {"name": "docs", "items": ["https://claude.ai/doc/d1"]},
+            {"name": "other", "items": ["/h.md"]},
+        ])
+
+    def test_title_and_first_ts(self):
+        (self.state / "artifacts-t.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+            {"ts": 1, "path": "https://claude.ai/doc/d1", "url": "https://claude.ai/doc/d1", "title": "First", "kind": "doc", "epoch": 0},
+            {"ts": 2, "path": "https://claude.ai/doc/d1", "url": "https://claude.ai/doc/d1", "title": "", "kind": "doc", "epoch": 0},
+            {"ts": 3, "path": "/x.md", "kind": "spec", "epoch": 0},
+        ]))
+        by = {i["url"] or i["path"]: i for i in artifacts.summary("t")["items"]}
+        self.assertEqual(by["https://claude.ai/doc/d1"]["title"], "First")
+        self.assertEqual(by["https://claude.ai/doc/d1"]["first_ts"], 1)
+        self.assertEqual(by["/x.md"]["title"], "")
+
 
 class ReadSaveTest(Base):
     def test_read_allowlist(self):
