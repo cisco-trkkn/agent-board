@@ -782,6 +782,11 @@ class Schedule(Base):
                                f'bootout) exit 3;; bootstrap) touch "{self.tmp}/loaded"; exit 0;; esac\n')
         self.set_env(AW_LAUNCHCTL=self.stub, AW_HOME=str(self.home))
         self.plist = self.home / "Library" / "LaunchAgents" / "com.user.agent-worktree-sweep.plist"
+        real = Path.home() / "Library" / "LaunchAgents" / "com.user.agent-worktree-sweep.plist"
+        before = (real.exists(), real.stat().st_mtime if real.exists() else None)
+        self.addCleanup(lambda: self.assertEqual(
+            (real.exists(), real.stat().st_mtime if real.exists() else None), before,
+            "a schedule test touched the real LaunchAgents plist"))
 
     def called(self):
         return self.calls.read_text().splitlines() if self.calls.exists() else []
