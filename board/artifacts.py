@@ -47,10 +47,17 @@ def lineage(project):
     return jsonl(state_dir() / f"lineage-{project}.jsonl")
 
 
+def _is_mark(e):
+    """A dismiss/restore line from the board, not a write by an agent."""
+    return "dismissed" in e and "kind" not in e
+
+
 def _moved(project):
     """Paths whose latest manifest entry is a move to another project."""
     gone = set()
     for e in entries(project):
+        if _is_mark(e):
+            continue
         key = e.get("url") or e.get("path")
         if not key:
             continue
@@ -77,12 +84,16 @@ def _sections(items, active):
 
 
 def summary(project):
-    by = {}
+    by, hidden = {}, {}
     gone = _moved(project)
     for e in entries(project):
         key = e.get("url") or e.get("path")
         if not key or key in gone or e.get("moved_to"):
             continue
+        if _is_mark(e):   # dismiss/restore: the latest line of a key decides, a later write lifts a dismissal
+            hidden[key] = bool(e["dismissed"])
+            continue
+        hidden[key] = False
         it = by.setdefault(key, {"path": e.get("path", ""), "kind": e.get("kind", "other"), "url": e.get("url", ""), "title": "", "history": []})
         it["history"].append({k: e.get(k) for k in ("ts", "agent", "hash", "epoch")})
         if e.get("title"):
@@ -100,9 +111,13 @@ def summary(project):
     lead = [i for i in plans if i["latest"].get("agent") in ("claude", "you") or "/.claude/worktrees/" not in i["path"]]
     plans = [i for i in lead if (i["latest"].get("epoch") or 0) == epoch] or lead   # no lead plan: no pin
     active = plans[0]["path"] if plans else None
+    for i in items:
+        i["dismissed"] = bool(hidden.get(i["url"] or i["path"])) and not (i["path"] == active and not i["url"])
+    shown = [i for i in items if not i["dismissed"]]
     return {"epoch": len(lin), "lineage": lin, "items": items,
             "active_plan": active,
-            "sections": _sections(items, active),
+            "sections": _sections(shown, active),
+            "dismissed": [i["url"] or i["path"] for i in items if i["dismissed"]],
             "started_from": lin[-1].get("doc") if lin else None}
 
 
@@ -111,7 +126,7 @@ def _sha(data):
 
 
 def read(project, path):
-    if path in _moved(project) or not any(e.get("path") == path and not e.get("url") for e in entries(project)):
+    if path in _moved(project) or not any(e.get("path") == path and not e.get("url") and not _is_mark(e) for e in entries(project)):
         raise FileNotFoundError(path)
     data = Path(path).read_bytes()
     return {"path": path, "text": data.decode("utf-8", "replace"), "hash": _sha(data)}
@@ -144,7 +159,7 @@ def move(project, path, target, source_repo, target_repo):
     No git commands: both repos are left with the change uncommitted."""
     if target == project:
         raise ValueError("the document is already in that project")
-    if path in _moved(project) or not any(e.get("path") == path and not e.get("url") for e in entries(project)):
+    if path in _moved(project) or not any(e.get("path") == path and not e.get("url") and not _is_mark(e) for e in entries(project)):
         raise FileNotFoundError(path)
     rel = os.path.relpath(path, source_repo)
     if not rel.startswith(DOC_DIRS) or any("/.claude/worktrees/" in f"{p}/" for p in (path, source_repo, target_repo)):
@@ -170,6 +185,37 @@ def move(project, path, target, source_repo, target_repo):
     except (subprocess.TimeoutExpired, OSError):
         pass
     return f"moved {rel} to {target}; commit it in both repos"
+
+
+def _mark(project, keys, dismissed):
+    now = time.time()
+    with open(state_dir() / f"artifacts-{project}.jsonl", "a") as f:
+        for k in keys:
+            f.write(json.dumps({"ts": now, ("url" if re.match(r"https?://", k) else "path"): k,
+                                "dismissed": dismissed, "agent": "you"}) + "\n")
+
+
+def dismiss(project, keys, dismissed=True):
+    """Hide (or restore) items in the panel. Only the manifest changes, never a file. The pinned plan can't be hidden."""
+    s = summary(project)
+    known = {i["url"] or i["path"] for i in s["items"]}
+    keys = list(dict.fromkeys(keys))
+    for k in keys:
+        if k not in known:
+            raise FileNotFoundError(k)
+    if dismissed and s["active_plan"] in keys:
+        raise ValueError("the pinned plan can't be dismissed")
+    _mark(project, keys, bool(dismissed))
+    return len(keys)
+
+
+def dismiss_session(project, epoch):
+    """Dismiss every shown, unpinned item whose latest write is from this session (epoch)."""
+    s = summary(project)
+    keys = [i["url"] or i["path"] for i in s["items"]
+            if not i["dismissed"] and (i["latest"].get("epoch") or 0) == epoch and not (i["path"] == s["active_plan"] and not i["url"])]
+    _mark(project, keys, True)
+    return len(keys)
 
 
 def _flat(s, limit):
