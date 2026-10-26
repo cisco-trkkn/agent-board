@@ -120,16 +120,19 @@ class SummaryTest(Base):
             {"ts": 1, "path": "/a.md", "kind": "plan", "agent": "claude", "epoch": 0},
             {"ts": 2, "path": "/b.md", "kind": "plan", "agent": "claude", "epoch": 0},
             {"ts": 3, "path": "/c.md", "kind": "plan", "agent": "claude", "epoch": 0},
-            {"ts": 4, "path": "/a.md", "kind": "plan", "agent": "claude", "epoch": 0},   # /a.md written last, registered first
-            {"ts": 5, "path": "/h.md", "kind": "handoff", "agent": "claude", "epoch": 0},
-            {"ts": 6, "path": "https://claude.ai/doc/d1", "url": "https://claude.ai/doc/d1", "title": "Report", "kind": "doc", "agent": "claude", "epoch": 0},
+            {"ts": 4, "path": "/a.md", "kind": "plan", "agent": "claude", "epoch": 0},   # /a.md written again: registered first, latest write 4
+            {"ts": 5, "path": "/d.md", "kind": "plan", "agent": "claude", "epoch": 0},   # newest write: the pinned plan
+            {"ts": 6, "path": "/h.md", "kind": "handoff", "agent": "claude", "epoch": 0},
+            {"ts": 7, "path": "https://claude.ai/doc/d1", "url": "https://claude.ai/doc/d1", "title": "Report", "kind": "doc", "agent": "claude", "epoch": 0},
+            {"ts": 8, "path": "/x/page.html", "url": "https://claude.ai/code/artifact/p", "kind": "published", "agent": "claude", "epoch": 0},
+            {"ts": 9, "path": "/w.txt", "kind": "weird", "agent": "claude", "epoch": 0},
         ]))
         s = artifacts.summary("s")
-        self.assertEqual(s["active_plan"], "/a.md")
+        self.assertEqual(s["active_plan"], "/d.md")
         self.assertEqual(s["sections"], [
-            {"name": "plans", "items": ["/c.md", "/b.md"]},
-            {"name": "docs", "items": ["https://claude.ai/doc/d1"]},
-            {"name": "other", "items": ["/h.md"]},
+            {"name": "plans", "items": ["/c.md", "/b.md", "/a.md"]},
+            {"name": "docs", "items": ["https://claude.ai/code/artifact/p", "https://claude.ai/doc/d1"]},
+            {"name": "other", "items": ["/w.txt", "/h.md"]},
         ])
 
     def test_title_and_first_ts(self):
