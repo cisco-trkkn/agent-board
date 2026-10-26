@@ -1,0 +1,36 @@
+{
+  "session_id": "S1",
+  "transcript_path": "/tmp/t",
+  "cwd": "/tmp/t",
+  "prompt_id": "94dec402-8df7-4e17-b000-f6cac87d4c76",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__claude_ai_Claude_Docs__batch",
+  "tool_input": {
+    "container": {
+      "kind": "project",
+      "create": {
+        "name": "agent-board hook fixture (delete me)",
+        "doc": {
+          "markdown": "hello fixture"
+        }
+      }
+    },
+    "batch": []
+  },
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\"verdict\":\"allow\",\"acks\":[{\"verdict\":\"allow\",\"minted\":\"a6de8ae0-a8d4\"},{\"verdict\":\"allow\",\"id\":\"da966959-5aba\",\"rev\":1,\"session\":\"m3d8ep9b6qh\",\"xml\":\"<doc><paragraph id='m3d8ep9b6qh.0' h='67bec9d7'>hello fixture</paragraph></doc>\"},{\"verdict\":\"allow\"},{\"verdict\":\"allow\"}],\"lids\":{\"f\":\"a6de8ae0-a8d4\",\"n\":\"da966959-5aba\"},\"created\":{\"verdict\":\"allow\",\"minted\":\"c40c4cbb-22e5-42f6-8b8d-d059bc72bc78\",\"bound\":true},\"frame\":{\"slug\":\"c40c4cbb-22e5-42f6-8b8d-d059bc72bc78\",\"url\":\"https://claude.ai/artifact/RD7ZrAi3je1ePkMmrBtQ9u\",\"artifactUrl\":\"https://claude.ai/artifact/RD7ZrAi3je1ePkMmrBtQ9u\"}}\n\nThe doc's viewer is at https://claude.ai/artifact/RD7ZrAi3je1ePkMmrBtQ9u — NOT open for the user yet. Open it NOW, before you fill any section: your very next message says one short chat line — outline up; now <topic> — and, in that same message, calls your Artifact tool's `open` action with this URL (no `open` action or no such tool: the line hands the user this link, once). In that same message also call `guide( items = [\"topic.index\"] )` (skip a topic read this session) and, each as its own call (some clients cut a long result), `[\"topic.diagram\"]` when a planted section holds a flow, an architecture, a hierarchy, a timeline of milestones, items on two axes or a funnel, `[\"topic.charts\"]` when one holds five or more values of one measure over time or across items: those sections are drawn, not set as rows, even if the intent you just planted named a table — a shape set as rows makes the reader rebuild it in their head, and those topics teach the drawing. Then fill it ONE section per call while they watch — a call shows nothing until it completes, so the whole doc in one call is a long blank page, then a wall. Rule: first section's write right after the open, then one call per section as each is ready; never draft the whole doc before the first write. When the doc is ready, hand off with one short line (~12 words) in your own words and nothing else — no summary of the doc: what they can do now (edit inline, comment, share), e.g. `<Title> is ready — read it over, edit inline, or comment.` or `Drafted <Title>; tweak it or comment and I'll revise.`"
+    }
+  ],
+  "tool_use_id": "toolu_01MaDATVVuYnHG3pev5dah3E",
+  "duration_ms": 754,
+  "mcp_server": {
+    "name": "claude.ai Claude Docs",
+    "source": "claudeai"
+  }
+}

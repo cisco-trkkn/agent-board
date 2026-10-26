@@ -61,6 +61,21 @@ def _moved(project):
     return gone
 
 
+SECTION_OF = {"plan": "plans", "spec": "specs", "doc": "docs", "published": "docs"}
+SECTIONS = ("plans", "specs", "docs", "other")
+
+
+def _sections(items, active):
+    """Items (newest write first) split by type; plans re-sorted newest registered first; the pinned plan left out."""
+    out = {n: [] for n in SECTIONS}
+    for it in items:
+        if it["path"] == active and not it["url"]:
+            continue
+        out[SECTION_OF.get(it["kind"], "other")].append(it)
+    out["plans"].sort(key=lambda i: i["first_ts"], reverse=True)
+    return [{"name": n, "items": [i["url"] or i["path"] for i in out[n]]} for n in SECTIONS if out[n]]
+
+
 def summary(project):
     by = {}
     gone = _moved(project)
@@ -68,11 +83,14 @@ def summary(project):
         key = e.get("url") or e.get("path")
         if not key or key in gone or e.get("moved_to"):
             continue
-        it = by.setdefault(key, {"path": e.get("path", ""), "kind": e.get("kind", "other"), "url": e.get("url", ""), "history": []})
+        it = by.setdefault(key, {"path": e.get("path", ""), "kind": e.get("kind", "other"), "url": e.get("url", ""), "title": "", "history": []})
         it["history"].append({k: e.get(k) for k in ("ts", "agent", "hash", "epoch")})
+        if e.get("title"):
+            it["title"] = e["title"]
     items = []
     for it in by.values():
         it["latest"] = it["history"][-1]
+        it["first_ts"] = it["history"][0]["ts"] or 0
         items.append(it)
     items.sort(key=lambda i: i["latest"]["ts"] or 0, reverse=True)
     lin = lineage(project)
@@ -81,8 +99,10 @@ def summary(project):
     # a worker's plan in its own worktree must not take the pin: prefer the lead's plans, then this epoch, then the newest
     lead = [i for i in plans if i["latest"].get("agent") in ("claude", "you") or "/.claude/worktrees/" not in i["path"]]
     plans = [i for i in lead if (i["latest"].get("epoch") or 0) == epoch] or lead   # no lead plan: no pin
+    active = plans[0]["path"] if plans else None
     return {"epoch": len(lin), "lineage": lin, "items": items,
-            "active_plan": plans[0]["path"] if plans else None,
+            "active_plan": active,
+            "sections": _sections(items, active),
             "started_from": lin[-1].get("doc") if lin else None}
 
 

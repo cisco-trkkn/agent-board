@@ -1,0 +1,38 @@
+{
+  "session_id": "S1",
+  "transcript_path": "/tmp/t",
+  "cwd": "/tmp/t",
+  "prompt_id": "94dec402-8df7-4e17-b000-f6cac87d4c76",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__claude_ai_Claude_Docs__read",
+  "tool_input": {
+    "ref": {
+      "object": "node",
+      "id": "da966959-5aba"
+    },
+    "engine": "prose",
+    "container": {
+      "kind": "project",
+      "id": "c40c4cbb-22e5-42f6-8b8d-d059bc72bc78"
+    },
+    "payload": {
+      "projection": "outline"
+    }
+  },
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\"verdict\":\"allow\",\"rev\":2,\"data\":{\"rev\":2,\"xml\":\"<doc node='da966959-5aba' rev='2' outline='true'><paragraph id='m3d8ep9b6qh.0' rev='1' h='67bec9d7'>hello fixture</paragraph><paragraph id='.14' rev='2' h='c644dd91'>second line</paragraph></doc>\",\"complete\":true},\"frame\":{\"slug\":\"c40c4cbb-22e5-42f6-8b8d-d059bc72bc78\",\"url\":\"https://claude.ai/artifact/RD7ZrAi3je1ePkMmrBtQ9u\",\"artifactUrl\":\"https://claude.ai/artifact/RD7ZrAi3je1ePkMmrBtQ9u\"}}"
+    }
+  ],
+  "tool_use_id": "toolu_017yNNnyKrx5KWdRqkErhg3P",
+  "duration_ms": 219,
+  "mcp_server": {
+    "name": "claude.ai Claude Docs",
+    "source": "claudeai"
+  }
+}
