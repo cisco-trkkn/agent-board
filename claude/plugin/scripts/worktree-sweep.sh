@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # worktree-sweep.sh — PostToolUse Bash hook: after git merge / git pull / glab mr merge / git branch -d|-D, start a
-# detached `agent-worktrees sweep <repo>`. Silent, always exits 0. The sweep's summary goes to the sweep log and, when
-# the session has a dev layout, to the shell feed (same entry header as bash-mirror).
+# detached `agent-worktrees sweep <repo>`. Silent, always exits 0. The sweep's summary goes to the shell feed when
+# the session has a dev layout (same entry header as bash-mirror). The sweep log is the engine's; this hook writes none.
 # Test seam: AW_CLI overrides the agent-worktrees command.
 emulate -L zsh
 _tcenv="${${(%):-%x}:A:h:h:h:h}/tools/lib/tc-env.zsh"
@@ -15,9 +15,7 @@ zmodload zsh/datetime
 # detached child: --sweep-child <repo> <feed log or ""> <caller> <cwd>. Runs the sweep, logs it, appends the feed entry.
 if [[ "$1" == --sweep-child ]]; then
   repo=$2 feedlog=$3 caller=$4 cwd=$5
-  STATE="$TC_STATE_DIR"; mkdir -p "$STATE"
   out="$("${(@Q)${(z)AW_CLI}}" sweep "$repo" 2>&1)"; code=$?
-  print -r -- "$(date +%FT%T) sweep $repo (exit $code)"$'\n'"$out" >> "$STATE/worktree-sweep.log"
   [[ -n "$feedlog" ]] || exit 0
   removed=() kept=() stale=()
   for l in "${(@f)out}"; do
@@ -91,7 +89,7 @@ sys.stdout.write("\0".join([target, shown]))
     done
   fi
   [[ -n "$AW_CLI" ]] || exit 0
-  # feed: located the way bash-mirror does it; none without a dev session (the sweep log is written anyway)
+  # feed: located the way bash-mirror does it; none without a dev session (the sweep still runs)
   feedlog= caller=
   if [[ -n "$TMUX" && -n "$TMUX_PANE" ]]; then
     RES="${${(%):-%x}:A:h:h:h:h}/bin/_tc_bins.zsh"

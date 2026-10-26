@@ -6,7 +6,7 @@ tt_setup
 unset AGENT_BOARD   # a board-opened shell exports it; the dedupe test sets it itself
 W="$TT_DIR/w"; mkdir -p "$W"
 argvf="$W/argv"; pidf="$W/pid"
-feed="$TC_STATE/feed-tt-shell.log"; slog="$TC_STATE/worktree-sweep.log"
+feed="$TC_STATE/feed-tt-shell.log"
 
 # stub CLI: records argv, prints a canned sweep summary
 cat > "$W/aw-stub" <<STUB
@@ -68,20 +68,22 @@ out="$(payload 'git merge x' | "$H" 2>&1)"; rcode=$?
 check "stdout empty, exit 0" test -z "$out" -a $rcode -eq 0
 
 # feed + sweep log
-rm -f "$feed" "$slog" "$argvf"; run 'git merge x' >/dev/null
+tt_wait 5 grep -q swept: "$feed" 2>/dev/null; sleep 0.5   # let the sweep from the stdout test finish
+rm -f "$feed" "$argvf"; run 'git merge x' >/dev/null
 tt_wait 5 grep -q 'swept:' "$feed" 2>/dev/null
 check "feed entry written to the shell feed" test -s "$feed"
 check "header: agent worktree-sweep, cwd, exit 0, epoch" grep -qE '^── [0-9]{2}:[0-9]{2}:[0-9]{2} · worktree-sweep · .* · exit 0 · @[0-9]{9,}$' "$feed"
 check "command line shows the sweep" grep -qxF "\$ agent-worktrees sweep $R" "$feed"
 check "body: removed/kept/stale summary" grep -qxF 'swept: removed wt-a; kept wt-b (unmerged); stale wt-c (9d)' "$feed"
 check "one entry per merge" test "$(grep -c '^── ' "$feed")" -eq 1
-check "sweep log written" grep -q 'wt-b' "$slog"
+check "engine invoked with the repo (stub argv)" test "$(<$argvf)" = "sweep $R"
+check "hook writes no worktree-sweep.log (the engine owns the sweep log)" test -z "$(find "$TC_STATE" -name 'worktree-sweep.log*')"
 
-# no dev session (no shell window): sweep log yes, feed no
+# no dev session (no shell window): the sweep still runs, no feed
 tt rename-window -t '=tt:shell' other
-rm -f "$feed" "$slog"; run 'git merge x' >/dev/null
-tt_wait 5 test -s "$slog"; sleep 0.5
-check "no shell window: sweep log written" test -s "$slog"
+rm -f "$feed" "$argvf"; run 'git merge x' >/dev/null
+tt_wait 5 test -s "$argvf"; sleep 0.5
+check "no shell window: sweep still runs" test "$(<$argvf)" = "sweep $R"
 check "no shell window: no feed" test ! -e "$feed"
 tt rename-window -t '=tt:other' shell
 
