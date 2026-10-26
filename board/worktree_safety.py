@@ -6,6 +6,7 @@ worktree `kept` with the reason.
 import hashlib
 import json
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -471,3 +472,75 @@ def sweep_recent(dry_run=False, now=None):
         seen_repos.add(key)
         lines += sweep(main, dry_run=dry_run, now=now)
     return lines
+
+
+# ---- daily schedule (launchd) ----
+
+LABEL = "com.user.agent-worktree-sweep"
+
+
+def _home():
+    return Path(os.environ.get("AW_HOME") or Path.home())
+
+
+def _plist_path(home=None):
+    return Path(home or _home()) / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+
+
+def plist_text(cli_path, home):
+    """The LaunchAgent plist (bytes) that runs `<cli_path> worktrees sweep --recent` every day at 04:00."""
+    log = f"{home}/.local/state/agent-board/worktree-sweep.launchd.log"
+    return plistlib.dumps({
+        "Label": LABEL,
+        "ProgramArguments": [str(cli_path), "worktrees", "sweep", "--recent"],
+        "StartCalendarInterval": {"Hour": 4, "Minute": 0},
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+        "EnvironmentVariables": {"PATH": f"{home}/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"},
+    })
+
+
+def _launchctl(*args):
+    cmd = shlex.split(os.environ.get("AW_LAUNCHCTL") or "launchctl")
+    try:
+        return subprocess.run([*cmd, *args], capture_output=True, text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(args, 127, "", str(e))
+
+
+def schedule_install():
+    home = _home()
+    plist = _plist_path(home)
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    (home / ".local" / "state" / "agent-board").mkdir(parents=True, exist_ok=True)
+    lines = []
+    if plist.exists():
+        bak = plist.with_name(f"{plist.name}.bak-{datetime.now():%Y%m%d}")
+        shutil.copy2(plist, bak)
+        lines.append(f"backed up the old plist to {bak}")
+    plist.write_bytes(plist_text(home / ".local" / "bin" / "agent-board", str(home)))
+    uid = os.getuid()
+    _launchctl("bootout", f"gui/{uid}/{LABEL}")   # not loaded yet is fine
+    r = _launchctl("bootstrap", f"gui/{uid}", str(plist))
+    if r.returncode != 0:
+        raise RuntimeError(f"launchctl bootstrap failed: {(r.stderr or r.stdout).strip()}")
+    return lines + [f"installed {plist}: sweep --recent every day at 04:00"]
+
+
+def schedule_uninstall():
+    plist = _plist_path()
+    _launchctl("bootout", f"gui/{os.getuid()}/{LABEL}")
+    if plist.exists():
+        plist.unlink()
+        return [f"removed {plist}"]
+    return ["not installed"]
+
+
+def schedule_status():
+    r = _launchctl("print", f"gui/{os.getuid()}/{LABEL}")
+    if r.returncode != 0:
+        return ["not installed"]
+    # the service's own keys sit one tab deep; nested blocks (event triggers, endpoints) are deeper
+    keep = [l.strip() for l in r.stdout.splitlines()
+            if re.match(r"^\t(state|last exit code) = ", l)]
+    return keep or ["installed"]

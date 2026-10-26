@@ -53,6 +53,17 @@ def cmd_sweep(a):
     return 0
 
 
+def cmd_schedule(a):
+    try:
+        lines = {"install": ws.schedule_install, "uninstall": ws.schedule_uninstall, "status": ws.schedule_status}[a.what]()
+    except RuntimeError as e:
+        print(f"agent-worktrees: {e}", file=sys.stderr)
+        return 1
+    for line in lines:
+        print(line)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="agent-worktrees")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -70,6 +81,9 @@ def main(argv=None):
     w.add_argument("--only", metavar="PATH", help="sweep just this worktree")
     w.add_argument("--dry-run", action="store_true")
     w.set_defaults(fn=cmd_sweep)
+    sc = sub.add_parser("schedule", help="the daily 04:00 sweep --recent LaunchAgent")
+    sc.add_argument("what", choices=["install", "uninstall", "status"])
+    sc.set_defaults(fn=cmd_schedule)
     a = p.parse_args(argv)
     if a.cmd == "sweep":
         if a.recent and (a.dir or a.only):

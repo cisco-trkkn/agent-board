@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -761,6 +762,106 @@ class CliSweep(StateBase):
 
     def test_remove_cli_bad_path_exits_2(self):
         self.assertEqual(self.run_cli("remove", self.tmp).returncode, 2)
+
+
+# Captured from `launchctl print gui/$UID/com.apple.Finder` (macOS 26.0, 2026-10-26): top-level keys have one
+# leading tab, nested blocks two or more; nested blocks also carry `state = active`.
+LAUNCHCTL_PRINT = ("gui/503/com.apple.Finder = {\n\tactive count = 5\n\tstate = running\n\n\tprogram = /System/x\n"
+                   "\tpid = 5388\n\tlast exit code = (never exited)\n\n\tevent triggers = {\n"
+                   "\t\tcom.apple.x => {\n\t\t\tstate = active\n\t\t}\n\t}\n}\n")
+
+
+class Schedule(Base):
+    def setUp(self):
+        super().setUp()
+        self.home = Path(self.tmp) / "home"
+        self.home.mkdir()
+        self.calls = Path(self.tmp) / "launchctl-calls"
+        self.stub = write_stub(self.bin / "launchctl", f'echo "$@" >> "{self.calls}"\n'
+                               f'case "$1" in print) [ -f "{self.tmp}/loaded" ] && {{ printf "%b" \'{LAUNCHCTL_PRINT.replace(chr(10), "\\n").replace(chr(9), "\\t")}\'; exit 0; }}; echo "Could not find service" >&2; exit 113;; '
+                               f'bootout) exit 3;; bootstrap) touch "{self.tmp}/loaded"; exit 0;; esac\n')
+        self.set_env(AW_LAUNCHCTL=self.stub, AW_HOME=str(self.home))
+        self.plist = self.home / "Library" / "LaunchAgents" / "com.user.agent-worktree-sweep.plist"
+
+    def called(self):
+        return self.calls.read_text().splitlines() if self.calls.exists() else []
+
+    def test_plist_fields(self):
+        cli = str(self.home / ".local" / "bin" / "agent-board")
+        d = plistlib.loads(ws.plist_text(cli, str(self.home)))
+        self.assertEqual(d["Label"], "com.user.agent-worktree-sweep")
+        self.assertEqual(d["ProgramArguments"], [cli, "worktrees", "sweep", "--recent"])
+        self.assertEqual(d["StartCalendarInterval"], {"Hour": 4, "Minute": 0})
+        log = str(self.home / ".local" / "state" / "agent-board" / "worktree-sweep.launchd.log")
+        self.assertEqual((d["StandardOutPath"], d["StandardErrorPath"]), (log, log))
+        path = d["EnvironmentVariables"]["PATH"]
+        self.assertIn(f"{self.home}/.local/bin:/opt/homebrew/bin:/usr/bin:/bin", path)
+
+    @unittest.skipUnless(shutil.which("plutil"), "plutil is macOS only")
+    def test_plist_passes_plutil_lint(self):
+        f = Path(self.tmp) / "x.plist"
+        f.write_bytes(ws.plist_text(str(self.home / ".local/bin/agent-board"), str(self.home)))
+        r = subprocess.run(["plutil", "-lint", str(f)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_install_writes_plist_and_runs_bootout_then_bootstrap(self):
+        lines = ws.schedule_install()
+        d = plistlib.loads(self.plist.read_bytes())
+        self.assertEqual(d["ProgramArguments"][0], str(self.home / ".local" / "bin" / "agent-board"))
+        uid = os.getuid()
+        self.assertEqual(self.called(), [f"bootout gui/{uid}/com.user.agent-worktree-sweep",
+                                         f"bootstrap gui/{uid} {self.plist}"])
+        self.assertTrue((self.home / ".local" / "state" / "agent-board").is_dir())
+        self.assertTrue(lines)
+
+    def test_install_backs_up_an_existing_plist(self):
+        self.plist.parent.mkdir(parents=True)
+        self.plist.write_text("old")
+        ws.schedule_install()
+        baks = list(self.plist.parent.glob(self.plist.name + ".bak-*"))
+        self.assertEqual(len(baks), 1)
+        self.assertRegex(baks[0].name, r"\.bak-\d{8}$")
+        self.assertEqual(baks[0].read_text(), "old")
+        self.assertNotEqual(self.plist.read_text(), "old")
+
+    def test_install_bootstrap_failure_raises(self):
+        write_stub(self.bin / "launchctl", 'case "$1" in bootstrap) echo "Bootstrap failed: 5" >&2; exit 5;; esac\n')
+        with self.assertRaisesRegex(RuntimeError, "Bootstrap failed"):
+            ws.schedule_install()
+
+    def test_uninstall_boots_out_and_removes_the_file(self):
+        ws.schedule_install()
+        self.calls.unlink()
+        ws.schedule_uninstall()
+        self.assertFalse(self.plist.exists())
+        self.assertEqual(self.called(), [f"bootout gui/{os.getuid()}/com.user.agent-worktree-sweep"])
+
+    def test_uninstall_when_not_installed_is_fine(self):
+        self.assertTrue(ws.schedule_uninstall())
+
+    def test_status_not_installed(self):
+        self.assertEqual(ws.schedule_status(), ["not installed"])
+
+    def test_status_prints_only_the_service_state_and_exit_code(self):
+        ws.schedule_install()
+        self.assertEqual(ws.schedule_status(), ["state = running", "last exit code = (never exited)"])
+
+    def test_launchctl_is_word_split(self):
+        stub = write_stub(self.bin / "lcargs", '[ "$1" = "--flag" ] || exit 9\nexit 0\n')
+        self.set_env(AW_LAUNCHCTL=f"{stub} --flag")
+        with mock.patch.object(ws.subprocess, "run", wraps=subprocess.run) as run:
+            ws.schedule_install()
+        self.assertTrue(all(c.args[0][1] == "--flag" for c in run.call_args_list if c.args[0][0] == stub))
+
+    def test_cli_schedule_install_status_uninstall(self):
+        env = {**os.environ, "AW_LAUNCHCTL": self.stub, "AW_HOME": str(self.home)}
+        run = lambda *a: subprocess.run([sys.executable, str(CLI), "schedule", *a], capture_output=True, text=True, env=env)
+        r = run("install")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.plist.exists())
+        self.assertIn("state = running", run("status").stdout)
+        self.assertEqual(run("uninstall").returncode, 0)
+        self.assertFalse(self.plist.exists())
 
 
 if __name__ == "__main__":
