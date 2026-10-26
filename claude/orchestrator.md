@@ -212,8 +212,8 @@ applies to every agent.
 - Never type into a window that is running something you didn't start, unless that something is a
   project agent you were asked to control (see above). `tmux-ctl` refuses busy windows; don't work
   around it with `keys` for anything else.
-- Don't push, merge or delete branches unless the user asks. Finished worker worktrees are cleaned up by
-  the user with `Ctrl-a W`.
+- Don't push, merge or delete branches unless the user asks. Merged agent worktrees are removed automatically
+  (after a merge, on a worker shutdown, and daily at 04:00); stale unmerged ones are flagged on the board and in `Ctrl-a W` for the user to remove.
 - When the repo checkout is also the live install (its files are symlinked into `~/.claude`,
   `~/.local/bin` or similar, so the checked-out branch runs for every session), execute plans in a
   worktree under `.claude/worktrees/`, never on a branch in the live checkout. Switch branches or merge

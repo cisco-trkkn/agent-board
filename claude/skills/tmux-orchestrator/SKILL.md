@@ -85,5 +85,5 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
 
 - Never answer a worker's or teammate's permission prompt or question. `tell` refuses while a worker
   waits on the user. Tell the user which window needs them instead.
-- Workers commit on their own branches. Don't merge or delete them unless asked. The user removes
-  finished worktrees with `Ctrl-a W`.
+- Workers commit on their own branches. Don't merge or delete them unless asked. Merged agent worktrees are removed automatically
+  (after a merge, on a worker shutdown, and daily at 04:00); stale unmerged ones are flagged on the board and in `Ctrl-a W` for the user to remove.
