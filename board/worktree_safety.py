@@ -154,6 +154,22 @@ def _squash_mr(repo, branch, sha):
     return None, None
 
 
+NEW_GRACE = 24 * 3600   # seconds a branch with no commits of its own counts as brand new
+
+
+def _is_new(repo, branch, now):
+    """True when the branch's reflog holds only its creation entry and that entry is under 24 h old: a worktree made
+    by plain `git worktree add` (no lock, often no pane) whose HEAD is trivially an ancestor of base. An unreadable
+    reflog gives False (no grace)."""
+    # %gd with --date=unix is `<branch>@{<epoch of the reflog entry>}`; %ct would be the date of the commit
+    r = _git(repo, "reflog", "show", "--format=%gd", "--date=unix", f"refs/heads/{branch}")
+    entries = r.stdout.split()
+    m = re.search(r"@\{(\d+)\}$", entries[0]) if len(entries) == 1 else None
+    if r.returncode != 0 or not m:
+        return False
+    return (now - datetime.fromtimestamp(int(m.group(1)), timezone.utc)).total_seconds() < NEW_GRACE
+
+
 def _worktrees(repo):
     """(main checkout path, all worktree blocks) of the repo containing `repo`. Raises NotARepo."""
     try:
@@ -216,6 +232,9 @@ def _classify_one(ctx, wt):
         return done("in_use", "tmux pane inside")
     if err:
         return done("kept", err)
+
+    if branch and _is_new(ctx.repo, branch, ctx.now):
+        return done("kept", "new, no commits yet")
 
     if any(_is_ancestor(ctx.repo, sha, r) for r in ctx.refs):
         return done("safe", "merged")

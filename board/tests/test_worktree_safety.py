@@ -2,6 +2,7 @@ import io
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -38,10 +39,16 @@ def make_repo(tmp):
     return repo
 
 
-def add_worktree(repo, name, commits=0, age_days=0, now=NOW):
-    """Add .claude/worktrees/<name> on branch <name>, with `commits` empty commits dated now - age_days."""
+def add_worktree(repo, name, commits=0, age_days=0, now=NOW, created_hours_ago=None):
+    """Add .claude/worktrees/<name> on branch <name>, with `commits` empty commits dated now - age_days.
+    The branch's creation (its first reflog entry) is dated `created_hours_ago` before `now`, default 2 days, so a
+    fixture is past the "brand new" grace period unless a test asks for a young one."""
     wt = repo / ".claude" / "worktrees" / name
+    created = now - (timedelta(hours=created_hours_ago) if created_hours_ago is not None else timedelta(days=2))
     git("worktree", "add", str(wt), "-b", name, cwd=repo)
+    # a reflog entry is stamped with the wall clock whatever GIT_COMMITTER_DATE says, so back-date it in the file
+    log = repo / ".git" / "logs" / "refs" / "heads" / name
+    log.write_text(re.sub(r"> \d+ ", f"> {int(created.timestamp())} ", log.read_text(), count=1))
     for i in range(commits):
         git("commit", "--allow-empty", "-m", f"{name} {i}", cwd=wt, date=now - timedelta(days=age_days))
     return wt
@@ -136,6 +143,41 @@ class ClassifyStates(Base):
         git("checkout", "feature", cwd=self.repo)   # current = feature, base main lacks w1
         item = self.one()
         self.assertEqual((item["state"], head(wt)), ("safe", item["head"]))
+
+    def test_brand_new_worktree_without_commits_is_kept(self):
+        add_worktree(self.repo, "w1", created_hours_ago=1)
+        item = self.one()
+        self.assertEqual((item["state"], item["reason"]), ("kept", "new, no commits yet"))
+
+    def test_the_grace_ends_after_24_hours(self):
+        add_worktree(self.repo, "w1", created_hours_ago=25)
+        self.assertEqual(self.one()["state"], "safe")
+
+    def test_a_young_worktree_with_a_merged_commit_is_safe(self):
+        wt = add_worktree(self.repo, "w1", commits=1, age_days=0, created_hours_ago=1)
+        git("merge", "--ff-only", "w1", cwd=self.repo)   # the commit is now on main too
+        self.assertEqual((self.one()["state"], head(wt) == self.one()["head"]), ("safe", True))
+
+    def test_creation_dated_after_now_is_still_new(self):
+        add_worktree(self.repo, "w1", created_hours_ago=-1)   # "created" an hour after `now`
+        self.assertEqual(self.one()["state"], "kept")
+
+    def test_detached_worktree_gets_no_grace(self):
+        wt = self.repo / ".claude" / "worktrees" / "d1"
+        git("worktree", "add", "--detach", str(wt), cwd=self.repo, date=NOW - timedelta(hours=1))
+        item = self.one(name="d1")
+        self.assertEqual(item["state"], "safe")
+
+    def test_unreadable_reflog_means_no_grace(self):
+        add_worktree(self.repo, "w1", created_hours_ago=1)
+        real = ws._git
+
+        def broken(cwd, *args):
+            if args[:2] == ("reflog", "show"):
+                return subprocess.CompletedProcess(args, 128, "", "fatal: bad")
+            return real(cwd, *args)
+        with mock.patch.object(ws, "_git", broken):
+            self.assertEqual(self.one()["state"], "safe")
 
     def test_unmerged_recent_is_kept_not_merged(self):
         add_worktree(self.repo, "w1", commits=1, age_days=2)
