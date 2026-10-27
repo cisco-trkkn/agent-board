@@ -50,10 +50,33 @@ def claude_pane(tmux, sess):
     return None
 
 
-def session_root(tmux, sess):
-    path = tmux("display", "-p", "-t", f"={sess}:", "#{pane_current_path}").strip()
-    r = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else path
+def main_checkout(d):
+    """d's project main checkout: a worktree maps to the repo that owns it; a non-git dir stays as is."""
+    r = subprocess.run(["git", "-C", d, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                       capture_output=True, text=True)
+    common = r.stdout.strip()
+    if r.returncode != 0 or not common:
+        return d
+    return str(Path(common).parent)
+
+
+def session_root(tmux, sess, pane=None):
+    """Where the new lead starts: the project's main checkout, never a worktree (auto-cleanup may remove it).
+
+    Candidates in order: the claude pane's current path, the session's start path, $HOME. A path that is
+    empty or no longer a directory (a removed worktree) is skipped.
+    """
+    if pane is None:
+        pane = claude_pane(tmux, sess)
+    cands = []
+    if pane:
+        cands.append(tmux("display", "-p", "-t", pane, "#{pane_current_path}").strip())
+    cands.append(tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip())
+    cands.append(os.environ.get("HOME", ""))
+    for d in cands:
+        if d and os.path.isdir(d):
+            return main_checkout(d)
+    return str(Path.home())
 
 
 def orchestrator():
@@ -76,7 +99,7 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", **wait):
         raise RuntimeError(f"no claude window in {sess}")
     if not wait_turn_end(tmux, pane, **wait):
         raise RuntimeError("the lead is still busy after the wait; not switching. Run tmux-ctl relay again when it is idle")
-    respawn(tmux, pane, session_root(tmux, sess), prompt_for(doc))
+    respawn(tmux, pane, session_root(tmux, sess, pane), prompt_for(doc))
     Path(state_dir).mkdir(parents=True, exist_ok=True)
     with open(Path(state_dir) / f"lineage-{sess}.jsonl", "a") as f:
         f.write(json.dumps({"ts": time.time(), "old_session_id": old_session_id, "doc": str(doc), "pane": pane}) + "\n")
