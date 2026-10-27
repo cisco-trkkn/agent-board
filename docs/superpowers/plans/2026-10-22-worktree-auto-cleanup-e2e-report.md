@@ -128,4 +128,11 @@ Both removed worktrees' branches were deleted with `git branch -d` (merged branc
 
 ## Schedule
 
-Not run (pending). `agent-board worktrees schedule install` happens after the branch is merged to main, on the user's go-ahead. On this host `~/.local/bin/agent-board` does not exist, so the install will target the `agent-board` beside the CLI.
+Installed 2026-10-27 from `~/agent-board` on `main` (75442ab), on the user's go-ahead:
+
+- `agent-board worktrees schedule install` → `installed ~/Library/LaunchAgents/com.user.agent-worktree-sweep.plist: sweep --recent every day at 04:00`, exit 0.
+- `schedule status` → `state = not running`, `last exit code = (never exited)`; `launchctl list` shows `com.user.agent-worktree-sweep`.
+- The plist runs `~/agent-board/bin/agent-board worktrees sweep --recent` with `PATH=~/.local/bin:/opt/homebrew/bin:/usr/bin:/bin`, logging to `~/.local/state/agent-board/worktree-sweep.launchd.log`.
+- A bare-environment dry run (`env -i HOME=… PATH=<plist PATH> … sweep --recent --dry-run`) exited 0, with `would-remove connector-framework` in master-gcp-repo.
+
+That dry run exposed a gap: `connector-framework` was clean and squash-merged, but held MR 1's SDD workspace (`.superpowers/`) and `.agent-ci/` state, both git-ignored, which `git worktree remove` deletes. The lead copied the SDD files into `ga4-connector-refit` (add-only), locked `connector-framework` until the fix landed, and the engine now keeps a would-be-safe worktree that holds ignored files other than caches (965a500).
