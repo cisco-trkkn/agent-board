@@ -10,6 +10,10 @@ out="$(HOME="$cfg" TC_TMUX="$TT_BIN" PATH="$stub:$PATH" $R/bin/claude-orchestrat
 check "orchestrator uses -file flag"  grep -qxF -- '--append-system-prompt-file' <<< "$out"
 check "orchestrator passes path"      grep -qxF -- "$R/claude/orchestrator.md" <<< "$out"
 check "no prompt text in argv"        test -z "$(grep -F 'tmux-ctl run' <<< "$out")"
+check "no default --name: Claude Code titles the session" test -z "$(grep -xF -- '--name' <<< "$out")"
+outn="$(HOME=/nonexistent TC_TMUX=/nonexistent PATH="$stub:$PATH" $R/bin/claude-orchestrator --name mine 2>&1)"
+check "user --name passes through once" test "$(grep -cxF -- '--name' <<< "$outn")" = 1
+check "user --name value kept"          grep -qxF -- 'mine' <<< "$outn"
 check "worker rules via -file"        grep -qF -- "--append-system-prompt-file $R/claude/worker.md" <<< "$(HOME=/nonexistent TC_AGENT_DRYRUN=1 $R/bin/tmux-ctl agent w --force 'a b' 2>&1)"
 check "no inline worker.md"           test -z "$(grep -F '$(<~/.claude/worker.md)' $R/bin/tmux-ctl)"
 
