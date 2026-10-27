@@ -212,6 +212,8 @@ dialog .row[hidden] { display: none; }   /* .row sets display:flex, which would 
 .art .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .art .dot { width: 7px; height: 7px; border-radius: 50%; background: #e5534b; flex: none; }
 .badge { font-size: 11px; color: var(--muted); background: var(--panel-2); border-radius: 6px; padding: 1px 6px; }
+.art .badge.sess { opacity: .7; }
+.art-foot { display: block; font-size: 12px; color: var(--muted); padding: 6px 8px; cursor: pointer; }
 .pending { font-size: 12px; color: var(--muted); padding: 2px 8px; }
 .doc { display: none; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); flex-direction: column; min-height: 0; overflow: hidden; }
 main.with-doc .doc { display: flex; }
@@ -934,9 +936,9 @@ $("#form-project").addEventListener("submit", async (e) => {
 });
 
 // ── artifacts panel: page-lifetime state per session (cleared by reload) ──
-const KIND_ICON = { plan: "▤", spec: "◇", handoff: "⇄", report: "▦", published: "↗", other: "•" };
+const KIND_ICON = { plan: "▤", spec: "◇", handoff: "⇄", report: "▦", published: "↗", doc: "✎", other: "•" };
 const ART = {};
-const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(), seen: new Map(), loadedAt: Date.now() / 1000, epoch: 0, plan: null, startedFrom: null, comments: [] });
+const artFor = (name) => (ART[name] ||= { items: new Map(), versions: new Map(), seen: new Map(), loadedAt: Date.now() / 1000, epoch: 0, plan: null, startedFrom: null, comments: [], sections: [] });
 let docBase = null, docSel = null, docSess = null, docMode = "read", docSelection = null, docRendered = null;
 if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", (n) => { if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); } });
 const api = (path) => fetch(`${API}/${path}`, { cache: "no-store" });
@@ -964,12 +966,18 @@ $("#side-toggle").onclick = () => {
 };
 $("#side-toggle").textContent = $("#side").classList.contains("collapsed") ? "▶" : "◀";
 
+let artShown = null;   // the project whose artifacts the pane last rendered
 async function pollArtifacts() {
   const s = session(); if (!s) return;
   const A = artFor(s.name);
-  const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const p = await pollJSON(`artifacts?session=${encodeURIComponent(s.name)}`); if (!p.ok) return;
+  if (!p.changed) {   // a 304 for this project's cached ETag: the data is current, but the pane may still show the project we switched from
+    if (artShown !== s.name) { artShown = s.name; renderArtifacts(); }
+    return;
+  }
+  artShown = s.name;
   const d = p.json;
-  Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [] });
+  Object.assign(A, { epoch: d.epoch, plan: d.active_plan, startedFrom: d.started_from, comments: d.comments || [], sections: d.sections || [], dismissed: d.dismissed || [] });
   for (const it of d.items) A.items.set(it.url || it.path, it);
   const keep = new Set(d.items.map((it) => it.url || it.path));   // a moved document leaves the manifest view
   for (const k of [...A.items.keys()]) if (!keep.has(k)) { A.items.delete(k); A.versions.delete(k); A.seen.delete(k); }
@@ -999,15 +1007,25 @@ async function trackVersion(name, A, it) {
 
 function artButton(A, it) {
   const b = el("button", "art" + (docSel === (it.url || it.path) ? " sel" : ""));
-  b.append(el("span", "", KIND_ICON[it.kind] || "•"), el("span", "nm", it.url ? it.url.split("/").pop() : it.path.split("/").pop()), el("span", "badge", it.latest.agent || "?"));
+  const label = it.title || (it.url ? it.url.split("/").pop() : it.path.split("/").pop());
+  b.append(el("span", "", KIND_ICON[it.kind] || "•"), el("span", "nm", label), el("span", "badge", it.latest.agent || "?"), el("span", "badge sess", `S${(it.latest.epoch ?? 0) + 1}`));
   const vs = A.versions.get(it.path);
   if (!it.url && vs && A.seen.get(it.path) !== vs[vs.length - 1].hash) b.append(el("span", "dot"));
   b.title = it.url || it.path;
   b.onclick = () => it.url ? window.open(it.url, "_blank", "noopener") : openDoc(it.path);
-  if (it.path && /\/docs\/superpowers\/(plans|specs)\//.test(it.path) && !/\/\.claude\/worktrees\//.test(it.path)) {
-    b.dataset.key = "art:" + it.path;
-    bindAgentMenu(b, () => otherProjects().map((p) => ({ label: `Move to ${p}`, run: () => moveDoc(it.path, p) })));
-  }
+  const key = it.url || it.path, pinned = !it.url && it.path === A.plan, movable = it.path && /\/docs\/superpowers\/(plans|specs)\//.test(it.path) && !/\/\.claude\/worktrees\//.test(it.path);
+  b.dataset.key = "art:" + key;
+  bindAgentMenu(b, () => {
+    const out = [];
+    if (it.dismissed) out.push({ label: "Restore", run: () => dismissArt([key], false) });
+    else if (!pinned) {
+      const n = (it.latest.epoch ?? 0);
+      out.push({ label: "Dismiss", run: () => dismissArt([key], true) },
+               { label: `Dismiss all from S${n + 1}`, run: () => dismissSession(n) });
+    }
+    if (movable) out.push(...otherProjects().map((p) => ({ label: `Move to ${p}`, run: () => moveDoc(it.path, p) })));
+    return out;
+  });
   return b;
 }
 
@@ -1026,26 +1044,48 @@ function renderArtifacts() {
     const txt = vs && vs[vs.length - 1].text;
     if (txt && /- \[x\]/i.test(txt) && !/- \[ \]/.test(txt)) pin.append(el("div", "pending", `Plan done · ${window.ideasOpen || 0} ideas ready for next steps`));
   }
-  const groups = new Map();
-  for (const it of A.items.values()) {
-    if (it.path === A.plan) continue;
-    const e = it.latest.epoch ?? 0;
-    if (!groups.has(e)) groups.set(e, []);
-    groups.get(e).push(it);
-  }
+  const SECTION_TITLE = { plans: "Plans", specs: "Specs", docs: "Docs & pages", other: "Other" };
   const box = $("#art-groups"); box.replaceChildren();
-  const openKey = (e) => `dash.art.${s.name}.${e}`;
-  for (const e of [...groups.keys()].sort((a, b) => b - a)) {
-    const g = el("details", "art-group");
-    let saved = null; try { saved = localStorage.getItem(openKey(e)); } catch (err) {}
-    g.open = saved ? saved === "open" : e === A.epoch;
-    const sum = el("summary"); sum.append(el("h4", "", `Session ${e + 1}${e === A.epoch ? " (current)" : ""} · ${groups.get(e).length}`));
+  const openKey = (n) => `dash.art.${s.name}.sec.${n}`;
+  for (const sec of A.sections) {
+    const its = sec.items.map((k) => A.items.get(k)).filter(Boolean);
+    if (!its.length) continue;
+    const g = el("details", "art-group"), dflt = sec.name !== "other";
+    let saved = null; try { saved = localStorage.getItem(openKey(sec.name)); } catch (err) {}
+    g.open = saved ? saved === "open" : dflt;
+    const sum = el("summary"); sum.append(el("h4", "", `${SECTION_TITLE[sec.name] || sec.name} · ${its.length}`));
     g.append(sum);
-    g.addEventListener("toggle", () => { try { if (g.open === (e === A.epoch)) localStorage.removeItem(openKey(e)); else localStorage.setItem(openKey(e), g.open ? "open" : "closed"); } catch (err) {} });   // keep only choices that differ from the default
-    for (const it of groups.get(e).sort((a, b) => b.latest.ts - a.latest.ts)) g.append(artButton(A, it));
+    g.addEventListener("toggle", () => { try { if (g.open === dflt) localStorage.removeItem(openKey(sec.name)); else localStorage.setItem(openKey(sec.name), g.open ? "open" : "closed"); } catch (err) {} });   // keep only choices that differ from the default
+    for (const it of its) g.append(artButton(A, it));
+    box.append(g);
+  }
+  const dis = (A.dismissed || []).map((k) => A.items.get(k)).filter(Boolean);
+  if (showDismissed(s.name) && dis.length) {
+    const g = el("details", "art-group dismissed"), sum = el("summary");
+    sum.append(el("h4", "", `Dismissed · ${dis.length}`));
+    g.append(sum);
+    try { g.open = localStorage.getItem(openKey("dismissed")) === "open"; } catch (err) {}   // collapsed unless opened; the 2 s rebuild keeps the choice
+    g.addEventListener("toggle", () => { try { if (g.open) localStorage.setItem(openKey("dismissed"), "open"); else localStorage.removeItem(openKey("dismissed")); } catch (err) {} });
+    for (const it of dis) g.append(artButton(A, it));
     box.append(g);
   }
   if (!A.items.size) box.append(el("div", "pending", "No artifacts yet in this session."));
+  const foot = el("label", "art-foot"), cb = el("input"); cb.type = "checkbox"; cb.id = "show-dismissed";
+  cb.checked = showDismissed(s.name);
+  cb.onchange = () => { try { if (cb.checked) localStorage.setItem(`dash.art.${s.name}.showDismissed`, "1"); else localStorage.removeItem(`dash.art.${s.name}.showDismissed`); } catch (err) {} renderArtifacts(); };
+  foot.append(cb, ` Show dismissed${(A.dismissed || []).length ? ` (${A.dismissed.length})` : ""}`);
+  box.append(foot);
+}
+function showDismissed(name) { try { return localStorage.getItem(`dash.art.${name}.showDismissed`) === "1"; } catch (err) { return false; } }
+async function dismissArt(keys, dismissed) {
+  const { status, j } = await post({ action: "art_dismiss", session: session().name, keys, dismissed });
+  toast(j.message || (status === 200 ? "Done" : "Failed"), status !== 200);
+  pollArtifacts();
+}
+async function dismissSession(epoch) {
+  const { status, j } = await post({ action: "art_dismiss_session", session: session().name, epoch });
+  toast(j.message || (status === 200 ? "Done" : "Failed"), status !== 200);
+  pollArtifacts();
 }
 
 async function openDoc(path) {
@@ -1173,7 +1213,8 @@ $("#doc-comment").onclick = () => {
 // ── ideas box ──
 window.ideasOpen = 0;
 let ideaEditing = null,   // {session, key} of the row being edited
-    ideaShowDropped = false;
+    ideaShowDropped = false,
+    ideasShown = null;   // the project the box last rendered: an unchanged (304) reply still needs a render after a switch
 try { ideaShowDropped = localStorage.getItem("dash.ideas.dropped") === "1"; } catch (e) {}
 
 // open projects other than the current one, for the "Move to" items
@@ -1227,7 +1268,7 @@ async function moveDoc(path, target) {
 
 async function pollIdeas() {
   const s = session(); if (!s) return;
-  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || !p.changed) return;
+  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || (!p.changed && ideasShown === s.name)) return;
   const d = p.json;
   window.ideasOpen = d.open;
   const box = $("#ideas-box");
@@ -1250,6 +1291,7 @@ async function pollIdeas() {
   box.querySelector(".art-group").replaceChildren(el("h4", "", `Ideas · ${d.open}`));
   if (ideaEditing && ideaEditing.session === s.name) return;
   ideaEditing = null;   // don't rebuild the row being edited
+  ideasShown = s.name;
   const list = box.querySelector(".ideas-list"); list.replaceChildren();
   const addRow = (i, cls) => {
     const row = el("div", cls, i.text); row.dataset.key = "idea:" + i.key;

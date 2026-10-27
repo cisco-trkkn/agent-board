@@ -1,0 +1,53 @@
+{
+  "session_id": "S1",
+  "transcript_path": "/tmp/t",
+  "cwd": "/tmp/t",
+  "prompt_id": "94dec402-8df7-4e17-b000-f6cac87d4c76",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__claude_ai_Claude_Docs__update",
+  "tool_input": {
+    "ref": {
+      "object": "node",
+      "id": "da966959-5aba"
+    },
+    "engine": "prose",
+    "container": {
+      "kind": "project",
+      "id": "c40c4cbb-22e5-42f6-8b8d-d059bc72bc78"
+    },
+    "payload": {
+      "ops": [
+        {
+          "op": "insert",
+          "target": {
+            "kind": "root"
+          },
+          "side": "end",
+          "source": {
+            "from": {
+              "kind": "inline",
+              "content": "second line"
+            },
+            "as": "markdown"
+          }
+        }
+      ]
+    }
+  },
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\"verdict\":\"allow\",\"rev\":2,\"session\":\"m3d8ep9b6qh\",\"xml\":\"<doc op='0'><paragraph id='m3d8ep9b6qh.14' h='c644dd91'>second line</paragraph></doc>\"}"
+    }
+  ],
+  "tool_use_id": "toolu_01BgdotpXf3TXw76qYU2iyig",
+  "duration_ms": 363,
+  "mcp_server": {
+    "name": "claude.ai Claude Docs",
+    "source": "claudeai"
+  }
+}
