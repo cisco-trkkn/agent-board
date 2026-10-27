@@ -53,7 +53,9 @@ class BoardBase(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def listed(self, name):
-        return name in git("worktree", "list", cwd=self.repo).stdout
+        # match worktree dir names, not the whole output: a random temp dir in the repo path can contain `name`
+        out = git("worktree", "list", "--porcelain", cwd=self.repo).stdout
+        return name in {Path(l[len("worktree "):]).name for l in out.splitlines() if l.startswith("worktree ")}
 
     def item(self, name):
         return next(i for i in server.worktrees(str(self.repo))["items"] if i["name"] == name)
