@@ -697,6 +697,102 @@ class SweepSquash(StateBase):
         self.assertNotIn("w1", self.branches())
 
 
+class IgnoredFiles(StateBase):
+    """A worktree that would be safe is kept when it holds git-ignored files other than caches: removal deletes them."""
+    IGNORE = ".superpowers/\n.agent-ci/\nnotes/\nscratch*/\n__pycache__/\n.pytest_cache/\n.DS_Store\n*.pyc\n"
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / ".gitignore").write_text(self.IGNORE)
+        git("add", ".gitignore", cwd=self.repo)
+        git("commit", "-m", "ignore", cwd=self.repo)
+
+    def put(self, wt, rel, text="x"):
+        f = wt / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+
+    def test_only_caches_is_still_safe(self):
+        wt = add_worktree(self.repo, "w1")
+        for rel in ("__pycache__/x.pyc", ".pytest_cache/v/cache", "sub/dir/__pycache__/y.cpython-312.pyc", ".DS_Store"):
+            self.put(wt, rel)
+        item = self.one(name="w1")
+        self.assertEqual((item["state"], item["reason"]), ("safe", "merged"))
+
+    def test_sdd_workspace_keeps_it(self):
+        wt = add_worktree(self.repo, "w1")
+        self.put(wt, ".superpowers/sdd/p/progress.md")
+        item = self.one(name="w1")
+        self.assertEqual(item["state"], "kept")
+        self.assertTrue(item["reason"].startswith("ignored files:"), item["reason"])
+        self.assertIn(".superpowers/", item["reason"])
+
+    def test_more_than_three_lists_three_then_ellipsis(self):
+        wt = add_worktree(self.repo, "w1")
+        for d in ("scratch1", "scratch2", "scratch3", "scratch4", "scratch5"):
+            self.put(wt, f"{d}/f")
+        reason = self.one(name="w1")["reason"]
+        self.assertRegex(reason, r"^ignored files: [^,]+, [^,]+, [^,]+, …$")
+
+    def test_exactly_three_has_no_ellipsis(self):
+        wt = add_worktree(self.repo, "w1")
+        for d in ("scratch1", "scratch2", "scratch3"):
+            self.put(wt, f"{d}/f")
+        self.assertNotIn("…", self.one(name="w1")["reason"])
+
+    def test_cache_beside_real_file_still_keeps(self):
+        wt = add_worktree(self.repo, "w1")
+        self.put(wt, "__pycache__/x.pyc")
+        self.put(wt, "notes/a.txt")
+        reason = self.one(name="w1")["reason"]
+        self.assertIn("notes/", reason)
+        self.assertNotIn("__pycache__", reason)
+
+    def test_ignored_listing_failure_fails_closed(self):
+        wt = add_worktree(self.repo, "w1")
+        real = ws._git
+
+        def fake(cwd, *args):
+            if "--ignored" in args:
+                return subprocess.CompletedProcess(args, 128, "", "fatal: boom")
+            return real(cwd, *args)
+        with mock.patch.object(ws, "_git", fake):
+            item = self.one(name="w1")
+        self.assertEqual(item["state"], "kept")
+        self.assertEqual(item["reason"], "can't list ignored files: fatal: boom")
+
+    def test_squash_verified_with_ignored_file_is_kept(self):
+        origin = Path(self.tmp) / "origin.git"
+        git("init", "--bare", "-b", "main", str(origin), cwd=self.tmp)
+        git("remote", "add", "origin", str(origin), cwd=self.repo)
+        git("push", "-u", "origin", "main", cwd=self.repo)
+        wt = add_worktree(self.repo, "w1", commits=1, age_days=1)
+        git("push", "-u", "origin", "w1", cwd=wt)
+        git("push", "origin", "--delete", "w1", cwd=self.repo)
+        git("fetch", "--prune", cwd=self.repo)
+        self.set_env(AW_GLAB=glab_stub(self.bin / "glab", head(wt)))
+        self.put(wt, ".agent-ci/state")
+        item = self.one(fetch=True, name="w1")
+        self.assertEqual(item["state"], "kept")
+        self.assertTrue(item["reason"].startswith("ignored files:"), item["reason"])
+
+    def test_sweep_keeps_it_and_the_file_survives(self):
+        wt = add_worktree(self.repo, "w1")
+        self.put(wt, ".agent-ci/state")
+        lines = ws.sweep(str(self.repo), now=NOW)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].startswith("kept w1 (ignored files:"), lines)
+        self.assertTrue(self.listed("w1"))
+        self.assertTrue((wt / ".agent-ci" / "state").exists())
+
+    def test_remove_by_the_user_still_removes_it(self):
+        wt = add_worktree(self.repo, "w1")
+        self.put(wt, ".agent-ci/state")
+        msg = ws.remove(str(self.repo), str(wt))
+        self.assertEqual(msg, "removed worktree w1; deleted branch w1")
+        self.assertFalse(self.listed("w1"))
+
+
 class SweepRecent(StateBase):
     def other_repo(self, name):
         d = Path(self.tmp) / name

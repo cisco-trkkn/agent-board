@@ -24,6 +24,9 @@ TIMEOUT = 20          # seconds, for every subprocess
 STALE_DAYS = 7        # unmerged and clean, last commit this old: stale
 AGENT_DIR = "/.claude/worktrees/"
 DARWIN_USER_TEMP_DIR = 65537   # _CS_DARWIN_USER_TEMP_DIR in <unistd.h>
+# git-ignored paths that are only caches: removing the worktree may delete these. Anything else ignored (SDD
+# workspaces in .superpowers/, .agent-ci/, venvs) is work state, so the worktree is kept.
+CACHE_NAMES = {"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "node_modules", ".DS_Store"}
 STATES = ("safe", "stale", "in_use", "dirty", "kept")
 
 
@@ -135,6 +138,47 @@ def _inside(pane, wt):
     return any(p == w or p.startswith(w + "/") for p in panes for w in wts)
 
 
+def _holds_non_cache(root):
+    """True when the directory `root` holds a file that is not a cache (git collapses a wholly ignored directory
+    to `dir/`, which can hide `dir/sub/__pycache__/`). Cache directories are not entered."""
+    for here, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in CACHE_NAMES]
+        if any(os.path.islink(os.path.join(here, d)) for d in dirs):   # os.walk doesn't enter these
+            return True
+        if any(not (f.endswith(".pyc") or f in CACHE_NAMES) for f in files):
+            return True
+    return False
+
+
+def _ignored_files(wt):
+    """(non-cache ignored paths, error) of the worktree at `wt`. An ignored directory is listed collapsed as `dir/`."""
+    r = _git(wt, "status", "--porcelain", "--ignored", "-z")
+    if r.returncode != 0:
+        return [], f"can't list ignored files: {(r.stderr or '').strip()[:120]}"
+    out = []
+    for entry in r.stdout.split("\0"):
+        if not entry.startswith("!! "):
+            continue
+        p = entry[3:]
+        if p.endswith(".pyc") or CACHE_NAMES & set(p.split("/")):
+            continue
+        if p.endswith("/") and not _holds_non_cache(os.path.join(wt, p)):
+            continue
+        out.append(p)
+    return out, None
+
+
+def _safe_unless_ignored(wt, reason):
+    """The classification of a worktree that would be safe: kept when it holds ignored files other than caches
+    (`git worktree remove` deletes them), or when they can't be listed."""
+    files, err = _ignored_files(wt)
+    if err:
+        return "kept", err
+    if files:
+        return "kept", "ignored files: " + ", ".join(files[:3]) + (", …" if len(files) > 3 else "")
+    return "safe", reason
+
+
 def _squash_mr(repo, branch, sha):
     """(mr iid or None, error). Is there a merged MR from `branch` whose head sha equals `sha`?"""
     glab = shlex.split(os.environ.get("AW_GLAB") or "glab")
@@ -242,7 +286,7 @@ def _classify_one(ctx, wt):
         return done("kept", "new, no commits yet")
 
     if any(_is_ancestor(ctx.repo, sha, r) for r in ctx.refs):
-        return done("safe", "merged")
+        return done(*_safe_unless_ignored(path, "merged"))
 
     if branch:
         track = _git(ctx.repo, "for-each-ref", "--format=%(upstream:track)", f"refs/heads/{branch}").stdout.strip()
@@ -255,8 +299,9 @@ def _classify_one(ctx, wt):
             if merr:
                 return done("kept", merr)
             if iid is not None:
-                out["squash"] = True
-                return done("safe", f"squash-merged (MR !{iid})")
+                state, why = _safe_unless_ignored(path, f"squash-merged (MR !{iid})")
+                out["squash"] = state == "safe"
+                return done(state, why)
             return done("kept", "upstream gone, no merged MR at this commit")
 
     if age is not None and age >= STALE_DAYS:
