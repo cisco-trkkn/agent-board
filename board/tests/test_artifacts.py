@@ -431,5 +431,152 @@ class CommentTest(unittest.TestCase):
             q.add_line("p", " \x00 ")
 
 
+class DismissTest(Base):
+    URL = "https://claude.ai/code/artifact/a"
+
+    def keys(self, s, name="items"):
+        return [i["url"] or i["path"] for i in s[name]]
+
+    def test_dismiss_hides_and_restore_brings_back(self):
+        before = artifacts.summary("p")
+        artifacts.dismiss("p", [str(self.spec)])
+        s = artifacts.summary("p")
+        flags = {(i["url"] or i["path"]): i["dismissed"] for i in s["items"]}
+        self.assertEqual(flags, {self.URL: False, str(self.plan): False, str(self.spec): True})
+        self.assertEqual(s["dismissed"], [str(self.spec)])
+        shown = [k for sec in s["sections"] for k in sec["items"]]
+        self.assertNotIn(str(self.spec), shown)
+        self.assertIn(self.URL, shown)
+        last = artifacts.entries("p")[-1]
+        self.assertEqual((last["path"], last["dismissed"], last["agent"]), (str(self.spec), True, "you"))
+        artifacts.dismiss("p", [str(self.spec)], dismissed=False)
+        after = artifacts.summary("p")
+        self.assertEqual(after["dismissed"], [])
+        self.assertEqual(after["sections"], before["sections"])
+
+    def test_dismiss_lines_are_not_writes(self):
+        before = {i["path"]: i for i in artifacts.summary("p")["items"]}
+        artifacts.dismiss("p", [str(self.spec)])
+        artifacts.dismiss("p", [str(self.spec)], dismissed=False)
+        after = {i["path"]: i for i in artifacts.summary("p")["items"]}
+        for k, it in before.items():
+            for f in ("history", "latest", "title", "first_ts"):
+                self.assertEqual(it[f], after[k][f])
+
+    def test_dismiss_line_creates_no_item(self):
+        with open(self.state / "artifacts-p.jsonl", "a") as f:
+            f.write(json.dumps({"ts": 9, "path": "/ghost.md", "dismissed": True, "agent": "you"}) + "\n")
+        self.assertNotIn("/ghost.md", [i["path"] for i in artifacts.summary("p")["items"]])
+
+    def test_url_item_keyed_by_url(self):
+        artifacts.dismiss("p", [self.URL])
+        self.assertEqual(artifacts.entries("p")[-1]["url"], self.URL)
+        self.assertEqual(artifacts.summary("p")["dismissed"], [self.URL])
+
+    def test_later_write_brings_it_back(self):
+        artifacts.dismiss("p", [str(self.spec)])
+        with open(self.state / "artifacts-p.jsonl", "a") as f:
+            f.write(json.dumps({"ts": 20, "path": str(self.spec), "kind": "spec", "agent": "claude", "hash": "n", "url": "", "epoch": 1}) + "\n")
+        s = artifacts.summary("p")
+        self.assertEqual(s["dismissed"], [])
+        self.assertFalse([i for i in s["items"] if i["path"] == str(self.spec)][0]["dismissed"])
+
+    def test_newest_first(self):
+        artifacts.dismiss("p", [str(self.spec), self.URL])
+        self.assertEqual(sorted(artifacts.summary("p")["dismissed"]), sorted([str(self.spec), self.URL]))
+        self.assertEqual(artifacts.summary("p")["dismissed"][0], self.URL)   # newer write (ts 4) first
+
+    def test_pinned_plan_is_refused(self):
+        with self.assertRaises(ValueError):
+            artifacts.dismiss("p", [str(self.plan)])
+        self.assertEqual(len(artifacts.entries("p")), 4)
+        # even a hand-written dismiss line never hides the pin
+        with open(self.state / "artifacts-p.jsonl", "a") as f:
+            f.write(json.dumps({"ts": 9, "path": str(self.plan), "dismissed": True, "agent": "you"}) + "\n")
+        s = artifacts.summary("p")
+        self.assertEqual(s["active_plan"], str(self.plan))
+        self.assertNotIn(str(self.plan), s["dismissed"])
+
+    def test_unknown_key_is_refused_and_nothing_written(self):
+        with self.assertRaises(FileNotFoundError):
+            artifacts.dismiss("p", [str(self.spec), "/nope.md"])
+        self.assertEqual(len(artifacts.entries("p")), 4)
+
+    def test_session_dismiss_leaves_pin_and_other_epochs(self):
+        artifacts.dismiss_session("p", 1)
+        s = artifacts.summary("p")
+        self.assertEqual(s["dismissed"], [self.URL])          # epoch 1: the page; the plan is pinned
+        self.assertEqual(s["active_plan"], str(self.plan))
+        self.assertFalse({i["path"]: i["dismissed"] for i in s["items"]}[str(self.spec)])   # epoch 0 stays
+        self.assertEqual(artifacts.dismiss_session("p", 1), 0)   # nothing left to dismiss
+
+    def test_summary_keys_unchanged(self):
+        s = artifacts.summary("p")
+        self.assertEqual(set(s), {"epoch", "lineage", "items", "active_plan", "sections", "started_from", "dismissed"})
+        self.assertEqual(set(s["items"][0]), {"path", "kind", "url", "title", "history", "latest", "first_ts", "dismissed"})
+
+
+class DismissActionTest(Base):
+    def act(self, **body):
+        return server._act(body)
+
+    def test_dismiss_and_restore_actions(self):
+        self.assertEqual(self.act(action="art_dismiss", session="p", keys=[str(self.spec)], dismissed=True), "dismissed 1")
+        self.assertEqual(artifacts.summary("p")["dismissed"], [str(self.spec)])
+        self.assertEqual(self.act(action="art_dismiss", session="p", keys=[str(self.spec)], dismissed=False), "restored 1")
+        self.assertEqual(artifacts.summary("p")["dismissed"], [])
+
+    def test_session_action(self):
+        self.assertEqual(self.act(action="art_dismiss_session", session="p", epoch=1), "dismissed 1")
+        self.assertEqual(artifacts.summary("p")["dismissed"], ["https://claude.ai/code/artifact/a"])
+
+    def test_bad_input(self):
+        for body in ({"session": "_web-1", "keys": ["x"]}, {"session": "../p", "keys": ["x"]},
+                     {"session": "p", "keys": "x"}, {"session": "p", "keys": []},
+                     {"session": "p", "keys": [str(self.plan)]}, {"session": "p", "keys": ["/nope.md"]}):
+            with self.assertRaises(Exception, msg=body):
+                self.act(action="art_dismiss", **body)
+        for ep in ("1", None, True, -1):
+            with self.assertRaises(Exception, msg=ep):
+                self.act(action="art_dismiss_session", session="p", epoch=ep)
+        self.assertEqual(len(artifacts.entries("p")), 4)
+
+    def test_dismissed_must_be_a_json_bool(self):
+        for v in ("false", "true", 0, 1, None, "yes"):
+            with self.assertRaises(Exception, msg=repr(v)):
+                self.act(action="art_dismiss", session="p", keys=[str(self.spec)], dismissed=v)
+        with self.assertRaises(Exception):   # missing is not a bool either
+            self.act(action="art_dismiss", session="p", keys=[str(self.spec)])
+        self.assertEqual(len(artifacts.entries("p")), 4)
+
+    def test_keys_are_capped_at_500(self):
+        keys = [f"/k/{i}.md" for i in range(501)]
+        with self.assertRaises(Exception) as cm:
+            self.act(action="art_dismiss", session="p", keys=keys, dismissed=True)
+        self.assertIn("500", str(cm.exception))   # refused for the cap, not for an unknown key
+        self.assertEqual(len(artifacts.entries("p")), 4)
+
+    def test_http_unknown_key_is_400_with_message(self):
+        httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        try:
+            with mock.patch.object(server, "ALLOWED_HOSTS", {f"127.0.0.1:{port}"}):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/{server.TOKEN}/api/action", method="POST",
+                    headers={"X-Dash-Token": server.TOKEN},
+                    data=json.dumps({"action": "art_dismiss", "session": "p", "keys": ["/nope.md"], "dismissed": True}).encode())
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    urllib.request.urlopen(req, timeout=5)
+                self.assertEqual(cm.exception.code, 400)
+                self.assertFalse(json.loads(cm.exception.read())["ok"])
+                cm.exception.close()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            t.join(5)
+
+
 if __name__ == "__main__":
     unittest.main()

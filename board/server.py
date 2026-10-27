@@ -562,6 +562,22 @@ def _act(body):
             ideas.move(sess, key, target)
             return f"idea moved to {target}"
         return artifacts.move(sess, str(body.get("path") or ""), target, project_repo(sess), project_repo(target))
+    if a in ("art_dismiss", "art_dismiss_session"):
+        _check_project(sess)
+        if a == "art_dismiss_session":
+            epoch = body.get("epoch")
+            if type(epoch) is not int or epoch < 0:
+                raise RuntimeError("epoch: a whole number")
+            return f"dismissed {artifacts.dismiss_session(sess, epoch)}"
+        keys = body.get("keys")
+        if not isinstance(keys, list) or not keys or not all(isinstance(k, str) and k for k in keys):
+            raise RuntimeError("keys: a list of artifact paths or urls")
+        if len(keys) > 500:
+            raise RuntimeError("keys: at most 500 at a time")
+        if type(body.get("dismissed")) is not bool:
+            raise RuntimeError("dismissed: true or false")
+        n = artifacts.dismiss(sess, keys, body["dismissed"])
+        return f"{'dismissed' if body['dismissed'] else 'restored'} {n}"
     if a in ("save", "comment", "idea") and not NAME_RE.fullmatch(sess):
         raise RuntimeError("bad session")
     if a == "idea":
