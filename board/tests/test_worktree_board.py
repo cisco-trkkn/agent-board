@@ -13,8 +13,14 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_worktree_safety import (GIT_ENV, WITH_START, add_worktree, git, glab_stub, head, make_repo,  # noqa: E402
+from test_worktree_safety import (GIT_ENV, WITH_START, git, glab_stub, head, make_repo,  # noqa: E402
                                   tmux_stub, write_stub)
+from test_worktree_safety import add_worktree as _add_worktree  # noqa: E402
+
+
+def add_worktree(repo, name, **kw):
+    # the board classifies on the wall clock, so date fixtures from it, not from the engine tests' fixed NOW
+    return _add_worktree(repo, name, now=datetime.now(timezone.utc), **kw)
 
 os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")
 SERVER = Path(__file__).resolve().parent.parent / "server.py"
