@@ -10,7 +10,7 @@
   uncapped evidence for all/none claims).
 - Whenever `superpowers-extended-cc:test-driven-development` runs, also load
   `test-driven-development-extras` (isolation seam before the RED run of side-effecting code, leak check after,
-  one real run of a deciding external command).
+  one real run of a deciding external command or platform call).
 - Whenever `anthropic-skills:docs` runs, also load `docs-compose` (typed outline, one confirm, guests per section type, Sources tab).
 
 # Local tooling gotchas
@@ -32,6 +32,15 @@
   or its length `${#T}`. Never put a secret inside `${T:-…}`, `${T:=…}` or a bare `$T`
   in echo, printf or a log line: `${T:-EMPTY}` expands to the secret when it is set,
   and one such "presence check" printed a whole ID token.
+- "Continue the recent handoff" in a project: handoff docs from every project share
+  `~/.local/state/agent-board/handoffs/` (older ones `~/.claude/handoffs/`). Take the
+  newest doc whose `Project:` line matches this repo's toplevel, never the newest overall;
+  if none matches, list candidates with their Focus lines and ask.
+- A suite verdict comes from the runner's own summary line. When the runner has none
+  (a loop over test files that only sets its exit code), read its exit code alone
+  (`run-all.zsh; echo rc=$?`, nothing chained after it) plus an uncapped count of failure
+  lines (`grep -c FAIL`). A `tail` shows the last file's ALL PASS, and a `;` chain shows
+  the last command's exit code.
 - tmux session-scoped options need the trailing colon: `show-options -t '=name:'`.
 - The `~/.local/bin`, `~/.local/share/tmux-*` and `~/.claude` tool files are not
   under git: back them up (`F.bak-YYYYMMDD`) and stage live ones as `F.next`

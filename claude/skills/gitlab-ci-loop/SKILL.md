@@ -226,6 +226,7 @@ mr_title_style: auto         # auto | bracketed ("[fix(x)]: …") | plain ("fix(
 mr_draft: false              # MRs open ready for review; true opens them as drafts until finish
 python_venv: true            # checks run inside .agent-ci/venv-<version> (setup pip installs land there)
 python_version: "3.11"       # match the CI image; uv fetches it if missing
+env_unset: []                # extra caller variables to drop from every check (TF_DATA_DIR, TF_WORKSPACE, TF_CLI_ARGS* always are)
 setup: []                    # global one-time setup (cached; the key is listed below the block)
 checks:
   - name: pytest-foo
@@ -236,6 +237,10 @@ checks:
     skip_local: "needs postgres service"   # optional: listed but only runs in CI
     venv: own                # optional: isolated venv (e.g. jobs on apache/airflow images)
 ```
+
+Checks run with the caller's environment minus `TF_DATA_DIR`, `TF_WORKSPACE`, `TF_CLI_ARGS*` and any names in `env_unset`.
+Those variables point a tool at the caller's state, so a check would test the caller's shell instead of the code.
+A check that needs one sets it in its own `env:`.
 
 Setup is cached per check, and first runs of heavy stacks (Airflow) take a few minutes.
 The cache key covers the setup commands, the venv path, the values of the check's `env` keys,

@@ -1,6 +1,6 @@
 ---
 name: "test-driven-development-extras"
-description: Local additions to superpowers-extended-cc:test-driven-development. Use together with superpowers-extended-cc:test-driven-development, every time it runs, before the first RED run of any test. For code under test that has side effects (creates windows, worktrees or processes, writes to the network or outside a temp dir), the isolation seam goes in before the RED run, and a leak check follows the run. When a decision rests on an external command's output, at least one test runs that command for real on a scratch fixture. A test counts as evidence only when its own results appear in the cited output, a test the host cannot run gets a runtime that can, and the repo's test lints pass before the RED commit. A test that asserts a value is absent from output runs in every output mode, with a planted dummy value.
+description: Local additions to superpowers-extended-cc:test-driven-development. Use together with superpowers-extended-cc:test-driven-development, every time it runs, before the first RED run of any test. For code under test that has side effects (creates windows, worktrees or processes, writes to the network or outside a temp dir), the isolation seam goes in before the RED run, and a leak check follows the run. When a decision rests on an external command's output or a platform API call, at least one test runs it for real, unpatched, on a scratch fixture. A test counts as evidence only when its own results appear in the cited output, a test the host cannot run gets a runtime that can, and the repo's test lints pass before the RED commit. A test that asserts a value is absent from output runs in every output mode, with a planted dummy value.
 ---
 
 # test-driven-development extras
@@ -39,6 +39,10 @@ Example: every test of a release gate stubbed `git diff --name-only` with a hand
 
 When the command needs real cloud state and tests must not make cloud calls, pin the exact argv in tests, and name one real run as a post-apply gate in the plan or runbook, with its expected output. Say in the report that the real run is still owed.
 
+"External command" means any call into a platform the code does not own: a subprocess, and also an OS or stdlib platform API (`os.confstr`, `sysconf`, locale, keychain) or a network call. At least one test calls it unpatched on the host. A try/except around such a call also needs a test that the real call succeeds, because the except turns a failing call into silent wrong behaviour.
+
+Example: a launchd fallback called `os.confstr('CS_DARWIN_USER_TEMP_DIR')` inside a try/except, and its unit test patched `os.confstr`. On the host, Python does not know that name and raises ValueError; the except swallowed it and the code silently used `/tmp`. Only a bare-environment e2e run, days later, showed it.
+
 ## 4. A run counts only if its results are in the output
 
 Green output proves only what the command collected. When you add a test file, cite output that shows that file's tests: their ids, or a collected count that includes them. If the project's check runner does not select the new test (or the file you changed), run the test directly and cite that, or wire it in.
@@ -59,6 +63,8 @@ Plant a known dummy value, make the case fail, and count its hits in each mode t
 
 Example: a redaction test passed by default; with `-l` a local still held the raw string, and with `-vv` a config dataclass repr printed every token.
 
+The test's own failure message can leak too. When the container is an environment or any mapping that may hold secrets, assert on the one key (`assertIsNone(env.get(k), k)`, or `assert env.get(k) is None, k`). Never assert membership in the whole mapping or compare two whole environments: on failure, `assertNotIn(k, env)` prints every variable, and RED fails by design. Example: a RED run of `assertNotIn("TF_DATA_DIR", env)` printed the whole process environment, a session token included.
+
 ## Before you finish
 
-Each test of a side-effecting command ran through a seam, and a leak check is on record after the run. Where an external command's flags decide the outcome, one test runs it for real. Each new test appears by name or count in the output you cite, and any test you could not run is reported as never executed. Each absence test was run in every output mode, with its hit counts.
+Each test of a side-effecting command ran through a seam, and a leak check is on record after the run. Where an external command's flags or a platform API call decide the outcome, one test runs it for real, unpatched. Each new test appears by name or count in the output you cite, and any test you could not run is reported as never executed. Each absence test was run in every output mode, with its hit counts.

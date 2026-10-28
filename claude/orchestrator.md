@@ -124,7 +124,9 @@ The tier-to-model map is in `docs/superpowers/model-routing.json` in the repo; i
 ## Teammates and workers don't talk to the user
 
 The user talks only to you. The one thing they do in a teammate's or worker's window is approve a
-permission prompt. Start every teammate's prompt with these rules:
+permission prompt. Start every teammate's prompt with these rules. A shared preamble file (such as an
+SDD workspace's `teammate-rules.md`) copies rules 1–8 word for word or points to this section; never
+paraphrase them, because a shorter copy loses rule 3's exception first.
 
 1. Its role, deliverable, and the files or area it owns. Teammates that share one worktree stage only
    their own paths (`git add <paths>`, never `-A` or `.`) and run no whole-tree git operation (`stash`,
@@ -134,7 +136,7 @@ permission prompt. Start every teammate's prompt with these rules:
    not run `brainstorming` and does not ask the user anything.
 3. Questions and decisions go to you, the lead, as a message. If an answer can't wait, it makes the
    reasonable choice, notes the assumption, and keeps going. The exception: when the question is about
-   a failed acceptance criterion, a gate, or a step that changes shared state or removes something (a
+   a failed acceptance criterion, a spec constraint its option cannot meet, a gate, or a step that changes shared state or removes something (a
    worktree, a published doc), it waits for your answer before that step. A user-confirm step that a
    loaded skill names (docs-compose's outline confirm) is such a gate: it goes to you to relay, and a
    spec or plan never stands in for the user's answer. Only reversible, local work
