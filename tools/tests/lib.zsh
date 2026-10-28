@@ -2,6 +2,9 @@
 TT_BIN="${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME/.local/bin/tmux || print -r -- ${commands[tmux]:-$HOME/.local/bin/tmux})}"
 TT_REPO="${${(%):-%x}:A:h:h:h}"          # the checkout under test (file scope: inside a function $0 is the function name)
 TT_FAILS=0
+# A board-opened shell exports AGENT_BOARD=1, which makes the legacy global hooks (kill-guard, bash-mirror) defer and exit 0.
+# Tests that run those hooks directly never call tt_setup, so clear it at source time.
+unset AGENT_BOARD
 
 # tt_zdot <dir>: a ZDOTDIR for pane shells. No global rcs either: Ubuntu's /etc/zsh/zshrc runs compinit, which asks
 # "insecure directories, continue [y/n]?" on a runner and eats the first typed line.
