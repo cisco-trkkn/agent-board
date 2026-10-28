@@ -4,7 +4,8 @@
 # systemMessage + hookSpecificOutput.additionalContext; Stop emits systemMessage only.
 # Once per 50K band: band = tokens / 50000; the hook warns only when the band is above the one stored in
 # ${CLAUDE_CONTEXT_GUARD_STATE:-$HOME/.local/state/agent-board/context-guard}/<session_id>.band.
-# Without a session_id it warns every time and stores nothing.
+# Without a session_id (or with an unwritable state dir) it warns every time and stores nothing.
+# A run below the threshold deletes the band file, so after /compact the next crossing warns again.
 # Threshold override: export CLAUDE_CONTEXT_WARN_TOKENS=400000
 THRESHOLD="${CLAUDE_CONTEXT_WARN_TOKENS:-300000}"
 
@@ -21,14 +22,20 @@ tokens=$(tail -n 400 "$transcript" \
            | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)' 2>/dev/null \
   | tail -n 1)
 
-[ -n "$tokens" ] && [ "$tokens" -ge "$THRESHOLD" ] || exit 0
+[ -n "$tokens" ] || exit 0
+sdir="${CLAUDE_CONTEXT_GUARD_STATE:-$HOME/.local/state/agent-board/context-guard}"
+if [ "$tokens" -lt "$THRESHOLD" ]; then
+  # Below the threshold (e.g. after /compact): forget the band so the next crossing warns again.
+  [ -n "$sid" ] && rm -f "$sdir/$sid.band" 2>/dev/null
+  exit 0
+fi
 
 band=$((tokens / 50000))
 if [ -n "$sid" ]; then
-  sdir="${CLAUDE_CONTEXT_GUARD_STATE:-$HOME/.local/state/agent-board/context-guard}"
   last=$(cat "$sdir/$sid.band" 2>/dev/null || echo -1)
   [ "$band" -gt "$last" ] || exit 0
-  mkdir -p "$sdir" && printf '%s\n' "$band" > "$sdir/$sid.band"
+  # An unwritable state dir is silent: warn as if there were no session_id.
+  { mkdir -p "$sdir" && printf '%s\n' "$band" > "$sdir/$sid.band"; } 2>/dev/null
 fi
 
 k=$((tokens / 1000))
