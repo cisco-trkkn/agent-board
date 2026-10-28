@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
-# UserPromptSubmit hook: warn loudly once the session's context passes a token threshold.
+# UserPromptSubmit / Stop / PostToolUse hook: warn once the session's context passes a token threshold.
+# The event is read from .hook_event_name (default UserPromptSubmit). UserPromptSubmit and PostToolUse emit
+# systemMessage + hookSpecificOutput.additionalContext; Stop emits systemMessage only.
+# Once per 50K band: band = tokens / 50000; the hook warns only when the band is above the one stored in
+# ${CLAUDE_CONTEXT_GUARD_STATE:-$HOME/.local/state/agent-board/context-guard}/<session_id>.band.
+# Without a session_id it warns every time and stores nothing.
 # Threshold override: export CLAUDE_CONTEXT_WARN_TOKENS=400000
 THRESHOLD="${CLAUDE_CONTEXT_WARN_TOKENS:-300000}"
 
-transcript=$(jq -r '.transcript_path // empty')
+input=$(cat)
+transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
+sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
+event=$(printf '%s' "$input" | jq -r '.hook_event_name // "UserPromptSubmit"')
 [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
 
 # Context size = everything sent as input on the latest main-thread assistant turn.
@@ -15,8 +23,25 @@ tokens=$(tail -n 400 "$transcript" \
 
 [ -n "$tokens" ] && [ "$tokens" -ge "$THRESHOLD" ] || exit 0
 
+band=$((tokens / 50000))
+if [ -n "$sid" ]; then
+  sdir="${CLAUDE_CONTEXT_GUARD_STATE:-$HOME/.local/state/agent-board/context-guard}"
+  last=$(cat "$sdir/$sid.band" 2>/dev/null || echo -1)
+  [ "$band" -gt "$last" ] || exit 0
+  mkdir -p "$sdir" && printf '%s\n' "$band" > "$sdir/$sid.band"
+fi
+
 k=$((tokens / 1000))
 msg="🛑 CONTEXT AT ${k}K TOKENS (limit ${THRESHOLD}). Run /handoff: it checkpoints the team, writes a handoff doc and asks before switching this window to a fresh orchestrator. Or /compact to stay here."
+ctx="IMPORTANT: This session's context is ${k}K tokens, past the user's ${THRESHOLD}-token budget. Begin your reply with one short, prominent line strongly recommending the user run /handoff (it checkpoints the team, writes the doc, and asks before relaying to a fresh orchestrator in this window). Suggest a one-line /handoff argument describing what the next session should focus on. Then answer their message normally."
+if [ "$event" != "UserPromptSubmit" ]; then
+  msg="$msg If you are a teammate, tell the lead in your next message."
+  ctx="$ctx If you are a teammate, tell the lead in your next message."
+fi
 
-jq -n --arg msg "$msg" --arg ctx "IMPORTANT: This session's context is ${k}K tokens, past the user's ${THRESHOLD}-token budget. Begin your reply with one short, prominent line strongly recommending the user run /handoff (it checkpoints the team, writes the doc, and asks before relaying to a fresh orchestrator in this window). Suggest a one-line /handoff argument describing what the next session should focus on. Then answer their message normally." \
-  '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $ctx}}'
+if [ "$event" = "Stop" ]; then
+  jq -n --arg msg "$msg" '{systemMessage: $msg}'
+else
+  jq -n --arg msg "$msg" --arg ctx "$ctx" --arg ev "$event" \
+    '{systemMessage: $msg, hookSpecificOutput: {hookEventName: $ev, additionalContext: $ctx}}'
+fi

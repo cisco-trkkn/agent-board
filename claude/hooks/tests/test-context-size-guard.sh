@@ -1,0 +1,62 @@
+#!/bin/bash
+# Test for claude/hooks/context-size-guard.sh: events, once-per-50K-band, state file.
+# Fixture context-transcript.jsonl is hand-built (the capture of a real transcript was refused); its last
+# main-thread usage is copied from session 48822fd2's real last main-thread assistant line (sum 352042,
+# band 7), plus an earlier smaller line and a sidechain line with a larger usage that must be ignored.
+set -u
+H="${HOOK:-$(cd "$(dirname "$0")/.." && pwd)/context-size-guard.sh}"
+FX="$(cd "$(dirname "$0")" && pwd)/fixtures/context-transcript.jsonl"
+REAL=$(ls "$HOME"/.claude/projects/*/48822fd2*.jsonl 2>/dev/null | head -1)
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+pass=0; fail=0
+check() { if [ "$2" = "$3" ]; then echo "PASS $1"; pass=$((pass+1)); else echo "FAIL $1: expected '$3', got '$2'"; fail=$((fail+1)); fi; }
+run() { # event sid transcript -> hook output
+  jq -n --arg t "$3" --arg s "$2" --arg e "$1" \
+    '{transcript_path:$t, hook_event_name:$e} + (if $s=="" then {} else {session_id:$s} end)' \
+    | CLAUDE_CONTEXT_GUARD_STATE="$T/state" "$H"
+}
+sm() { printf '%s' "$1" | jq -r "$2" 2>/dev/null; }
+
+o=$(run UserPromptSubmit s1 "$FX")
+check "UPS: systemMessage mentions 352K" "$(sm "$o" '.systemMessage' | grep -c '352K')" "1"
+check "UPS: hookEventName" "$(sm "$o" '.hookSpecificOutput.hookEventName')" "UserPromptSubmit"
+check "UPS: additionalContext has /handoff" "$(sm "$o" '.hookSpecificOutput.additionalContext' | grep -c '/handoff')" "1"
+check "UPS: no teammate sentence" "$(printf '%s' "$o" | grep -c 'If you are a teammate')" "0"
+check "band file holds 7" "$(cat "$T/state/s1.band")" "7"
+check "same band twice -> one warning" "$(run UserPromptSubmit s1 "$FX" | wc -c | tr -d ' ')" "0"
+check "same band, other event, still silent" "$(run Stop s1 "$FX" | wc -c | tr -d ' ')" "0"
+
+o=$(run Stop s2 "$FX")
+check "Stop: systemMessage present" "$(sm "$o" '.systemMessage | length > 0')" "true"
+check "Stop: no hookSpecificOutput" "$(sm "$o" 'has("hookSpecificOutput")')" "false"
+check "Stop: teammate sentence" "$(printf '%s' "$o" | grep -c 'If you are a teammate, tell the lead in your next message.')" "1"
+
+o=$(run PostToolUse s3 "$FX")
+check "PostToolUse: hookEventName" "$(sm "$o" '.hookSpecificOutput.hookEventName')" "PostToolUse"
+check "PostToolUse: systemMessage present" "$(sm "$o" '.systemMessage | length > 0')" "true"
+check "PostToolUse: teammate sentence" "$(sm "$o" '.hookSpecificOutput.additionalContext' | grep -c 'If you are a teammate, tell the lead in your next message.')" "1"
+
+o=$(CLAUDE_CONTEXT_WARN_TOKENS=900000 run UserPromptSubmit s4 "$FX")
+check "threshold above tokens -> silent" "$(printf '%s' "$o" | wc -c | tr -d ' ')" "0"
+check "threshold above tokens -> no band file" "$([ -e "$T/state/s4.band" ] && echo yes || echo no)" "no"
+
+a=$(run UserPromptSubmit "" "$FX" | wc -c | tr -d ' '); b=$(run UserPromptSubmit "" "$FX" | wc -c | tr -d ' ')
+check "no session_id: warns first time" "$([ "$a" -gt 0 ] && echo yes)" "yes"
+check "no session_id: warns again" "$([ "$b" -gt 0 ] && echo yes)" "yes"
+
+# higher stored band is not re-warned; lower stored band is
+mkdir -p "$T/state"; echo 3 > "$T/state/s5.band"
+check "lower stored band -> warns" "$(run PostToolUse s5 "$FX" | wc -c | awk '{print ($1>0)}')" "1"
+check "lower stored band -> updated to 7" "$(cat "$T/state/s5.band")" "7"
+
+# real-state replay of session 48822fd2 (read-only)
+if [ -n "$REAL" ] && [ -f "$REAL" ]; then
+  o=$(run PostToolUse real48822fd2 "$REAL")
+  check "real 48822fd2 replay: output" "$(sm "$o" '.hookSpecificOutput.hookEventName')" "PostToolUse"
+else
+  echo "SKIP real 48822fd2 replay: transcript not found"
+fi
+
+check "no leak under real state root" "$([ -e "$HOME/.local/state/agent-board/context-guard/s1.band" ] && echo yes || echo no)" "no"
+echo "passed=$pass failed=$fail"
+[ "$fail" -eq 0 ]
