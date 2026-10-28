@@ -5,6 +5,7 @@
 Each idea is "- [ ] YYYY-MM-DD HH:MM · text" with detail as indented lines; [x] = taken up
 (followed by "→ <spec>"), [-] = dropped. Ideas are never deleted. Every writer appends under an
 exclusive lock on <file>.lock. Agents do not read this file while a plan is running.
+An idea pushed to GitLab carries " · gl#<iid>" before any " → …" suffix (see gitlab_sync.py).
 The board can edit, drop/restore and move ideas; a move appends to the target and marks the source "[-] … → moved to <target>".
 
   ideas.py add --project P [--detail D] -- TEXT
@@ -23,6 +24,7 @@ from pathlib import Path
 LINE_RE = re.compile(r"^- \[( |x|-)\] (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · (.*)$")
 STATUS = {" ": "open", "x": "taken", "-": "dropped"}
 MOVED_RE = re.compile(r" → moved to ([A-Za-z0-9_-][A-Za-z0-9._-]*)$")
+ISSUE_RE = re.compile(r" · gl#(\d+)(?= → |$)")   # the GitLab issue token gitlab_sync.py writes
 
 
 class Stale(ValueError):
@@ -69,6 +71,12 @@ def _append(project, first, detail_lines):
             f.write(entry)
 
 
+def _split_issue(text):
+    """'a · gl#12 → b' -> ('a → b', 12); text without the token -> (text, None)."""
+    m = ISSUE_RE.search(text)
+    return (text[:m.start()] + text[m.end():], int(m[1])) if m else (text, None)
+
+
 def _clean_detail(detail):
     return [l.strip() for l in str(detail).splitlines() if l.strip()]
 
@@ -110,7 +118,7 @@ def _rewrite(project, key, change):
 
 
 def edit(project, key, text, detail=""):
-    text = " ".join(str(text).split())
+    text = _split_issue(" ".join(str(text).split()))[0]
     if not text:
         raise ValueError("empty idea")
     new_detail = _clean_detail(detail)
@@ -118,7 +126,8 @@ def edit(project, key, text, detail=""):
     def change(box, ts, raw, old):
         if box != " ":
             raise ValueError("only open ideas can be edited")
-        return f"- [ ] {ts} · {text}", new_detail
+        iid = _split_issue(raw)[1]
+        return f"- [ ] {ts} · {text}" + (f" · gl#{iid}" if iid else ""), new_detail
     return _rewrite(project, key, change)[6:]
 
 
@@ -157,6 +166,21 @@ def move(project, key, target):
     return _rewrite(project, key, change)
 
 
+def set_issue(project, key, iid):
+    """Record GitLab issue #iid on the idea: the token goes before a ' → …' suffix on a closed idea,
+    at the end of an open one. Called by gitlab_sync only; it never triggers a sync."""
+    def change(box, ts, raw, detail):
+        have = _split_issue(raw)[1]
+        if have is not None and have != iid:
+            raise Stale(f"the idea already has issue #{have}")
+        if have == iid:
+            return f"- [{box}] {ts} · {raw}", detail
+        cut = raw.rfind(" → ") if box != " " else -1
+        raw = raw[:cut] + f" · gl#{iid}" + raw[cut:] if cut >= 0 else raw + f" · gl#{iid}"
+        return f"- [{box}] {ts} · {raw}", detail
+    return _rewrite(project, key, change)
+
+
 def load(project):
     p = ideas_path(project)
     if not p.exists():
@@ -169,7 +193,8 @@ def load(project):
         m = LINE_RE.match(line)
         if m:
             mv = MOVED_RE.search(m[3]) if m[1] == "-" else None
-            out.append({"status": STATUS[m[1]], "ts": m[2], "text": m[3][:mv.start()] if mv else m[3],
+            text, iid = _split_issue(m[3][:mv.start()] if mv else m[3])
+            out.append({"status": STATUS[m[1]], "ts": m[2], "text": text, "issue": iid,
                         "detail": "", "key": f"{m[2]} · {m[3]}", "moved_to": mv[1] if mv else ""})
         elif out and line.startswith("  ") and line.strip():
             d = out[-1]["detail"]
