@@ -298,6 +298,12 @@ class TestCli(unittest.TestCase):
             planview.watch("s", Path("."))
         self.assertEqual(out.getvalue().count("\033[H\033[2J"), 2)
 
+    def test_snapshot_reads_sessions_and_tasks_under_dot_claude(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("planview.view") as v, \
+                mock.patch("planview.Path.home", return_value=Path(tmp)), mock.patch("planview.paneclass.tmux_runner"):
+            planview._snapshot("s", Path("."))
+        self.assertEqual(v.call_args[0][2], Path(tmp) / ".claude")
+
     def test_tmux_plan_script_runs_watch(self):
         f = HERE.parent / "bin" / "tmux-plan"
         self.assertTrue(os.access(f, os.X_OK))

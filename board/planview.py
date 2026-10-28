@@ -230,7 +230,7 @@ def render(v, width, color):
 
 
 def _snapshot(session, root):
-    return view(session, root, Path.home(), tc_env.state_dir(), paneclass.tmux_runner())
+    return view(session, root, Path.home() / ".claude", tc_env.state_dir(), paneclass.tmux_runner())
 
 
 def watch(session, root, interval=2.0):
