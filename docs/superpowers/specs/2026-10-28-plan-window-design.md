@@ -12,28 +12,26 @@ three costs: a tmux tab never used, a `›_` card on the Agent Board, and window
 ## Decision
 
 Window 2 becomes `plan`: a live, read-only view of the active plan's tasks with the teammate on each one
-and whether that teammate needs the user. An on-demand shell moves to a popup key, `` prefix ` ``.
+and whether that teammate needs the user. The on-demand shell is main's `prefix S` popup (see section 1).
 
 Rejected: a client of a new board endpoint (blank whenever the board is not running) and a `watch` over
 `.tasks.json` (cannot show owners or "needs you").
 
 ## 1. Layout
 
-- `bin/dev` creates window 2 as `plan`, running `bin/tmux-plan <session>`, in place of `shell`.
-  The header comment and `dev --help` say `1 claude · 2 plan`.
-- `bin/tmux-dev-layout` migrates an existing session: an idle `shell` window (its pane runs a shell,
-  `TC_SHELLS`) is killed and `plan` created; a busy one is left in place with a stderr note, as the old
-  `tests` migration does. A session with `plan` already is left alone (idempotent).
-- `config/tmux.conf` binds `` ` `` to
-  `display-popup -E -w 80% -h 80% -d "#{pane_current_path}" -T " shell " zsh` (probed on tmux 3.8:
-  `list-keys -T prefix` shows it). It lives only in `config/tmux.conf`, never in a user's `~/.tmux.conf`, so
-  `install.sh --migrate` and its fixture do not change.
-- `claude/orchestrator.md` (the windows table, the "Never type into the user's `shell` window" lines) and
-  the tmux-orchestrator skill copies describe `plan` and the popup. The agents' `<project>-bg` `shell`
-  window is unchanged.
-- The board shows `plan` like any program pane; only the new-session help text (`board/index.html`) changes.
-- `claude/plugin/scripts/worktree-sweep.sh` detects a dev session by its `-bg` session or a `shell` window;
-  the `-bg` check still holds, so it does not change.
+**Revised 2026-10-28.** While this spec was planned, main gained feat/no-user-shell (29ffb48..bd4d215): the
+user `shell` window is gone (an idle one is removed by `tmux-dev-layout`, a busy one kept with a note) and
+`prefix S` opens a popup shell in `#{session_path}`. The user chose to build on it, so this design no longer
+adds a `` prefix ` `` key or migrates `shell` itself.
+
+- `bin/dev` adds window 2 `plan`, running `bin/tmux-plan <session> <root>`, after `claude`; `claude` stays
+  selected. Header comment and `dev --help`: `1 claude · 2 plan`.
+- `bin/tmux-dev-layout` creates `plan` when it is missing (existing sessions get it on the next run);
+  idempotent; main's `shell` handling and the `-bg` windows are unchanged.
+- `config/tmux.conf`: only the `D` comment changes to name `plan`.
+- The windows tables in `claude/orchestrator.md` and both tmux-orchestrator skill copies, `docs/ARCHITECTURE.md`,
+  `docs/INSTALL.md` and the board's new-session help text name `plan`.
+- `claude/plugin/scripts/worktree-sweep.sh` detects a dev session by its `-bg` session; unchanged.
 
 ## 2. Data — `board/planview.py`
 
@@ -70,7 +68,7 @@ rows while a plan runs, and the `.tasks.json` fallback gives the dimmed last-pla
   `✓` completed, `▶` in progress, `·` pending, `✗` blocked, then the subject cut to the width.
   In-progress rows end `→ <owner> (<state>)`; `waiting` is shown red and bold.
 - `active: false`: rows dimmed, header followed by `no active plan`.
-- Empty view: `no plans yet · prefix \` for a shell`.
+- Empty view: `no plans yet · prefix S for a shell`.
 
 ## 4. Testing
 
@@ -79,6 +77,6 @@ rows while a plan runs, and the `.tasks.json` fallback gives the dimmed last-pla
   sort, blocked derivation, owner state, both fallbacks, missing-file cases.
 - `render` snapshot tests at a fixed width, including truncation and the three empty/inactive states.
 - A zsh test on the scratch tmux server (`lib.zsh`): a new `dev` session has `claude` and `plan` and no
-  `shell`; an idle `shell` migrates; a busy one stays; the `` ` `` binding is present after sourcing
-  `config/tmux.conf`.
+  `shell`; an existing session gains `plan` on the next layout run;
+  the plan window's pane runs `tmux-plan`.
 - Post-merge user gate: start a plan in a dev session and watch window 2 update as teammates finish tasks.
