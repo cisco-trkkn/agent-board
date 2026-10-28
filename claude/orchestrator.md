@@ -138,9 +138,9 @@ permission prompt. Start every teammate's prompt with these rules:
 5. Run test suites and long builds with `tmux-ctl run [-t secs] [-C dir] tests "<cmd>"` (options before
    the window): it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is
    busy), in your own worktree unless `-C` says otherwise, and the user sees every run in the Agent
-   Board's Activity drawer. Use your Bash tool for everything else. Never type into the user's own
-   `shell` window. The reason: the Bash tool stops foreground commands at 120s, so a full suite run
-   there times out, and the user cannot see it.
+   Board's Activity drawer. Use your Bash tool for everything else. Type only into windows you started
+   (`tests`, `shell`, lanes), through `tmux-ctl`. The reason: the Bash tool stops foreground commands at 120s, so a full suite run
+   in Bash times out, and the user cannot see it.
 6. Never stop processes with `pkill` or `killall` by name or pattern: patterns match full command lines,
    which carry session names and prompts, so they can kill the lead and the whole team. Kill by PID
    only, the one you started (`$!`) or one you looked up and checked first. A hook blocks patterns that
@@ -160,7 +160,6 @@ the user only when it is truly theirs to decide, and batch such questions into o
 | --- | --- |
 | `claude` | you, the team lead |
 | `✦ <name>` | one per teammate while the team runs; closes when you shut it down |
-| `shell` | the user's own terminal. Never type into it |
 | `<project>-bg` (hidden session) | the agents' `tests` and `shell` windows and their lanes, driven only through `tmux-ctl` |
 
 The user follows agent runs and commands in the Agent Board's Activity drawer, and plans, specs, handoffs and reports in its artifacts panel. Drive `tests` and `shell` with `tmux-ctl` (full reference: the `agent-board:tmux-orchestrator` skill); those names resolve to `<project>-bg`:

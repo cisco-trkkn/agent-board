@@ -14,7 +14,6 @@ Output stays visible to the user in those windows. Run `tmux-ctl help` for usage
 | --- | --- |
 | `claude` | the team lead |
 | `✦ <name>` | one per teammate while the team runs |
-| `shell` | the user's own terminal. Never type into it |
 | `<project>-bg` (hidden session) | the agents' `tests` and `shell` windows and their lanes, driven only through `tmux-ctl` |
 
 The user watches agent runs in the Agent Board's Activity drawer and plans, specs, handoffs and reports in its artifacts panel.
@@ -41,7 +40,7 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
 ## How to use it
 
 1. Start with `tmux-ctl list` to see what exists and what's busy.
-2. Run test suites and long builds with `tmux-ctl run tests "<cmd>"`: it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is busy), in your own worktree (`-C <dir>` to override), and the user sees every run in the Agent Board's Activity drawer. Use `-t` for long suites (`-t 1800`). Use your Bash tool for everything else. Never type into the user's own `shell` window.
+2. Run test suites and long builds with `tmux-ctl run tests "<cmd>"`: it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is busy), in your own worktree (`-C <dir>` to override), and the user sees every run in the Agent Board's Activity drawer. Use `-t` for long suites (`-t 1800`). Use your Bash tool for everything else. Type only into windows you started, through `tmux-ctl`.
 3. Exit 124 means it is still running after the timeout. `read` the window later; don't re-run it.
 4. A `busy` error means something else is running there. Read it and wait, or ask the user. Don't
    interrupt what you didn't start.
