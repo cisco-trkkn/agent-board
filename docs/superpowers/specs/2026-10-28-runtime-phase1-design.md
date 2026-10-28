@@ -57,15 +57,20 @@ observation, (b) a review is due and the user opts in, or (c) staged updates nee
 
 ## 1.3 Stop-hook short-circuit
 
-`claude/hooks/superpowers-hook.sh` reads stdin once, extracts `transcript_path`, and exits 0 before
-resolving the plugin script when the guard cannot act:
+`claude/hooks/superpowers-hook.sh` reads stdin once, extracts `session_id`, and exits 0 before
+resolving the plugin script when the guard cannot act. The marker is the session's native task
+directory, `~/.claude/tasks/session-<first 8 chars of session_id>/`, which the wait guard itself
+reads (its condition 4):
 
-- `stop-wait-guard.sh`: transcript does not contain `executing-plans`.
-- `stop-revalidate-user-gates.sh`: transcript matches none of `userGate`, `user-gate`,
-  `USER-ORDERED GATE`.
+- `stop-wait-guard.sh`: no `*.json` there contains `"status": "in_progress"`.
+- `stop-revalidate-user-gates.sh`: no `*.json` there matches `userGate`, `user-gate` or
+  `USER-ORDERED GATE` (case-insensitive).
 
-Otherwise the buffered stdin is piped to the real script unchanged. Missing or unreadable transcript:
-pass through to the real script (it fails open itself). `post-task-complete-revalidate.sh` is not
+A transcript-text marker was rejected: probe 2026-10-28, 199 of the 200 most recent transcripts
+contain both `executing-plans` and `user-gate`, because the skill listing carries them.
+
+Otherwise the buffered stdin is piped to the real script unchanged. Missing `session_id`: pass
+through to the real script (it fails open itself). `post-task-complete-revalidate.sh` is not
 short-circuited. The plugin's own disable variables keep working.
 
 ## 1.4 Review job budget
@@ -158,7 +163,7 @@ a copy), and uses hook JSON captured from a real transcript in the audit window.
 | Item | Test |
 | --- | --- |
 | 1.2 | scratch workspace: summary counts match; `review-started.txt` not `completed` is reported; `TC_ROLE=worker` gives the exemption |
-| 1.3 | transcripts with and without the markers: short-circuit skips; a planted gate case still reaches the real guard and blocks |
+| 1.3 | task dirs with and without the markers: short-circuit skips; with a marker the real plugin guard runs (its trace log gets a line) |
 | 1.4 | the post-run classification on captured outputs (limit message, budget cap, clean) writes the right marker |
 | 1.5 | close a scratch tmux session (`-f /dev/null`): lineage file survives; relay writes and the board reads the new path |
 | 1.9 | band file: one warning per band; replay of session `48822fd2` gives more than 0 warnings on `PostToolUse`/`Stop` |
