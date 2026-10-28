@@ -36,18 +36,19 @@ if [ -d "$u" ]; then
     n=${e##*/}
     case "$n" in (PENDING.md*) continue ;; esac
     if [ -f "$u/PENDING.md" ]; then
-      grep -q "^## $n .*awaiting install" "$u/PENDING.md" && K=$((K+1))
+      grep -F -- "## $n " "$u/PENDING.md" | grep -q 'awaiting install' && K=$((K+1))
     elif [ -d "$e" ]; then
       K=$((K+1))
     fi
   done
 fi
 if [ "$wsok" = MISSING ]; then
-  msg="Task observer: workspace MISSING ($ws). Run the full protocol: load the task-observer skill with no Skill arguments (storage check, frontmatter scan, review trigger). Observations are created only by scripts/new-observation.sh. Teammates and subagents never load it and report findings to the lead. Details: $ws/README.md."
+  msg="Task observer: workspace MISSING. Run the full protocol: load the task-observer skill with no Skill arguments (storage check, frontmatter scan, review trigger). Observations are created only by scripts/new-observation.sh. Teammates and subagents never load it and report findings to the lead. Workspace (pinned, never the cwd or a worktree): $ws. Details: $ws/README.md."
 else
   msg="Task observer: workspace ok · $open open · last review $last"
   [ -n "$due" ] && msg="$msg (due)"
   msg="$msg$fired · $K staged updates."
+  [ -n "$due" ] && msg="$msg The review is due: offer it in one line and carry on with the user's task."
   msg="$msg Load the task-observer skill (no Skill arguments) only to write an observation, to run a review the user opted into, or to reconcile staged updates. Observations are created only by scripts/new-observation.sh. Re-read this summary before writing or proposing a plan. Teammates and subagents never load it and report findings to the lead. Workspace (pinned, never the cwd or a worktree): $ws. Details: $ws/README.md."
 fi
 # JSON string escaping for the two characters a path or note could carry

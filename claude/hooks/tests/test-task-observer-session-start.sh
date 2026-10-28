@@ -23,6 +23,8 @@ mkdir -p "$staged/skill-updates/2026-10-26" "$staged/skill-updates/2026-10-28" "
 printf '# Pending\n\n## 2026-10-28 (scheduled review): installed\n\nx\n\n## 2026-10-26 (scheduled review): awaiting install\n\ny\n' > "$staged/skill-updates/PENDING.md"
 nopend="$T/nopend"; ws "$nopend"; date +%F > "$nopend/skill-observations/last-review-date.txt"
 mkdir -p "$nopend/skill-updates/2026-10-26" "$nopend/skill-updates/2026-10-28" "$nopend/skill-updates/.live-mirror"
+regex="$T/regex"; ws "$regex"; date +%F > "$regex/skill-observations/last-review-date.txt"; mkdir -p "$regex/skill-updates/2026-10-2x"
+printf '## 2026-10-28 (scheduled review): awaiting install\n' > "$regex/skill-updates/PENDING.md"
 missing="$T/missing"   # no directory at all
 
 out=$(text "$empty"); check "empty workspace: valid JSON" "$?" "0"
@@ -51,6 +53,11 @@ check "staged: one awaiting install round" "$(text "$staged" | grep -cF '· 1 st
 check "no PENDING.md: counts directories, not dot-entries" "$(text "$nopend" | grep -cF '· 2 staged updates.')" "1"
 check "missing workspace: MISSING" "$(text "$missing" | grep -cF 'workspace MISSING')" "1"
 check "missing workspace: full protocol" "$(text "$missing" | grep -cF 'Run the full protocol: load the task-observer skill')" "1"
+check "missing workspace: pinned wording" "$(text "$missing" | grep -cF 'pinned, never the cwd or a worktree')" "1"
+check "due: offer text" "$(text "$overdue" | grep -cF 'offer it in one line and carry on with the user')" "1"
+check "not due: no offer text" "$(text "$fresh" | grep -cF 'offer it in one line')" "0"
+check "worker: no offer text" "$(TC_ROLE=worker TASK_OBSERVER_WORKSPACE="$overdue" sh "$H" | grep -cF 'offer it in one line')" "0"
+check "regex chars in round name do not match loosely" "$(text "$regex" | grep -cF '· 0 staged updates.')" "1"
 check "missing workspace: no summary counts" "$(text "$missing" | grep -cF 'staged updates')" "0"
 real=$(TASK_OBSERVER_WORKSPACE="${TASK_OBSERVER_WORKSPACE:-$HOME/.task-observer}" sh "$H" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])')
 echo "real workspace output (${#real} chars): $real"
