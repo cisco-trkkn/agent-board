@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # dev [dir] — open (or reattach to) a tmux session for a project.
-# Windows: claude only (a throwaway shell is prefix S). Agent windows live in the hidden session <name>-bg.  Run it again and it just reattaches.
+# Windows: 1 claude · 2 plan (the active plan's tasks; a throwaway shell is prefix S). Agent windows live in the hidden session <name>-bg.  Run it again and it just reattaches.
 emulate -L zsh
 source "${0:A:h}/_tc_bins.zsh"
 [[ "$1" == (-h|--help|help) ]] && { sed -n '2,3p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 }
@@ -19,6 +19,7 @@ if ! tc_tmux has-session -t "=$name" 2>/dev/null; then
   # a server this starts inherits this environment: keep the pane dev may be typed in out of it
   ( unset TMUX TMUX_PANE; tc_tmux new-session -d -s "$name" -n claude -c "$root" )
   tc_tmux send-keys -t "=${name}:claude" "${DEV_CLAUDE_CMD:-${(q)${0:A:h}}/claude-orchestrator}" Enter   # agent team by default
+  tc_tmux new-window -d -a -t "=${name}:claude" -n plan -c "$root" "${(q)${0:A:h}}/tmux-plan ${(q)name} ${(q)root}"
   tc_tmux select-window -t "=${name}:claude"
 elif [[ -n "$DEV_CLAUDE_CMD" ]]; then
   print -ru2 -- "dev: session '$name' already exists — DEV_CLAUDE_CMD was not sent"

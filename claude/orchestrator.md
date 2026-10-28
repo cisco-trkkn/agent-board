@@ -159,6 +159,7 @@ the user only when it is truly theirs to decide, and batch such questions into o
 | Window | Use |
 | --- | --- |
 | `claude` | you, the team lead |
+| `plan` | the active plan's tasks, who is on each, and who needs you; read-only. Never type into it |
 | `✦ <name>` | one per teammate while the team runs; closes when you shut it down |
 | `<project>-bg` (hidden session) | the agents' `tests` and `shell` windows and their lanes, driven only through `tmux-ctl` |
 

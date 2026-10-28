@@ -7,13 +7,14 @@ fp="$(tt split-window -d -v -t '=tt:tests' -P -F '#{pane_id}' 'sleep 600')"; tt 
 sp="$(tt split-window -d -v -t '=tt:shell' -P -F '#{pane_id}' 'sleep 600')"; tt set-option -p -t "$sp" @tc_role feed
 tt set-option -w -t '=tt:shell' @tc_label x
 "$L" tt "$TT_DIR"
-check "user windows"     test "$(wins tt)" = "claude "   # the idle user shell is removed
+check "user windows"     test "$(wins tt)" = "claude plan "   # the idle user shell is removed; plan is added
 check "bg windows"       test "$(wins tt-bg)" = "shell tests "
+check "plan window runs tmux-plan" sh -c "$TT_BIN display -p -t '=tt:plan' '#{pane_start_command}' | grep -q tmux-plan"
 check "bg flagged"       test "$(tt show-options -qv -t '=tt-bg:' @tc_bg)" = 1
 check "no role panes"    test -z "$(tt list-panes -s -t '=tt' -F '#{@tc_role}' | tr -d '\n')"
 check "moved tests bare" test "$(tt list-panes -t '=tt-bg:tests' | wc -l | tr -d ' ')" = 1
 "$L" tt "$TT_DIR"
-check "idempotent"       test "$(wins tt)|$(wins tt-bg)" = "claude |shell tests "
+check "idempotent"       test "$(wins tt)|$(wins tt-bg)" = "claude plan |shell tests "
 mkdir -p "$TT_DIR/.dev"; printf '# c\ntests: while :; do echo W; sleep 1; done\n' > "$TT_DIR/.dev/windows"
 "$L" tt "$TT_DIR"
 wp="$(tt list-panes -t '=tt-bg:tests' -F '#{pane_id} #{@tc_role}' | awk '$2=="watch"{print $1}')"
@@ -31,13 +32,20 @@ tt new-session -d -s busy -n claude -c "$TT_DIR"; tt new-window -d -t '=busy:' -
 err="$("$L" busy "$TT_DIR" 2>&1 >/dev/null)"
 check "busy shell kept"  sh -c "$TT_BIN list-windows -t '=busy' -F '#{window_name}' | grep -qx shell"
 check "busy shell note"  zsh -c 'print -r -- "$1" | grep -q "busy"' x "$err"
+check "busy gains plan"  test "$(wins busy)" = "claude plan shell "
+# plan sits right after claude even when the next slot is taken (and the window that was there moves up)
+tt new-session -d -s ord -n claude -c "$TT_DIR"; tt new-window -d -t '=ord:' -n x -c "$TT_DIR" 'sleep 30'
+"$L" ord "$TT_DIR"
+ci="$(tt list-windows -t '=ord' -F '#{window_name} #{window_index}' | awk '$1=="claude"{print $2}')"
+pi="$(tt list-windows -t '=ord' -F '#{window_name} #{window_index}' | awk '$1=="plan"{print $2}')"
+check "plan right after claude" test "$pi" = "$((ci + 1))"
 check "busy bg intact"   test "$(wins busy-bg)" = "shell tests "
 # the popup shell binding
 check "S popup bound"    zsh -c 'grep -qE "^bind S display-popup .*-d \"#\{session_path\}\"" "$1"' x "$TT_REPO/config/tmux.conf"
 mkdir -p "$TT_DIR/proj"
 out="$(DEV_NO_ATTACH=1 DEV_CLAUDE_CMD=true TC_LAYOUT="$L" "$D" "$TT_DIR/proj")"
 check "dev ready"        zsh -c 'print -r -- "$1" | grep -q ready' x "$out"
-check "dev windows"      test "$(wins proj)" = "claude "
+check "dev windows"      test "$(wins proj)" = "claude plan "
 check "dev bg"           test "$(wins proj-bg)" = "shell tests "
 # race: layout migration and tmux-ctl's ensure_bg on a fresh session must not duplicate windows
 CT="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"

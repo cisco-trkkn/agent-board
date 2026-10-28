@@ -1,0 +1,25 @@
+{
+ "pid": 1002,
+ "sessionId": "22222222-2222-2222-2222-222222222222",
+ "cwd": "/proj",
+ "startedAt": 1793209013811,
+ "procStart": "Wed Oct 28 17:36:52 2026",
+ "version": "2.1.312",
+ "peerProtocol": 1,
+ "peerFeatures": [
+  "notify_idle",
+  "reply_across_default_dirs",
+  "artifact_yield"
+ ],
+ "kind": "interactive",
+ "entrypoint": "cli",
+ "pidDomain": "darwin",
+ "tmux": "proj:@81.%83",
+ "messagingSocketPath": "/tmp/cc-socks/53324.sock",
+ "name": "proj-2",
+ "nameSource": "derived",
+ "nameSince": 1793209013812,
+ "status": "idle",
+ "updatedAt": 1793212535487,
+ "statusUpdatedAt": 1793212534487
+}

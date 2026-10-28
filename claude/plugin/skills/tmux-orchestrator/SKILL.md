@@ -13,6 +13,7 @@ Output stays visible to the user in those windows. Run `tmux-ctl help` for usage
 | Window | Use |
 | --- | --- |
 | `claude` | the team lead |
+| `plan` | the active plan's tasks, who is on each, and who needs you; read-only. Never type into it |
 | `✦ <name>` | one per teammate while the team runs |
 | `<project>-bg` (hidden session) | the agents' `tests` and `shell` windows and their lanes, driven only through `tmux-ctl` |
 
