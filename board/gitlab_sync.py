@@ -7,7 +7,6 @@ Status  <ideas_dir>/<project>.gitlab-status.json   {"at", "ok", "error", "pendin
 """
 import datetime
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -134,8 +133,11 @@ def _write_status(project, ok, error, pending):
 
 # ---- reconcile --------------------------------------------------------------------------------
 
-def _marker(project, idea):
-    return f"<!-- agent-board:{project}:{idea['ts']}:{hashlib.sha256(idea['text'].encode()).hexdigest()[:8]} -->"
+def _marker(project, idea, todo):
+    """<ts>#<n>: n = 1-based position among ALL lines with this ts, in file order. Ideas are never deleted
+    and a move leaves the source line in place, so n survives edits."""
+    n = 1 + sum(1 for i in todo[:todo.index(idea)] if i["ts"] == idea["ts"])
+    return f"<!-- agent-board:{project}:{idea['ts']}#{n} -->"
 
 
 def _want(idea):
@@ -160,10 +162,10 @@ def _ops(idea, entry, base):
     elif entry["state"] != want:
         if want == "closed-done":
             suffix = text.rsplit(" → ", 1)[1] if " → " in text else text
-            ops.append((f"close-done #{iid}", [("POST", f"{url}/notes", [("body", f"Taken up → {suffix}")]), close],
+            ops.append((f"close-done #{iid}", [close, ("POST", f"{url}/notes", [("body", f"Taken up → {suffix}")])],
                         {"state": want}))
         elif want == "closed-moved":
-            ops.append((f"close-moved #{iid}", [("POST", f"{url}/notes", [("body", f"Moved to {idea['moved_to']}")]), close],
+            ops.append((f"close-moved #{iid}", [close, ("POST", f"{url}/notes", [("body", f"Moved to {idea['moved_to']}")])],
                         {"state": want}))
         else:
             ops.append((f"close-dropped #{iid}", [("PUT", url, [("state_event", "close"), ("add_labels", "not-planned")])],
@@ -218,7 +220,7 @@ def _pass(project, m, dry_run, out):
     todo = ideas.load(project)
     for n, idea in enumerate(todo):
         try:
-            _one(project, m, base, side, idea, dry_run, out)
+            _one(project, m, base, side, idea, todo, dry_run, out)
         except RateLimited as e:
             _fail(out, e)
             out["pending"] += sum(_needs(i, side, m["since"], base) for i in todo[n + 1:])
@@ -227,11 +229,11 @@ def _pass(project, m, dry_run, out):
             _fail(out, e)
 
 
-def _one(project, m, base, side, idea, dry_run, out):
+def _one(project, m, base, side, idea, todo, dry_run, out):
     if idea["issue"] is None:
         if not _needs(idea, side, m["since"], base):
             return
-        mk = _marker(project, idea)
+        mk = _marker(project, idea, todo)
         found = api("GET", base, [("search", mk), ("in", "description"), ("state", "all"), ("per_page", "20")]) or []
         hit = next((r for r in found if mk in (r.get("description") or "")), None)
         if dry_run:

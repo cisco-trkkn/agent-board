@@ -1,5 +1,4 @@
 import fcntl
-import hashlib
 import json
 import os
 import subprocess
@@ -19,8 +18,8 @@ BASE = "projects/grp%2Frepo/issues"
 TS = "2026-10-28 10:00"
 
 
-def marker(project, ts, text):
-    return f"<!-- agent-board:{project}:{ts}:{hashlib.sha256(text.encode()).hexdigest()[:8]} -->"
+def marker(project, ts, n=1):
+    return f"<!-- agent-board:{project}:{ts}#{n} -->"
 
 
 class Env(unittest.TestCase):
@@ -177,7 +176,7 @@ class SyncTest(Env):
         self.ideas(f"- [ ] {TS} · retries")
         self.create_rules(5)
         r = g.sync("p")
-        mk = marker("p", TS, "retries")
+        mk = marker("p", TS)
         self.assertEqual(self.calls(), [
             ("GET", BASE, {"search": mk, "in": "description", "state": "all", "per_page": "20"}),
             ("POST", BASE, {"title": "retries", "labels": "idea", "description": mk})])
@@ -191,7 +190,7 @@ class SyncTest(Env):
     def test_marker_hit_is_adopted_without_post(self):
         # mutation: skip the search -> POST logged and the iid differs
         self.ideas(f"- [ ] {TS} · retries")
-        mk = marker("p", TS, "retries")
+        mk = marker("p", TS)
         self.rules({"method": "GET", "path_re": "issues$", "status": 200,
                     "body": [{"iid": 9, "title": "retries", "state": "opened", "description": f"x\n{mk}"}]},
                    {"method": "POST", "path_re": "issues$", "status": 201, "body": {"iid": 77}})
@@ -202,7 +201,7 @@ class SyncTest(Env):
 
     def test_hit_without_exact_marker_is_not_adopted(self):
         self.ideas(f"- [ ] {TS} · retries")
-        other = marker("p", TS, "retriesX")
+        other = marker("p", TS, 2)
         self.rules({"method": "GET", "path_re": "issues$", "status": 200,
                     "body": [{"iid": 9, "title": "t", "state": "opened", "description": other}]},
                    {"method": "POST", "path_re": "issues$", "status": 201, "body": {"iid": 77}})
@@ -255,11 +254,45 @@ class SyncTest(Env):
         self.ideas(f"- [x] {TS} · retries · gl#5 → docs/s.md")
         self.sidecar_put({"5": {"ts": TS, "title": "retries → docs/s.md", "state": "open"}})
         g.sync("p")
-        self.assertEqual(self.calls(), [("POST", f"{BASE}/5/notes", {"body": "Taken up → docs/s.md"}),
-                                        ("PUT", f"{BASE}/5", {"state_event": "close"})])
+        self.assertEqual(self.calls(), [("PUT", f"{BASE}/5", {"state_event": "close"}),
+                                        ("POST", f"{BASE}/5/notes", {"body": "Taken up → docs/s.md"})])
         self.assertEqual(self.sidecar()["5"]["state"], "closed-done")
         g.sync("p")
         self.assertEqual(len(self.log()), 2)
+
+    def test_note_failure_leaves_sidecar_and_retry_posts_one_note(self):
+        # mutation: note first -> the retry log has no second close PUT / two note attempts before the close
+        self.ideas(f"- [x] {TS} · retries · gl#5 → docs/s.md")
+        old = {"5": {"ts": TS, "title": "retries → docs/s.md", "state": "open"}}
+        self.sidecar_put(old)
+        self.rules({"method": "POST", "path_re": "notes$", "status": 500, "body": {"message": "boom"}, "once": True})
+        self.assertFalse(g.sync("p")["ok"])
+        self.assertEqual(self.sidecar(), old)
+        self.assertTrue(g.sync("p")["ok"])
+        self.assertEqual([m for m, _, _ in self.calls()], ["PUT", "POST", "PUT", "POST"])
+        self.assertEqual(self.sidecar()["5"]["state"], "closed-done")
+
+    def test_same_minute_ideas_get_distinct_ordinal_markers(self):
+        self.ideas(f"- [ ] {TS} · a", f"- [-] {TS} · b", f"- [ ] {TS} · c")
+        self.rules({"method": "POST", "path_re": "issues$", "status": 201, "body": {"iid": 1}})
+        g.sync("p")
+        searches = [c[2]["search"] for c in self.calls("GET")]
+        self.assertEqual(searches, [marker("p", TS, 1), marker("p", TS, 3)])   # b is dropped: no create, but it holds #2
+
+    def test_edit_after_failed_token_still_adopts(self):
+        # mutation: put a hash of the text back into the marker -> a second POST on the next pass
+        self.ideas(f"- [ ] {TS} · retries")
+        self.rules({"method": "POST", "path_re": "issues$", "status": 201, "body": {"iid": 5}})
+        with mock.patch.object(ideas, "set_issue", side_effect=ideas.Stale("x")):
+            g.sync("p")
+        mk = self.calls("POST")[0][2]["description"]
+        key = ideas.load("p")[0]["key"]
+        ideas.edit("p", key, "retries, reworded")
+        self.rules({"method": "GET", "path_re": "issues$", "status": 200,
+                    "body": [{"iid": 5, "title": "retries", "state": "opened", "description": mk}]})
+        g.sync("p")
+        self.assertEqual(len(self.calls("POST")), 1)
+        self.assertIn("reworded · gl#5", self.text())
 
     def test_dropped_closes_as_not_planned(self):
         self.ideas(f"- [-] {TS} · retries · gl#5")
@@ -272,8 +305,8 @@ class SyncTest(Env):
         self.ideas(f"- [-] {TS} · retries · gl#5 → moved to other")
         self.sidecar_put({"5": {"ts": TS, "title": "retries", "state": "open"}})
         g.sync("p")
-        self.assertEqual(self.calls(), [("POST", f"{BASE}/5/notes", {"body": "Moved to other"}),
-                                        ("PUT", f"{BASE}/5", {"state_event": "close"})])
+        self.assertEqual(self.calls(), [("PUT", f"{BASE}/5", {"state_event": "close"}),
+                                        ("POST", f"{BASE}/5/notes", {"body": "Moved to other"})])
         self.assertEqual(self.sidecar()["5"]["state"], "closed-moved")
 
     def test_restored_reopens(self):
@@ -325,7 +358,7 @@ class SyncTest(Env):
 
     def test_dry_run_adopt_line(self):
         self.ideas(f"- [ ] {TS} · retries")
-        mk = marker("p", TS, "retries")
+        mk = marker("p", TS)
         self.rules({"method": "GET", "path_re": "issues$", "status": 200,
                     "body": [{"iid": 9, "title": "retries", "state": "opened", "description": mk}]})
         self.assertEqual(g.sync("p", dry_run=True)["actions"], ['adopt #9 "retries"'])
