@@ -14,6 +14,10 @@ check budget "$(classify_run "$FX/review-out-budget.txt" 1)" budget-hit
 check ok "$(classify_run "$FX/review-out-ok.txt" 0)" ok
 check ok-nonzero-unmatched "$(classify_run "$FX/review-out-ok.txt" 1)" ok
 check limit-text-exit0-is-ok "$(classify_run "$FX/review-out-limit.txt" 0)" ok
-check budget-default "$REVIEW_BUDGET_USD" 5
+check budget-default "$REVIEW_BUDGET_USD" 25
+cmdline=$(grep -A12 '^claude -p' "$S")
+check flag-budget "$(printf %s "$cmdline" | grep -c -e '--max-budget-usd "\$REVIEW_BUDGET_USD"')" 1
+check flag-fallback "$(printf %s "$cmdline" | grep -c -e '--fallback-model sonnet')" 1
+check live-log-tee "$(grep -c 'tee -a "\$log"' "$S")" 1
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
