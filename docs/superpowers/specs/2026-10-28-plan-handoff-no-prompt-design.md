@@ -41,6 +41,10 @@ In the workflow table row "Carrying out a plan", state that execution starts wit
 - Kill switch: `PLAN_HANDOFF_GUARD=0` means exit 0.
 - Lives in `claude/hooks/`, follows `kill-guard.sh`'s shape (bash wrapper, `python3 -I`, `--scoped` dedupe), and is registered both ways `kill-guard.sh` is: `claude/plugin/hooks/hooks.json` (scoped, through `claude/plugin/scripts/`) and `claude/settings.json` (global, through `~/.claude/hooks/`).
 
+#### Interaction with the plugin's `pre-askuser-handoff-guard`
+
+superpowers-extended-cc ships its own `PreToolUse(AskUserQuestion)` hook, `hooks/pre-askuser-handoff-guard`. After `writing-plans` (armed by the skill signal plus a TaskCreate), it blocks any `AskUserQuestion` that is not the exact two-option handoff, and its block message quotes the required YAML. It fires only on `AskUserQuestion`, so a session that never asks never meets it. But a model that tries to ask anyway would be caught between two hooks: the plugin demands the handoff YAML and ours denies it. So our deny reason must say explicitly: "do not call AskUserQuestion for the execution choice in any form; invoke the Skill tool with `superpowers-extended-cc:subagent-driven-development` now". The plugin hook is left untouched (not patched, and `SUPERPOWERS_ROUTING_GUARD` is not set), because it also guards model routing.
+
 ### 4. Tests: `claude/hooks/tests/test-plan-handoff-guard.sh`
 
 Feed the script real `PreToolUse` JSON on stdin, in the style of the existing tests in that directory. Cases:
@@ -48,11 +52,14 @@ Feed the script real `PreToolUse` JSON on stdin, in the style of the existing te
 - the same question with a different header but the "How would you like to execute it?" text is denied;
 - an unrelated question passes with no output;
 - malformed JSON passes (fail open);
-- `PLAN_HANDOFF_GUARD=0` passes the handoff question.
+- `PLAN_HANDOFF_GUARD=0` passes the handoff question;
+- the deny reason contains both "do not call AskUserQuestion" and the Skill name, so a model told to ask by the plugin hook is told not to by ours.
+
+Before planning, record the plugin hook's input and block output once (a probe), so the test fixtures come from the real `PreToolUse` payload.
 
 ## Acceptance
 
-- The five test cases pass.
+- The six test cases pass.
 - In a fresh Claude session, completing a small plan through `writing-plans` goes straight into `subagent-driven-development` with no execution prompt. Verified once by hand in a scratch repo, with the hook's deny visible in the transcript if the model tried to ask.
 - Other `AskUserQuestion` calls in the same session still reach the user.
 
