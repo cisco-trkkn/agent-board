@@ -77,7 +77,7 @@ check "nesting: prints the attach command"    grep -qF "tmux -L $B_SOCK attach -
 check "dev: session on the agent-board server" B has-session -t '=proj'
 check "dev: nothing created on the user's server" sh -c "! $TT_BIN -L $A_SOCK has-session -t '=proj' 2>/dev/null"
 check "dev: layout ran on B too (proj-bg)"    B has-session -t '=proj-bg'
-check "dev: windows"                          test "$(B list-windows -t '=proj' -F '#{window_name}' | sort | tr '\n' ' ')" = "claude "
+check "dev: windows"                          test "$(B list-windows -t '=proj' -F '#{window_name}' | sort | tr '\n' ' ')" = "claude plan "
 out="$(devx "$TT_DIR/proj" 2>&1)"
 check "nesting: second dev reattaches (hint again, no error)" grep -qF "attach -t proj" <<< "$out"
 check "dev: DEV_NO_ATTACH still prints ready" sh -c "DEV_NO_ATTACH=1 HOME='$SH' TC_TMUX='$TT_BIN' TC_LAYOUT='$R/bin/tmux-dev-layout' '$DEV' '$TT_DIR/proj' | grep -q ready"
