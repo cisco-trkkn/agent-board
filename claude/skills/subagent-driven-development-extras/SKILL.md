@@ -27,7 +27,7 @@ Example: a report that says "tests pass" with no command output is bounced, not 
 
 ## 2. Small-fix re-review on the task's tier
 
-Overrides: base "4. The fix loop", where every scoped re-review is a standard-tier dispatch.
+Narrows base "4. The fix loop", where scoped re-reviews of small fix diffs already take a cheap-to-mid tier: Haiku only on a mechanical task, standard otherwise.
 
 A fix is **small** when FIX_BASE..HEAD has ≤20 changed lines, ≤2 files, no added files, no deleted or skipped tests, and the fix report shows the covering tests green.
 
@@ -46,8 +46,9 @@ Overrides: base "3. Review the task", which reviews each task on its own.
 
 Consecutive `mechanical` tasks that passed the lever 1 check form a batch. It closes at 5 tasks, at the next non-mechanical task, or at the plan's end.
 
+- A closing task (non-mechanical, or a never-batched task) ends the batch; review the batch before dispatching that task's implementer.
 - Never batched, whatever the tier: a task whose files or brief touch security (auth, IAM, secrets), migrations, CI configuration or shared config. It gets the base per-task review.
-- A batched task stays `in_progress` until its batch is reviewed. The gate reads the in-progress task's tier, and the batch reviewer runs at `standard`, which it always allows.
+- A batched task stays `in_progress` until its batch is reviewed. The gate allows the union of every in-progress task's tier plus `standard`, and the batch reviewer runs at `standard`, which it always allows.
 - One standard-tier reviewer gets `scripts/review-package PLAN_FILE <batch base> <batch head>`, each task's brief and report paths, and the global constraints. It returns spec and quality verdicts **per task**.
 - Each task's findings enter that task's own fix loop (lever 2 applies). A task is marked complete only when its own verdicts pass.
 - The final whole-branch review is unchanged.
@@ -65,4 +66,4 @@ Walk the progress ledger and confirm:
 - [ ] Every Haiku re-review was on a `mechanical` task with a small fix.
 - [ ] No batch held a security, migration, CI or shared-config task.
 - [ ] Every batched task got its own spec and quality verdicts.
-- [ ] No routing-gate block occurred, and `SUPERPOWERS_ROUTING_GUARD` is unset.
+- [ ] No routing-gate block was bypassed, and `SUPERPOWERS_ROUTING_GUARD` is unset.
