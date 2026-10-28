@@ -1,6 +1,6 @@
 ---
 name: docs-architecture
-description: Use when asked for an "architecture doc", a "system overview", or to "document how X fits together" for a GCP repo (Terraform, GitLab CI, Cloud Run, Pub/Sub, BigQuery), or to refresh such a doc after the repo changed. Architecture and system documentation only, written as a Claude Doc of layered diagrams; not runbooks, how-tos, reports or client explainers.
+description: Use when asked for an "architecture doc", a "system overview", or to "document how X fits together" for a GCP repo (Terraform, GitLab CI, Cloud Run, Pub/Sub, BigQuery), or to refresh one. Architecture docs only, as layered diagrams in a Claude Doc; not runbooks, reports or explainers.
 ---
 
 # docs-architecture

@@ -1,6 +1,6 @@
 ---
 name: "docs-compose"
-description: Use for any doc request that may mix kinds (architecture, runbook or how-to, report or handover, client explainer), used alongside `anthropic-skills:docs`. Builds one Claude Doc from a confirmed, typed outline and hands each section to its type skill as a guest; for one type alone, that type's skill may run standalone.
+description: Use for any doc request that may mix kinds (architecture, runbook, report, client explainer), alongside `anthropic-skills:docs`. Builds one Claude Doc from a confirmed typed outline; each section goes to its type skill as a guest. One type alone may run standalone.
 ---
 
 # docs-compose
