@@ -33,6 +33,12 @@ err="$("$L" busy "$TT_DIR" 2>&1 >/dev/null)"
 check "busy shell kept"  sh -c "$TT_BIN list-windows -t '=busy' -F '#{window_name}' | grep -qx shell"
 check "busy shell note"  zsh -c 'print -r -- "$1" | grep -q "busy"' x "$err"
 check "busy gains plan"  test "$(wins busy)" = "claude plan shell "
+# plan sits right after claude even when the next slot is taken (and the window that was there moves up)
+tt new-session -d -s ord -n claude -c "$TT_DIR"; tt new-window -d -t '=ord:' -n x -c "$TT_DIR" 'sleep 30'
+"$L" ord "$TT_DIR"
+ci="$(tt list-windows -t '=ord' -F '#{window_name} #{window_index}' | awk '$1=="claude"{print $2}')"
+pi="$(tt list-windows -t '=ord' -F '#{window_name} #{window_index}' | awk '$1=="plan"{print $2}')"
+check "plan right after claude" test "$pi" = "$((ci + 1))"
 check "busy bg intact"   test "$(wins busy-bg)" = "shell tests "
 # the popup shell binding
 check "S popup bound"    zsh -c 'grep -qE "^bind S display-popup .*-d \"#\{session_path\}\"" "$1"' x "$TT_REPO/config/tmux.conf"

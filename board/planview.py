@@ -75,7 +75,7 @@ def live_tasks(home, sid):
             d = json.loads(f.read_text())
             if isinstance(d, dict):
                 tasks.append(_norm(d))
-        except ERRORS:
+        except (ERRORS + (AttributeError, TypeError)):
             continue
     return _finish(tasks)
 
@@ -101,7 +101,13 @@ def plan_entry(state_dir, project, sid):
 def file_tasks(path):
     try:
         d = json.loads(Path(path).read_text())
-        return _finish([_norm(t) for t in d["tasks"] if isinstance(t, dict)])
+        tasks = []
+        for t in d["tasks"]:
+            try:
+                tasks.append(_norm(t))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return _finish(tasks)
     except (ERRORS + (KeyError, TypeError)):
         return []
 
@@ -157,27 +163,32 @@ def project_of(session, tmux):
     return p or session
 
 
-def _idle_view(root, name, tmux, session):
-    """No live list: the plan's own .md.tasks.json, else the newest in the repo; active is False."""
+def _idle_view(root, plan, tmux, session):
+    """No live list: the plan's own .md.tasks.json (next to its manifest path, else under root), else the newest in
+    the repo; active is False and the name is that of the file shown."""
     tj = None
-    if name:
-        cand = Path(root) / "docs" / "superpowers" / "plans" / f"{name}.md.tasks.json"
-        tj = cand if cand.is_file() else None
+    if plan:
+        own = Path(str(plan) + ".tasks.json")
+        under_root = Path(root) / "docs" / "superpowers" / "plans" / f"{plan.name}.tasks.json"
+        tj = next((c for c in (own, under_root) if c.is_file()), None)
     tj = tj or _newest_repo_tasks_json(root)
     if tj is None:
-        return {"name": name, "active": False, "tasks": []}
-    fname = tj.name[:-len(".md.tasks.json")] if tj.name.endswith(".md.tasks.json") else tj.name
-    return {"name": name or fname, "active": False, "tasks": owner_states(session, file_tasks(tj), tmux)}
+        return {"name": _plan_name(plan), "active": False, "tasks": []}
+    name = tj.name[:-len(".md.tasks.json")] if tj.name.endswith(".md.tasks.json") else tj.name
+    return {"name": name, "active": False, "tasks": owner_states(session, file_tasks(tj), tmux)}
+
+
+def _plan_name(plan):
+    return plan.name[:-3] if plan and plan.name.endswith(".md") else (plan.name if plan else "")
 
 
 def view(session, root, home, state_dir, tmux):
     sid = lead_session(session, home, tmux)
     plan = plan_entry(state_dir, project_of(session, tmux), sid)
-    name = plan.name[:-3] if plan and plan.name.endswith(".md") else (plan.name if plan else "")
     tasks = live_tasks(home, sid)
     if tasks:
-        return {"name": name, "active": True, "tasks": owner_states(session, tasks, tmux)}
-    return _idle_view(root, name, tmux, session)
+        return {"name": _plan_name(plan), "active": True, "tasks": owner_states(session, tasks, tmux)}
+    return _idle_view(root, plan, tmux, session)
 
 
 GLYPHS = {"completed": "\u2713", "in_progress": "\u25b6", "pending": "\u00b7", "blocked": "\u2717"}
@@ -230,14 +241,19 @@ def render(v, width, color):
     return lines
 
 
-def _snapshot(session, root):
-    return view(session, root, Path.home() / ".claude", tc_env.state_dir(), paneclass.tmux_runner())
+def _snapshot(session, root, tmux=None):
+    return view(session, root, Path.home() / ".claude", tc_env.state_dir(), tmux or paneclass.tmux_runner())
 
 
 def watch(session, root, interval=2.0):
     prev = None
+    tmux = paneclass.tmux_runner()   # once: building it runs the zsh resolver
     while True:
-        lines = render(_snapshot(session, root), shutil.get_terminal_size((80, 24)).columns, True)
+        try:
+            lines = render(_snapshot(session, root, tmux), shutil.get_terminal_size((80, 24)).columns, True)
+        except Exception:   # a bad poll keeps the previous frame; the window must not close
+            time.sleep(interval)
+            continue
         if lines != prev:
             sys.stdout.write("\033[H\033[2J" + "\n".join(lines) + "\n")
             sys.stdout.flush()

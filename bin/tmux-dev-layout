@@ -53,7 +53,7 @@ if has_win "$sess" shell; then   # the user's old shell window; never the -bg on
   fi
 fi
 
-has_win "$sess" plan || t new-window -d -t "=${sess}:" -n plan -c "$root" "${(q)${0:A:h}}/tmux-plan ${(q)sess} ${(q)root}"
+has_win "$sess" plan || t new-window -d -a -t "=${sess}:claude" -n plan -c "$root" "${(q)${0:A:h}}/tmux-plan ${(q)sess} ${(q)root}"
 
 # optional watch commands, in the -bg windows
 if [[ -r "$root/.dev/windows" ]]; then

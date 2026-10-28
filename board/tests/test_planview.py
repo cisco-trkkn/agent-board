@@ -151,6 +151,35 @@ class TestPlanview(Base):
         (self.repo / "docs/superpowers/plans/2026-01-01-demo.md.tasks.json").write_text("[")
         self.assertEqual(self.view()["tasks"], [])
 
+    def _outside_plan(self, with_tasks):
+        out = self.root / "elsewhere" / "docs" / "superpowers" / "plans"
+        out.mkdir(parents=True)
+        if with_tasks:
+            (out / "new-plan.md.tasks.json").write_text(json.dumps({"tasks": [{"id": 1, "subject": "NEW", "status": "pending"}]}))
+        self.clear_tasks("11111111")
+        self.write_manifest([{"kind": "plan", "session_id": SID1, "ts": 1, "path": str(out / "new-plan.md")}])
+
+    def test_idle_view_uses_the_manifest_path_tasks_json_outside_root(self):
+        self._outside_plan(True)
+        v = self.view()
+        self.assertEqual((v["name"], [t["subject"] for t in v["tasks"]]), ("new-plan", ["NEW"]))
+
+    def test_idle_fallback_shows_the_fallback_files_own_name(self):
+        self._outside_plan(False)
+        v = self.view()
+        self.assertEqual((v["name"], v["active"], len(v["tasks"])), ("2026-01-01-demo", False, 3))
+
+    def test_malformed_task_files_are_skipped_one_by_one(self):
+        self.clear_tasks("11111111")
+        d = self.home / "tasks" / "session-11111111"
+        (d / "1.json").write_text(json.dumps({"id": "1", "subject": "bad blockedBy", "status": "pending", "blockedBy": 5}))
+        (d / "2.json").write_text(json.dumps(["not", "a", "dict"]))
+        (d / "3.json").write_text(json.dumps({"id": "3", "subject": "bad owner", "status": ["x"], "owner": {"a": 1}}))
+        self.put_task("11111111", 4, subject="good")
+        v = self.view()
+        self.assertIn("good", [t["subject"] for t in v["tasks"]])
+        self.assertNotIn("bad blockedBy", [t["subject"] for t in v["tasks"]])
+
     def test_tmux_raising_falls_back_to_newest_repo_tasks_json(self):
         def boom(*a, **k):
             raise RuntimeError("no tmux")
@@ -324,6 +353,23 @@ class TestCli(unittest.TestCase):
                 mock.patch("planview.Path.home", return_value=Path(tmp)), mock.patch("planview.paneclass.tmux_runner"):
             planview._snapshot("s", Path("."))
         self.assertEqual(v.call_args[0][2], Path(tmp) / ".claude")
+
+    def test_watch_survives_an_iteration_that_raises_and_builds_the_runner_once(self):
+        views = [ValueError("boom"), ACTIVE, ACTIVE]
+        calls = []
+
+        def sleep(_):
+            calls.append(1)
+            if len(calls) == len(views):
+                raise KeyboardInterrupt
+        out = io.StringIO()
+        with mock.patch("planview._snapshot", side_effect=views), mock.patch("planview.time.sleep", sleep), \
+                mock.patch("planview.paneclass.tmux_runner") as runner, mock.patch("sys.stdout", out), \
+                self.assertRaises(KeyboardInterrupt):
+            planview.watch("s", Path("."))
+        self.assertEqual(len(calls), 3)
+        self.assertIn("demo", out.getvalue())
+        self.assertEqual(runner.call_count, 1)
 
     def test_tmux_plan_script_runs_watch(self):
         f = HERE.parent / "bin" / "tmux-plan"
