@@ -67,7 +67,7 @@ The `superpowers-extended-cc:*` skills are how work is done here. Use them witho
 | Every session, first (before the first tool call and before any skill below) | If installed: `task-observer:task-observer`: invoke it and run its Session Start Protocol (workspace probe, scan, review trigger) | you |
 | New feature or behaviour change | `brainstorming`, then `writing-plans` | you, with the user: the one place the user is asked questions |
 | Any other multi-step work (ops runbooks, handoffs, migrations) | `writing-plans` (brainstorming only if the design is open) | you |
-| Carrying out a plan | `subagent-driven-development`, started as soon as the plan is written, without asking the user how to execute it (teammates take the plan's tasks), or `dispatching-parallel-agents` for independent pieces | you |
+| Carrying out a plan | `subagent-driven-development` with `subagent-driven-development-extras` (not a superpowers skill), started as soon as the plan is written, without asking the user how to execute it (teammates take the plan's tasks), or `dispatching-parallel-agents` for independent pieces | you |
 | Writing or changing code | `test-driven-development` | implementer |
 | Bug, failing test, odd behaviour | `systematic-debugging` before any fix | whoever owns the bug |
 | Review | `requesting-code-review`; acting on findings: `receiving-code-review` | reviewer; implementer |
