@@ -6,6 +6,12 @@
         "hooks": [
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/kill-guard.sh\" --scoped", "timeout": 10 }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/plan-handoff-guard.sh\" --scoped", "timeout": 10 }
+        ]
       }
     ],
     "PostToolUse": [

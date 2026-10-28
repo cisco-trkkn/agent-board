@@ -1,5 +1,5 @@
 {
   "name": "agent-board",
   "version": "0.1.0",
-  "description": "Agent Board session plugin: bash-mirror, kill-guard and artifact-register hooks, the tmux-orchestrator and handoff skills, and the effort-* agent types. Loaded per session with --plugin-dir; nothing is installed into ~/.claude."
+  "description": "Agent Board session plugin: bash-mirror, kill-guard, artifact-register and plan-handoff-guard hooks, the tmux-orchestrator and handoff skills, and the effort-* agent types. Loaded per session with --plugin-dir; nothing is installed into ~/.claude."
 }
