@@ -2,7 +2,8 @@
 """planview: the active plan's tasks with their owners' pane state, for the tmux `plan` window.
 
 view(session, root, home, state_dir, tmux) -> {"name", "active", "tasks": [{"id","subject","status","owner","state"}]}
-Reads the lead's live task list (~/.claude/tasks/session-<id8>/), falls back to the plan's .md.tasks.json.
+`home` is the Claude config dir (~/.claude): it holds sessions/ and tasks/.
+Reads the lead's live task list (<home>/tasks/session-<id8>/), falls back to the plan's .md.tasks.json.
 Never raises: missing files, bad JSON and a failing tmux give an empty or partial view.
 """
 import argparse

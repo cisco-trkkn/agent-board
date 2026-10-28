@@ -270,6 +270,27 @@ class TestCli(unittest.TestCase):
         r = self.run_cli("view", "nosuch", "--json")
         self.assertEqual(json.loads(r.stdout), EMPTY_VIEW)
 
+    def test_cli_default_home_reads_dot_claude_with_a_tmux_shim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / ".claude" / "sessions").mkdir(parents=True)
+            tdir = tmp / ".claude" / "tasks" / "session-cccccccc"
+            tdir.mkdir(parents=True)
+            (tmp / ".claude" / "sessions" / "1.json").write_text(json.dumps(
+                {"sessionId": "cccccccc-0000-0000-0000-000000000000", "tmux": "proj:@7.%8", "updatedAt": 1}))
+            (tdir / "1.json").write_text(json.dumps({"id": "1", "subject": "real default", "status": "in_progress", "owner": ""}))
+            shim = tmp / "tmux-shim"
+            shim.write_text("#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in\n"
+                            "display) case \"$*\" in *session_group*) echo proj;; *) echo @7.%8;; esac; exit 0;;\n"
+                            "list-windows) printf 'claude\\t%%8\\n'; exit 0;; esac; done\nexit 1\n")
+            shim.chmod(0o755)
+            env = {"PATH": os.environ["PATH"], "HOME": str(tmp), "TC_STATE": str(tmp / "state"), "TC_TMUX": str(shim)}
+            r = subprocess.run([sys.executable, "-I", str(HERE / "planview.py"), "view", "proj", "--root", str(tmp / "repo"), "--json"],
+                               capture_output=True, text=True, env=env, timeout=30)
+        v = json.loads(r.stdout)
+        self.assertTrue(v["active"], (r.stdout, r.stderr))
+        self.assertEqual([t["subject"] for t in v["tasks"]], ["real default"])
+
     def test_watch_draws_once_and_exits_zero_on_sigint(self):
         import signal
         import time
