@@ -1,5 +1,8 @@
+import io
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -181,6 +184,108 @@ class TestPlanview(Base):
                 raise RuntimeError("no")
             return base(*args)
         self.assertEqual(self.view(tmux)["name"], "zz-own")
+
+
+def T(i, subject, status, owner="", state=""):
+    return {"id": str(i), "subject": subject, "status": status, "owner": owner, "state": state}
+
+
+ACTIVE = {"name": "demo", "active": True, "tasks": [
+    T(1, "Parse", "completed", "parse", "ready"), T(2, "Build", "in_progress", "sift", "waiting"),
+    T(3, "Ship", "pending"), T(4, "Wait", "blocked")]}
+EMPTY_VIEW = {"name": "", "active": False, "tasks": []}
+
+
+class TestRender(unittest.TestCase):
+    def test_active_snapshot(self):
+        self.assertEqual(planview.render(ACTIVE, 40, False), [
+            "demo \u00b7 1/4 done", "\u2713 Parse", "\u25b6 Build \u2192 sift (waiting)", "\u00b7 Ship", "\u2717 Wait"])
+
+    def test_long_subject_cut_keeps_owner_suffix(self):
+        v = {"name": "d", "active": True, "tasks": [T(1, "x" * 60, "in_progress", "parse", "working")]}
+        line = planview.render(v, 40, False)[1]
+        self.assertLessEqual(len(line), 40)
+        self.assertTrue(line.endswith("\u2192 parse (working)"), line)
+        self.assertIn("\u2026", line)
+
+    def test_wide_characters_count_two_columns(self):
+        v = {"name": "d", "active": True, "tasks": [T(1, "\u4e2d" * 30, "pending")]}
+        line = planview.render(v, 20, False)[1]
+        self.assertLessEqual(planview.display_width(line), 20)
+        self.assertIn("\u2026", line)
+
+    def test_every_line_fits_narrow_width(self):
+        for line in planview.render(ACTIVE, 8, False):
+            self.assertLessEqual(planview.display_width(line), 8, line)
+
+    def test_inactive_view(self):
+        v = dict(ACTIVE, active=False)
+        lines = planview.render(v, 40, False)
+        self.assertEqual(lines[1], "no active plan")
+        self.assertEqual(len(lines), 6)
+
+    def test_empty_view(self):
+        self.assertEqual(planview.render(EMPTY_VIEW, 40, True), ["no plans yet \u00b7 prefix S for a shell"])
+
+    def test_color_waiting_bold_red_and_inactive_dim(self):
+        lines = planview.render(ACTIVE, 60, True)
+        self.assertIn("\033[1;31m\u2192 sift (waiting)\033[0m", lines[2])
+        dim = planview.render(dict(ACTIVE, active=False), 60, True)
+        self.assertTrue(dim[2].startswith("\033[2m"), dim[2])
+        self.assertTrue(dim[2].endswith("\033[0m"))
+
+    def test_no_color_has_no_escapes(self):
+        for v in (ACTIVE, dict(ACTIVE, active=False), EMPTY_VIEW):
+            self.assertNotIn("\033", "\n".join(planview.render(v, 40, False)))
+
+
+class TestCli(unittest.TestCase):
+    def run_cli(self, *args):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"PATH": os.environ["PATH"], "HOME": tmp, "TC_STATE": tmp, "TC_TMUX": "/nonexistent"}
+            return subprocess.run([sys.executable, "-I", str(HERE / "planview.py"), *args, "--root", tmp],
+                                  capture_output=True, text=True, env=env, timeout=20)
+
+    def test_view_without_tmux_prints_empty_line(self):
+        r = self.run_cli("view", "nosuch")
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "no plans yet \u00b7 prefix S for a shell"), r.stderr)
+
+    def test_view_json(self):
+        r = self.run_cli("view", "nosuch", "--json")
+        self.assertEqual(json.loads(r.stdout), EMPTY_VIEW)
+
+    def test_watch_draws_once_and_exits_zero_on_sigint(self):
+        import signal
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"PATH": os.environ["PATH"], "HOME": tmp, "TC_STATE": tmp, "TC_TMUX": "/nonexistent"}
+            p = subprocess.Popen([sys.executable, "-I", str(HERE / "planview.py"), "watch", "nosuch", tmp],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            time.sleep(1.5)
+            p.send_signal(signal.SIGINT)
+            out, err = p.communicate(timeout=10)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(out.count("no plans yet"), 1)
+
+    def test_watch_redraws_only_when_lines_change(self):
+        views = [ACTIVE, ACTIVE, dict(ACTIVE, name="other"), dict(ACTIVE, name="other")]
+        calls = []
+
+        def sleep(_):
+            calls.append(1)
+            if len(calls) == len(views):
+                raise KeyboardInterrupt
+        out = io.StringIO()
+        with mock.patch("planview._snapshot", side_effect=views), mock.patch("planview.time.sleep", sleep), \
+                mock.patch("sys.stdout", out), self.assertRaises(KeyboardInterrupt):
+            planview.watch("s", Path("."))
+        self.assertEqual(out.getvalue().count("\033[H\033[2J"), 2)
+
+    def test_tmux_plan_script_execs_watch(self):
+        f = HERE.parent / "bin" / "tmux-plan"
+        self.assertTrue(os.access(f, os.X_OK))
+        self.assertIn('exec python3 -I "${0:A:h:h}/board/planview.py" watch "$@"', f.read_text())
 
 
 class TestPaneState(unittest.TestCase):

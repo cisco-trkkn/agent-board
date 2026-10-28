@@ -5,9 +5,13 @@ view(session, root, home, state_dir, tmux) -> {"name", "active", "tasks": [{"id"
 Reads the lead's live task list (~/.claude/tasks/session-<id8>/), falls back to the plan's .md.tasks.json.
 Never raises: missing files, bad JSON and a failing tmux give an empty or partial view.
 """
+import argparse
 import json
+import shutil
 import subprocess
 import sys
+import time
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
@@ -173,3 +177,92 @@ def view(session, root, home, state_dir, tmux):
     if tasks:
         return {"name": name, "active": True, "tasks": owner_states(session, tasks, tmux)}
     return _idle_view(root, name, tmux, session)
+
+
+GLYPHS = {"completed": "\u2713", "in_progress": "\u25b6", "pending": "\u00b7", "blocked": "\u2717"}
+NO_PLANS = "no plans yet \u00b7 prefix S for a shell"
+RED, DIM, RESET = "\033[1;31m", "\033[2m", "\033[0m"
+
+
+def display_width(text):
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else (0 if unicodedata.combining(c) else 1) for c in text)
+
+
+def clip(text, width):
+    """text cut to `width` display columns, ending in an ellipsis when something was removed."""
+    if display_width(text) <= width:
+        return text
+    out, used = "", 0
+    for c in text:
+        w = display_width(c)
+        if used + w > width - 1:
+            break
+        out, used = out + c, used + w
+    return out + "\u2026" if width >= 1 else ""
+
+
+def render(v, width, color):
+    """The window's lines for a view; every line fits `width` display columns."""
+    tasks = v.get("tasks") or []
+    if not v.get("name") and not tasks:
+        return [clip(NO_PLANS, width)]
+    done = sum(1 for t in tasks if t["status"] == "completed")
+    lines = [clip(f"{v.get('name', '')} \u00b7 {done}/{len(tasks)} done", width)]
+    active = v.get("active", False)
+    if not active:
+        lines.append(clip("no active plan", width))
+    for t in tasks:
+        head = GLYPHS.get(t["status"], "\u00b7") + " "
+        suffix = f" \u2192 {t['owner']} ({t['state']})" if t["status"] == "in_progress" and t.get("owner") else ""
+        room = width - display_width(head) - display_width(suffix)
+        if suffix and room < 1:
+            line, suffix = clip(head + t["subject"] + suffix, width), ""
+        else:
+            line = head + clip(t["subject"], room) if suffix else clip(head + t["subject"], width)
+        if suffix:
+            line += (f" {RED}{suffix[1:]}{RESET}" if t["state"] == "waiting" and color else suffix)
+        if color and not active:
+            line = f"{DIM}{line}{RESET}"
+        lines.append(line)
+    return lines
+
+
+def _snapshot(session, root):
+    return view(session, root, Path.home(), tc_env.state_dir(), paneclass.tmux_runner())
+
+
+def watch(session, root, interval=2.0):
+    prev = None
+    while True:
+        lines = render(_snapshot(session, root), shutil.get_terminal_size((80, 24)).columns, True)
+        if lines != prev:
+            sys.stdout.write("\033[H\033[2J" + "\n".join(lines) + "\n")
+            sys.stdout.flush()
+            prev = lines
+        time.sleep(interval)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="planview")
+    ap.add_argument("cmd", choices=("view", "watch"))
+    ap.add_argument("session")
+    ap.add_argument("root_pos", nargs="?")
+    ap.add_argument("--root")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    root = Path(a.root or a.root_pos or ".")
+    try:
+        if a.cmd == "watch":
+            watch(a.session, root)
+        v = _snapshot(a.session, root)
+        if a.json:
+            print(json.dumps(v, ensure_ascii=False))
+        else:
+            print("\n".join(render(v, shutil.get_terminal_size((80, 24)).columns, sys.stdout.isatty())))
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,3 @@
+#!/usr/bin/env zsh
+# tmux-plan <session> <root> — the dev session's `plan` window: the lead's tasks with owner state, redrawn on change.
+exec python3 -I "${0:A:h:h}/board/planview.py" watch "$@"
