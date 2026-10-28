@@ -80,5 +80,40 @@ class SetupCacheKeyTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.root, lc.STATE_DIR, "setup", old)))
 
 
+class CheckEnvTests(unittest.TestCase):
+    """Checks start from a defined environment: state-redirecting variables of the caller are dropped."""
+
+    AMBIENT = {"TF_DATA_DIR": "/tmp/other-tenant/.terraform", "TF_WORKSPACE": "stage",
+               "TF_CLI_ARGS": "-no-color", "TF_CLI_ARGS_plan": "-lock=false", "HOME_MARKER": "kept"}
+
+    def build(self, cfg=None, extra=None):
+        with patch.dict(os.environ, self.AMBIENT):
+            return lc.build_env("/repo", cfg or {}, extra)
+
+    def test_caller_terraform_state_vars_are_dropped(self):
+        env = self.build()
+        # Assert on one key at a time: a failing assertNotIn(k, env) prints the whole environment.
+        for k in ("TF_DATA_DIR", "TF_WORKSPACE", "TF_CLI_ARGS", "TF_CLI_ARGS_plan"):
+            self.assertIsNone(env.get(k), k)
+        self.assertEqual("kept", env["HOME_MARKER"])
+        self.assertEqual("/repo", env["CI_PROJECT_DIR"])
+
+    def test_check_env_can_set_a_dropped_var(self):
+        env = self.build(extra={"TF_DATA_DIR": ".terraform-check"})
+        self.assertEqual(".terraform-check", env["TF_DATA_DIR"])
+
+    def test_env_unset_adds_repo_specific_names(self):
+        env = self.build(cfg={"env_unset": ["HOME_MARKER"]})
+        self.assertIsNone(env.get("HOME_MARKER"), "HOME_MARKER")
+
+    def test_real_shell_does_not_see_caller_tf_data_dir(self):
+        # One unpatched run: the env reaches a real bash the way a check's `run` does.
+        import subprocess
+        env = self.build()
+        out = subprocess.run(["bash", "-c", 'echo "${TF_DATA_DIR-unset}"'], env=env,
+                             capture_output=True, text=True).stdout.strip()
+        self.assertEqual("unset", out)
+
+
 if __name__ == "__main__":
     unittest.main()

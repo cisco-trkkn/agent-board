@@ -107,8 +107,19 @@ def ensure_venv(root: str, version: str, name: str = "") -> str:
     return venv
 
 
+# Variables that redirect where a tool keeps its state or which workspace it acts on. Inherited from the
+# caller's shell, they turn a check into a check of that shell (a TF_DATA_DIR from another root makes
+# `terraform validate` load that root's backend). Dropped unless the check's own `env:` sets them.
+UNSET_ENV = ("TF_DATA_DIR", "TF_WORKSPACE", "TF_CLI_ARGS")
+UNSET_ENV_PREFIXES = ("TF_CLI_ARGS_",)
+
+
 def build_env(root: str, cfg: dict, extra: dict | None, chk: dict | None = None) -> dict:
     env = dict(os.environ)
+    drop = set(UNSET_ENV) | {str(k) for k in cfg.get("env_unset") or []}
+    for k in list(env):
+        if k in drop or k.startswith(UNSET_ENV_PREFIXES):
+            del env[k]
     env["CI_PROJECT_DIR"] = root
     if cfg.get("python_venv"):
         chk = chk or {}

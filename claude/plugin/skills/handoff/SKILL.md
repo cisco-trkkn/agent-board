@@ -23,6 +23,9 @@ Save it with the Write tool to `~/.local/state/agent-board/handoffs/YYYY-MM-DD-<
 
 Older handoffs may still be in `~/.claude/handoffs/`; read them from there if the user points to one.
 
+To find "the recent handoff for this project", filter by the `Project:` line first (`grep -lx "Project: <toplevel>"` over both directories), then take the newest match. Never take the newest file across all projects. If nothing matches (older docs have no `Project:` line), list the candidates with their Focus lines and ask.
+
+- **Project**: the doc's first line is `Project: <path>`, where the path is `git rev-parse --show-toplevel` of the main checkout (for a worktree, the repo it belongs to), or the cwd outside git. Every project's handoffs share one directory, so this line is how the next session finds its own.
 - **Focus**: what the next session is for (the arguments, or your best summary).
 - **State of the work**: what is done, in progress and next. Reference the plan, spec, branch, MR and commits by path or URL instead of copying them. If the doc names a merge strategy or branch relationship ("merging into main is a fast-forward"), record the SHAs it was computed against (`git rev-parse <base> <branch>`), so the next lead can re-check it before acting.
 - **Team**: one entry per teammate, built from its checkpoint, so the next lead can respawn it as is. Lead with name, role and model tier, then the checkpoint note: task, files owned, progress, next step, assumptions, risks. Mark teammates without a reply as `no checkpoint` and include their captured output, if any.

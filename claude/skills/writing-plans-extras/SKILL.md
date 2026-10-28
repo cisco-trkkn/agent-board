@@ -105,8 +105,18 @@ For a task that proves a fix by repeating a run N times (a flake count, a stress
 
 Example: 120 loaded runs at about 37 s each were given one 3600 s call; it timed out with no tally and left its load loop running for a day and a half. The retry kept only `tail -1` per iteration, so its two failures, during a sleep, had no output.
 
+## 13. Measurement plans define each shared metric once
+
+For an audit or measurement plan whose tasks compute and report metrics:
+
+- Global Constraints holds a "Metric definitions" block. Each metric that more than one task computes or cites is defined there once (what counts, what is excluded), and every task cites the definition rather than restating it.
+- A report task that draws a verdict from a metric ("confirmed", "refuted", "no effect") states the metric's scope next to the verdict, and an acceptance criterion checks that it does.
+- Where the toolkit writes JSON, a Verify step resolves each figure the report cites to a path in that JSON, so no reviewer has to re-derive figures by hand.
+
+Example: one task counted re-reads with the Read tool only, while another task's read set included Bash reads. The report called re-exploration after handoff "refuted" from the narrow count; the main agent's pre-edit calls were 34 Read against 158 Bash reads. The per-task review logged the caveat as a minor, and only the final review caught that the verdict rested on it.
+
 ## Before you finish
 
-Re-read the plan's tasks: every security gate is stated as an accepted shape with its tried bypasses, every repeat-count task sizes its cap from a timed iteration and records each iteration, every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, every plan-authored guard test names its mutation, every snippet and external-tool value was run once, and the plan ends by invoking subagent-driven-development (or, with context nearly exhausted, a printed prompt), never a question.
+Re-read the plan's tasks: every shared metric is defined once and every verdict states its scope, every security gate is stated as an accepted shape with its tried bypasses, every repeat-count task sizes its cap from a timed iteration and records each iteration, every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, every plan-authored guard test names its mutation, every snippet and external-tool value was run once, and the plan ends by invoking subagent-driven-development (or, with context nearly exhausted, a printed prompt), never a question.
 
 Then check that each task's `**Verify:**` command is byte-identical to its json:metadata `verifyCommand`, or that the Verify line says "see verifyCommand". Two different commands give the executor two acceptance numbers. Mechanical check: extract both per task and diff them.
