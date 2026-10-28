@@ -141,21 +141,35 @@ def _newest_repo_tasks_json(root):
         return None
 
 
-def view(session, root, home, state_dir, tmux):
-    sid = lead_session(session, home, tmux)
-    if not sid:
-        return dict(EMPTY, tasks=[])
-    plan = plan_entry(state_dir, session, sid)
-    name = plan.name[:-3] if plan and plan.name.endswith(".md") else (plan.name if plan else "")
-    tasks = live_tasks(home, sid)
-    if tasks:
-        return {"name": name, "active": True, "tasks": owner_states(session, tasks, tmux)}
+def project_of(session, tmux):
+    """Manifest key: the session group (else the session name) with a trailing -bg dropped; `session` if tmux fails."""
+    try:
+        p = tmux("display", "-p", "-t", f"={session}:", "#{?session_group,#{session_group},#{session_name}}").strip()
+    except ERRORS:
+        p = ""
+    if p.endswith("-bg"):
+        p = p[:-3]
+    return p or session
+
+
+def _idle_view(root, name, tmux, session):
+    """No live list: the plan's own .md.tasks.json, else the newest in the repo; active is False."""
     tj = None
-    if plan:
-        cand = Path(root) / "docs" / "superpowers" / "plans" / f"{plan.name}.tasks.json"
+    if name:
+        cand = Path(root) / "docs" / "superpowers" / "plans" / f"{name}.md.tasks.json"
         tj = cand if cand.is_file() else None
     tj = tj or _newest_repo_tasks_json(root)
     if tj is None:
         return {"name": name, "active": False, "tasks": []}
     fname = tj.name[:-len(".md.tasks.json")] if tj.name.endswith(".md.tasks.json") else tj.name
     return {"name": name or fname, "active": False, "tasks": owner_states(session, file_tasks(tj), tmux)}
+
+
+def view(session, root, home, state_dir, tmux):
+    sid = lead_session(session, home, tmux)
+    plan = plan_entry(state_dir, project_of(session, tmux), sid)
+    name = plan.name[:-3] if plan and plan.name.endswith(".md") else (plan.name if plan else "")
+    tasks = live_tasks(home, sid)
+    if tasks:
+        return {"name": name, "active": True, "tasks": owner_states(session, tasks, tmux)}
+    return _idle_view(root, name, tmux, session)

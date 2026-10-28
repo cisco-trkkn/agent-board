@@ -15,10 +15,12 @@ SID1 = "11111111-1111-1111-1111-111111111111"
 SID2 = "22222222-2222-2222-2222-222222222222"
 
 
-def fake_tmux(claude_pane="@80.%82", windows=(("claude", "%82"), ("✦ parse", "%90")), status=None):
+def fake_tmux(claude_pane="@80.%82", windows=(("claude", "%82"), ("✦ parse", "%90")), status=None, group=""):
     status = status or {}
 
     def run(*args, check=False):
+        if args[0] == "display" and "session_group" in args[-1]:
+            return (group or "proj") + "\n"
         if args[0] == "display" and "#{window_id}.#{pane_id}" in args[-1]:
             return claude_pane + "\n"
         if args[0] == "list-windows":
@@ -146,11 +148,39 @@ class TestPlanview(Base):
         (self.repo / "docs/superpowers/plans/2026-01-01-demo.md.tasks.json").write_text("[")
         self.assertEqual(self.view()["tasks"], [])
 
-    def test_tmux_raising_gives_empty_view(self):
+    def test_tmux_raising_falls_back_to_newest_repo_tasks_json(self):
         def boom(*a, **k):
             raise RuntimeError("no tmux")
+        for tmux in (boom, lambda *a, **k: ""):
+            v = self.view(tmux)
+            self.assertEqual((v["name"], v["active"], [t["id"] for t in v["tasks"]]), ("2026-01-01-demo", False, ["1", "2", "3"]))
+            self.assertEqual({t["state"] for t in v["tasks"]}, {""})
+
+    def test_tmux_raising_and_no_repo_gives_empty_view(self):
+        def boom(*a, **k):
+            raise RuntimeError("no tmux")
+        shutil.rmtree(self.repo)
         self.assertEqual(self.view(boom), {"name": "", "active": False, "tasks": []})
-        self.assertEqual(self.view(lambda *a, **k: ""), {"name": "", "active": False, "tasks": []})
+
+    def test_no_matching_lead_falls_back_to_repo_tasks_json(self):
+        v = self.view(fake_tmux(claude_pane="@99.%99"))
+        self.assertEqual((v["name"], v["active"], len(v["tasks"])), ("2026-01-01-demo", False, 3))
+
+    def test_manifest_keyed_by_session_group(self):
+        (self.state / "artifacts-proj.jsonl").unlink()
+        (self.state / "artifacts-grp.jsonl").write_text(json.dumps({"kind": "plan", "session_id": SID1, "ts": 1, "path": "/p/zz-grp.md"}) + "\n")
+        for grp in ("grp", "grp-bg"):
+            self.assertEqual(self.view(fake_tmux(group=grp), session="_web-1")["name"], "zz-grp", grp)
+
+    def test_group_lookup_failure_uses_session_name(self):
+        (self.state / "artifacts-proj.jsonl").write_text(json.dumps({"kind": "plan", "session_id": SID1, "ts": 1, "path": "/p/zz-own.md"}) + "\n")
+        base = fake_tmux()
+
+        def tmux(*args, check=False):
+            if "session_group" in args[-1]:
+                raise RuntimeError("no")
+            return base(*args)
+        self.assertEqual(self.view(tmux)["name"], "zz-own")
 
 
 class TestPaneState(unittest.TestCase):
