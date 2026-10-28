@@ -97,22 +97,28 @@ class SessionRootTest(unittest.TestCase):
     def root(self, tmux, **kw):
         return relay.session_root(tmux, "proj", **kw)
 
-    def test_live_worktree_resolves_to_main_checkout(self):
-        self.assertEqual(self.root(RootTmux({"%5": str(self.wt)})), str(self.repo))
+    def test_session_path_wins_over_pane_path(self):
+        # the lead cd'd into a repo; the project is rooted at the session's start dir
+        tmux = RootTmux({"%5": str(self.repo)}, session_path=str(self.plain))
+        self.assertEqual(self.root(tmux), str(self.plain))
 
-    def test_deleted_worktree_falls_back_to_session_path(self):
+    def test_pane_path_ignored_for_active_window_too(self):
+        tmux = RootTmux({"%5": str(self.wt)}, session_path=str(self.plain), active_path=str(self.repo))
+        self.assertEqual(self.root(tmux), str(self.plain))
+
+    def test_session_path_in_live_worktree_resolves_to_main_checkout(self):
+        self.assertEqual(self.root(RootTmux({}, session_path=str(self.wt))), str(self.repo))
+
+    def test_deleted_worktree_session_path_falls_back_to_home(self):
         git(self.repo, "worktree", "remove", "--force", str(self.wt))
-        self.assertEqual(self.root(RootTmux({"%5": str(self.wt)}, session_path=str(self.repo))), str(self.repo))
+        with mock.patch.dict(os.environ, {"HOME": str(self.plain)}):
+            self.assertEqual(self.root(RootTmux({"%5": str(self.repo)}, session_path=str(self.wt))), str(self.plain))
 
-    def test_empty_pane_path_uses_session_path(self):
-        self.assertEqual(self.root(RootTmux({"%5": ""}, session_path=str(self.repo / ".claude"))), str(self.repo))
+    def test_session_subdir_resolves_to_main_checkout(self):
+        self.assertEqual(self.root(RootTmux({}, session_path=str(self.repo / ".claude"))), str(self.repo))
 
-    def test_non_git_dir_is_returned_as_is(self):
-        self.assertEqual(self.root(RootTmux({"%5": str(self.plain)})), str(self.plain))
-
-    def test_uses_claude_pane_not_active_window(self):
-        tmux = RootTmux({"%5": str(self.wt)}, active_path=str(self.plain))
-        self.assertEqual(self.root(tmux), str(self.repo))
+    def test_non_git_session_path_is_returned_as_is(self):
+        self.assertEqual(self.root(RootTmux({}, session_path=str(self.plain))), str(self.plain))
 
     def test_nothing_usable_falls_back_to_home(self):
         with mock.patch.dict(os.environ, {"HOME": str(self.plain)}):

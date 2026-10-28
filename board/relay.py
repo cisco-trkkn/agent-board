@@ -63,16 +63,11 @@ def main_checkout(d):
 def session_root(tmux, sess, pane=None):
     """Where the new lead starts: the project's main checkout, never a worktree (auto-cleanup may remove it).
 
-    Candidates in order: the claude pane's current path, the session's start path, $HOME. A path that is
-    empty or no longer a directory (a removed worktree) is skipped.
+    Candidates in order: the session's start path (the project root), $HOME. The claude pane's current path
+    is not used: Claude Code follows the lead's cd, so it is wherever the lead last went, not the project root.
+    A path that is empty or no longer a directory (a removed worktree) is skipped. pane is kept for callers.
     """
-    if pane is None:
-        pane = claude_pane(tmux, sess)
-    cands = []
-    if pane:
-        cands.append(tmux("display", "-p", "-t", pane, "#{pane_current_path}").strip())
-    cands.append(tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip())
-    cands.append(os.environ.get("HOME", ""))
+    cands = [tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip(), os.environ.get("HOME", "")]
     for d in cands:
         if d and os.path.isdir(d):
             return main_checkout(d)
