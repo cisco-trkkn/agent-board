@@ -40,7 +40,7 @@
 - Modify: `claude/plugin/.claude-plugin/plugin.json` (`description` names the new hook)
 
 **Acceptance Criteria:**
-- [ ] `zsh tools/tests/test_plan_handoff_guard.zsh` prints `ALL PASS` (9 checks).
+- [ ] `zsh tools/tests/test_plan_handoff_guard.zsh` prints `ALL PASS` (9 checks; 11 after the final-review fix wave, 85b11b7).
 - [ ] With the header check removed from the hook, the check "header Execution with other text denied" fails; with the text regex removed, "handoff text under another header denied" fails (the RED run reports both).
 - [ ] `zsh tools/tests/test_plugin.zsh` prints `ALL PASS` with the new hooks.json entry.
 - [ ] `hooks.json` registers `"${CLAUDE_PLUGIN_ROOT}/scripts/plan-handoff-guard.sh" --scoped` under `PreToolUse` with matcher `AskUserQuestion`.
@@ -150,7 +150,7 @@ git commit -m "feat(plugin): plan-handoff-guard refuses the execution-choice que
 End the message with the attribution trailer your harness specifies.
 
 ```json:metadata
-{"files": ["claude/plugin/scripts/plan-handoff-guard.sh", "tools/tests/test_plan_handoff_guard.zsh", "claude/plugin/hooks/hooks.json", "claude/plugin/.claude-plugin/plugin.json"], "verifyCommand": "zsh tools/tests/test_plan_handoff_guard.zsh && zsh tools/tests/test_plugin.zsh", "acceptanceCriteria": ["test_plan_handoff_guard.zsh prints ALL PASS (9 checks)", "header and text mutations each fail their named check", "test_plugin.zsh prints ALL PASS", "hooks.json registers plan-handoff-guard.sh --scoped under PreToolUse matcher AskUserQuestion"], "modelTier": "mechanical"}
+{"files": ["claude/plugin/scripts/plan-handoff-guard.sh", "tools/tests/test_plan_handoff_guard.zsh", "claude/plugin/hooks/hooks.json", "claude/plugin/.claude-plugin/plugin.json"], "verifyCommand": "zsh tools/tests/test_plan_handoff_guard.zsh && zsh tools/tests/test_plugin.zsh", "acceptanceCriteria": ["test_plan_handoff_guard.zsh prints ALL PASS (9 checks; 11 after the final-review fix wave)", "header and text mutations each fail their named check", "test_plugin.zsh prints ALL PASS", "hooks.json registers plan-handoff-guard.sh --scoped under PreToolUse matcher AskUserQuestion"], "modelTier": "mechanical"}
 ```
 
 ---
