@@ -2,7 +2,7 @@
 
 The tmux `dev` orchestration toolkit and the Agent Board web UI, for running teams of Claude Code agents per project.
 
-- **`agent-board dev <repo>`** opens a tmux session for a project: a `claude` window running the lead (an orchestrator that splits work across an agent team by default) and your own `shell`. The agents' `tests`/`shell` windows live in a hidden `<project>-bg` session.
+- **`agent-board dev <repo>`** opens a tmux session for a project: a `claude` window running the lead (an orchestrator that splits work across an agent team by default) and nothing else (`prefix S` opens a throwaway shell popup). The agents' `tests`/`shell` windows live in a hidden `<project>-bg` session.
 - **`tmux-ctl`** lets agents run tests in those windows safely (locking, busy-window lanes, output capture, run records), start worker Claudes in their own git worktrees, and talk to them.
 - **The Agent Board** (`agent-board dash`) is a localhost web UI with every project, agent status ("Needs you"), live terminals, API-equivalent cost and usage alerts per project, test runs, plans and specs (with inline edit and comments to the lead), ideas, and worktrees.
 - **Claude rules and a session plugin** make the lead orchestrate and workers act alone, mirror agent commands to the board, register artifacts, and block `pkill` patterns that would kill Claude itself.

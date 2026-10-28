@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
-# tmux-dev-layout <session> <root> — idempotently shape a dev session. The user keeps `claude` and a plain
-# `shell`; the agents' tests/shell windows live in the hidden session <project>-bg (see tmux-ctl ensure_bg).
-# Migrates old layouts: moves an idle `tests` window to -bg, closes feed/watch panes, drops status labels.
+# tmux-dev-layout <session> <root> — idempotently shape a dev session. The user keeps only `claude` (a throwaway shell is
+# prefix S); the agents' tests/shell windows live in the hidden session <project>-bg (see tmux-ctl ensure_bg).
+# Migrates old layouts: removes an idle user `shell`, moves an idle `tests` window to -bg, closes feed/watch panes, drops status labels.
 # Optional .dev/windows lines `tests: <cmd>` / `shell: <cmd>` run as a watch pane in the -bg window.
 emulate -L zsh
 source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
@@ -45,7 +45,13 @@ if has_win "$sess" tests; then
     print -u2 "tmux-dev-layout: '${sess}:tests' is busy; left in place (run again when it is idle)"
   fi
 fi
-has_win "$sess" shell || t new-window -d -t "=${sess}:" -n shell -c "$root"
+if has_win "$sess" shell; then   # the user's old shell window; never the -bg one
+  if [[ "$(t display -p -t "=${sess}:shell" '#{pane_current_command}')" == ${~TC_SHELLS} ]]; then
+    t kill-window -t "=${sess}:shell"
+  else
+    print -u2 "tmux-dev-layout: '${sess}:shell' is busy; left in place (run again when it is idle)"
+  fi
+fi
 
 # optional watch commands, in the -bg windows
 if [[ -r "$root/.dev/windows" ]]; then

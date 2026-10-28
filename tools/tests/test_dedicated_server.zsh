@@ -77,7 +77,7 @@ check "nesting: prints the attach command"    grep -qF "tmux -L $B_SOCK attach -
 check "dev: session on the agent-board server" B has-session -t '=proj'
 check "dev: nothing created on the user's server" sh -c "! $TT_BIN -L $A_SOCK has-session -t '=proj' 2>/dev/null"
 check "dev: layout ran on B too (proj-bg)"    B has-session -t '=proj-bg'
-check "dev: windows"                          test "$(B list-windows -t '=proj' -F '#{window_name}' | sort | tr '\n' ' ')" = "claude shell "
+check "dev: windows"                          test "$(B list-windows -t '=proj' -F '#{window_name}' | sort | tr '\n' ' ')" = "claude "
 out="$(devx "$TT_DIR/proj" 2>&1)"
 check "nesting: second dev reattaches (hint again, no error)" grep -qF "attach -t proj" <<< "$out"
 check "dev: DEV_NO_ATTACH still prints ready" sh -c "DEV_NO_ATTACH=1 HOME='$SH' TC_TMUX='$TT_BIN' TC_LAYOUT='$R/bin/tmux-dev-layout' '$DEV' '$TT_DIR/proj' | grep -q ready"
@@ -141,7 +141,7 @@ tt_wait 5 sh -c "$TT_BIN -L $A_SOCK display -p -t '=tt:shell' '#{pane_current_co
 # --- nesting: dev from a pane on B switches the client (a client attaches to B from a pane on A, as the printed command does)
 A send-keys -t '=tt:shell' "env -u TMUX -u TMUX_PANE $TT_BIN -L $B_SOCK attach -t proj" Enter
 check "attach from inside A's pane works"     tt_wait 10 sh -c "test -n \"\$($TT_BIN -L $B_SOCK list-clients -F '#{client_session}')\""
-B send-keys -t '=proj:shell' "TC_TMUX=$TT_BIN TC_LAYOUT=$R/bin/tmux-dev-layout DEV_CLAUDE_CMD=true $DEV $TT_DIR/proj2 > $TT_DIR/dev2.out 2>&1; echo DEVRC=\$? >> $TT_DIR/dev2.out" Enter
+B send-keys -t '=proj:claude' "TC_TMUX=$TT_BIN TC_LAYOUT=$R/bin/tmux-dev-layout DEV_CLAUDE_CMD=true $DEV $TT_DIR/proj2 > $TT_DIR/dev2.out 2>&1; echo DEVRC=\$? >> $TT_DIR/dev2.out" Enter
 check "same server: dev finished"             tt_wait 20 grep -q 'DEVRC=' "$TT_DIR/dev2.out"
 check "same server: exit 0"                   grep -qx 'DEVRC=0' "$TT_DIR/dev2.out"
 check "same server: no attach hint"           sh -c "! grep -q 'attach -t' '$TT_DIR/dev2.out'"
@@ -150,7 +150,7 @@ B detach-client 2>/dev/null
 
 # --- unmigrated install, Ctrl-a D shape: ~/.tmux.conf still binds `DEV_CLIENT=… dev` on the user's server (A), and no
 # agent-board server exists for that install. dev must open the project on A and switch that client, not print the hint.
-B send-keys -t '=proj:shell' "env -u TMUX -u TMUX_PANE $TT_BIN -L $A_SOCK attach -t tt" Enter   # a client on A, as the user would have
+B send-keys -t '=proj:claude' "env -u TMUX -u TMUX_PANE $TT_BIN -L $A_SOCK attach -t tt" Enter   # a client on A, as the user would have
 check "legacy: a client is attached to A"     tt_wait 10 sh -c "test -n \"\$($TT_BIN -L $A_SOCK list-clients -F '#{client_name}')\""
 cl="$(A list-clients -F '#{client_name}' | head -1)"
 out="$(HOME="$LH" AGENT_BOARD_TMUX_SOCKET="$NEVER" DEV_CLIENT="$cl" TC_TMUX="$TT_BIN" TC_LAYOUT="$R/bin/tmux-dev-layout" DEV_CLAUDE_CMD=true "$DEV" "$TT_DIR/lg" 2>&1)"; rc=$?
