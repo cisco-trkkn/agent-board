@@ -63,13 +63,15 @@ directory, `~/.claude/tasks/session-<first 8 chars of session_id>/`, which the w
 reads (its condition 4):
 
 - `stop-wait-guard.sh`: no `*.json` there contains `"status": "in_progress"`.
-- `stop-revalidate-user-gates.sh`: no `*.json` there matches `userGate`, `user-gate` or
-  `USER-ORDERED GATE` (case-insensitive).
+- `stop-revalidate-user-gates.sh`: no transcript line holding a `TaskCreate` or `TaskUpdate`
+  tool_use matches `userGate`, `user-gate` or `USER-ORDERED GATE` (case-insensitive). This guard
+  rebuilds tasks from the transcript, and Claude Code empties the task directory (Task 2 review:
+  4 of the 9 sessions with a gate TaskCreate had an empty one), so the task directory is not its marker.
 
 A transcript-text marker was rejected: probe 2026-10-28, 199 of the 200 most recent transcripts
 contain both `executing-plans` and `user-gate`, because the skill listing carries them.
 
-Otherwise the buffered stdin is piped to the real script unchanged. Missing `session_id`: pass
+Otherwise the buffered stdin is piped to the real script unchanged. Missing `session_id` or transcript: pass
 through to the real script (it fails open itself). `post-task-complete-revalidate.sh` is not
 short-circuited. The plugin's own disable variables keep working.
 
