@@ -1,8 +1,10 @@
 # Plan and review companions
 
 - Whenever `superpowers-extended-cc:writing-plans` runs, also load `writing-plans-extras`
-  (step granularity by modelTier, audit tasks, autonomous handoff, real-state e2e,
+  (step granularity by modelTier, audit tasks, never-ask execution handoff, real-state e2e,
   copy-X differences, event-consumer delivery semantics, Verify = verifyCommand).
+- Whenever `superpowers-extended-cc:subagent-driven-development` runs, also load
+  `subagent-driven-development-extras` (green before review, small-fix re-review tier, batched mechanical review).
 - Whenever `superpowers-extended-cc:requesting-code-review` runs, also load
   `requesting-code-review-extras` (fixture origin, artefact-under-test, user-experienced checks,
   uncapped evidence for all/none claims).
