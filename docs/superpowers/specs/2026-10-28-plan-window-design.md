@@ -25,12 +25,15 @@ Rejected: a client of a new board endpoint (blank whenever the board is not runn
   `TC_SHELLS`) is killed and `plan` created; a busy one is left in place with a stderr note, as the old
   `tests` migration does. A session with `plan` already is left alone (idempotent).
 - `config/tmux.conf` binds `` ` `` to
-  `display-popup -E -w 80% -h 80% -d "#{pane_current_path}" -T " shell " zsh`. `install.sh`'s uninstall
-  hint unbinds it beside `W`, `f` and `D`; `tools/tests/fixtures/expected-migrate-plan.txt` follows.
+  `display-popup -E -w 80% -h 80% -d "#{pane_current_path}" -T " shell " zsh` (probed on tmux 3.8:
+  `list-keys -T prefix` shows it). It lives only in `config/tmux.conf`, never in a user's `~/.tmux.conf`, so
+  `install.sh --migrate` and its fixture do not change.
 - `claude/orchestrator.md` (the windows table, the "Never type into the user's `shell` window" lines) and
   the tmux-orchestrator skill copies describe `plan` and the popup. The agents' `<project>-bg` `shell`
   window is unchanged.
-- The board shows `plan` like any program pane; no board change is required.
+- The board shows `plan` like any program pane; only the new-session help text (`board/index.html`) changes.
+- `claude/plugin/scripts/worktree-sweep.sh` detects a dev session by its `-bg` session or a `shell` window;
+  the `-bg` check still holds, so it does not change.
 
 ## 2. Data — `board/planview.py`
 
@@ -53,10 +56,11 @@ real HOME.
 - **Blocked** is derived: `pending` with any `blockedBy` id not `completed`.
 - Missing or unreadable files at any step yield an empty or partial view, never an exception.
 
-**Open point, settled by the plan's first task (a probe):** whether completed tasks stay in the
-`session-<id8>` directory for the session's life. This session's directory was empty after it had used
-task tools. If they do not persist, the `.tasks.json` fallback carries the done rows and the live list
-adds in-progress and owner data on top, joined by subject.
+**Task persistence (probed 2026-10-28).** Completed tasks stay in `session-<id8>/` while any task of the
+list is still open (a real dir held 9 completed + 3 pending). Claude Code clears the whole list once every
+task is completed (a lone task's file vanished seconds after completion). So the live list carries the done
+rows while a plan runs, and the `.tasks.json` fallback gives the dimmed last-plan view after it ends.
+`owner` holds the teammate name (`"owner": "parse"` ↔ window `✦ parse`).
 
 ## 3. Rendering — `bin/tmux-plan`
 
