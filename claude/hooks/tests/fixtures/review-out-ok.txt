@@ -1,0 +1,13 @@
+
+To install: `bash ~/.task-observer/skill-updates/2026-10-28/install-2026-10-28.sh`, then the same with `--apply`, then commit in `~/agent-board`. I rehearsed it in a scratch home directory: it applied cleanly and all 68 tests passed. Running it a second time changed nothing, it refused a file that had changed since staging, and it wrote nothing outside the scratch directory.
+
+**#95, a leak in my own run:** the first run of a new #94 test was meant to fail, and its failure message printed the whole environment, including a session token. That went into this session's tool output only, not into any file. I fixed the test and logged it as #95. The rule against it is part of this round.
+
+**Partly done:** parts of #89, #92 and #93 couldn't be applied here, so I logged them as follow-up entries #96–#98. #96 waits on #70.
+
+The log now has 21 open and 2 parked observations. 4 bundles staged, 4 bundles presented (listed above; there is no file-presentation tool here).
+
+**Next steps:**
+1. Install the 2026-10-28 round.
+2. Decide how rules for plugin skills (superpowers-extended-cc) should be added locally. This has gone four reviews without an answer and is now blocking #97 and #98.
+3. Decide #70: which copy of tmux-orchestrator and handoff is the real one. That unblocks #83 and #96.
