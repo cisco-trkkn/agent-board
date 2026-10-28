@@ -259,7 +259,7 @@ class TestCli(unittest.TestCase):
         import time
         with tempfile.TemporaryDirectory() as tmp:
             env = {"PATH": os.environ["PATH"], "HOME": tmp, "TC_STATE": tmp, "TC_TMUX": "/nonexistent"}
-            p = subprocess.Popen([sys.executable, "-I", str(HERE / "planview.py"), "watch", "nosuch", tmp],
+            p = subprocess.Popen([sys.executable, "-I", str(HERE / "planview.py"), "watch", "nosuch", "--root", tmp],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             time.sleep(1.5)
             p.send_signal(signal.SIGINT)
@@ -285,7 +285,7 @@ class TestCli(unittest.TestCase):
     def test_tmux_plan_script_execs_watch(self):
         f = HERE.parent / "bin" / "tmux-plan"
         self.assertTrue(os.access(f, os.X_OK))
-        self.assertIn('exec python3 -I "${0:A:h:h}/board/planview.py" watch "$@"', f.read_text())
+        self.assertIn('exec python3 -I "${0:A:h:h}/board/planview.py" watch "$1" --root "$2"', f.read_text())
 
 
 class TestPaneState(unittest.TestCase):
