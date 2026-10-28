@@ -60,12 +60,12 @@ def main_checkout(d):
     return str(Path(common).parent)
 
 
-def session_root(tmux, sess, pane=None):
+def session_root(tmux, sess):
     """Where the new lead starts: the project's main checkout, never a worktree (auto-cleanup may remove it).
 
     Candidates in order: the session's start path (the project root), $HOME. The claude pane's current path
     is not used: Claude Code follows the lead's cd, so it is wherever the lead last went, not the project root.
-    A path that is empty or no longer a directory (a removed worktree) is skipped. pane is kept for callers.
+    A path that is empty or no longer a directory (a removed worktree) is skipped.
     """
     cands = [tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip(), os.environ.get("HOME", "")]
     for d in cands:
@@ -94,7 +94,7 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", **wait):
         raise RuntimeError(f"no claude window in {sess}")
     if not wait_turn_end(tmux, pane, **wait):
         raise RuntimeError("the lead is still busy after the wait; not switching. Run tmux-ctl relay again when it is idle")
-    respawn(tmux, pane, session_root(tmux, sess, pane), prompt_for(doc))
+    respawn(tmux, pane, session_root(tmux, sess), prompt_for(doc))
     Path(state_dir).mkdir(parents=True, exist_ok=True)
     with open(Path(state_dir) / f"lineage-{sess}.jsonl", "a") as f:
         f.write(json.dumps({"ts": time.time(), "old_session_id": old_session_id, "doc": str(doc), "pane": pane}) + "\n")
