@@ -218,6 +218,22 @@ class TestRender(unittest.TestCase):
         for line in planview.render(ACTIVE, 8, False):
             self.assertLessEqual(planview.display_width(line), 8, line)
 
+    def test_width_30_cuts_subject_before_owner_suffix(self):
+        v = {"name": "d", "active": True, "tasks": [T(1, "y" * 50, "in_progress", "parse", "waiting")]}
+        line = planview.render(v, 30, False)[1]
+        self.assertTrue(line.endswith(" \u2192 parse (waiting)"), line)
+        self.assertLessEqual(len(line), 30)
+        self.assertIn("\u2026", line)
+        red = planview.render(v, 30, True)[1]
+        self.assertIn("\033[1;31m\u2192 parse (waiting)\033[0m", red)
+
+    def test_width_30_cuts_name_before_header_counts(self):
+        v = {"name": "n" * 40, "active": True, "tasks": [T(1, "a", "completed"), T(2, "b", "pending")]}
+        head = planview.render(v, 30, False)[0]
+        self.assertTrue(head.endswith(" \u00b7 1/2 done"), head)
+        self.assertLessEqual(len(head), 30)
+        self.assertIn("\u2026", head)
+
     def test_inactive_view(self):
         v = dict(ACTIVE, active=False)
         lines = planview.render(v, 40, False)
@@ -282,10 +298,26 @@ class TestCli(unittest.TestCase):
             planview.watch("s", Path("."))
         self.assertEqual(out.getvalue().count("\033[H\033[2J"), 2)
 
-    def test_tmux_plan_script_execs_watch(self):
+    def test_tmux_plan_script_runs_watch(self):
         f = HERE.parent / "bin" / "tmux-plan"
         self.assertTrue(os.access(f, os.X_OK))
         self.assertIn('exec python3 -I "${0:A:h:h}/board/planview.py" watch "$1" --root "$2"', f.read_text())
+        import signal
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"PATH": os.environ["PATH"], "HOME": tmp, "TC_STATE": tmp, "TC_TMUX": "/nonexistent"}
+            p = subprocess.Popen([str(f), "nosuch", tmp], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            time.sleep(2)
+            p.send_signal(signal.SIGINT)
+            out, err = p.communicate(timeout=10)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertIn("no plans yet \u00b7 prefix S for a shell", out)
+
+    def test_positional_root_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = subprocess.run([sys.executable, "-I", str(HERE / "planview.py"), "view", "nosuch", tmp],
+                               capture_output=True, text=True, timeout=20)
+        self.assertNotEqual(r.returncode, 0)
 
 
 class TestPaneState(unittest.TestCase):

@@ -207,7 +207,9 @@ def render(v, width, color):
     if not v.get("name") and not tasks:
         return [clip(NO_PLANS, width)]
     done = sum(1 for t in tasks if t["status"] == "completed")
-    lines = [clip(f"{v.get('name', '')} \u00b7 {done}/{len(tasks)} done", width)]
+    tail = f" \u00b7 {done}/{len(tasks)} done"
+    name = v.get("name", "")
+    lines = [clip(name, width - display_width(tail)) + tail if width > display_width(tail) else clip(name + tail, width)]
     active = v.get("active", False)
     if not active:
         lines.append(clip("no active plan", width))
@@ -215,7 +217,7 @@ def render(v, width, color):
         head = GLYPHS.get(t["status"], "\u00b7") + " "
         suffix = f" \u2192 {t['owner']} ({t['state']})" if t["status"] == "in_progress" and t.get("owner") else ""
         room = width - display_width(head) - display_width(suffix)
-        if suffix and room < 1:
+        if suffix and room < 0:
             line, suffix = clip(head + t["subject"] + suffix, width), ""
         else:
             line = head + clip(t["subject"], room) if suffix else clip(head + t["subject"], width)
@@ -246,11 +248,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="planview")
     ap.add_argument("cmd", choices=("view", "watch"))
     ap.add_argument("session")
-    ap.add_argument("root_pos", nargs="?")
     ap.add_argument("--root")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
-    root = Path(a.root or a.root_pos or ".")
+    root = Path(a.root or ".")
     try:
         if a.cmd == "watch":
             watch(a.session, root)
