@@ -12,7 +12,7 @@ Nothing here is a daemon except the board. All coordination goes through **tmux*
 flowchart LR
   subgraph tmux["tmux server -L agent-board"]
     direction TB
-    P["session &lt;project&gt;<br/>claude (lead)<br/>✦ teammate windows<br/>worker windows"]
+    P["session &lt;project&gt;<br/>claude (lead)<br/>plan (tasks)<br/>✦ teammate windows<br/>worker windows"]
     BG["hidden session &lt;project&gt;-bg<br/>tests · shell · lanes"]
     W["_web-NNN<br/>(grouped views, one per browser terminal)"]
   end
@@ -46,7 +46,7 @@ flowchart LR
 | **Lead / orchestrator** | The Claude in the project's `claude` window, started by `claude-orchestrator` with `claude/orchestrator.md` appended to its system prompt. |
 | **Teammate** | A Claude Code agent-team member spawned by the lead. Claude Code opens it as a split pane; the `after-split-window` hook moves it into its own window `✦ <name>`. |
 | **Worker** | An independent Claude started by `tmux-ctl agent <name> "<task>"`, in its own window and its own git worktree (`.claude/worktrees/<name>`, branch `worktree-<name>`), with `claude/worker.md` appended. |
-| **-bg session** | A hidden session `<project>-bg` holding the agents' `tests` and `shell` windows, so agents' commands stay out of the user's session; the user's session has only `claude` (plus `✦` windows), and `prefix S` opens a throwaway shell popup. Tagged with the session option `@tc_bg=1`. |
+| **-bg session** | A hidden session `<project>-bg` holding the agents' `tests` and `shell` windows, so agents' commands stay out of the user's session; the user's session has `claude` and `plan` (plus `✦` windows), and `prefix S` opens a throwaway shell popup. Tagged with the session option `@tc_bg=1`. |
 | **Lane** | A per-caller window `tests·<agent>` created when `tests` is busy. Idle lanes are closed after 15 minutes. |
 | **Artifact** | A document worth showing on the board: plan, spec, handoff, report, published claude.ai artifact, or anything registered by hand. |
 | **Epoch** | How many handoff relays this project has had (lines in `lineage-<project>.jsonl`). The board groups artifacts by epoch. |
@@ -64,8 +64,8 @@ flowchart LR
 
 ## Lifecycle of a project session
 
-1. **`dev [dir]`** resolves the git top level (a non-repo folder under a home-directory repo stays itself), derives the session name and, if no session exists, creates it with window `claude` running `${DEV_CLAUDE_CMD:-<clone>/bin/claude-orchestrator}` (the absolute path, so it needs nothing on `PATH`); there is no `shell` window, `prefix S` opens a throwaway one. It then runs `tmux-dev-layout` and attaches (or `switch-client` when already inside tmux; `DEV_NO_ATTACH=1` only creates, which the board uses).
-2. **`tmux-dev-layout <session> <root>`** is idempotent. It migrates old layouts (moves an idle `tests` window into `-bg`, removes an idle user `shell` window (a busy one stays, with a note), kills feed/watch panes, drops labels), creates `<project>-bg` atomically (`new-session` is the lock; latecomers wait for `@tc_bg`), and adds optional watch panes from `<root>/.dev/windows`.
+1. **`dev [dir]`** resolves the git top level (a non-repo folder under a home-directory repo stays itself), derives the session name and, if no session exists, creates it with window `claude` running `${DEV_CLAUDE_CMD:-<clone>/bin/claude-orchestrator}` (the absolute path, so it needs nothing on `PATH`) and window `plan` running `bin/tmux-plan`; there is no `shell` window, `prefix S` opens a throwaway one. It then runs `tmux-dev-layout` and attaches (or `switch-client` when already inside tmux; `DEV_NO_ATTACH=1` only creates, which the board uses).
+2. **`tmux-dev-layout <session> <root>`** is idempotent. It migrates old layouts (moves an idle `tests` window into `-bg`, removes an idle user `shell` window (a busy one stays, with a note), creates `plan` when missing, kills feed/watch panes, drops labels), creates `<project>-bg` atomically (`new-session` is the lock; latecomers wait for `@tc_bg`), and adds optional watch panes from `<root>/.dev/windows`.
 3. **`claude-orchestrator`** puts the clone's `bin/` first on `PATH`, exports `AGENT_BOARD_REPO`, and runs `claude --name orchestrator --model opus --settings <clone>/claude/session-settings.json --plugin-dir <clone>/claude/plugin --append-system-prompt-file <rules> "$@"`, where `<rules>` is `~/.config/agent-board/orchestrator.md` if it exists, else `<clone>/claude/orchestrator.md`. Passing your own `--name` or `--model` overrides the defaults. Inside tmux it also records `AGENT_BOARD_REPO` and `PATH` on the tmux session with `set-environment`, so windows and teammates started from the session find the clone's commands. Side effect: every window opened in that session afterwards has the clone's `bin/` first on its `PATH`.
 4. The lead splits work into teammates or workers (see below). The user watches in tmux or on the board.
 5. **Closing** the session (board "Close project", or `tmux kill-session`) fires the `session-closed` hook. `tmux-session-closed` checks that no session or grouped view of that name is left, then deletes that project's state files. It never touches the ideas files, and it never runs for `_web-*` or `*-bg` names.

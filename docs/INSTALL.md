@@ -93,7 +93,7 @@ zsh tools/tests/run-all.zsh                                  # tmux-ctl, dev lay
 All three are safe next to live sessions. The zsh tests start their own tmux server on a private socket with `-f /dev/null` and a temporary state directory.
 
 ```zsh
-agent-board dev ~/some/git/repo    # session "repo": window claude (the lead), on tmux -L agent-board
+agent-board dev ~/some/git/repo    # session "repo": windows claude (the lead) and plan, on tmux -L agent-board
 agent-board dash                   # starts the board, opens http://127.0.0.1:7700/<token>/
 ```
 
