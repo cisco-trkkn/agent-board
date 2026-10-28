@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Hand this session to a fresh orchestrator: checkpoint the team, write a handoff doc, ask, then relay in place.
+description: "Hand this session to a fresh orchestrator: checkpoint the team, write a handoff doc, ask, then relay in place."
 argument-hint: "What will the next session be used for?"
 disable-model-invocation: true
 ---
