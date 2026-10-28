@@ -10,6 +10,7 @@ The board can edit, drop/restore and move ideas; a move appends to the target an
 
   ideas.py add --project P [--detail D] -- TEXT
   ideas.py list --project P
+  ideas.py sync --project P [--dry-run]
 """
 import argparse
 import fcntl
@@ -206,6 +207,22 @@ def open_count(project):
     return sum(1 for i in load(project) if i["status"] == "open")
 
 
+def _sync(project, dry_run):
+    """Push the project's ideas to GitLab. 0 ok or unmapped, 1 a push failed, 2 bad config."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))   # python3 -I implies -P
+    import gitlab_sync   # lazy: gitlab_sync imports this module
+    try:
+        r = gitlab_sync.sync(project, dry_run=dry_run)
+    except gitlab_sync.ConfigError as e:
+        print(f"ideas: gitlab config: {e}", file=sys.stderr)
+        return 2
+    for line in r["actions"]:
+        print(line)
+    if r["error"]:
+        print(f"ideas: {r['error']}", file=sys.stderr)
+    return 0 if r["ok"] else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="per-project ideas inbox")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -215,7 +232,12 @@ def main(argv=None):
     a.add_argument("text", nargs="+")
     ls = sub.add_parser("list")
     ls.add_argument("--project", required=True)
+    sy = sub.add_parser("sync")
+    sy.add_argument("--project", required=True)
+    sy.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if args.cmd == "sync":
+        return _sync(args.project, args.dry_run)
     try:
         if args.cmd == "add":
             print(f"noted for later: {add(args.project, ' '.join(args.text), args.detail)}")
