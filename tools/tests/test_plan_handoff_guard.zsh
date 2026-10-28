@@ -21,7 +21,11 @@ check "deny reason says not to ask in any form"           zsh -c '[[ $1 == *"Do 
 echo 'not json' | "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?
 check "malformed json: silent exit 0"                     test $rc -eq 0 -a ! -s "$tmp/o" -a ! -s "$tmp/e"
 payload Execution "$HANDOFF" | PLAN_HANDOFF_GUARD=0 "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?
-check "PLAN_HANDOFF_GUARD=0 lets the handoff through"     test $rc -eq 0 -a ! -s "$tmp/e"
+check "PLAN_HANDOFF_GUARD=0 lets the handoff through"     test $rc -eq 0 -a ! -s "$tmp/o" -a ! -s "$tmp/e"
+print -r -- '{"tool_name":"AskUserQuestion"}' | "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?
+check "AskUserQuestion with no tool_input: silent exit 0" test $rc -eq 0 -a ! -s "$tmp/o" -a ! -s "$tmp/e"
+python3 -c 'import json; q=lambda t,h:{"question":t,"header":h,"multiSelect":False,"options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}; print(json.dumps({"tool_name":"AskUserQuestion","tool_input":{"questions":[q("Does this design look right?","Design 1"),q("How would you like to execute it?","Execution")]}}))' | "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?
+check "handoff question second of two is denied"          test $rc -eq 2 -a -s "$tmp/e"
 payload Execution "$HANDOFF" | "$H" --scoped >"$tmp/o" 2>"$tmp/e"; rc=$?
 check "--scoped registration denies the same way"         test $rc -eq 2
 tt_done
