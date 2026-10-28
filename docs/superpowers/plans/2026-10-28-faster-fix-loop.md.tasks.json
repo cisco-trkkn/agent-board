@@ -1,0 +1,15 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-28-faster-fix-loop.md",
+  "tasks": [
+    {
+      "id": 3,
+      "subject": "Task 3: subagent-driven-development-extras skill and orchestrator row",
+      "status": "pending",
+      "description": "**Goal:** `claude/skills/subagent-driven-development-extras/SKILL.md` states the three levers as overrides of the base skill's \"Review the task\" and \"The fix loop\" sections, and the orchestrator's \"Carrying out a plan\" row names it.\n\n**Files:**\n- Create: `claude/skills/subagent-driven-development-extras/SKILL.md`\n- Modify: `claude/orchestrator.md` (workflow table row \"Carrying out a plan\")\n\n**Acceptance Criteria:**\n- [ ] Frontmatter has `name: subagent-driven-development-extras`, and the `description` starts with \"Local additions to superpowers-extended-cc:subagent-driven-development. Use together with subagent-driven-development, every time it runs\".\n- [ ] The body has these H2 headings, in this order: `## 1. Green before review`, `## 2. Small-fix re-review on the task's tier`, `## 3. Batched review for consecutive mechanical tasks`, `## Before you finish`.\n- [ ] Each Global Constraints bullet appears with its numbers and ledger line forms verbatim: `bounced <k>/2`, `≤20 changed lines`, `≤2 files`, `(small, mechanical re-review)`, `5 tasks`, `per task`.\n- [ ] The skill names the routing-gate limit and contains no instruction to set `SUPERPOWERS_ROUTING_GUARD=0` (the only occurrence of that string, if any, says not to set it).\n- [ ] The skill says where it wins over the base skill and that everything else in the base skill stands, in the style of `claude/skills/writing-plans-extras/SKILL.md` (first paragraph).\n- [ ] `orchestrator.md`'s \"Carrying out a plan\" row contains `subagent-driven-development-extras`.\n- [ ] Under 120 lines (the largest existing extras skill is 110).\n\n**Verify:** `f=claude/skills/subagent-driven-development-extras/SKILL.md; grep -c '^## ' $f; grep -cE 'bounced <k>/2|≤20 changed lines|≤2 files|\\(small, mechanical re-review\\)|5 tasks|per task' $f; grep -c 'subagent-driven-development-extras' claude/orchestrator.md; wc -l < $f` → `4`, ≥`6`, `1`, <`120`\n\n```json:metadata\n{\"files\": [\"claude/skills/subagent-driven-development-extras/SKILL.md\", \"claude/orchestrator.md\"], \"verifyCommand\": \"f=claude/skills/subagent-driven-development-extras/SKILL.md; grep -c '^## ' $f; grep -cE 'bounced <k>/2|≤20 changed lines|≤2 files|\\\\(small, mechanical re-review\\\\)|5 tasks|per task' $f; grep -c 'subagent-driven-development-extras' claude/orchestrator.md; wc -l < $f\", \"acceptanceCriteria\": [\"frontmatter name and description as specified\", \"four H2 headings in order\", \"Global Constraints numbers and ledger forms verbatim\", \"routing-gate limit named; no instruction to set SUPERPOWERS_ROUTING_GUARD=0\", \"wins-over-base paragraph in the extras house style\", \"orchestrator row names subagent-driven-development-extras\", \"under 120 lines\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    }
+  ],
+  "lastUpdated": "2026-10-28T16:42:22"
+}

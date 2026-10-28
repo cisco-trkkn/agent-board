@@ -35,17 +35,17 @@ In the workflow table row "Carrying out a plan", state that execution starts wit
 ### 3. Hook `plan-handoff-guard.sh`
 
 - Event: `PreToolUse`, matcher `AskUserQuestion`.
-- Denies when any question in `tool_input.questions` has `header == "Execution"` or `question` matches `(?i)how would you like to execute`. Output: `hookSpecificOutput.permissionDecision = "deny"` with a reason telling the model to invoke `superpowers-extended-cc:subagent-driven-development` now, or to print the Parallel Session kickoff prompt if context is nearly exhausted, and not to re-ask.
+- Denies when any question in `tool_input.questions` has `header == "Execution"` or `question` matches `(?i)how would you like to execute`. Output: exit 2 with a reason on stderr telling the model to invoke `superpowers-extended-cc:subagent-driven-development` now, or to print the Parallel Session kickoff prompt if context is nearly exhausted, and not to re-ask.
 - Passes (exit 0, no output) for every other question.
 - Fails open: unreadable stdin, malformed JSON, or a missing field means exit 0.
 - Kill switch: `PLAN_HANDOFF_GUARD=0` means exit 0.
-- Lives in `claude/hooks/`, follows `kill-guard.sh`'s shape (bash wrapper, `python3 -I`, `--scoped` dedupe), and is registered both ways `kill-guard.sh` is: `claude/plugin/hooks/hooks.json` (scoped, through `claude/plugin/scripts/`) and `claude/settings.json` (global, through `~/.claude/hooks/`).
+- Lives in `claude/plugin/scripts/plan-handoff-guard.sh`, follows `kill-guard.sh`'s shape (bash wrapper, `python3 -I`, exit 2 with the reason on stderr), and is registered in `claude/plugin/hooks/hooks.json` only (revised 2026-10-28 while planning: the repo is moving hooks out of the global `settings.json`, so outside `dev` sessions the text override alone applies).
 
 #### Interaction with the plugin's `pre-askuser-handoff-guard`
 
 superpowers-extended-cc ships its own `PreToolUse(AskUserQuestion)` hook, `hooks/pre-askuser-handoff-guard`. After `writing-plans` (armed by the skill signal plus a TaskCreate), it blocks any `AskUserQuestion` that is not the exact two-option handoff, and its block message quotes the required YAML. It fires only on `AskUserQuestion`, so a session that never asks never meets it. But a model that tries to ask anyway would be caught between two hooks: the plugin demands the handoff YAML and ours denies it. So our deny reason must say explicitly: "do not call AskUserQuestion for the execution choice in any form; invoke the Skill tool with `superpowers-extended-cc:subagent-driven-development` now". The plugin hook is left untouched (not patched, and `SUPERPOWERS_ROUTING_GUARD` is not set), because it also guards model routing.
 
-### 4. Tests: `claude/hooks/tests/test-plan-handoff-guard.sh`
+### 4. Tests: `tools/tests/test_plan_handoff_guard.zsh`
 
 Feed the script real `PreToolUse` JSON on stdin, in the style of the existing tests in that directory. Cases:
 - the handoff question (header `Execution`) is denied, and the reason names `subagent-driven-development`;
