@@ -1,6 +1,6 @@
 ---
 name: "writing-plans-extras"
-description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. It overrides three base rules. Step granularity follows each task's modelTier (frontier tasks get goal, constraints and acceptance criteria instead of code). Audit or discovery tasks are exempt from code in every step. In autonomous sessions the execution handoff is a printed kickoff prompt instead of AskUserQuestion. It also adds plan-content rules. e2e tasks check real, aged state; commit steps name the harness attribution trailer; copy-X steps name the differences; event consumers state delivery semantics; each Verify line matches its verifyCommand; plan-authored tests and snippets are run once by the author and name the mutation that fails them; external-tool values cite a probe; migrations, CI variables and runbooks state their gates and preconditions; security gates state the shape they accept and the bypasses tried; repeat-count runs time one iteration first.
+description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. It overrides three base rules. Step granularity follows each task's modelTier (frontier tasks get goal, constraints and acceptance criteria instead of code). Audit or discovery tasks are exempt from code in every step. The execution handoff never asks: it invokes subagent-driven-development (a printed kickoff prompt only when context is nearly exhausted). It also adds plan-content rules. e2e tasks check real, aged state; commit steps name the harness attribution trailer; copy-X steps name the differences; event consumers state delivery semantics; each Verify line matches its verifyCommand; plan-authored tests and snippets are run once by the author and name the mutation that fails them; external-tool values cite a probe; migrations, CI variables and runbooks state their gates and preconditions; security gates state the shape they accept and the bypasses tried; repeat-count runs time one iteration first.
 ---
 
 # writing-plans extras
@@ -33,9 +33,11 @@ A security review, threat model or inventory cannot have its code written in adv
 - Acceptance Criteria count and cover: "every route in `routes/` appears in the table", "each finding cites file:line".
 - Verify is a command that checks that structure, e.g. `grep -c '^## ' report.md` against the expected number.
 
-## 3. Handoff in autonomous sessions
+## 3. Execution handoff: never ask
 
-When nobody is watching (worker mode, a system prompt that forbids questions, a scheduled run), skip the `AskUserQuestion` in Execution Handoff: it fails there. Print the base skill's Parallel Session kickoff prompt in a fenced block, name the plan path, and end the turn. A line before the fence says which execution skill the prompt invokes.
+Plans run without asking how. When the plan is complete, skip the `AskUserQuestion` in Execution Handoff in every session, watched or not, and invoke the Skill tool with `superpowers-extended-cc:subagent-driven-development`. In a `dev` session the agent-board plugin's `plan-handoff-guard.sh` hook refuses the question anyway; another hook quoting the handoff YAML does not change this.
+
+The one exception is a session nearly out of context: print the base skill's Parallel Session kickoff prompt in a fenced block, name the plan path, and end the turn. A line before the fence says which execution skill the prompt invokes. Still no question.
 
 ## 4. e2e acceptance criteria use real state
 
@@ -105,6 +107,6 @@ Example: 120 loaded runs at about 37 s each were given one 3600 s call; it timed
 
 ## Before you finish
 
-Re-read the plan's tasks: every security gate is stated as an accepted shape with its tried bypasses, every repeat-count task sizes its cap from a timed iteration and records each iteration, every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, every plan-authored guard test names its mutation, every snippet and external-tool value was run once, and an autonomous session ends with a printed prompt, not a question.
+Re-read the plan's tasks: every security gate is stated as an accepted shape with its tried bypasses, every repeat-count task sizes its cap from a timed iteration and records each iteration, every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, every plan-authored guard test names its mutation, every snippet and external-tool value was run once, and the plan ends by invoking subagent-driven-development (or, with context nearly exhausted, a printed prompt), never a question.
 
 Then check that each task's `**Verify:**` command is byte-identical to its json:metadata `verifyCommand`, or that the Verify line says "see verifyCommand". Two different commands give the executor two acceptance numbers. Mechanical check: extract both per task and diff them.
