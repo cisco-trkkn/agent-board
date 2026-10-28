@@ -44,8 +44,16 @@ A handoff's Team section describes how the past session worked; it is not a mode
 
 The user keeps ideas for future work in `~/.local/state/agent-board/ideas/<project>.md` (older: `~/.claude/ideas/<project>.md`; the board's Ideas box, or `tmux-ctl idea`).
 - A user message starting with `idea:` is filed, not acted on: run `tmux-ctl idea "<the rest>"`, reply "noted for later" in one line, and carry on with the current work.
-- Don't read the ideas file while a plan is in progress, and never mention it to teammates.
-- **Next steps round.** When every plan task is complete and `finishing-a-development-branch` has run, read the open ideas (`- [ ]`):
+- Don't read the ideas file while a plan is in progress, except for `regroup` below, and never mention it to teammates.
+- **`regroup`.** A user message whose first word is `regroup` (any case), optionally `regroup: <hint>`, asks to pull an idea forward now.
+  - No plan running: run the Next steps round now, with the group matching the hint first.
+  - A plan running: it keeps running. Say so in one line, don't interrupt teammates, and keep answering their messages between these steps:
+    1. Read the open ideas and group them as in the Next steps round. The group matching the hint goes first, marked as the user's pick.
+    2. Ask with AskUserQuestion, per group: work on next / park / drop.
+    3. Take each "work on next" group through `brainstorming`, one at a time, up to a written spec the user approved. Stop there: no `writing-plans` yet, because a second plan's tasks would mix with the running plan's in the one task list.
+    4. For each approved spec, in the order chosen, create a pending task `Plan & run: <spec path>`, blocked by every open task of the current plan and by the previous `Plan & run:` task.
+    5. Mark ideas as in step 4 of the Next steps round; parked ones stay `- [ ]`.
+- **Next steps round.** When every task of the current plan (not the `Plan & run:` queue) is complete and `finishing-a-development-branch` has run, first take any pending `Plan & run:` tasks in order: `writing-plans` for the spec, execution, `finishing-a-development-branch`, then mark the task completed. Then read the open ideas (`- [ ]`):
   1. Group related ideas and note any that overlap with what was just built.
   2. Ask with AskUserQuestion, per group: brainstorm now / park / drop.
   3. Take each chosen group through `brainstorming`, one at a time.
@@ -67,7 +75,7 @@ The `superpowers-extended-cc:*` skills are how work is done here. Use them witho
 | Every session, first (before the first tool call and before any skill below) | If installed: `task-observer:task-observer`: invoke it and run its Session Start Protocol (workspace probe, scan, review trigger) | you |
 | New feature or behaviour change | `brainstorming`, then `writing-plans` | you, with the user: the one place the user is asked questions |
 | Any other multi-step work (ops runbooks, handoffs, migrations) | `writing-plans` (brainstorming only if the design is open) | you |
-| Carrying out a plan | `subagent-driven-development` (teammates take the plan's tasks) or `dispatching-parallel-agents` for independent pieces | you |
+| Carrying out a plan | `subagent-driven-development`, with `subagent-driven-development-extras` (not a superpowers skill; If installed), started as soon as the plan is written, without asking the user how to execute it (teammates take the plan's tasks), or `dispatching-parallel-agents` for independent pieces | you |
 | Writing or changing code | `test-driven-development` | implementer |
 | Bug, failing test, odd behaviour | `systematic-debugging` before any fix | whoever owns the bug |
 | Review | `requesting-code-review`; acting on findings: `receiving-code-review` | reviewer; implementer |

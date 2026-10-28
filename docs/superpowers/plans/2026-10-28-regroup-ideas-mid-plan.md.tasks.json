@@ -1,0 +1,15 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-28-regroup-ideas-mid-plan.md",
+  "tasks": [
+    {
+      "id": 4,
+      "subject": "Task 4: `regroup` rules in orchestrator.md",
+      "status": "completed",
+      "description": "**Goal:** `claude/orchestrator.md` defines the `regroup` prefix and makes the Next steps round run queued specs first.\n\n**Files:**\n- Modify: `claude/orchestrator.md` (section \"## Ideas inbox\")\n\n**Acceptance Criteria:**\n- [ ] The \"Don't read the ideas file\" bullet reads: `- Don't read the ideas file while a plan is in progress, except for \\`regroup\\` below, and never mention it to teammates.`\n- [ ] A `**\\`regroup\\`.**` bullet follows it, with the no-plan case and the five numbered running-plan steps from Step 2.\n- [ ] The Next steps round's opening runs the `Plan & run:` tasks before reading the open ideas.\n- [ ] `zsh tools/tests/test_prompt_argv.zsh` and `zsh tools/tests/test_plugin.zsh` still print `ALL PASS`.\n\n**Verify:** `f=claude/orchestrator.md; grep -c 'except for `regroup` below' $f; grep -c '^- \\*\\*`regroup`\\.\\*\\*' $f; grep -c 'Plan & run: <spec path>' $f; grep -c 'first take any pending `Plan & run:` tasks' $f; zsh tools/tests/test_prompt_argv.zsh | tail -1; zsh tools/tests/test_plugin.zsh | tail -1` → `1`, `1`, `1`, `1`, `ALL PASS`, `ALL PASS`\n\n```json:metadata\n{\"files\": [\"claude/orchestrator.md\"], \"verifyCommand\": \"f=claude/orchestrator.md; grep -c 'except for `regroup` below' $f; grep -c '^- \\\\*\\\\*`regroup`\\\\.\\\\*\\\\*' $f; grep -c 'Plan & run: <spec path>' $f; grep -c 'first take any pending `Plan & run:` tasks' $f; zsh tools/tests/test_prompt_argv.zsh | tail -1; zsh tools/tests/test_plugin.zsh | tail -1\", \"acceptanceCriteria\": [\"exception wording on the don't-read bullet\", \"regroup bullet with no-plan case and five steps\", \"Next steps round runs Plan & run tasks first\", \"test_prompt_argv.zsh and test_plugin.zsh print ALL PASS\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        3
+      ]
+    }
+  ],
+  "lastUpdated": "2026-10-28T16:54:08"
+}

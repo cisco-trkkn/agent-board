@@ -87,7 +87,7 @@ for f in ("orchestrator.md", "worker.md"):
             if ns == "agent-board" and os.path.exists(os.path.join(p, "skills", name, "SKILL.md")): continue
             if "If installed" in line: continue
             bad.append((f, n, ns + ":" + name))
-        for name in ("task-observer", "gitlab-ci-loop"):
+        for name in ("task-observer", "gitlab-ci-loop", "subagent-driven-development-extras"):
             if "`" + name in line and "If installed" not in line and not re.search(r"(?i)(do not|don't) invoke", line): bad.append((f, n, name))
         if re.search(r"tmux-orchestrator|`/?handoff`", line) and "agent-board:" not in line:
             bad.append((f, n, "unprefixed plugin skill"))
