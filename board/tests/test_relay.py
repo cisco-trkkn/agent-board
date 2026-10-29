@@ -1,10 +1,12 @@
 import io
 import os
 import shlex
+import shutil
 import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -97,26 +99,69 @@ class SessionRootTest(unittest.TestCase):
     def root(self, tmux, **kw):
         return relay.session_root(tmux, "proj", **kw)
 
-    def test_live_worktree_resolves_to_main_checkout(self):
-        self.assertEqual(self.root(RootTmux({"%5": str(self.wt)})), str(self.repo))
+    def test_session_path_wins_over_pane_path(self):
+        # the lead cd'd into a repo; the project is rooted at the session's start dir
+        tmux = RootTmux({"%5": str(self.repo)}, session_path=str(self.plain))
+        self.assertEqual(self.root(tmux), str(self.plain))
 
-    def test_deleted_worktree_falls_back_to_session_path(self):
+    def test_pane_path_ignored_for_active_window_too(self):
+        tmux = RootTmux({"%5": str(self.wt)}, session_path=str(self.plain), active_path=str(self.repo))
+        self.assertEqual(self.root(tmux), str(self.plain))
+
+    def test_session_path_in_live_worktree_resolves_to_main_checkout(self):
+        self.assertEqual(self.root(RootTmux({}, session_path=str(self.wt))), str(self.repo))
+
+    def test_deleted_worktree_session_path_falls_back_to_home(self):
         git(self.repo, "worktree", "remove", "--force", str(self.wt))
-        self.assertEqual(self.root(RootTmux({"%5": str(self.wt)}, session_path=str(self.repo))), str(self.repo))
+        with mock.patch.dict(os.environ, {"HOME": str(self.plain)}):
+            self.assertEqual(self.root(RootTmux({"%5": str(self.repo)}, session_path=str(self.wt))), str(self.plain))
 
-    def test_empty_pane_path_uses_session_path(self):
-        self.assertEqual(self.root(RootTmux({"%5": ""}, session_path=str(self.repo / ".claude"))), str(self.repo))
+    def test_session_subdir_resolves_to_main_checkout(self):
+        self.assertEqual(self.root(RootTmux({}, session_path=str(self.repo / ".claude"))), str(self.repo))
 
-    def test_non_git_dir_is_returned_as_is(self):
-        self.assertEqual(self.root(RootTmux({"%5": str(self.plain)})), str(self.plain))
+    def test_session_path_that_is_a_git_repo_is_returned_unchanged(self):
+        # a project rooted at $HOME which is itself a repo
+        self.assertEqual(self.root(RootTmux({"%5": str(self.plain)}, session_path=str(self.repo))), str(self.repo))
 
-    def test_uses_claude_pane_not_active_window(self):
-        tmux = RootTmux({"%5": str(self.wt)}, active_path=str(self.plain))
-        self.assertEqual(self.root(tmux), str(self.repo))
+    def test_non_git_session_path_is_returned_as_is(self):
+        self.assertEqual(self.root(RootTmux({}, session_path=str(self.plain))), str(self.plain))
 
     def test_nothing_usable_falls_back_to_home(self):
         with mock.patch.dict(os.environ, {"HOME": str(self.plain)}):
             self.assertEqual(self.root(RootTmux({"%5": "/gone"}, session_path="")), str(self.plain))
+
+
+TMUX_BIN = os.path.expanduser("~/.local/bin/tmux") if os.access(os.path.expanduser("~/.local/bin/tmux"), os.X_OK) else shutil.which("tmux")
+
+
+@unittest.skipUnless(TMUX_BIN, "no tmux")
+class RealTmuxSessionRootTest(unittest.TestCase):
+    """session_root against a real scratch tmux server: the lead's pane moves, the session path stays."""
+
+    def test_pane_cd_does_not_move_the_root(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        a, b = Path(tmp.name).resolve() / "A", Path(tmp.name).resolve() / "B"
+        a.mkdir()
+        b.mkdir()
+        sock = f"relay-root-{os.getpid()}"
+
+        def tmux(*args, check=False):
+            r = subprocess.run([TMUX_BIN, "-L", sock, "-f", "/dev/null", *args], capture_output=True, text=True)
+            if check and r.returncode:
+                raise RuntimeError(r.stderr)
+            return r.stdout
+
+        self.addCleanup(lambda: tmux("kill-server"))
+        # the pane process cd's like a lead does, then stays alive
+        tmux("new-session", "-d", "-s", "proj", "-n", "claude", "-c", str(a), f"cd {b} && exec sleep 60", check=True)
+        pane = tmux("list-panes", "-t", "=proj:claude", "-F", "#{pane_id}").split()[0]
+        for _ in range(50):
+            if tmux("display", "-p", "-t", pane, "#{pane_current_path}").strip() == str(b):
+                break
+            time.sleep(0.1)
+        self.assertEqual(tmux("display", "-p", "-t", pane, "#{pane_current_path}").strip(), str(b))  # really diverged
+        self.assertEqual(relay.session_root(tmux, "proj"), str(a))
 
 
 class RelayTest(unittest.TestCase):

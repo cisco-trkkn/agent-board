@@ -746,9 +746,7 @@ def restart_orchestrator(sess, confirm):
     if sess.startswith("_web-"):
         raise RuntimeError("that is a browser view, not a project")
     tmux("has-session", "-t", f"={sess}", check=True)
-    path = session_path(sess)
-    g = git(path, "rev-parse", "--show-toplevel")
-    root = g.stdout.strip() if g.returncode == 0 and g.stdout.strip() else path
+    root = relay.session_root(tmux, sess)  # the same rule as tmux-ctl relay: the session's start dir, not the pane's cwd
     wins = []
     for line in tmux("list-windows", "-t", f"={sess}", "-F",
                      f"#{{window_index}}{SEP}#{{window_name}}{SEP}#{{@tc_teammate}}").splitlines():

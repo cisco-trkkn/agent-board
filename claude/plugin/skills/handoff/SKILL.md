@@ -30,7 +30,7 @@ To find "the recent handoff for this project", filter by the `Project:` line fir
 - **State of the work**: what is done, in progress and next. Reference the plan, spec, branch, MR and commits by path or URL instead of copying them. If the doc names a merge strategy or branch relationship ("merging into main is a fast-forward"), record the SHAs it was computed against (`git rev-parse <base> <branch>`), so the next lead can re-check it before acting.
 - **Team**: one entry per teammate, built from its checkpoint, so the next lead can respawn it as is. Lead with name, role and model tier, then the checkpoint note: task, files owned, progress, next step, assumptions, risks. Mark teammates without a reply as `no checkpoint` and include their captured output, if any.
 - **Previous session**: its id, so it stays resumable with `claude --resume <id>`. Write a placeholder first and fill it in as below.
-- **Ideas**: one line: `Ideas inbox: ~/.local/state/agent-board/ideas/<project>.md (do not read until the plan is done)`. `<project>` is the tmux session name: `tmux display -p '#{?session_group,#{session_group},#{session_name}}'`. Never copy ideas into the doc. Outside tmux, leave this line out.
+- **Ideas**: one line: `Ideas inbox: ${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}/<project>.md (do not read until the plan is done)`, with `TC_IDEAS_DIR` resolved from your environment when it is set. `<project>` is the tmux session name: `tmux display -p '#{?session_group,#{session_group},#{session_name}}'`. Never copy ideas into the doc. Outside tmux, leave this line out.
 - **Suggested skills**: the skills the next lead should invoke with the Skill tool.
 
 Redact secrets and personal data.

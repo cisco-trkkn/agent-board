@@ -1,0 +1,2 @@
+{"type": "assistant", "uuid": "u14", "timestamp": "2026-01-01T00:00:00.000Z", "sessionId": "synthetic", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_13", "name": "Skill", "input": {"skill": "task-observer:task-observer"}, "caller": {"type": "direct"}}]}}
+{"type": "assistant", "uuid": "u15", "timestamp": "2026-01-01T00:00:00.000Z", "sessionId": "synthetic", "message": {"role": "assistant", "content": [{"type": "text", "text": "placeholder"}]}}

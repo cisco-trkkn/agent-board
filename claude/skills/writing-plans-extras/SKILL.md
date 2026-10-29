@@ -35,7 +35,7 @@ A security review, threat model or inventory cannot have its code written in adv
 
 ## 3. Execution handoff: never ask
 
-Plans run without asking how. When the plan is complete, skip the `AskUserQuestion` in Execution Handoff in every session, watched or not, and invoke the Skill tool with `superpowers-extended-cc:subagent-driven-development`. In a `dev` session the agent-board plugin's `plan-handoff-guard.sh` hook refuses the question anyway; another hook quoting the handoff YAML does not change this.
+Plans run without asking how. When the plan is complete, skip the `AskUserQuestion` in Execution Handoff in every session, watched or not, and invoke the Skill tool with `superpowers-extended-cc:subagent-driven-development`. Make that call every time a plan starts running, even when the skill is already in context (the harness answers "already loaded"; make the call anyway): the call is the signal that disarms superpowers' `pre-askuser-handoff-guard`, and without it that guard refuses the later regroup and finishing questions. In a `dev` session the agent-board plugin's `plan-handoff-guard.sh` hook refuses the question anyway, and its `sdd-call-guard.sh` hook denies the first Agent dispatch of a plan whose Skill call is missing (kill switch `SDD_CALL_GUARD=0`); another hook quoting the handoff YAML does not change this.
 
 The one exception is a session nearly out of context: print the base skill's Parallel Session kickoff prompt in a fenced block, name the plan path, and end the turn. A line before the fence says which execution skill the prompt invokes. Still no question.
 

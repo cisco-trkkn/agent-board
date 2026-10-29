@@ -1,6 +1,8 @@
 import importlib.util
 import os
 import shlex
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +20,8 @@ class Fake:
 
     def __init__(self, windows, cmd="2.1.0", rows=(), bell="0", has=True):
         self.windows = windows  # list of (index, name, teammate)
+        self.session_path = ""  # answer for #{session_path}
+        self.pane_path = ""     # answer for #{pane_current_path}: wherever the lead last cd'd
         self.cmd, self.rows, self.bell, self.has = cmd, list(rows), bell, has
         self.calls = []
 
@@ -35,6 +39,8 @@ class Fake:
             return "%9\n"
         if args[0] == "show-options":
             return "1\n"
+        if args[0] == "display":
+            return (self.session_path if args[-1] == "#{session_path}" else self.pane_path) + "\n"
         return ""
 
     def names(self):
@@ -45,16 +51,30 @@ class Fake:
 
 
 class RestartOrchestratorTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = str(Path(tmp.name).resolve() / "root")
+        os.makedirs(self.root + "/sub")
+        subprocess.run(["git", "-C", self.root, "init", "-q"], check=True, capture_output=True)
+        self.elsewhere = str(Path(tmp.name).resolve() / "elsewhere")
+        os.makedirs(self.elsewhere)
+
     def run_act(self, fake, **body):
-        saved = (server.tmux, server.git, server.pane_text, server.session_path)
+        fake.session_path = self.root + "/sub"
+        fake.pane_path = self.elsewhere
+        saved = (server.tmux, server.pane_text)
         server.tmux = fake.tmux
-        server.git = lambda path, *a: type("R", (), {"returncode": 0, "stdout": "/proj/root\n", "stderr": ""})()
         server.pane_text = lambda target, lines=40: fake.rows
-        server.session_path = lambda sess: "/proj/root/sub"
         try:
             return server._act({"action": "restart_orchestrator", "session": "proj", **body})
         finally:
-            server.tmux, server.git, server.pane_text, server.session_path = saved
+            server.tmux, server.pane_text = saved
+
+    def test_restarts_in_session_root_not_pane_path(self):
+        fake = Fake([(1, "claude", False)], cmd="zsh")
+        self.run_act(fake)
+        self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", self.root))
 
     def test_close_session_also_kills_bg_by_exact_name(self):
         fake = Fake([(1, "claude", False)])
@@ -120,7 +140,7 @@ class RestartOrchestratorTest(unittest.TestCase):
     def test_idle_respawns_in_root_then_sends_keys(self):
         fake = Fake([(1, "claude", False)], rows=["> "])
         msg = self.run_act(fake)
-        self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", "/proj/root"))
+        self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", self.root))
         sk = fake.find("send-keys")
         self.assertEqual(sk[0], ("send-keys", "-t", "%7", "-l", "--", shlex.quote(relay.orchestrator())))
         self.assertEqual(sk[1], ("send-keys", "-t", "%7", "Enter"))
@@ -139,7 +159,7 @@ class RestartOrchestratorTest(unittest.TestCase):
         self.assertEqual(nw[:2], ("new-window", "-d"))
         self.assertEqual(nw[nw.index("-t") + 1], "=proj:")
         self.assertIn("claude", nw)
-        self.assertIn("/proj/root", nw)
+        self.assertIn(self.root, nw)
         self.assertEqual([r[3] for r in fake.find("respawn-pane")], ["%9"])
         self.assertIn("-P", nw)
         self.assertEqual(nw[nw.index("-F") + 1], "#{pane_id}")

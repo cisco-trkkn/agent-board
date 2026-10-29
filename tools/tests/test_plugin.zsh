@@ -27,6 +27,12 @@ for c in cmds:
         if "/" + n + ".sh" in c: want[n] += 1
 assert all(want.values()), want
 PY
+check "hooks.json registers sdd-call-guard on PreToolUse Agent, --scoped, timeout 10" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+hit = [(e["matcher"], h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/sdd-call-guard.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] == "Agent" and hit[0][1]["timeout"] == 10, hit
+PY
 check "settings.json no longer registers hooks (no double run)" python3 -c 'import json,sys; assert "hooks" not in json.load(open(sys.argv[1]))' "$R/claude/session-settings.json"
 check "legacy hook paths are symlinks into the plugin" zsh -c 'cd "$1/claude/hooks" && for n in kill-guard bash-mirror artifact-register worktree-sweep; do [[ -L $n.sh && $(readlink $n.sh) == ../plugin/scripts/$n.sh && -x $n.sh ]] || exit 1; done' _ "$R"
 check "superpowers-hook.sh stays in claude/hooks (regular file)" test -f "$R/claude/hooks/superpowers-hook.sh" -a ! -L "$R/claude/hooks/superpowers-hook.sh"
@@ -41,8 +47,9 @@ check "session settings file is session-settings.json; claude/settings.json (the
 check "no /Users/ under claude/" test -z "$(grep -rn '/Users/' "$R/claude/" --exclude=settings.json --exclude-dir=staged --exclude-dir=__pycache__ 2>/dev/null)"
 check "ab_claude_args loads the plugin" zsh -c 'source "$1/bin/_ab_claude.zsh"; [[ "$(ab_claude_args)" == *"--plugin-dir ${(q)AB_REPO}/claude/plugin"* ]]' _ "$R"
 
-# the agent-facing rules name the ideas path board/ideas.py writes, not the old ~/.claude one
-check "lead and handoff rules name ~/.local/state/agent-board/ideas" test "$(grep -lF '~/.local/state/agent-board/ideas/<project>.md' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | wc -l)" -eq 2
+# the agent-facing rules name the ideas path board/ideas.py writes (TC_IDEAS_DIR first), not the old ~/.claude one
+check "lead and handoff rules name \${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}" test "$(grep -lF '${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}/<project>.md' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | wc -l)" -eq 2
+check "no rule names the ideas dir without TC_IDEAS_DIR" test -z "$(grep -n '~/.local/state/agent-board/ideas' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | grep -vF '${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}')"
 check "no rule or doc outside docs/superpowers history points at ~/.claude/ideas as THE path" test -z "$(grep -rn '~/.claude/ideas' "$R/claude" "$R/CLAUDE.md" "$R/README.md" "$R/docs/INSTALL.md" "$R/docs/CUSTOMIZATION.md" 2>/dev/null | grep -v 'older\|old ')"
 
 # 3. headless probe
