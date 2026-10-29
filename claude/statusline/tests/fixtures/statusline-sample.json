@@ -1,0 +1,75 @@
+{
+  "session_id": "a6ade69c-e107-4020-9afb-0549650f396f",
+  "transcript_path": "/home/user/.claude/projects/-home-user-probe/a6ade69c-e107-4020-9afb-0549650f396f.jsonl",
+  "cwd": "/home/user/probe",
+  "scratchpad_dir": "/tmp/claude-1000/-home-user-probe/a6ade69c-e107-4020-9afb-0549650f396f/scratchpad",
+  "prompt_id": "89ce6f1a-ac7b-4aaa-9ab5-05ee0e8b9007",
+  "effort": {
+    "level": "medium"
+  },
+  "session_name": "Single word reply",
+  "model": {
+    "id": "claude-haiku-5-5",
+    "display_name": "Haiku 5.5"
+  },
+  "workspace": {
+    "current_dir": "/home/user/probe",
+    "project_dir": "/home/user/probe",
+    "added_dirs": []
+  },
+  "version": "2.1.312",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0.012401300000000002,
+    "total_duration_ms": 149296,
+    "total_api_duration_ms": 6600,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "context_window": {
+    "total_input_tokens": 41459,
+    "total_output_tokens": 80,
+    "context_window_size": 1000000,
+    "current_usage": {
+      "input_tokens": 2,
+      "output_tokens": 80,
+      "cache_creation_input_tokens": 315,
+      "cache_read_input_tokens": 41142
+    },
+    "used_percentage": 4,
+    "remaining_percentage": 96
+  },
+  "exceeds_200k_tokens": false,
+  "prompt_cache": {
+    "warm": true,
+    "caching_observed": true,
+    "ttl": "1h",
+    "expires_at": 1793259716,
+    "requests": 3,
+    "misses": 1,
+    "expected_rebuilds": 0,
+    "hit_ratio": 0.5350992092368894,
+    "cache_write_tokens": 57492,
+    "miss_recache_tokens": 16104,
+    "last_miss_at": 1793256110,
+    "last_miss_cause": null,
+    "miss_causes": {},
+    "recache_tokens_if_cold": 41459
+  },
+  "fast_mode": false,
+  "thinking": {
+    "enabled": true
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 63,
+      "resets_at": 1793266200
+    },
+    "seven_day": {
+      "used_percentage": 93,
+      "resets_at": 1793469600
+    }
+  }
+}
