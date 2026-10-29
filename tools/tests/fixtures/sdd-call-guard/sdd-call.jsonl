@@ -1,0 +1,2 @@
+{"type": "assistant", "uuid": "u11", "timestamp": "2026-01-01T00:00:00.000Z", "sessionId": "synthetic", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_10", "name": "Skill", "input": {"skill": "superpowers-extended-cc:subagent-driven-development"}, "caller": {"type": "direct"}}]}}
+{"type": "user", "uuid": "u12", "timestamp": "2026-01-01T00:00:00.000Z", "sessionId": "synthetic", "message": {"role": "user", "content": "Skill /superpowers-extended-cc:subagent-driven-development is already loaded above; instructions unchanged."}}
