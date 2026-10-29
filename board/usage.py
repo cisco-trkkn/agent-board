@@ -14,6 +14,7 @@ from artifacts import state_dir
 HERE = Path(__file__).resolve().parent
 DEFAULT_ALERTS = {"context_pct": 80, "burn_per_hour": 15, "burn_window_s": 900, "session_total": 25,
                   "mismatch_efforts": ["low", "medium"], "mismatch_models": ["opus", "fable"], "live_s": 1800}
+OPTIONAL_ALERTS = ("day_total",)   # accepted when present, no default: absent means off (th.get("day_total") is None)
 ALERTS_PATH = None   # tests may point this at a file; None = alerts_path()
 
 
@@ -178,6 +179,12 @@ def thresholds(path=None):
         return th, f"{p.name} unreadable, using defaults: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
     bad = []
     for k, v in d.items():
+        if k in OPTIONAL_ALERTS:
+            if _valid_threshold(1, v):
+                th[k] = v
+            else:
+                bad.append(k)
+            continue
         if k not in DEFAULT_ALERTS:
             continue
         if _valid_threshold(DEFAULT_ALERTS[k], v):
@@ -303,6 +310,33 @@ def report(conn, repo, prices, th, now):
             "by_role": _breakdown(rows, role, prices),
             "by_model": _breakdown(rows, lambda r: r["model"], prices, extra=True),
             "by_branch": _breakdown(rows, _branch_key, prices)}
+
+
+def spend_since(conn, repo, since, prices):
+    """USD of the project's priced calls since `since` (one SQL pass grouped by model). 0.0 with no calls;
+    None when every call is on an unpriced model (never shown as $0)."""
+    repo = repo.rstrip("/")
+    prefix = repo + "/.claude/worktrees/"
+    rows = _rows(conn, "select model, sum(input) input, sum(output) output, sum(cache_read) cache_read, "
+                       "sum(cache_write_5m) cache_write_5m, sum(cache_write_1h) cache_write_1h, count(*) n from calls "
+                       "where ts >= ? and (cwd = ? or substr(cwd, 1, ?) = ?) group by model",
+                 (since, repo, len(prefix), prefix))
+    total, priced = 0.0, 0
+    for r in rows:
+        c = call_cost(r, prices)
+        if c is not None:
+            total += c
+            priced += r["n"]
+    return total if priced or not rows else None
+
+
+def day_alert(spend, th):
+    """The project's day_total alert dict, or None: off when the key is absent, when spend is unknown, or not over."""
+    limit = th.get("day_total")
+    if limit is None or spend is None or spend <= limit:
+        return None
+    return {"kind": "day_total", "label": f"${spend:.0f} today",
+            "detail": f"Spend today ${spend:.2f} is over the ${limit} day_total alert."}
 
 
 def _branch_key(r):

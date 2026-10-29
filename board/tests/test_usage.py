@@ -906,5 +906,46 @@ class UsageApiTest(unittest.TestCase):
         self.assertEqual(s["usage_labels"]["%1"]["label"], "claude · sonnet·med")
 
 
+class DayTotalTest(unittest.TestCase):
+    """day_total: an optional usage-alerts.json key with no default; spend_since and day_alert evaluate it."""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.tmp)
+        self.p = self.tmp / "usage-alerts.json"
+        self.prices = {"models": {"claude-opus-5-5": {"input": 15, "output": 75, "cache_read": 1.5, "cache_write_5m": 18.75, "cache_write_1h": 30, "context": 200000}}}
+
+    def test_absent_key_is_off(self):
+        th, warn = usage.thresholds(self.tmp / "none.json")
+        self.assertIsNone(th.get("day_total")); self.assertIsNone(warn)
+        self.assertIsNone(usage.day_alert(999.0, th))
+
+    def test_accepted_and_evaluated(self):
+        self.p.write_text(json.dumps({"day_total": 10}))
+        th, warn = usage.thresholds(self.p)
+        self.assertEqual(th["day_total"], 10); self.assertIsNone(warn)
+        self.assertIsNone(usage.day_alert(10.0, th))                       # not over
+        a = usage.day_alert(12.5, th)
+        self.assertEqual((a["kind"], a["label"]), ("day_total", "$12 today"))
+        self.assertIn("$12.50", a["detail"])
+        self.assertIsNone(usage.day_alert(None, th))                        # unknown spend never alerts
+
+    def test_invalid_value_warns(self):
+        self.p.write_text(json.dumps({"day_total": "ten"}))
+        th, warn = usage.thresholds(self.p)
+        self.assertIsNone(th.get("day_total")); self.assertIn("day_total", warn)
+
+    def test_spend_since_sums_project_calls_only(self):
+        conn = usage.connect(self.tmp / "u.sqlite"); self.addCleanup(conn.close)
+        f = self.tmp / "p" / "s.jsonl"; f.parent.mkdir()
+        f.write_text(line("a", inp=1_000_000, out=0, ts="2026-10-19T10:00:00.000Z", cwd="/r")
+                     + line("b", inp=1_000_000, out=0, ts="2026-10-19T10:00:00.000Z", cwd="/r/.claude/worktrees/w")
+                     + line("c", inp=1_000_000, out=0, ts="2026-10-19T10:00:00.000Z", cwd="/other")
+                     + line("d", inp=1_000_000, out=0, ts="2026-10-18T10:00:00.000Z", cwd="/r"))
+        usage.ingest(conn, f)
+        since = usage._epoch("2026-10-19T00:00:00.000Z")
+        self.assertAlmostEqual(usage.spend_since(conn, "/r", since, self.prices), 30.0)   # a + b at $15/Mtok; c other project, d too old
+        self.assertEqual(usage.spend_since(conn, "/nowhere", since, self.prices), 0.0)
+        self.assertIsNone(usage.spend_since(conn, "/r", since, {"models": {}}))          # all unpriced
+
+
 if __name__ == "__main__":
     unittest.main()
