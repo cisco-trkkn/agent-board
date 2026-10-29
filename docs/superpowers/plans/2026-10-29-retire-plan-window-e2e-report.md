@@ -72,6 +72,8 @@ Sessions with two or more `plan` windows: 0. (The group view `_web-47416` had cl
 
 A `dev` re-run would clean the real sessions `agent-board` and `francisco_ruiz` (it is run on the real session; `dev` derives the group key from `#{session_group}`). It would not be run on `_web-47416`: a group view shares the window, so closing it in the real session removes it from the view too (next section). `interiors` and `master-gcp-repo` have no `plan` window and would be untouched.
 
+Correction (final review, 2026-10-29): the install runs in dedicated mode, so `dev` lays out sessions on the `-L agent-board` server, not the default server checked above. A read-only check of `-L agent-board` found the same two `plan` windows with the same `tmux-plan` start command, and no other window among its 8 panes with `tmux-plan` in its start command, so the close condition holds there too. The two `plan` windows on the default server are not reached by `dev`; close them by hand with `tmux kill-window -t '=agent-board:plan'` and `tmux kill-window -t '=francisco_ruiz:plan'`.
+
 ## Group-view probe
 
 Scratch server, never the live one: `~/.local/bin/tmux -L rps-probe-61512 -f /dev/null …`. The layout reads its server from `TMUX_DASH_TMUX_ARGS` (first match in `bin/_tc_bins.zsh`), so it was run as `env -u TMUX TMUX_DASH_TMUX_ARGS="-L rps-probe-61512" zsh bin/tmux-dev-layout dev1 <scratch dir>`: it could only reach the scratch server.

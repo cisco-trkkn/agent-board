@@ -435,14 +435,14 @@ elif (( close || force )); then print -u2 "usage: dev [dir] --team <name> [--clo
 
 **Files:**
 - Modify: `bin/tmux-teammate-window` (name and options from the lead window's `@tc_team`)
-- Modify: `board/planview.py` (`lead_session`, `owner_states`, `view`, `_snapshot`, `watch`, `main` take `lead_window="claude"`, `mate_prefix="✦ "`; CLI flags `--lead-window`, `--mate-prefix`)
+- Modify: `board/planview.py` (`lead_session`, `owner_states`, `view`, `_snapshot`, `main` take `lead_window="claude"`, `mate_prefix="✦ "`; CLI flags `--lead-window`, `--mate-prefix`)
 - Modify: `board/tests/test_planview.py` (team cases)
 - Modify: `tools/tests/test_teammate_window.zsh` (team placement case)
 - Modify: `tools/tests/test_teams.zsh` (a teammate split from `auth·claude` lands in the group)
 
 **Acceptance Criteria:**
 - [ ] `tmux-teammate-window`: after computing `lead`, reads `team="$("$T" show-options -wqv -t "$pane" @tc_team 2>/dev/null)"` and `troot=…@tc_team_root`; the window name is `"${team:+$team·}✦ $name"`; after `break-pane` it sets `@tc_team` and `@tc_team_root` on the new window when `team` is non-empty. Placement unchanged: after the lead window, behind that lead's existing `@tc_teammate` windows (right after `<t>·claude`, as the default team's `✦` windows sit right after `claude`).
-- [ ] `planview.view(session, root, home, state_dir, tmux, lead_window="claude", mate_prefix="✦ ")`; `lead_session` targets `={session}:{lead_window}`; `owner_states` looks up `f"{mate_prefix}{owner}"`; `python3 -I board/planview.py view|watch <session> --root R [--lead-window W] [--mate-prefix P]`. Defaults keep every existing test green.
+- [ ] `planview.view(session, root, home, state_dir, tmux, lead_window="claude", mate_prefix="✦ ")`; `lead_session` targets `={session}:{lead_window}`; `owner_states` looks up `f"{mate_prefix}{owner}"`; `python3 -I board/planview.py view <session> --root R [--lead-window W] [--mate-prefix P]`. Defaults keep every existing test green.
 - [ ] `test_planview.py`: `test_team_lead_window_and_mate_prefix` — the sessions fixture entry points at the pane of `auth·claude`; a task owned by `parse` with window `auth·✦ parse` → `state ready`, and with `mate_prefix="✦ "` (default) → `gone`. Mutation: hardcode `✦ ` → fails. `test_cli_flags_pass_through` — `main(["view", "s", "--root", r, "--lead-window", "auth·claude", "--mate-prefix", "auth·✦ ", "--json"])` with the `TC_TMUX` shim used by the existing CLI test.
 - [ ] `test_teammate_window.zsh`: a window `auth·claude` with `@tc_team auth` and `@tc_team_root $TT_DIR`; a split from it with the direct `--agent-name probe-t` shape → window `auth·✦ probe-t` right after `auth·claude`, with `@tc_teammate 1`, `@tc_team auth`, `@tc_team_root $TT_DIR`. Mutation: drop the option copy → fails.
 - [ ] `test_teams.zsh`: the same split against the `dev --team auth` session → `auth·✦ probe-t` sits right after `auth·claude`.
