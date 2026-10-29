@@ -133,6 +133,13 @@ def _write_status(project, ok, error, pending):
 
 # ---- reconcile --------------------------------------------------------------------------------
 
+TITLE_MAX = 255   # GitLab rejects longer issue titles
+
+
+def _title(text):
+    return text if len(text) <= TITLE_MAX else text[:TITLE_MAX - 1] + "…"
+
+
 def _marker(project, idea, todo):
     """<ts>#<n>: n = 1-based position among ALL lines with this ts, in file order. Ideas are never deleted
     and a move leaves the source line in place, so n survives edits."""
@@ -157,8 +164,8 @@ def _ops(idea, entry, base):
         if entry["state"] != "open":
             ops.append((f"reopen #{iid}", [("PUT", url, [("state_event", "reopen"), ("remove_labels", "not-planned")])],
                         {"state": "open"}))
-        if entry["title"] != text:
-            ops.append((f"retitle #{iid}", [("PUT", url, [("title", text)])], {"title": text}))
+        if entry["title"] != _title(text):
+            ops.append((f"retitle #{iid}", [("PUT", url, [("title", _title(text))])], {"title": _title(text)}))
     elif entry["state"] != want:
         if want == "closed-done":
             suffix = text.rsplit(" → ", 1)[1] if " → " in text else text
@@ -174,7 +181,7 @@ def _ops(idea, entry, base):
 
 
 def _entry(idea, side):
-    return side.get(str(idea["issue"])) or {"title": idea["text"], "state": "open"}
+    return side.get(str(idea["issue"])) or {"title": _title(idea["text"]), "state": "open"}
 
 
 def _needs(idea, side, since, base):
@@ -237,16 +244,16 @@ def _one(project, m, base, side, idea, todo, dry_run, out):
         found = api("GET", base, [("search", mk), ("in", "description"), ("state", "all"), ("per_page", "20")]) or []
         hit = next((r for r in found if mk in (r.get("description") or "")), None)
         if dry_run:
-            out["actions"].append(f'adopt #{hit["iid"]} "{idea["text"]}"' if hit else f'create "{idea["text"]}"')
+            out["actions"].append(f'adopt #{hit["iid"]} "{_title(idea["text"])}"' if hit else f'create "{_title(idea["text"])}"')
             return
         if hit:
-            iid, entry = hit["iid"], {"ts": idea["ts"], "title": hit.get("title") or idea["text"],
+            iid, entry = hit["iid"], {"ts": idea["ts"], "title": hit.get("title") or _title(idea["text"]),
                                       "state": "open" if hit.get("state") != "closed" else "closed-adopted"}
         else:
-            body = api("POST", base, [("title", idea["text"]), ("labels", "idea"), ("description", mk)])
+            body = api("POST", base, [("title", _title(idea["text"])), ("labels", "idea"), ("description", mk)])
             if not isinstance(body, dict) or "iid" not in body:
                 raise GlabError("create returned no iid")
-            iid, entry = body["iid"], {"ts": idea["ts"], "title": idea["text"], "state": "open"}
+            iid, entry = body["iid"], {"ts": idea["ts"], "title": _title(idea["text"]), "state": "open"}
         try:
             ideas.set_issue(project, idea["key"], iid)
         except ideas.Stale:

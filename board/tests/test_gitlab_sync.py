@@ -243,6 +243,37 @@ class SyncTest(Env):
         self.assertIsNone(self.sidecar())
         self.assertEqual(self.status()["error"], "")
 
+    def test_long_idea_is_posted_with_a_255_char_title_and_then_idle(self):
+        # mutation: compare the sidecar title against the raw text -> the second pass logs a retitle PUT
+        long = "w" * 300
+        self.ideas(f"- [ ] {TS} · {long}")
+        self.create_rules(5)
+        g.sync("p")
+        [(_, _, f)] = self.calls("POST")
+        self.assertEqual((len(f["title"]), f["title"][-1], f["title"][:254]), (255, "…", "w" * 254))
+        self.assertEqual(f["description"], marker("p", TS))
+        self.assertEqual(self.sidecar()["5"]["title"], f["title"])
+        n = len(self.log())
+        g.sync("p")
+        self.assertEqual(len(self.log()), n)
+
+    def test_title_of_exactly_255_is_sent_unchanged(self):
+        exact = "e" * 255
+        self.ideas(f"- [ ] {TS} · {exact}")
+        self.create_rules(5)
+        g.sync("p")
+        self.assertEqual(self.calls("POST")[0][2]["title"], exact)
+
+    def test_dry_run_and_retitle_use_the_capped_title(self):
+        long = "x" * 300
+        self.ideas(f"- [ ] {TS} · {long}", f"- [ ] {TS} · {long} · gl#7")
+        self.sidecar_put({"7": {"ts": TS, "title": "old", "state": "open"}})
+        r = g.sync("p", dry_run=True)
+        self.assertEqual(r["actions"][0], f'create "{"x" * 254}…"')
+        g.sync("p")
+        puts = [f for m, _, f in self.calls("PUT")]
+        self.assertEqual(puts, [{"title": "x" * 254 + "…"}])
+
     def test_retitle(self):
         self.ideas(f"- [ ] {TS} · new words · gl#5")
         self.sidecar_put({"5": {"ts": TS, "title": "old words", "state": "open"}})
