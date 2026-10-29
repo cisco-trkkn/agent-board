@@ -24,14 +24,32 @@ check "list shows bg"        sh -c "$C list | grep -q 'tests .*(bg)'"
 check "read bg"              sh -c "$C read tests 40 | grep -qx hi"
 check "send to bg shell"     sh -c "$C send shell 'echo via-send' && sleep 1 && $TT_BIN capture-pane -p -t '=tt-bg:shell' | grep -q via-send"
 # interrupted run: record must not stay at exit:null
+# waits are on conditions with a 30 s cap (one loaded iteration of this file takes ~60-100 s in all, so
+# no single step needs more); a timeout fails the step under its own name
+cap=30
+sleep30() { jq -sr "[.[]|select(.cmd==\"sleep 30\")]|$1" "$r" }
 $C run tests 'sleep 30' >/dev/null 2>&1 &
 rp=$!
-tt_wait 5 sh -c "jq -sr '[.[]|select(.cmd==\"sleep 30\")]|length' $r | grep -qx 1"
+check "interrupt: start record"  tt_wait $cap sh -c "jq -sr '[.[]|select(.cmd==\"sleep 30\")]|length' $r | grep -qx 1"
+check "interrupt: sleep running" tt_wait $cap sh -c "$TT_BIN list-panes -t '=tt-bg:tests' -F '#{pane_current_command}' | grep -qx sleep"
 kill -TERM "$rp"                            # the PID we started
-tt_wait 5 sh -c "jq -sr '[.[]|select(.cmd==\"sleep 30\")]|last|.exit' $r | grep -qx 143"
-check "interrupted exit 143"   test "$(jq -sr '[.[]|select(.cmd=="sleep 30")]|last|.exit' "$r")" = 143
-check "interrupted summary"    test "$(jq -sr '[.[]|select(.cmd=="sleep 30")]|last|.summary' "$r")" = interrupted
+check "interrupt: exit 143 written" tt_wait $cap sh -c "jq -sr '[.[]|select(.cmd==\"sleep 30\")]|last|.exit' $r | grep -qx 143"
+check "interrupted exit 143"   test "$(sleep30 'last|.exit')" = 143
+check "interrupted summary"    test "$(sleep30 'last|.summary')" = interrupted
 tt send-keys -t '=tt-bg:tests' C-c
+check "interrupt: pane idle again" tt_wait $cap tt_all_idle
+# TERM the instant the start record lands (no wait for the run to settle): the record must still end at 143.
+# The window is a race, so 6 trials; each one is its own command text.
+for i in 1 2 3 4 5 6; do
+  $C run tests "sleep 3$i" >/dev/null 2>&1 &
+  rp=$!
+  until grep -q "\"sleep 3$i\"" "$r" 2>/dev/null; do sleep 0.01; done
+  kill -TERM "$rp"; wait "$rp" 2>/dev/null
+  check "early TERM $i: exit 143 written" tt_wait $cap sh -c "jq -sr '[.[]|select(.cmd==\"sleep 3$i\")]|last|.exit' $r | grep -qx 143"
+  check "early TERM $i: summary"    test "$(jq -sr "[.[]|select(.cmd==\"sleep 3$i\")]|last|.summary" "$r")" = interrupted
+  tt send-keys -t '=tt-bg:tests' C-c
+  check "early TERM $i: pane idle again" tt_wait $cap tt_all_idle
+done
 # race: two parallel first-uses create exactly one shell window
 tt kill-session -t '=tt-bg'
 $C run tests true >/dev/null & $C run tests true >/dev/null & wait

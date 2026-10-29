@@ -267,8 +267,10 @@ case "$cmd" in
     lock_win "$win"; pick_win "$win"
     id="$$-$RANDOM"; rm -f "$STATE/$id.rc"
     cmdtext="$*"; t0=$EPOCHSECONDS; logf="$STATE/logs/$FEEDKEY/$id.log"; mkdir -p "${logf:h}"
+    # in place before the start record, so a TERM landing right after (or during) it still finalises the record;
+    # it drops the record lock first: the TERM may have hit inside append_capped, which would otherwise wait on its own lock
+    trap 'unlock_win; [[ -n "$RLOCKD" ]] && { rm -rf "$RLOCKD"; RLOCKD=; }; run_record 143 $(( EPOCHSECONDS - t0 )) "interrupted"; exit 143' INT TERM HUP   # replaced below once there is a pane to capture
     run_record null 0 ""
-    trap 'unlock_win; run_record 143 $(( EPOCHSECONDS - t0 )) "interrupted"; exit 143' INT TERM HUP   # replaced below once there is a pane to capture
     tgt="$(target "$win")"
     hs="$(t display -p -t "$tgt" '#{history_size}')"; cy="$(t display -p -t "$tgt" '#{cursor_y}')"
     start=$(( ${${hs:-0}//[^0-9]/} + ${${cy:-0}//[^0-9]/} ))
