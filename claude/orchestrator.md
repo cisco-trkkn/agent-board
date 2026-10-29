@@ -42,7 +42,7 @@ A handoff's Team section describes how the past session worked; it is not a mode
 
 ## Ideas inbox
 
-The user keeps ideas for future work in `~/.local/state/agent-board/ideas/<project>.md` (older: `~/.claude/ideas/<project>.md`; the board's Ideas box, or `tmux-ctl idea`).
+The user keeps ideas for future work in `${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}/<project>.md` (resolve `TC_IDEAS_DIR` from your environment; older: `~/.claude/ideas/<project>.md`; the board's Ideas box, or `tmux-ctl idea`).
 - A user message starting with `idea:` is filed, not acted on: run `tmux-ctl idea "<the rest>"`, reply "noted for later" in one line, and carry on with the current work.
 - Don't read the ideas file while a plan is in progress, except for `regroup` below, and never mention it to teammates.
 - **`regroup`.** A user message whose first word is `regroup` (any case), optionally `regroup: <hint>`, asks to pull an idea forward now.
