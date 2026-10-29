@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -56,6 +57,17 @@ class TcEnvTest(unittest.TestCase):
                     if v is not None:
                         os.environ[k] = v
             self.assertEqual(py, zsh('print -r -- "$(tc_state_dir)"', env))
+
+    def test_lineage_dir_agrees(self):
+        for env in ({"TC_LINEAGE": "/x/l"}, {"XDG_STATE_HOME": "/x/xdg"}, {"HOME": "/x/home"}):
+            e = {k: v for k, v in os.environ.items() if k not in ("TC_LINEAGE", "XDG_STATE_HOME")}
+            e.update(env)
+            with mock.patch.dict(os.environ, e, clear=True):
+                py = str(tc_env.lineage_dir())
+            self.assertEqual(py, zsh('print -r -- "$TC_LINEAGE_DIR"', {k: v for k, v in e.items()}), env)
+        self.assertEqual(zsh('print -r -- "$TC_LINEAGE_DIR"', {"TC_LINEAGE": "/x/l"}), "/x/l")
+        self.assertTrue(zsh('print -r -- "$TC_LINEAGE_DIR"', {"HOME": "/x/home"}).endswith("/x/home/.local/state/agent-board/lineage")
+                        or "XDG" in os.environ)
 
 
 def zsh_order(s):

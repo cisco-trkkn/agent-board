@@ -16,6 +16,7 @@ tt_setup() {   # tt_setup [windows...]  (default: claude shell tests)
   TT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tctest.XXXXXX")"
   TT_DIR="${TT_DIR:A}"
   export TC_STATE="$TT_DIR/state"; mkdir -p "$TC_STATE"
+  export TC_LINEAGE="$TC_STATE/lineage"   # handoff lineage lives outside the state dir in production; tests keep it in the temp dir
   # pane shells are interactive zsh: without a .zshrc in $ZDOTDIR/$HOME they open the zsh-newuser-install menu and eat the typed line (fresh CI runners)
   [[ -n "$ZDOTDIR" ]] || tt_zdot "$TT_DIR/zdot"
   unset TMUX TMUX_PANE TC_SESSION TMUX_DASH_TMUX_ARGS DEV_NO_ATTACH DEV_CLIENT DEV_CLAUDE_CMD AGENT_BOARD   # a board-opened shell exports some of these (AGENT_BOARD=1 makes the legacy global hooks defer, so they record nothing)

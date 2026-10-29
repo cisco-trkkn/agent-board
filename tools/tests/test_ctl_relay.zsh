@@ -32,12 +32,12 @@ done
 sleep 6   # relay.py would have polled twice (2s apart) and respawned the lead by now
 check "lead pane untouched"  test "$(tt display -p -t "$lead" '#{pane_pid}')" = "$lead_pid0"
 check "no orchestrator started" test ! -e "$STUB/args"
-check "no lineage written"   test ! -e "$TC_STATE/lineage-tt.jsonl"
+check "no lineage written"   test ! -e "$TC_LINEAGE/tt.jsonl"
 out="$($C relay "$doc" --old-session OLD1)"
 check "relay scheduled"     zsh -c 'print -r -- "$1" | grep -q "relay scheduled"' x "$out"
 check "orchestrator started" tt_wait 30 test -s "$STUB/args"
 check "prompt names doc"    grep -qF "Read $doc and continue from where the previous session left off." "$STUB/args"
-check "lineage written"     tt_wait 10 sh -c "test \"\$(jq -r .old_session_id $TC_STATE/lineage-tt.jsonl 2>/dev/null)\" = OLD1"
+check "lineage written"     tt_wait 10 sh -c "test \"\$(jq -r .old_session_id $TC_LINEAGE/tt.jsonl 2>/dev/null)\" = OLD1"
 tt_wait 10 test -n "$(tt list-panes -t '=tt:claude' -F '#{pane_current_command}' | grep -x sleep)"
 tt send-keys -t '=tt:claude' C-c 2>/dev/null
 tt respawn-pane -k -t '=tt:claude'       # no command: a fresh interactive shell, as relay.respawn does
@@ -54,7 +54,7 @@ check "notice prefix not doubled" test "$(grep -o 'relay failed:' $TC_STATE/rela
 # '#' in the doc path must survive tmux format expansion (relay from the lead; the lineage records the doc as relay.py received it)
 hd="$TT_DIR/h#H.md"; print x > "$hd"
 $C relay "$hd" >/dev/null
-check "hash in path kept"     tt_wait 15 sh -c "grep -q 'h#H.md' $TC_STATE/lineage-tt.jsonl"
+check "hash in path kept"     tt_wait 15 sh -c "grep -q 'h#H.md' $TC_LINEAGE/tt.jsonl"
 $C relay /nope-$$.md 2>/dev/null; rc=$?
 check "missing doc refused" test $rc -eq 2
 check "help lists relay"    sh -c "$C help | grep -q 'tmux-ctl relay'"

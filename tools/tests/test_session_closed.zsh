@@ -10,9 +10,10 @@ tt source-file "$TT_DIR/hook.conf"
 mk() {   # mk <project>: per-session state files
   local p="$1"
   mkdir -p "$TC_STATE/logs/$p"; print x > "$TC_STATE/logs/$p/r.log"
-  for f in artifacts-$p.jsonl lineage-$p.jsonl runs-$p.jsonl feed-$p-tests.log feed-$p-shell.log; do print x > "$TC_STATE/$f"; done
+  mkdir -p "$TC_LINEAGE"; print x > "$TC_LINEAGE/$p.jsonl"
+  for f in artifacts-$p.jsonl runs-$p.jsonl feed-$p-tests.log feed-$p-shell.log; do print x > "$TC_STATE/$f"; done
 }
-has() { test -e "$TC_STATE/artifacts-$1.jsonl" -o -e "$TC_STATE/runs-$1.jsonl" -o -e "$TC_STATE/feed-$1-tests.log" -o -e "$TC_STATE/lineage-$1.jsonl" -o -e "$TC_STATE/feed-$1-shell.log" -o -d "$TC_STATE/logs/$1" }
+has() { test -e "$TC_STATE/artifacts-$1.jsonl" -o -e "$TC_STATE/runs-$1.jsonl" -o -e "$TC_STATE/feed-$1-tests.log" -o -e "$TC_STATE/feed-$1-shell.log" -o -d "$TC_STATE/logs/$1" }
 gone() { ! has "$1" }
 mk foo; mk foo-bar; mk proj; print idea > "$TC_IDEAS_DIR/foo.md"
 tt new-session -d -s foo -c "$TT_DIR"; tt new-session -d -s foo-bar -c "$TT_DIR"; tt new-session -d -s proj -c "$TT_DIR"
@@ -29,6 +30,7 @@ check "view closing later still keeps state (name is _web-)" has proj
 tt kill-session -t '=foo'
 check "project state removed"               tt_wait 5 gone foo
 check "other project (foo-bar) untouched"   has foo-bar
+check "lineage survives the close"         test -s "$TC_LINEAGE/foo.jsonl"
 check "ideas file is never deleted"         test -s "$TC_IDEAS_DIR/foo.md"
 # hostile session names must never reach a shell
 MD="${TMPDIR:-/tmp}/ttm$$"; mkdir -p "$MD"; MARK="$MD/pwned"   # no dots or colons: tmux rewrites those in names

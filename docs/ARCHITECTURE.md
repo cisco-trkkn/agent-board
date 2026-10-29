@@ -49,7 +49,7 @@ flowchart LR
 | **-bg session** | A hidden session `<project>-bg` holding the agents' `tests` and `shell` windows, so agents' commands stay out of the user's session; the user's session has `claude` and `plan` (plus `✦` windows), and `prefix S` opens a throwaway shell popup. Tagged with the session option `@tc_bg=1`. |
 | **Lane** | A per-caller window `tests·<agent>` created when `tests` is busy. Idle lanes are closed after 15 minutes. |
 | **Artifact** | A document worth showing on the board: plan, spec, handoff, report, published claude.ai artifact, or anything registered by hand. |
-| **Epoch** | How many handoff relays this project has had (lines in `lineage-<project>.jsonl`). The board groups artifacts by epoch. |
+| **Epoch** | How many handoff relays this project has had (lines in `~/.local/state/agent-board/lineage/<project>.jsonl`). The board groups artifacts by epoch. |
 
 ### tmux user options used as tags
 
@@ -230,7 +230,7 @@ Plan comments and `[Board]` requests sit in an in-memory `CommentQueue` per proj
 
 ## Handoff relay
 
-`/handoff` (a skill in the agent-board plugin) checkpoints teammates, writes `~/.local/state/agent-board/handoffs/<date>-<slug>.md` (older docs in `~/.claude/handoffs/` are still read) and calls `tmux-ctl relay <doc>`. That schedules `board/relay.py` with `tmux run-shell -b`, so the lead can finish its turn first. `relay.py` waits until the lead's pane is idle or ready on two polls 2 s apart (120 s cap), respawns the pane with a fresh shell in the repo root, types `claude-orchestrator "Read <doc> and continue from where the previous session left off."` and appends `{ts, old_session_id, doc, pane}` to `lineage-<project>.jsonl` (which bumps the epoch). On failure the old pane is untouched and `_relay_failed` shows the manual command on every attached client and in `relay-failed-<project>.txt`.
+`/handoff` (a skill in the agent-board plugin) checkpoints teammates, writes `~/.local/state/agent-board/handoffs/<date>-<slug>.md` (older docs in `~/.claude/handoffs/` are still read) and calls `tmux-ctl relay <doc>`. That schedules `board/relay.py` with `tmux run-shell -b`, so the lead can finish its turn first. `relay.py` waits until the lead's pane is idle or ready on two polls 2 s apart (120 s cap), respawns the pane with a fresh shell in the repo root, types `claude-orchestrator "Read <doc> and continue from where the previous session left off."` and appends `{ts, old_session_id, doc, pane}` to `~/.local/state/agent-board/lineage/<project>.jsonl` (persistent: a project close keeps it) (which bumps the epoch). On failure the old pane is untouched and `_relay_failed` shows the manual command on every attached client and in `relay-failed-<project>.txt`.
 
 ## Ideas inbox
 
@@ -247,7 +247,7 @@ Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It 
 | `feed-<p>-{tests,shell}.log` | `bash-mirror.sh` | `tmux-ctl feed` |
 | `usage.sqlite` (+ `-wal`, `-shm`) | board usage indexer | `api/usage`, card alerts. Shared by all projects; not deleted when a session closes |
 | `artifacts-<p>.jsonl` | `artifact-register.sh`, board save/move | board artifacts panel |
-| `lineage-<p>.jsonl` | `relay.py` | artifacts epoch, board |
+| `~/.local/state/agent-board/lineage/<p>.jsonl` | `relay.py` | artifacts epoch, board. Persistent: not in the state dir, not deleted when a session closes |
 | `relay-<p>.log`, `relay-failed-<p>.txt` | `tmux-ctl relay` | you |
 | `lock-<p>-<win>/` | `tmux-ctl` (transient) | `tmux-ctl` |
 | `<id>.rc`, `<id>.gone` | `tmux-ctl run`/`_done` (transient) | `tmux-ctl run` |

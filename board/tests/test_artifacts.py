@@ -32,6 +32,9 @@ class Base(unittest.TestCase):
         self.state = Path(self.tmp.name) / "state"
         self.state.mkdir()
         os.environ["TC_STATE"] = str(self.state)
+        self.lin = Path(self.tmp.name) / "lineage"
+        self.lin.mkdir()
+        os.environ["TC_LINEAGE"] = str(self.lin)
         self.plan = Path(self.tmp.name) / "plan.md"
         self.plan.write_text("# Plan\n")
         self.spec = Path(self.tmp.name) / "spec.md"
@@ -43,11 +46,12 @@ class Base(unittest.TestCase):
             {"ts": 4, "path": "/x/page.html", "kind": "published", "agent": "claude", "hash": "", "url": "https://claude.ai/code/artifact/a", "epoch": 1},
         ]
         (self.state / "artifacts-p.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "garbage\n")
-        (self.state / "lineage-p.jsonl").write_text(json.dumps({"ts": 2.5, "old_session_id": "O", "doc": "/h.md", "pane": "%1"}) + "\n")
+        (self.lin / "p.jsonl").write_text(json.dumps({"ts": 2.5, "old_session_id": "O", "doc": "/h.md", "pane": "%1"}) + "\n")
 
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("TC_STATE", None)
+        os.environ.pop("TC_LINEAGE", None)
 
 
 class SummaryTest(Base):
@@ -73,7 +77,7 @@ class SummaryTest(Base):
             {"ts": 1, "path": "/old.md", "kind": "plan", "agent": "claude", "hash": "", "url": "", "epoch": 0},
             {"ts": 2, "path": "/cur.md", "kind": "plan", "agent": "you", "hash": "", "url": "", "epoch": 1},
             {"ts": 3, "path": "/newer-old.md", "kind": "plan", "agent": "claude", "hash": "", "url": "", "epoch": 0}]))
-        (self.state / "lineage-q.jsonl").write_text(json.dumps({"ts": 1.5}) + "\n")
+        (self.lin / "q.jsonl").write_text(json.dumps({"ts": 1.5}) + "\n")
         self.assertEqual(artifacts.summary("q")["active_plan"], "/cur.md")
         (self.state / "artifacts-r.jsonl").write_text(json.dumps({"ts": 1, "path": wt, "kind": "plan", "agent": "w1", "hash": "", "url": "", "epoch": 0}) + "\n")
         self.assertIsNone(artifacts.summary("r")["active_plan"])   # only another agent's worktree plan: no pin
@@ -99,7 +103,7 @@ class SummaryTest(Base):
         rows = [{"ts": 10 + e, "path": f"/x/{n}", "kind": "plan", "agent": "claude", "hash": "", "url": "", "epoch": e}
                 for e, n in enumerate(["old-plan.md", "mid-spec.md", "new-plan.md"])]
         (self.state / "artifacts-m.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-        (self.state / "lineage-m.jsonl").write_text(json.dumps({"ts": 10.5}) + "\n" + json.dumps({"ts": 11.5}) + "\n")
+        (self.lin / "m.jsonl").write_text(json.dumps({"ts": 10.5}) + "\n" + json.dumps({"ts": 11.5}) + "\n")
         s = artifacts.summary("m")
         self.assertEqual(s["epoch"], 2)
         self.assertEqual(sorted(it["latest"]["epoch"] for it in s["items"]), [0, 1, 2])

@@ -6,6 +6,10 @@
 TC_STATE_DIR="${TC_STATE:-${${TMPDIR:-/tmp}%/}/tmux-ctl-$UID}"   # set at source time: callers need no subshell
 tc_state_dir() { print -r -- "$TC_STATE_DIR" }
 
+# Handoff lineage (one <project>.jsonl per project, a line per relay). Persistent state: it outlives the project's close
+# and the $TMPDIR sweep. TC_LINEAGE overrides (the test harness sets it). board/tc_env.py lineage_dir() is the same rule.
+TC_LINEAGE_DIR="${TC_LINEAGE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-board/lineage}"
+
 # pane_current_command values that mean "idle at a shell prompt" (zsh pattern; paneclass.py uses the same list)
 TC_SHELLS='(zsh|bash|sh|fish|-zsh|-bash)'
 
