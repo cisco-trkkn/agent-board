@@ -171,7 +171,7 @@ Prices: `board/prices.json` holds $/Mtok and context size per model. Add an entr
 {"master-gcp-repo": {"repo": "trkkn/trkkn-na/master-gcp-repo", "since": "2026-10-28"}}
 ```
 
-`repo` is the project path on gitlab.com; `since` (`YYYY-MM-DD`, required) means only ideas stamped on or after that date become issues. Every ideas write starts a background `ideas.py sync --project P`, and the board re-syncs mapped projects every 60 s. Preview a pass with `ideas.py sync --project P --dry-run`: it only reads GitLab. The sync needs `glab` logged in. Test seam: with `TC_IDEAS_DIR` set and `TC_GITLAB_CONF` unset the feature is off.
+`repo` is the project path on gitlab.com; `since` (`YYYY-MM-DD`, required) means only ideas stamped on or after that date become issues. Every ideas write starts a background `ideas.py sync --project P`, and the board re-syncs mapped projects every 60 s. Preview a pass with `ideas.py sync --project P --dry-run`: it only reads GitLab. The sync needs `glab` logged in, as a user with at least the Planner/Reporter role on the repo (check with `glab auth status --hostname gitlab.com`). Below that role GitLab silently drops the labels. Test seam: with `TC_IDEAS_DIR` set and `TC_GITLAB_CONF` unset the feature is off.
 
 ### New board actions
 

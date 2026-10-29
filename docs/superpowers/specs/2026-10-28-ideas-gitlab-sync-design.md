@@ -56,7 +56,7 @@ any ` → …` suffix the lead or a move appends:
 - `move()` does not copy the token to the target; the target project gets its own issue if it is mapped.
 - The token regex is anchored: ` · gl#(\d+)(?= → |$)`. A `gl#` elsewhere in the idea text is left alone.
 
-**Sidecar** `<ideas_dir>/<project>.gitlab.json`: what was last pushed for each iid.
+**Sidecar** `<ideas_dir>/<project>.gitlab.json`: what was last pushed for each iid. `state` is `open`, `closed-done`, `closed-moved` or `closed-dropped`, plus `closed-adopted`: an open idea that adopted an already closed issue by its marker. It differs from `open`, so the next step reopens the issue (removing `not-planned`); if the idea has meanwhile been taken up, moved or dropped, the normal close for that status runs instead.
 
 ```json
 {"12": {"ts": "2026-10-28 10:00", "title": "add retries to the export", "state": "open"}}

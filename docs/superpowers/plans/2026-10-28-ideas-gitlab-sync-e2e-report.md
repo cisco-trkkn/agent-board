@@ -80,7 +80,7 @@ One marker search per create, and nothing else. The searches all returned no mat
 
 ## Limits of this run
 
-An empty marker search on the real instance is only proven by the user gate's second pass: here the search returned nothing for every idea, which cannot distinguish "no issue carries the marker" from "the search does not find markers". Only the gate, which creates an issue and then syncs again, shows the second sync adopting it instead of creating a duplicate.
+An empty marker search on the real instance is only proven by the user gate's adopt step: here the search returned nothing for every idea, which cannot distinguish "no issue carries the marker" from "the search does not find markers". Only the gate's adopt step (below), which removes the token from a line whose issue exists and then syncs, shows the sync adopting the issue instead of creating a duplicate. A plain second sync does not: the token is already written, so it skips the search.
 
 ## User gate after merge
 
@@ -91,3 +91,13 @@ Copied from the spec's e2e check, to be run by the user once merged:
 3. See the issue appear in the GitLab repo.
 4. Drop the idea.
 5. See the issue closed with `not-planned`.
+6. Adopt step (proves no duplicate on a lost token): delete ` · gl#N` from the idea line by hand. `python3 board/ideas.py sync --project P --dry-run` must print `adopt #N "…"`, not `create`. Then a real `python3 board/ideas.py sync --project P` writes `gl#N` back, and the repo still has exactly one issue for that idea.
+7. Restore the dropped idea (board restore): the issue reopens and `not-planned` is removed.
+8. Mark an idea `[x] → <spec>`: the issue closes with a "Taken up" note.
+
+### Merge-gate checklist (inputs the agents cannot read)
+
+- [ ] The board server's PATH contains glab's directory: `ps eww -p $(lsof -tiTCP:7700 -sTCP:LISTEN) | tr ' ' '\n' | grep '^PATH='` must include `~/.local/bin` (`command -v glab` → `/Users/francisco.ruiz/.local/bin/glab`). tmux-dash starts the server with `nohup` from the caller's shell (bin/tmux-dash:47). If the directory is missing, the sync shows a warning rather than failing silently.
+- [ ] Restart the board after merge (`tmux-dash` restart): the 60 s loop starts only in `__main__` (server.py:1013), so a board that is already running never re-syncs.
+- [ ] glab is logged in to gitlab.com with a user who has at least Planner/Reporter on the repo: `glab auth status --hostname gitlab.com`, and the project's member page.
+- [ ] The adopt step (6 above) passed.
