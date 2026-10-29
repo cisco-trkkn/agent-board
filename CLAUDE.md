@@ -10,6 +10,7 @@ The tmux `dev` toolkit (`bin/`), the Agent Board (`board/`), its tests (`tools/t
     python3 -m unittest discover -s claude/skills/docs-architecture/tests   # docs-architecture inventory
     python3 -m unittest discover -s claude/skills/docs-compose/tests        # docs-compose Sources check
     python3 -m unittest discover -s claude/skills/docs-report/tests         # docs-report cloud gate
+    for t in claude/hooks/tests/test-*.sh; do bash "$t" || echo "FAIL $t"; done   # claude/hooks shell tests
 
 ## Rules
 
