@@ -200,7 +200,10 @@ dialog .row[hidden] { display: none; }   /* .row sets display:flex, which would 
 .home { padding: 20px; }
 .home-grid { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(320px, 45%); gap: 16px; }
 .ov-term { display: flex; }
-.ov-term iframe { width: 100%; height: 70vh; border: 0; border-radius: 10px; background: #1e1e2e; }
+.ov-term { align-self: start; }   /* the grid would stretch it to the card column and the flex iframe would shrink with it */
+.ov-term iframe { flex: none; width: 100%; height: 70vh; border: 0; border-radius: 10px; background: #1e1e2e; }
+#btn-agent[hidden], #btn-close[hidden], #proj-menu hr[hidden] { display: none; }   /* project-scoped header controls, hidden on the Overview */
+.pill.missing { background: var(--gray-soft); color: var(--muted); }
 .ov-card .ov-lines { font-size: 13px; display: grid; gap: 3px; }
 .ov-needs { color: var(--red); font-weight: 600; }
 .ov-tail, .ov-art { color: var(--muted); }
@@ -689,7 +692,8 @@ for (const g of document.querySelectorAll(".grip")) g.addEventListener("pointerd
   g.addEventListener("pointermove", move); g.addEventListener("pointerup", up); g.addEventListener("pointercancel", cancel);
 });
 
-function render() { $("#home").hidden = !homeView(); $(".layout").hidden = homeView(); renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
+function render() { const home = homeView(); $("#btn-agent").hidden = home; $("#btn-close").hidden = home; $("#proj-menu hr").hidden = home;
+  $("#home").hidden = !homeView(); $(".layout").hidden = homeView(); renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
 
 function setOffline(off) {
   $("#live").classList.toggle("off", off); $("#live span").textContent = off ? "offline" : "live";
@@ -1598,7 +1602,7 @@ function renderHome() {
   for (const p of d.projects) {
     const c = el("div", "card ov-card" + (p.needs_you.length ? " waiting" : "")), head = el("div", "card-head");
     const a = el("a", "ov-name", p.project); a.href = "#" + encodeURIComponent(p.project);
-    head.append(a, el("span", "pill " + (p.needs_you.length ? "waiting" : p.lead.status === "working" ? "working" : "ready"),
+    head.append(a, el("span", "pill " + (p.needs_you.length || p.lead.status === "waiting" ? "waiting" : p.lead.status === "working" ? "working" : p.lead.status === "ready" ? "ready" : "missing"),
       p.needs_you.length ? "Needs you" : p.lead.status === "ready" && p.lead.idle_s != null ? `Lead idle ${fmtAge(p.lead.idle_s)}` : `Lead ${p.lead.status}`));
     c.append(head);
     const lines = el("div", "ov-lines");
