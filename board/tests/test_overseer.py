@@ -54,6 +54,12 @@ class OverseerSettingsTest(unittest.TestCase):
             self.assertIn(s, launcher, s)
         self.assertNotIn("--plugin-dir", launcher)
 
+    def test_overseer_session_starts_outside_the_repo(self):
+        # started in the repo, usage matching by cwd would count its own session toward the agent-board project's alerts
+        script = (REPO / "bin" / "tmux-overseer").read_text()
+        self.assertNotIn('-c "$AB_REPO"', script)
+        self.assertIn("agent-board/overseer", script)
+
 
 if __name__ == "__main__":
     unittest.main()

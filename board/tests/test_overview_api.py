@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest import mock
 
 os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")
-os.environ["TC_OVERSEER"] = "0"
 SERVER = Path(__file__).resolve().parent.parent / "server.py"
 spec = importlib.util.spec_from_file_location("tmux_dash_server_overview", SERVER)
 server = importlib.util.module_from_spec(spec)
@@ -37,8 +36,10 @@ class OverviewApiTest(unittest.TestCase):
                         mock.patch.object(server, "window_activity", return_value={"proj": {"claude": 1}}),
                         mock.patch.object(server, "spend_today", return_value=None),
                         mock.patch.object(server.overview.planview, "view", return_value=dict(server.overview.planview.EMPTY)),
-                        mock.patch.object(server, "run_script", side_effect=AssertionError("must not spawn"))]
-        for p in self.patches:
+                        mock.patch.object(server, "run_script"),
+                        mock.patch.dict(os.environ, {"TC_OVERSEER": "0"})]   # restored on cleanup: no leak into other modules
+        self.run_script = self.patches[4].start(); self.addCleanup(self.patches[4].stop)
+        for p in self.patches[:4] + self.patches[5:]:
             p.start(); self.addCleanup(p.stop)
 
     def tearDown(self):
@@ -73,10 +74,19 @@ class OverviewApiTest(unittest.TestCase):
 
     def test_tc_overseer_off_never_spawns(self):
         server._last["windows"] = {"proj": {"claude": 1}}     # no overseer running, a project with a claude window
-        server.ensure_overseer()                               # run_script is patched to fail: not called
-        with mock.patch.dict(os.environ, {"TC_OVERSEER": "1"}), mock.patch.object(server, "run_script", return_value="started") as rs:
+        server.ensure_overseer()
+        self.run_script.assert_not_called()                    # TC_OVERSEER=0 (set in setUp)
+        with mock.patch.dict(os.environ, {"TC_OVERSEER": "1"}):
             server.ensure_overseer()
-            self.assertEqual(rs.call_args[0][0][-1], "ensure")
+        self.run_script.assert_called_once()
+        self.assertEqual(self.run_script.call_args[0][0][-1], "ensure")
+
+    def test_ensure_runs_outside_the_overview_lock(self):
+        held = []
+        with mock.patch.object(server, "ensure_overseer", side_effect=lambda: held.append(server._overview_lock.locked())) as ens:
+            self.get()
+        ens.assert_called_once()
+        self.assertEqual(held, [False])                        # a slow tmux-overseer must not stall /api/overview
 
 
 if __name__ == "__main__":

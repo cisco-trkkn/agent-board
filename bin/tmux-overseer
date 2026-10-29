@@ -25,8 +25,11 @@ case "$1" in
     "$T" has-session -t "=$OV" 2>/dev/null && exit 0
     [[ -n "$(projects)" ]] || exit 0
     cmd="${TC_OVERSEER_CMD:-${(q)AB_REPO}/bin/claude-overseer}"
+    # its own cwd, not the repo: usage matches sessions to projects by cwd, and the overseer must not count toward agent-board
+    dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-board/overseer"
+    mkdir -p "$dir" || exit 0
     # new-session is the atomic gate: a second caller racing this one loses and exits quietly
-    "$T" new-session -d -s "$OV" -n claude -x 200 -y 50 -c "$AB_REPO" 2>/dev/null || exit 0
+    "$T" new-session -d -s "$OV" -n claude -x 200 -y 50 -c "$dir" 2>/dev/null || exit 0
     "$T" set-option -t "=${OV}:" @tc_overseer 1
     "$T" send-keys -t "=${OV}:claude" -l -- "$cmd"
     "$T" send-keys -t "=${OV}:claude" Enter

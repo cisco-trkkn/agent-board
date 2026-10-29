@@ -395,10 +395,10 @@ def overview_payload():
             return _overview_cache["value"]
         ov = build_overview()
         NOTIFIER.observe(ov)
-        ensure_overseer()
         value = {**ov, "events": NOTIFIER.recent(), "overseer": overseer_info()}
         _overview_cache.update(at=time.monotonic(), value=value)
-        return value
+    ensure_overseer()   # once per fresh build, outside the lock: its run_script can take up to 20 s and must not stall /api/overview
+    return value
 
 
 def overview_loop():
