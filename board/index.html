@@ -285,8 +285,10 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .ideas-list { display: flex; flex-direction: column; gap: 4px; }
 .idea { font-size: 13px; padding: 4px 8px; border-radius: 8px; background: var(--panel-2); }
 .idea small { color: var(--muted); display: block; }
-.idea.dropped { opacity: .55; }
+.idea.dropped { color: var(--muted); }   /* dim by colour, not opacity: opacity would dim the issue link too */
+.idea a { color: var(--blue); }   /* 4.66:1 light, 6.16:1 dark on --panel-2 */
 .idea input, .idea textarea { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+.ideas-gitlab-warn { font-size: 12px; color: var(--red); margin: 2px 0 6px; overflow-wrap: anywhere; }
 .ideas-dropped { font-size: 12px; color: var(--muted); display: block; margin-top: 6px; }
 .ideas-dropped input { width: auto; margin-right: 4px; vertical-align: middle; }   /* the global input rule sets width:100% */
 </style>
@@ -1288,7 +1290,9 @@ async function pollIdeas() {
     lab.append(cb, " Show dropped");
     box.append(inp, det, el("div", "ideas-list"), lab);
   }
-  box.querySelector(".art-group").replaceChildren(el("h4", "", `Ideas · ${d.open}`));
+  const gl = d.gitlab;   // null = the project is not mapped to a GitLab repo
+  box.querySelector(".art-group").replaceChildren(el("h4", "", `Ideas · ${d.open}`),
+    ...(gl && !gl.ok ? [el("div", "ideas-gitlab-warn", `GitLab sync: ${gl.error}`)] : []));
   if (ideaEditing && ideaEditing.session === s.name) return;
   ideaEditing = null;   // don't rebuild the row being edited
   ideasShown = s.name;
@@ -1296,7 +1300,13 @@ async function pollIdeas() {
   const addRow = (i, cls) => {
     const row = el("div", cls, i.text); row.dataset.key = "idea:" + i.key;
     const meta = i.ts + (i.moved_to ? " · → " + i.moved_to : "") + (i.detail ? " · " + i.detail.split("\n")[0] : "");
-    row.append(el("small", "", meta));
+    const small = el("small", "", meta);
+    if (i.issue && gl && gl.url) {
+      const a = el("a", "", `GitLab #${i.issue}`);
+      a.href = `${gl.url}/-/issues/${i.issue}`; a.target = "_blank"; a.rel = "noopener";
+      small.append(" · ", a);
+    }
+    row.append(small);
     bindAgentMenu(row, () => ideaMenuItems(i));
     list.append(row);
   };

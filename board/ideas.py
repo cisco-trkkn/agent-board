@@ -5,10 +5,12 @@
 Each idea is "- [ ] YYYY-MM-DD HH:MM · text" with detail as indented lines; [x] = taken up
 (followed by "→ <spec>"), [-] = dropped. Ideas are never deleted. Every writer appends under an
 exclusive lock on <file>.lock. Agents do not read this file while a plan is running.
+An idea pushed to GitLab carries " · gl#<iid>" before any " → …" suffix (see gitlab_sync.py).
 The board can edit, drop/restore and move ideas; a move appends to the target and marks the source "[-] … → moved to <target>".
 
   ideas.py add --project P [--detail D] -- TEXT
   ideas.py list --project P
+  ideas.py sync --project P [--dry-run]
 """
 import argparse
 import fcntl
@@ -23,6 +25,7 @@ from pathlib import Path
 LINE_RE = re.compile(r"^- \[( |x|-)\] (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · (.*)$")
 STATUS = {" ": "open", "x": "taken", "-": "dropped"}
 MOVED_RE = re.compile(r" → moved to ([A-Za-z0-9_-][A-Za-z0-9._-]*)$")
+ISSUE_RE = re.compile(r" · gl#(\d+)(?= → |$)")   # the GitLab issue token gitlab_sync.py writes
 
 
 class Stale(ValueError):
@@ -69,17 +72,36 @@ def _append(project, first, detail_lines):
             f.write(entry)
 
 
+def _kick(project):
+    """Start a background GitLab sync for a mapped project. Capture must never fail because of it."""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)   # python3 -I implies -P
+        import gitlab_sync
+        gitlab_sync.kick(project)
+    except Exception:
+        pass
+
+
+def _split_issue(text):
+    """'a · gl#12 → b' -> ('a → b', 12); text without the token -> (text, None)."""
+    m = ISSUE_RE.search(text)
+    return (text[:m.start()] + text[m.end():], int(m[1])) if m else (text, None)
+
+
 def _clean_detail(detail):
     return [l.strip() for l in str(detail).splitlines() if l.strip()]
 
 
 def add(project, text, detail="", now=None):
-    text = " ".join(str(text).split())
+    text = _split_issue(" ".join(str(text).split()))[0]   # a typed gl#N must not point at someone else's issue
     if not text:
         raise ValueError("empty idea")
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(now))
     first = f"- [ ] {stamp} · {text}"
     _append(project, first, _clean_detail(detail))
+    _kick(project)
     return first
 
 
@@ -110,7 +132,7 @@ def _rewrite(project, key, change):
 
 
 def edit(project, key, text, detail=""):
-    text = " ".join(str(text).split())
+    text = _split_issue(" ".join(str(text).split()))[0]
     if not text:
         raise ValueError("empty idea")
     new_detail = _clean_detail(detail)
@@ -118,8 +140,11 @@ def edit(project, key, text, detail=""):
     def change(box, ts, raw, old):
         if box != " ":
             raise ValueError("only open ideas can be edited")
-        return f"- [ ] {ts} · {text}", new_detail
-    return _rewrite(project, key, change)[6:]
+        iid = _split_issue(raw)[1]
+        return f"- [ ] {ts} · {text}" + (f" · gl#{iid}" if iid else ""), new_detail
+    out = _rewrite(project, key, change)[6:]
+    _kick(project)
+    return out
 
 
 def set_status(project, key, status):
@@ -134,7 +159,9 @@ def set_status(project, key, status):
         if to == " " and MOVED_RE.search(raw):
             raise ValueError("a moved idea cannot be restored here; restore it in the project it moved to")
         return f"- [{to}] {ts} · {raw}", detail
-    return _rewrite(project, key, change)
+    out = _rewrite(project, key, change)
+    _kick(project)
+    return out
 
 
 def move(project, key, target):
@@ -154,6 +181,24 @@ def move(project, key, target):
         if box != " ":
             raise Stale("the idea changed since you loaded it")
         return f"- [-] {ts} · {raw} → moved to {target}", detail
+    out = _rewrite(project, key, change)
+    _kick(project)
+    _kick(target)
+    return out
+
+
+def set_issue(project, key, iid):
+    """Record GitLab issue #iid on the idea: the token goes before a ' → …' suffix on a closed idea,
+    at the end of an open one. Called by gitlab_sync only; it never triggers a sync."""
+    def change(box, ts, raw, detail):
+        have = _split_issue(raw)[1]
+        if have is not None and have != iid:
+            raise Stale(f"the idea already has issue #{have}")
+        if have == iid:
+            return f"- [{box}] {ts} · {raw}", detail
+        cut = raw.rfind(" → ") if box != " " else -1
+        raw = raw[:cut] + f" · gl#{iid}" + raw[cut:] if cut >= 0 else raw + f" · gl#{iid}"
+        return f"- [{box}] {ts} · {raw}", detail
     return _rewrite(project, key, change)
 
 
@@ -169,7 +214,8 @@ def load(project):
         m = LINE_RE.match(line)
         if m:
             mv = MOVED_RE.search(m[3]) if m[1] == "-" else None
-            out.append({"status": STATUS[m[1]], "ts": m[2], "text": m[3][:mv.start()] if mv else m[3],
+            text, iid = _split_issue(m[3][:mv.start()] if mv else m[3])
+            out.append({"status": STATUS[m[1]], "ts": m[2], "text": text, "issue": iid,
                         "detail": "", "key": f"{m[2]} · {m[3]}", "moved_to": mv[1] if mv else ""})
         elif out and line.startswith("  ") and line.strip():
             d = out[-1]["detail"]
@@ -181,6 +227,22 @@ def open_count(project):
     return sum(1 for i in load(project) if i["status"] == "open")
 
 
+def _sync(project, dry_run):
+    """Push the project's ideas to GitLab. 0 ok or unmapped, 1 a push failed, 2 bad config."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))   # python3 -I implies -P
+    import gitlab_sync   # lazy: gitlab_sync imports this module
+    try:
+        r = gitlab_sync.sync(project, dry_run=dry_run)
+    except gitlab_sync.ConfigError as e:
+        print(f"ideas: gitlab config: {e}", file=sys.stderr)
+        return 2
+    for line in r["actions"]:
+        print(line)
+    if r["error"]:
+        print(f"ideas: {r['error']}", file=sys.stderr)
+    return 0 if r["ok"] else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="per-project ideas inbox")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -190,7 +252,12 @@ def main(argv=None):
     a.add_argument("text", nargs="+")
     ls = sub.add_parser("list")
     ls.add_argument("--project", required=True)
+    sy = sub.add_parser("sync")
+    sy.add_argument("--project", required=True)
+    sy.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if args.cmd == "sync":
+        return _sync(args.project, args.dry_run)
     try:
         if args.cmd == "add":
             print(f"noted for later: {add(args.project, ' '.join(args.text), args.detail)}")

@@ -1,0 +1,35 @@
+HTTP/2.0 200 OK
+Cache-Control: max-age=0, private, must-revalidate
+Cf-Cache-Status: BYPASS
+Cf-Ray: a51db22868fa41e3-EWR
+Content-Length: 2
+Content-Security-Policy: default-src 'none'
+Content-Type: application/json
+Date: Wed, 28 Oct 2026 23:24:47 GMT
+Etag: W/"4f53cda18c2baa0c0354bb5f9a3ecbe5"
+Gitlab-Lb: haproxy-main-31-lb-gprd
+Gitlab-Sv: api-gke-us-east1-b
+Link: <https://gitlab.com/api/v4/projects/trkkn%2Ftrkkn-na%2Fmaster-gcp-repo/issues?id=trkkn%2Ftrkkn-na%2Fmaster-gcp-repo&order_by=created_at&page=1&per_page=1&sort=desc&state=all&with_labels_details=false>; rel="first", <https://gitlab.com/api/v4/projects/trkkn%2Ftrkkn-na%2Fmaster-gcp-repo/issues?id=trkkn%2Ftrkkn-na%2Fmaster-gcp-repo&order_by=created_at&page=1&per_page=1&sort=desc&state=all&with_labels_details=false>; rel="last"
+Nel: {"max_age": 0}
+Ratelimit-Limit: 2000
+Ratelimit-Name: throttle_authenticated_api
+Ratelimit-Observed: 1
+Ratelimit-Remaining: 1999
+Ratelimit-Reset: 1793229900
+Referrer-Policy: strict-origin-when-cross-origin
+Server: cloudflare
+Strict-Transport-Security: max-age=31536000
+Vary: Origin
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+X-Gitlab-Meta: {"correlation_id":"a51db22868fa41e3-EWR","version":"1"}
+X-Next-Page: 
+X-Page: 1
+X-Per-Page: 1
+X-Prev-Page: 
+X-Request-Id: a51db22868fa41e3-EWR
+X-Runtime: 0.186059
+X-Total: 0
+X-Total-Pages: 1
+
+[]
