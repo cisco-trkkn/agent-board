@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# tmux-dev-layout <session> <root> — idempotently shape a dev session. The user keeps `claude` and `plan` (a throwaway shell is
+# tmux-dev-layout <session> <root> — idempotently shape a dev session. The user keeps `claude` (a throwaway shell is
 # prefix S); the agents' tests/shell windows live in the hidden session <project>-bg (see tmux-ctl ensure_bg).
 # Migrates old layouts: removes an idle user `shell`, moves an idle `tests` window to -bg, closes feed/watch panes, drops status labels.
 # Optional .dev/windows lines `tests: <cmd>` / `shell: <cmd>` run as a watch pane in the -bg window.
@@ -53,7 +53,10 @@ if has_win "$sess" shell; then   # the user's old shell window; never the -bg on
   fi
 fi
 
-has_win "$sess" plan || t new-window -d -a -t "=${sess}:claude" -n plan -c "$root" "${(q)${0:A:h}}/tmux-plan ${(q)sess} ${(q)root}"
+# the retired plan window (2026-10-29): close it only if its pane started tmux-plan; a user window named plan stays
+if has_win "$sess" plan && [[ "$(t display -p -t "=${sess}:plan" '#{pane_start_command}')" == *tmux-plan* ]]; then
+  t kill-window -t "=${sess}:plan"
+fi
 
 # optional watch commands, in the -bg windows
 if [[ -r "$root/.dev/windows" ]]; then
