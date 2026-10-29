@@ -260,11 +260,20 @@ def _overlay_tap(e, tap):
     return e
 
 
+def _with_context_alert(e, th):
+    """Add the context alert (first in the list) from the row's final context_pct, after any tap overlay."""
+    pct = e["context_pct"]
+    if pct is not None and pct >= th["context_pct"]:
+        e["alerts"].insert(0, {"kind": "context", "label": f"ctx {pct}%",
+                               "detail": f"Context is {pct}% of the model window (alert at {th['context_pct']}%)."})
+    return e
+
+
 def _tap_only_entry(sid, tap):
     cwd = tap.get("cwd") or _get(tap, "workspace", "current_dir")
     e = {"session_id": sid, "name": tap.get("session_name") or sid[:8],
          "role": "worker" if "/.claude/worktrees/" in (cwd or "") else "lead",
-         "model": None, "effort": None, "agent_name": None, "cwd": cwd, "context": 0, "context_pct": 0,
+         "model": None, "effort": None, "agent_name": None, "cwd": cwd, "context": 0, "context_pct": None,
          "last_hour": 0.0, "total": 0.0, "alerts": []}
     return _overlay_tap(e, tap)
 
@@ -285,9 +294,6 @@ def _live_entry(conn, sid, prices, th, now):
     rl = role(newest)
     name = newest["agent_name"] or (os.path.basename(newest["cwd"].rstrip("/")) if rl == "worker" else None) or sid[:8]
     alerts = []
-    if pct >= th["context_pct"]:
-        alerts.append({"kind": "context", "label": f"ctx {pct}%",
-                       "detail": f"Context is {pct}% of the model window (alert at {th['context_pct']}%)."})
     per_hour = burn_spend * 3600 / th["burn_window_s"]
     if per_hour > th["burn_per_hour"]:
         alerts.append({"kind": "burn", "label": f"${per_hour:.0f}/h",
@@ -320,12 +326,13 @@ def live_sessions(conn, prices, th, now, taps=None):
     out = []
     for sid in sids:
         e = _live_entry(conn, sid, prices, th, now)
-        out.append(_overlay_tap(e, taps[sid]) if sid in taps else e)
+        out.append(_with_context_alert(_overlay_tap(e, taps[sid]) if sid in taps else e, th))
     # a fresh tap with no transcript call in the window: a session that just started, or whose calls aged out
     for sid, tap in taps.items():
         if sid not in sids:
-            out.append(_overlay_tap(_live_entry(conn, sid, prices, th, now), tap) if sid in indexed
-                       else _tap_only_entry(sid, tap))
+            e = (_overlay_tap(_live_entry(conn, sid, prices, th, now), tap) if sid in indexed
+                 else _tap_only_entry(sid, tap))
+            out.append(_with_context_alert(e, th))
     return out
 
 

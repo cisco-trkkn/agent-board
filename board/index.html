@@ -1465,8 +1465,8 @@ function usageLive(d) {
   t.append(head);
   for (const e of d.live) {
     const tr = el("tr"), bar = el("span", "ctx-bar" + (e.alerts.some((a) => a.kind === "context") ? " amber" : "")), fill = el("i");
-    fill.style.width = `${Math.min(100, e.context_pct)}%`; bar.append(fill);
-    const cx = el("td"); cx.append(bar, `${e.context_pct}%`);
+    fill.style.width = `${Math.min(100, e.context_pct ?? 0)}%`; bar.append(fill);
+    const cx = el("td"); cx.append(bar, e.context_pct == null ? "–" : `${e.context_pct}%`);
     tr.append(el("td", null, e.name), el("td", null, e.role), el("td", null, e.model), el("td", null, e.effort || ""), cx,
       el("td", "num", usd(e.last_hour)), el("td", "num", usd(e.total)));
     t.append(tr);

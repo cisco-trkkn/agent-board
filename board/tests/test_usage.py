@@ -940,6 +940,28 @@ class TapTest(ReportTest):
         e = self.live()[0]
         self.assertEqual((e["context_pct"], e["model"], e["source"]), (0, "claude-haiku-5-5", "tap"))
 
+    def test_low_tap_pct_over_high_transcript_pct_raises_no_context_alert(self):
+        self.put(line("a", ts=ts(60), inp=850_000, out=0))
+        self.tap(age=30)
+        e = self.live()[0]
+        self.assertEqual(e["context_pct"], 4)
+        self.assertEqual([a for a in e["alerts"] if a["kind"] == "context"], [])
+
+    def test_tap_only_row_at_97_pct_raises_the_context_alert(self):
+        d = self.tap(sid="s9", age=30)
+        d["context_window"]["used_percentage"] = 97
+        self.tap(sid="s9", age=30, context_window=d["context_window"])
+        e = self.live()[0]
+        self.assertEqual((e["context_pct"], [a["label"] for a in e["alerts"] if a["kind"] == "context"]), (97, ["ctx 97%"]))
+
+    def test_tap_only_row_with_null_pct_is_unknown_and_raises_no_alert(self):
+        d = self.tap(sid="s9", age=30)
+        d["context_window"]["used_percentage"] = None
+        self.tap(sid="s9", age=30, context_window=d["context_window"])
+        e = self.live()[0]
+        self.assertIsNone(e["context_pct"])
+        self.assertEqual(e["alerts"], [])
+
     def test_stale_tap_with_recent_call_is_a_transcript_row(self):
         self.put(line("a", ts=ts(60), inp=100, out=0, effort="high"))
         self.tap(age=1900)
