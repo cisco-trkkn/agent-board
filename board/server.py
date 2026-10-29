@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, gitlab_sync, ideas, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, gitlab_sync, ideas, notify, overview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 
@@ -221,6 +221,9 @@ def vendor_file(name):
 
 COMMENTS = artifacts.CommentQueue()
 INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
+NOTIFIER = notify.Notifier()   # TC_NOTIFY=0 turns banners and the events list off
+OVERSEER_SESSION = "overseer"   # the read-only overseer's tmux session: never a project card
+OVERVIEW_EVERY = 10   # seconds between overview builds (the notifier thread) and the cache life of /api/overview
 NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")   # the same rule as ideas.py
 
 
@@ -294,7 +297,7 @@ def build_state():
     for f in every:
         windows.setdefault(f[0], {})[f[3]] = int(f[2])
     _last["windows"] = windows
-    panes = [f for f in every if not f[0].startswith("_web-") and f[14] != "1"]
+    panes = [f for f in every if not f[0].startswith("_web-") and f[14] != "1" and f[0] != OVERSEER_SESSION]
     ids = list(dict.fromkeys(f[7] for f in panes))
     rows_by = _split_captures(MARK + captured) if captured else {}
     rows_by.update(capture_panes([p for p in ids if p not in rows_by]))   # new since the last build, or after an abort
@@ -326,6 +329,90 @@ def build_state():
     usage.card_labels(out, snap)
     return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}, "last_sweep": last_sweep()}
 
+
+
+# ---------------------------------------------------------------- overview and notifier
+
+_overview_lock = threading.Lock()
+_overview_cache = {"at": 0.0, "value": None}
+
+
+def window_activity():
+    """{session: {window name: epoch of the window's last activity}} from one list-windows -a (#{window_activity})."""
+    out = {}
+    for line in tmux("list-windows", "-a", "-F", SEP.join(["#{session_name}", "#{window_name}", "#{window_activity}"])).splitlines():
+        f = line.split(SEP)
+        if len(f) == 3 and f[2].isdigit():
+            out.setdefault(f[0], {})[f[1]] = int(f[2])
+    return out
+
+
+def spend_today(repo, now):
+    """USD the project spent since local midnight, from the usage index; None when the index can't be read."""
+    conn = None
+    try:
+        conn = usage.connect(usage.db_path())
+        return usage.spend_since(conn, repo, usage._midnight(now, 0), usage.load_prices())
+    except Exception:   # noqa: BLE001 - sqlite locked or corrupt: the digest shows no spend
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def overseer_info():
+    """{"session", "running", "window_index"} from the last state build's window map."""
+    wins = _last["windows"].get(OVERSEER_SESSION)
+    return {"session": OVERSEER_SESSION, "running": bool(wins), "window_index": (wins or {}).get("claude")}
+
+
+def ensure_overseer():
+    """Start the overseer when a project with a claude window exists and the overseer session doesn't (TC_OVERSEER=0: never).
+    One spawn only when it is missing; bin/tmux-overseer decides the rest (it is also the dev-layout and session-closed path)."""
+    if os.environ.get("TC_OVERSEER") == "0" or OVERSEER_SESSION in _last["windows"]:
+        return
+    if not any("claude" in w for s, w in _last["windows"].items() if not s.startswith("_web-") and not s.endswith("-bg")):
+        return
+    try:
+        run_script([str(BIN / "tmux-overseer"), "ensure"], timeout=20)
+    except Exception as e:   # noqa: BLE001 - never on the request path's error budget
+        print(f"tmux-dash: overseer ensure failed: {e}", file=sys.stderr, flush=True)
+
+
+def build_overview(now=None):
+    now = now or time.time()
+    st = state()
+    live = INDEXER.snapshot() if INDEXER else []
+    th, _ = usage.thresholds()
+    return overview.build(st["sessions"], live, now, home=HOME / ".claude", state_dir=tc_env.state_dir(), tmux=tmux, th=th,
+                          spend=lambda repo: spend_today(repo, now), activity=window_activity())
+
+
+def overview_payload():
+    """The /api/overview body: a fresh overview at most every OVERVIEW_EVERY seconds, observed by the notifier, plus its events."""
+    with _overview_lock:
+        if _overview_cache["value"] is not None and time.monotonic() - _overview_cache["at"] < OVERVIEW_EVERY:
+            return _overview_cache["value"]
+        ov = build_overview()
+        NOTIFIER.observe(ov)
+        ensure_overseer()
+        value = {**ov, "events": NOTIFIER.recent(), "overseer": overseer_info()}
+        _overview_cache.update(at=time.monotonic(), value=value)
+        return value
+
+
+def overview_loop():
+    """The notifier thread: builds the overview every OVERVIEW_EVERY seconds, so events fire with no browser open."""
+    logged = set()
+    while True:
+        try:
+            overview_payload()
+        except Exception as e:   # noqa: BLE001 - tmux down, etc.: log once, keep going
+            key = f"{type(e).__name__}: {e}"
+            if key not in logged:
+                logged.add(key)
+                print(f"tmux-dash: overview: {key}", file=sys.stderr, flush=True)
+        time.sleep(OVERVIEW_EVERY)
 
 
 def label_targets(run=None):
@@ -884,6 +971,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, state(), etag=True)
             except Exception as e:  # tmux server not running, etc.
                 self._json(200, {"sessions": [], "error": str(e), "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}}, etag=True)
+        elif sub == "api/overview":
+            try:
+                self._json(200, overview_payload(), etag=True)
+            except Exception as e:  # tmux server not running, etc.
+                self._json(200, {"generated": time.time(), "projects": [], "events": [], "overseer": overseer_info(), "error": str(e)}, etag=True)
         elif sub == "api/artifacts":
             try:
                 sess = project_arg(q)
@@ -1012,5 +1104,6 @@ if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     INDEXER = usage.Indexer(usage.root(), usage.db_path(), on_snapshot=sync_labels)
     INDEXER.start()
+    threading.Thread(target=overview_loop, name="overview-notifier", daemon=True).start()
     print(f"tmux-dash on http://127.0.0.1:{PORT}/{TOKEN}/", flush=True)
     srv.serve_forever()
