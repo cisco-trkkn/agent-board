@@ -1268,9 +1268,10 @@ async function moveDoc(path, target) {
   pollArtifacts();
 }
 
-async function pollIdeas() {
+async function pollIdeas(fromCache) {   // fromCache: re-render from the last reply (the Show dropped toggle), no fetch
   const s = session(); if (!s) return;
-  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || (!p.changed && ideasShown === s.name)) return;
+  const path = `ideas?session=${encodeURIComponent(s.name)}`, last = fromCache && POLL.get(`${API}/${path}`);
+  const p = last ? { ok: true, changed: true, json: last.json } : await pollJSON(path); if (!p.ok || (!p.changed && ideasShown === s.name)) return;
   const d = p.json;
   window.ideasOpen = d.open;
   const box = $("#ideas-box");
@@ -1286,7 +1287,7 @@ async function pollIdeas() {
       if (status === 200) { inp.value = ""; det.value = ""; pollIdeas(); }
     };
     const lab = el("label", "ideas-dropped"), cb = el("input"); cb.type = "checkbox"; cb.id = "ideas-show-dropped"; cb.checked = ideaShowDropped;
-    cb.onchange = () => { ideaShowDropped = cb.checked; try { localStorage.setItem("dash.ideas.dropped", cb.checked ? "1" : "0"); } catch (e) {} pollIdeas(); };
+    cb.onchange = () => { ideaShowDropped = cb.checked; try { localStorage.setItem("dash.ideas.dropped", cb.checked ? "1" : "0"); } catch (e) {} return pollIdeas(true); };
     lab.append(cb, " Show dropped");
     box.append(inp, det, el("div", "ideas-list"), lab);
   }

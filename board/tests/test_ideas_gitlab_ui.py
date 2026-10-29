@@ -45,7 +45,7 @@ const warns = () => box.children.flatMap((c) => c.children || []).filter((c) => 
 %s
 })().catch((e) => { console.log("ERR", e.stack); process.exit(2); });
 """ % (grab(html, r"^async function pollJSON\(path\) \{.*?^\}\n", "pollJSON"),
-       grab(html, r"^async function pollIdeas\(\) \{.*?^\}\n", "pollIdeas"), scenario)
+       grab(html, r"^async function pollIdeas\([^)]*\) \{.*?^\}\n", "pollIdeas"), scenario)
         return subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=20)
 
     def check(self, scenario):
@@ -93,7 +93,7 @@ if (warns().length !== 0 || links(0).length !== 0) process.exit(1);
 
     def test_glab_text_never_goes_through_innerhtml(self):
         html = (BOARD / "index.html").read_text()
-        fn = grab(html, r"^async function pollIdeas\(\) \{.*?^\}\n", "pollIdeas")
+        fn = grab(html, r"^async function pollIdeas\([^)]*\) \{.*?^\}\n", "pollIdeas")
         self.assertNotIn("innerHTML", fn)
 
 
