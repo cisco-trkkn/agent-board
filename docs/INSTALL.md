@@ -20,7 +20,7 @@ agent-board installs from a clone of this repo with one script, `install.sh`, an
 | `~/.config/agent-board/` | **not created**; optional overrides you write yourself ([CUSTOMIZATION](CUSTOMIZATION.md)) | none |
 | `~/.claude/projects/` (your transcripts) | **read only**, by the board's Usage tab | none: nothing is written there |
 
-How the rest reaches Claude without touching `~/.claude`: every Claude that agent-board starts gets `--settings` with the settings file in `<clone>/claude/` (agent teams, `teammateMode`, the `AGENT_BOARD=1` marker) and `--plugin-dir <clone>/claude/plugin` (the `bash-mirror`, `artifact-register`, `kill-guard` and `worktree-sweep` hooks, `plan-handoff-guard` (refuses writing-plans' execution-choice question; `PLAN_HANDOFF_GUARD=0` disables it), `sdd-call-guard` (denies an Agent dispatch while a plan has no `subagent-driven-development` Skill call, which would make superpowers' handoff guard refuse later questions; `SDD_CALL_GUARD=0` disables it), the `tmux-orchestrator` and `handoff` skills, the `effort-low`/`-medium`/`-high` agent types). That covers the lead, the workers started by `tmux-ctl agent`, and the teammates, which Claude Code starts with the lead's own `--settings` and `--plugin-dir` flags. Plain `claude` outside agent-board loads none of it.
+How the rest reaches Claude without touching `~/.claude`: every Claude that agent-board starts gets `--settings` with the settings file in `<clone>/claude/` (agent teams, `teammateMode`, the `AGENT_BOARD=1` marker) and `--plugin-dir <clone>/claude/plugin` (the `bash-mirror`, `artifact-register`, `kill-guard` and `worktree-sweep` hooks, `plan-handoff-guard` (refuses writing-plans' execution-choice question; `PLAN_HANDOFF_GUARD=0` disables it), `sdd-call-guard` (denies an Agent dispatch while a plan has no `subagent-driven-development` Skill call, which would make superpowers' handoff guard refuse later questions; `SDD_CALL_GUARD=0` disables it), `context-inject` (a SessionStart hook that injects the project's shared context file, `${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md`, capped at 8 KB; `TC_CONTEXT=0` disables it), the `tmux-orchestrator` and `handoff` skills, the `effort-low`/`-medium`/`-high` agent types). That covers the lead, the workers started by `tmux-ctl agent`, and the teammates, which Claude Code starts with the lead's own `--settings` and `--plugin-dir` flags. Plain `claude` outside agent-board loads none of it.
 
 > **Used the author's earlier global setup, or an earlier version of this guide?** Run `./install.sh --migrate` (see [Migrating](#migrating-from-the-global-setup)). Otherwise the old global hooks run next to the new ones.
 
@@ -103,7 +103,7 @@ Detach with the usual `Ctrl-b d`. agent-board's tmux server uses tmux's default 
 
 **Your own setup is untouched:**
 
-Nothing under `~/.claude` was written by `./install.sh`. In a plain `claude` session started outside agent-board, `/hooks` lists none of the four agent-board hooks. In the agent-board lead, `/hooks` lists them.
+Nothing under `~/.claude` was written by `./install.sh`. In a plain `claude` session started outside agent-board, `/hooks` lists none of the agent-board hooks. In the agent-board lead, `/hooks` lists them.
 
 ### Things to know
 
