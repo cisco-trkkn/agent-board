@@ -117,6 +117,7 @@ Design points:
 | `agents` | each worker's state (working / WAITING ON USER / exited) and last lines |
 | `artifact <path> [--kind K]` | register a file in the board's artifacts panel |
 | `idea <text>` | append to `~/.local/state/agent-board/ideas/<project>.md` |
+| `context show \| path \| add <section> "<entry>"` | the project's shared context file, `${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md`; see [Shared project context](#shared-project-context) |
 | `relay <doc> [--old-session ID]` | after this turn, restart the `claude` window as a fresh orchestrator reading `<doc>` (used by `/handoff`) |
 
 ## Agent teams and workers
@@ -141,9 +142,10 @@ The hooks ship in the agent-board plugin (`claude/plugin/hooks/hooks.json`, scri
 | PostToolUse + PostToolUseFailure, `Bash` | `bash-mirror.sh` | `feed-<project>-{tests,shell}.log` | Classifies the command as `tests` (pytest, make, npm test, go test, cargo, terraform plan, …) or `shell`, appends a header `── HH:MM:SS · agent · cwd · exit N · @epoch`, the first line and the last 12 output lines. Skips `tmux-ctl` calls (those are recorded as runs). Caps the log at 2 MB (keeps the last 1 MB). Only in dev sessions. |
 | PostToolUse, `Write\|Edit\|MultiEdit\|Artifact` | `artifact-register.sh` | `artifacts-<project>.jsonl` | Kinds by path: `docs/superpowers/plans/` → plan, `…/specs/` → spec, `~/.local/state/agent-board/handoffs/` (or the old `~/.claude/handoffs/`) or a tmp `*handoff*` → handoff, `scratchpad/*report*` → report, Artifact tool URL → published. Other files are ignored unless registered by hand (`--path`). Records sha256, agent, session id and epoch. |
 | PostToolUse, `Bash` | `worktree-sweep.sh` | `feed-<project>-shell.log` (a `swept: removed …; kept …` entry, dev sessions only); the sweep log is the engine's | Acts only when the command contained `git merge`, `git pull`, `glab mr merge` or `git branch -d/-D`; then starts `agent-worktrees sweep <repo>` in the background and never blocks or fails the call. See [Worktree cleanup](#agent-teams-and-workers). |
+| SessionStart (no matcher: startup, resume, clear and compact) | `context-inject.sh` | nothing; prints `hookSpecificOutput.additionalContext` | Injects `${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md` (`<project>` is the ideas key, `-bg` stripped) under the preface "Shared project context, curated by the lead; propose additions as 'Context learned' in your report." Over 8 KB it keeps the last whole entry that fits and appends `… truncated, full file at <path>`. No file, an empty one, no tmux pane or any error: silent exit 0. `TC_CONTEXT=0` disables it. See [Shared project context](#shared-project-context). |
 | Stop / PostToolUse `TaskUpdate` (optional, not registered by agent-board; `claude/hooks/`) | `superpowers-hook.sh <name>` | — | Finds the superpowers-extended-cc plugin wherever it is installed and runs its example hook; silent no-op without the plugin. |
 
-All hooks are silent and exit 0 except kill-guard's deliberate block.
+All hooks are silent and exit 0, except the deliberate blocks of `kill-guard`, `plan-handoff-guard` and `sdd-call-guard` (exit 2) and `context-inject`'s `additionalContext` output.
 
 ## The Agent Board
 
@@ -236,6 +238,10 @@ Plan comments and `[Board]` requests sit in an in-memory `CommentQueue` per proj
 
 `board/ideas.py` owns `${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}/<project>.md` (an older `~/.claude/ideas/<project>.md` is copied across on first use, and the original stays). Each idea is `- [ ] YYYY-MM-DD HH:MM · text` with indented detail lines; `[x]` means taken up (`→ <spec>`), `[-]` dropped (or `→ moved to <project>`). Ideas are never deleted. Writers take an exclusive `fcntl` lock on `<file>.lock`. Edits address an idea by a key and raise `Stale` (HTTP 409) if the file changed underneath. The lead files `idea:` messages here and only reads the file once a plan is finished.
 
+## Shared project context
+
+`board/context.py` owns `${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md`: one curated Markdown file per project with a `Last curated: YYYY-MM-DD` line and four sections in a fixed order (`Map`, `How to run`, `Gotchas`, `Decisions`), one bullet per entry, `- <fact> (files: path/a, path/b) · YYYY-MM-DD` (the date is when the entry was last checked; `(files: …)` is expected for Map and How-to-run entries, so a staleness check can be added later). `add` creates the file with its four headings the first time, appends under the named heading, dates an undated entry, refuses an unknown section, and takes the same exclusive `fcntl` lock on `<file>.lock` as `ideas.py`; the lead's pruning and rewording are plain edits of the file. `tmux-ctl context show | path | add <section> "<entry>"` calls it with the ideas key. The plugin's SessionStart hook `context-inject.sh` injects the file into every agent-board lead, teammate and worker, capped at 8 KB (see [Hooks](#hooks)); teammates propose entries as `Context learned` bullets in their reports, and only the lead writes. Nothing is committed to the repo.
+
 ## State files
 
 Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It is per-user and is deleted per project when the session closes.
@@ -253,7 +259,7 @@ Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It 
 | `<id>.rc`, `<id>.gone` | `tmux-ctl run`/`_done` (transient) | `tmux-ctl run` |
 | `recent-projects.json` | board `dev` action | Open project dialog |
 
-Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `worktree-sweep.log`, the transient `sweep-*.lock`). Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
+Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `context/`, `worktree-sweep.log`, the transient `sweep-*.lock`). Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
 
 ## Install footprint
 
@@ -262,14 +268,14 @@ Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `w
 - **Claude Code.** Every Claude agent-board starts (the lead via `claude-orchestrator`, workers via `tmux-ctl agent`) gets `--settings <clone>/claude/session-settings.json` and `--plugin-dir <clone>/claude/plugin` from `bin/_ab_claude.zsh`, so the hooks, skills and agent types exist only in those sessions. Teammates get the lead's own `--settings` and `--plugin-dir` flags from Claude Code; the tmux session environment carries only `PATH` and `AGENT_BOARD_REPO`, which `claude-orchestrator` sets on the session. `~/.claude` is never written, except by `install.sh --migrate`, which removes what the earlier global install left there.
 - **tmux.** `bin/_tc_bins.zsh` is the one resolver for the tmux command. Its order, first match wins: `TMUX_DASH_TMUX_ARGS`; the server named by `$TMUX` (hooks, `tmux-ctl`, the tests; skipped by the entry points `dev` and `tmux-dash`, which always use agent-board's server); otherwise `tmux -L ${AGENT_BOARD_TMUX_SOCKET:-agent-board} -f <clone>/config/tmux.conf`. A server started that way loads `config/tmux.conf` (the `after-split-window` and `session-closed` hooks, bell and passthrough options, the `D`, `f` and `W` bindings) instead of `~/.tmux.conf`. `board/paneclass.py` asks the same resolver, so Python and zsh agree on the server.
 - **Legacy detection.** On an install from before the dedicated server, `tc_tmux_legacy` is true: `~/.tmux.conf` still has agent-board's hook lines (`tmux-teammate-window` or `tmux-session-closed`) and no `agent-board` server is running. Then `dev` and `tmux-dash` keep using the user's own server until `install.sh --migrate` removes those lines. "The user's own server" is the one the command was typed in when `$TMUX` is set (`-S` its socket), else tmux's default server.
-- **State paths.** Durable data: `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `migrated-YYYYMMDD/`). Board process state: `~/.local/state/tmux-dash/`. Runtime state: `TC_STATE`. Optional user overrides: `~/.config/agent-board/` (`orchestrator.md`, `worker.md`, `tmux.local.conf`, `usage-alerts.json`).
+- **State paths.** Durable data: `~/.local/state/agent-board/` (`ideas/`, `context/`, `handoffs/`, `migrated-YYYYMMDD/`). Board process state: `~/.local/state/tmux-dash/`. Runtime state: `TC_STATE`. Optional user overrides: `~/.config/agent-board/` (`orchestrator.md`, `worker.md`, `tmux.local.conf`, `usage-alerts.json`).
 - **Helper binaries.** ttyd and fzf come from `TTYD_BIN` / `FZF_BIN`, else `PATH`, else `~/.local/bin/<tool>`; tmux from `TC_TMUX`, else `~/.local/bin/tmux` if executable, else `tmux` on `PATH` (`tc_tmux_bin`; `board/paneclass.py` uses the same order).
 
 ## Tests
 
 | Suite | Command | How it isolates |
 | --- | --- | --- |
-| Board (Python `unittest`) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR`, fake tmux runners |
+| Board (Python `unittest`) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR` / `TC_CONTEXT_DIR`, fake tmux runners |
 | Install helpers (Python `unittest`) | `python3 -m unittest discover -s tools/tests -p 'test_*.py'` | `install_lib` (the `install.sh --migrate` settings and tmux edits) on temporary files |
 | Toolkit (zsh) | `zsh tools/tests/run-all.zsh` | `tools/tests/lib.zsh` starts a private tmux server (`-L tctest-…  -f /dev/null`) with a temp `TC_STATE`, and kills it on exit. Covers tmux-ctl, the dev layout, the plugin and hooks, `install.sh` |
 

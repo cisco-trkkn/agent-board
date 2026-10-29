@@ -59,6 +59,14 @@ The user keeps ideas for future work in `${TC_IDEAS_DIR:-~/.local/state/agent-bo
   3. Take each chosen group through `brainstorming`, one at a time.
   4. Mark ideas taken up as `- [x] … → <spec path>` and dropped ones as `- [-] …`. Never delete an idea.
 
+## Shared project context
+
+Every agent-board session starts with the project's shared context file, `${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md` (`<project>` is the ideas key: the tmux session group, else the session name), injected by the plugin's `context-inject` SessionStart hook under the preface "Shared project context, curated by the lead". Sections, in a fixed order: `Map`, `How to run`, `Gotchas`, `Decisions`; one bullet per entry, `- <fact> (files: path/a, path/b) · YYYY-MM-DD`, the date being when the entry was last checked. You curate it; teammates only propose.
+- **At each deliverable** (a task's review passed, a teammate's report in): merge the durable `Context learned` items with `tmux-ctl context add <section> "<entry>"` (`add` dates the entry and creates the file with its four headings the first time). Skip items already there; re-date an entry a teammate checked again; delete one a teammate showed to be wrong. Re-dating, rewording and deleting are ordinary edits with the Edit tool after `tmux-ctl context path`.
+- **At `finishing-a-development-branch`:** prune entries whose cited files the branch removed or renamed.
+- **Over 8 KB** (the hook's cap; it injects a truncated copy and says so): condense the oldest entries.
+- Never copy the file into briefs or handoff docs: every agent gets it from the hook. `tmux-ctl context show` prints it; `tmux-ctl artifact "$(tmux-ctl context path)"` opens it in the board's artifacts panel.
+
 ## Plan comments from the board
 
 A line starting `[Plan comment] <file> § <section>: "<quote>" — <note>` was sent by the user from the board's artifacts panel. Treat it as user feedback on that part of the plan:

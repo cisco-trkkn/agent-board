@@ -26,6 +26,8 @@
 #   tmux-ctl agents                        worker status + last lines
 #   tmux-ctl artifact <path> [--kind K]    show a file in the board's artifacts panel
 #   tmux-ctl idea  <text>                  file an idea for after the plan (never act on it now)
+#   tmux-ctl context show|path|add <section> "<entry>"
+#                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)
 #
@@ -441,6 +443,17 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     [[ -n "$*" ]] || die "usage: tmux-ctl idea <text>"
     python3 -I "${0:A:h:h}/board/ideas.py" add --project "$FEEDKEY" -- "$*" ;;
 
+  context)
+    sub="$1"; [[ -n "$sub" ]] && shift
+    case "$sub" in
+      show|path) python3 -I "${0:A:h:h}/board/context.py" "$sub" --project "$FEEDKEY" ;;
+      add)
+        [[ -n "$1" && -n "$2" ]] || die 'usage: tmux-ctl context add <Map|How to run|Gotchas|Decisions> "<entry>"'
+        sec="$1"; shift
+        python3 -I "${0:A:h:h}/board/context.py" add --project "$FEEDKEY" --section "$sec" -- "$*" ;;
+      *) die 'usage: tmux-ctl context show | path | add <section> "<entry>"' ;;
+    esac ;;
+
   relay)
     [[ -n "$1" ]] || die "usage: tmux-ctl relay <handoff-doc> [--old-session <id>]"
     doc="${1:A}"; shift; old=""
@@ -464,7 +477,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     print -r -- "relay scheduled: ${FEEDKEY}:claude restarts with $doc once this turn ends (log: $log)" ;;
 
   ""|-h|--help|help)
-    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

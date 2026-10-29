@@ -31,6 +31,8 @@ A project-specific settings file is not an override: it is passed per lead, see 
 | `TC_SESSION` | caller's session | `tmux-ctl` | Target a different session (the board sets it for actions). |
 | `TC_LAYOUT` | `tmux-dev-layout` next to `dev` | `dev` | Replace the layout step with your own script (called as `<script> <session> <root>`). |
 | `TC_IDEAS_DIR` | `~/.local/state/agent-board/ideas` | `ideas.py` (board, `tmux-ctl idea`) | Where idea files live. |
+| `TC_CONTEXT_DIR` | `~/.local/state/agent-board/context` | `context.py` (`tmux-ctl context`), `context-inject.sh` | Where the shared project context files live. |
+| `TC_CONTEXT` | unset | `context-inject.sh` | `0` turns off the SessionStart injection of the shared context file. |
 | `TC_GITLAB_CONF` | `~/.config/agent-board/gitlab.json`; none (feature off) when `TC_IDEAS_DIR` is set | `gitlab_sync.py` | Path of the GitLab mapping file. Setting `TC_IDEAS_DIR` alone turns the sync off, so tests never reach your real config. |
 | `TC_AGENT_DRYRUN` | unset | `tmux-ctl agent` | Test seam: print the task and stop before creating a window. |
 | `TMUX_DASH_PORT` | `7700` | `tmux-dash`, `server.py` | Board HTTP port. |
