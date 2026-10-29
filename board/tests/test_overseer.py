@@ -5,8 +5,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 SETTINGS = REPO / "claude" / "overseer-settings.json"
-WRITE_TOOLS = ("Write", "Edit", "NotebookEdit", "Agent", "SendMessage")
-WRITE_CTL = ("send", "run", "tell", "agent", "keys", "relay")
+WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "SendMessage", "WebFetch", "WebSearch", "Skill")
+WRITE_CTL = ("send", "run", "tell", "agent", "keys", "relay", "context")
+# the allowed read-only git commands still write a file with --output=<file>
+GIT_OUTPUT = ("git log", "git show", "git -C * log", "git -C * show")
 
 
 class OverseerSettingsTest(unittest.TestCase):
@@ -16,10 +18,15 @@ class OverseerSettingsTest(unittest.TestCase):
 
     def test_every_write_and_messaging_tool_is_denied(self):
         for t in WRITE_TOOLS:
-            self.assertIn(t, self.deny, t)
+            with self.subTest(tool=t):
+                self.assertIn(t, self.deny)
         for sub in WRITE_CTL:
-            self.assertIn(f"Bash(tmux-ctl {sub} *)", self.deny, sub)
+            with self.subTest(ctl=sub):
+                self.assertIn(f"Bash(tmux-ctl {sub} *)", self.deny)
         self.assertIn("Bash(tmux send-keys *)", self.deny)
+        for g in GIT_OUTPUT:
+            with self.subTest(git=g):
+                self.assertIn(f"Bash({g} *--output*)", self.deny)
 
     def test_overview_and_read_only_git_allowed(self):
         self.assertIn("Bash(tmux-ctl overview *)", self.allow)
