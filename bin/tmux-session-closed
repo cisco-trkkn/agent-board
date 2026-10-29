@@ -18,4 +18,5 @@ done
 rm -f -- "$STATE/artifacts-$n.jsonl" "$STATE/runs-$n.jsonl" \
   "$STATE/feed-$n-tests.log" "$STATE/feed-$n-shell.log" "$STATE/relay-$n.log" "$STATE/relay-failed-$n.txt"
 [[ -d "$STATE/logs/$n" ]] && rm -rf -- "$STATE/logs/$n"
+"${0:A:h}/tmux-overseer" stop >/dev/null 2>&1   # the overseer goes when the last project session has gone
 exit 0

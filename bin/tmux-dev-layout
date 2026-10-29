@@ -67,4 +67,6 @@ if [[ -r "$root/.dev/windows" ]]; then
     [[ -n "$wp" ]] && t set-option -p -t "$wp" @tc_role watch
   done < "$root/.dev/windows"
 fi
+# the overseer (one read-only Claude across projects) starts with the first project session; TC_OVERSEER=0 disables it
+"${0:A:h}/tmux-overseer" ensure >/dev/null 2>&1 || true
 exit 0
