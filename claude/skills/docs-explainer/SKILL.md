@@ -1,6 +1,6 @@
 ---
 name: docs-explainer
-description: Use for "explain to the client", a "stakeholder summary", a "non-technical overview", "what this means for" a team, an `[explainer]` guest section, or a refresh after its sources changed. Plain-language explainers derived from a Doc's other sections; not architecture, runbooks or reports.
+description: Use for "explain to the client", a "stakeholder summary", a "non-technical overview", "what this means for" a team or client, an `[explainer]` guest section, or a refresh after its sources changed. Plain-language explainers derived from a Doc's other sections; not architecture, runbooks or reports.
 ---
 
 # docs-explainer

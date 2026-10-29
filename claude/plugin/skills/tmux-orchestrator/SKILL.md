@@ -1,6 +1,6 @@
 ---
 name: "tmux-orchestrator"
-description: Drive the other windows of the current tmux session with tmux-ctl, e.g. running tests in the tests window, reading the shell window, starting worker Claude agents in worktrees. Use when $TMUX is set, especially in a `dev` session, or when asked to run something in a window or coordinate agents.
+description: Drive the other windows of this tmux session with tmux-ctl, e.g. running tests in the tests window, reading the shell window, starting worker agents in worktrees. Use when $TMUX is set, especially in a `dev` session, or when asked to run something in a window, watch a window or coordinate agents.
 ---
 
 # tmux-orchestrator
