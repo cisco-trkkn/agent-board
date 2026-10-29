@@ -69,6 +69,7 @@ ensure_bg() {
   if t new-session -d -s "$BG" -n tests -x 200 -y 50 -c "$root" 2>/dev/null; then
     t new-window -d -t "=$BG:" -n shell -c "$root"
     t set-option -t "=$BG:" @tc_bg 1      # set last: it marks the session as complete
+    BG_FRESH=1                            # these panes were created in this very call: pick_win waits for their shells
   else
     local n=0; while [[ -z "$(t show-options -qv -t "=$BG:" @tc_bg)" ]] && (( n++ < 40 )); do sleep 0.1; done
   fi
@@ -174,6 +175,12 @@ caller() {
 # pick_win: sets $win to the window to type into — <win> if its main pane is idle, else the caller's lane
 pick_win() {
   local base="$1" lane
+  # a pane created in this call has no prompt yet (its shell is still starting, worse under load): give it up to 3 s
+  # before calling it busy. Panes that already existed get no wait: a busy one goes to a lane at once.
+  if [[ -n "$BG_FRESH" ]]; then
+    local n=0; while ! is_idle "$base" && (( n++ < 60 )); do sleep 0.05; done
+    BG_FRESH=
+  fi
   if is_idle "$base"; then win="$base"; return; fi
   lane="$base·$(caller)"
   if ! t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$lane"; then
