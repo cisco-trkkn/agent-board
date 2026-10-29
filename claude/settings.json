@@ -66,6 +66,11 @@
           {
             "type": "command",
             "command": "bash \"/Users/francisco.ruiz/agent-board/claude/hooks/superpowers-hook.sh\" stop-wait-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/context-size-guard.sh",
+            "timeout": 10
           }
         ]
       }
@@ -110,6 +115,27 @@
           {
             "type": "command",
             "command": "bash \"/Users/francisco.ruiz/agent-board/claude/hooks/superpowers-hook.sh\" post-task-complete-revalidate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "SendMessage|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/context-size-guard.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/spawn-record.sh",
+            "timeout": 5,
+            "async": true
           }
         ]
       }
@@ -223,6 +249,12 @@
     "anthropic-skills:pptx": "name-only",
     "anthropic-skills:terraform-gcp": "off",
     "anthropic-skills:where-to-run": "off",
-    "anthropic-skills:xlsx": "off"
+    "anthropic-skills:xlsx": "off",
+    "code-review": "name-only",
+    "interior-design-expert": "name-only",
+    "loop": "name-only",
+    "run": "name-only",
+    "schedule": "name-only",
+    "anthropic-skills:pdf": "name-only"
   }
 }
