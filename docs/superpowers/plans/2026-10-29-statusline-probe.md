@@ -23,11 +23,11 @@ Read-only record of one real interactive session, captured 2026-10-29. Fixture:
   `Enter`: "Yes, I trust this folder"); no login prompt appeared (the user's existing claude.ai Max
   login was used, so `rate_limits` is the subscriber form). The live tmux server was only read
   (`list-sessions`, to confirm no `probe` session on it).
-- Turns run: (1) `Reply with the single word ok and nothing else.` (one API call); (2) a 60 s idle wait;
-  (3) `Use the Bash tool to run ls -a here, then … pwd, then reply with the single word done.`
+- Turns run: turn 1 `Reply with the single word ok and nothing else.` (one API call); a 60 s idle wait;
+  turn 2 `Use the Bash tool to run ls -a here, then … pwd, then reply with the single word done.`
   (three API calls: two tool uses and the final answer). Then `/exit`; the pane's shell ended with it
   and the scratch server was gone (`list-sessions` → `no server running`), confirmed by `kill-server`.
-- Five payloads were captured. The fixture is the last one (after turn 3, the most complete: cache
+- Five payloads were captured. The fixture is the last one (after turn 2, the most complete: cache
   reads, accumulated cost, `rate_limits`). Scrubbing changed only paths, keeping type and shape:
   `transcript_path` → `/home/user/.claude/projects/-home-user-probe/<session_id>.jsonl`, `cwd` and
   `workspace.*_dir` → `/home/user/probe`, `scratchpad_dir` → `/tmp/claude-1000/-home-user-probe/
@@ -129,7 +129,7 @@ and `cost.total_cost_usd` is the session's client-side estimate, not a per-call 
   },
   "exceeds_200k_tokens": false,
   "prompt_cache": {"warm": true, "caching_observed": true, "ttl": "1h", "expires_at": 1793259716,
-                   "requests": 3, "misses": 0, "…": "…"},
+                   "requests": 3, "misses": 1, "…": "…"},
   "fast_mode": false,
   "thinking": {"enabled": true},
   "rate_limits": {
@@ -140,7 +140,8 @@ and `cost.total_cost_usd` is the session's client-side estimate, not a per-call 
 ```
 
 (Abridged here for reading: `prompt_id` and `prompt_cache` are complete in the fixture file, and the
-numbers above are the fixture's.) The first payload of a session (before any API call) differs: no
+numbers above are the fixture's.) The first payload of a session (before any API call), saved scrubbed
+as `claude/statusline/tests/fixtures/statusline-sample-start.json`, differs: no
 `prompt_id`, `session_name`, `prompt_cache` or `rate_limits`; `cost.total_cost_usd` 0;
 `context_window.total_input_tokens` 0, `current_usage`, `used_percentage` and `remaining_percentage`
 `null`.
