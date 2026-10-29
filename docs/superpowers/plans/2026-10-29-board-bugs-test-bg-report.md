@@ -17,7 +17,7 @@ Deciding evidence:
 
 ## Load runs
 
-Load: `2 * hw.ncpu` = 24 `yes > /dev/null` processes, PIDs saved, killed in a `trap`, checked gone with `ps -p` afterwards (none alive); each run under `caffeinate -i`. Runs are `zsh tools/tests/test_bg.zsh` directly.
+Load: `2 * hw.ncpu` = 24 `yes > /dev/null` processes, PIDs saved, killed in a `trap`, checked gone with `ps -p` afterwards (none alive); the earlier loaded runs ran under `caffeinate -i` (the brief asks `-w <pid>`; the fix-round runs used `caffeinate -w $$`), and the failing reproduction iteration did keep its full output and `ps` snapshot (`run4.out`, `run4.ps`). Runs are `zsh tools/tests/test_bg.zsh` directly.
 
 Step 0 (one timed loaded iteration, original test): pass, 81.0 s.
 
