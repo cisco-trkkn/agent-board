@@ -285,7 +285,8 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .ideas-list { display: flex; flex-direction: column; gap: 4px; }
 .idea { font-size: 13px; padding: 4px 8px; border-radius: 8px; background: var(--panel-2); }
 .idea small { color: var(--muted); display: block; }
-.idea.dropped { opacity: .55; }
+.idea.dropped { color: var(--muted); }   /* dim by colour, not opacity: opacity would dim the issue link too */
+.idea a { color: var(--blue); }   /* 4.66:1 light, 6.16:1 dark on --panel-2 */
 .idea input, .idea textarea { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
 .ideas-gitlab-warn { font-size: 12px; color: var(--red); margin: 2px 0 6px; overflow-wrap: anywhere; }
 .ideas-dropped { font-size: 12px; color: var(--muted); display: block; margin-top: 6px; }
