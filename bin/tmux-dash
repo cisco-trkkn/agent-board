@@ -14,6 +14,7 @@ tc_tmux_resolve dedicated                           # the board shows agent-boar
 export TMUX_DASH_TMUX_ARGS="$(tc_tmux_args_str)"   # server.py and ttyd's tmux-web-attach read the same server
 STATE="$HOME/.local/state/tmux-dash"
 APP="${0:A:h:h}/board"
+HERE="${0:A:h}"   # $0 is the function name inside start(), so resolve this script's dir here
 PORT="${TMUX_DASH_PORT:-7700}"
 TTYD_PORT="${TMUX_DASH_TTYD_PORT:-7701}"
 mkdir -p "$STATE"; chmod 700 "$STATE"
@@ -39,7 +40,7 @@ start() {
       -i 127.0.0.1 -p "$TTYD_PORT" -b "/$tok-tty" -O -W -a \
       -t fontSize=13 -t 'fontFamily=SF Mono, Menlo, monospace' -t disableLeaveAlert=true \
       -t 'theme={"background":"#1e1e2e","foreground":"#cdd6f4","cursor":"#f5e0dc","selectionBackground":"#45475a"}' \
-      "${0:A:h}/tmux-web-attach" > "$STATE/ttyd.log" 2>&1 &
+      "$HERE/tmux-web-attach" > "$STATE/ttyd.log" 2>&1 &
     print $! > "$STATE/ttyd.pid"
   fi
   if ! alive server; then

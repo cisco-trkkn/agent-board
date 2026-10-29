@@ -63,4 +63,13 @@ if [[ -x "$REAL_TTYD" ]]; then
   check "dash stop: server stopped" test -n "$(agent-board dash status 2>&1 | grep -F 'server: stopped')"
 fi
 check "dash wrote state only under the scratch HOME" test -d "$HOME/.local/state/tmux-dash"
+
+# 6. ttyd's command is the repo's tmux-web-attach, wherever dash was started from (a stub ttyd records its argv)
+stub="$TT_DIR/ttyd-stub"; argv_out="$TT_DIR/ttyd-argv"
+print -r -- "#!/bin/sh
+for a in \"\$@\"; do printf '%s\n' \"\$a\"; done > '$argv_out'
+exec sleep 300" > "$stub"; chmod +x "$stub"
+(cd / && TTYD_BIN="$stub" agent-board dash start >/dev/null 2>&1)
+check "dash started from / gives ttyd the repo's tmux-web-attach" test "$(tail -n 1 "$argv_out" 2>/dev/null)" = "$BIN/tmux-web-attach"
+agent-board dash stop >/dev/null 2>&1
 tt_done
