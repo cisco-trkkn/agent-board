@@ -106,3 +106,28 @@ Final: parked — Stop repeats its user-visible warning in an unrecorded band un
 Remaining after merge: Task 11b (lead, live config), Task 13 (measurement)
 Merge: feat/runtime-phase1 → main e28de44 (main had moved to 9c06adc; no conflicts); pre-merge branch merge 8c97122 resolved relay.py + ARCHITECTURE.md conflicts with main's start-dir fix
 Task 11b: spawn-record link created; lineage migrated (agent-board 2, francisco_ruiz 13, interiors 2, master-gcp-repo 13; new files empty before); ~/.claude/settings.json.bak-20261028 + generated .next (permissions and all non-hook keys identical; 6 name-only, Stop + PostToolUse registrations) swapped; handoffs 47 → ~/.local/state/agent-board/handoffs, ~/.claude/handoffs now a link; skills/handoff → ~/agent-board/claude/plugin/skills/handoff (old ../../.agents/skills/handoff); fresh claude -p started (hit $0.05 cap — settings parse)
+Resume 2026-10-28 21:35: Task 13 in worktree .claude/worktrees/runtime-phase1-measure, branch docs/runtime-phase1-measure from main 45781bb
+Task 13: Ruling: "before" = docs/superpowers/reports/runtime-audit/report.md lines 9, 103, 172, 174, 182 (2026-10-25 audit-out JSON was deleted with the runtime-audit worktree; gitignored) — report figures were read from that JSON, so they are the same numbers — cost if wrong: before-values unverifiable at JSON level
+Task 13: Ruling: "after" scope = sessions started at/after 2026-10-29T01:15Z (2026-10-28 21:15 EDT, the settings swap); after-window n will be tiny, stated per verdict; week-scale comparison deferred to the 2026-11-04 follow-up — cost if wrong: after medians not representative
+Task 13: dispatch measurer (standard, sonnet), BASE 45781bb
+Task 13: measurer DONE_WITH_CONCERNS 216971b (n=2 after-window); verify 15 rc0
+Task 13: dispatch checker (task review, standard) on review-45781bb..216971b
+Task 13: minor (deferred): claude/hooks/task-observer-session-start.sh is mode 644 (settings run it via sh; direct exec denied)
+Task 13: review checker: spec ❌ (follow-up 2 not runnable), quality needs fixes; 0C/3I/5M
+Task 13: Ruling: Stop after-figures = median over every stop_hook_summary in session 5387f433 up to a stated cutoff timestamp, n stated — the session keeps growing; a fixed cutoff makes the cell reproducible — cost if wrong: medians shift as more events land
+Task 13: minor (deferred): measurement.md:13 say 21,213 is teammate's, 17,873 lead's
+Task 13: minor (deferred): measurement.md:14 pooled 38,723.5 median of mixed kinds
+Task 13: minor (deferred): measurement.md:49 spawns.jsonl "1 line" stale
+Task 13: minor (deferred): measurement.md:53 no per-week find command for earlier weeks
+Task 13: minor (deferred): after-column one-off python snippet not in doc
+Task 13: fix round 1 commit 082fb4b (verify 15 rc0); re-review dispatched to checker
+Task 13: fix round 1/5 (3 addressed, 2 new open — N1 all-sessions column is 32/35 tctest harness dirs; N2 "load noise" unevidenced; commits 216971b..082fb4b)
+Task 13: Ruling: N1 — exclude test-harness transcripts (tctest / /private/var/folders / tmp) from the post-install column, rename it, reconcile every n statement — harness runs are not user sessions — cost if wrong: smaller n
+Task 13: Ruling: N2 — reword to "cause not measured" (load cannot be recorded retroactively) — cost if wrong: none
+Task 13: fix round 2 commit 2921a91 (verify 15 rc0); re-review 2 dispatched to checker
+Task 13: fix round 2/5 (2 addressed, 0 open; commits 082fb4b..2921a91)
+Task 13: minor (deferred): measurement.md says "large majority tctest" — exact is all 32 of 32
+Task 13: minor (deferred): snippet's -tmp prefix filter would hide a real project folder starting with -tmp (none today)
+Task 13: complete (commits 45781bb..2921a91, review clean)
+Task 13: Ruling: no separate final whole-branch review — branch is Task 13's 3 commits on one doc, all covered by the task review and 2 re-reviews — cost if wrong: a cross-file issue the task review could not see (none possible, one file)
+Task 13: idea filed (2026-11-04 follow-up); team shut down
