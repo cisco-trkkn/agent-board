@@ -16,7 +16,7 @@ other="$TT_DIR/r/notes.md"; print x > "$other"
 n0=$(wc -l < "$m")
 hook "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$other\"}}"
 check "unmatched ignored"   test "$(wc -l < "$m")" -eq "$n0"
-print '{}' > "$TC_STATE/lineage-tt.jsonl"
+mkdir -p "$TC_LINEAGE"; print '{}' > "$TC_LINEAGE/tt.jsonl"
 hook "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$plan\"}}"
 check "epoch from lineage"  test "$(jq -r .epoch "$m" | tail -1)" = 1
 rep="$TT_DIR/sp/scratchpad/e2e-report.md"; print r > "$rep"

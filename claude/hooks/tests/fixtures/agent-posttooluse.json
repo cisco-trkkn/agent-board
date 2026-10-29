@@ -1,0 +1,5 @@
+{"session_id": "lead-session-1", "cwd": ".", "hook_event_name": "PostToolUse", "tool_name": "Agent",
+ "tool_input": {"name": "trace", "subagent_type": "effort-medium", "model": "sonnet",
+  "description": "Trace the hook path",
+  "prompt": "Trace the hook path.\nReason: fable-limit\nReport back with evidence."},
+ "tool_response": {}}

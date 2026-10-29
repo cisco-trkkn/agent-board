@@ -167,9 +167,11 @@ class RealTmuxSessionRootTest(unittest.TestCase):
 class RelayTest(unittest.TestCase):
     def test_relay_respawns_and_writes_lineage(self):
         fake = FakeTmux()
-        with tempfile.TemporaryDirectory() as d, statuses("idle", "idle"):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, statuses("idle", "idle"), \
+                mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
             msg = relay.relay(fake, "proj", "/d.md", d, "OLD1", sleep=lambda s: None)
-            lines = (Path(d) / "lineage-proj.jsonl").read_text().splitlines()
+            lines = (Path(ld) / "proj.jsonl").read_text().splitlines()
+            self.assertFalse((Path(d) / "lineage-proj.jsonl").exists())   # state_dir no longer decides the path
         self.assertIn("relayed", msg)
         self.assertEqual(len(lines), 1)
         rec = json.loads(lines[0])
@@ -188,10 +190,11 @@ class RelayTest(unittest.TestCase):
     def test_busy_leaves_pane_alone(self):
         fake = FakeTmux()
         clock = iter(range(0, 1000, 2))
-        with tempfile.TemporaryDirectory() as d, statuses(*["working"] * 100):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, statuses(*["working"] * 100), \
+                mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
             with self.assertRaises(RuntimeError):
                 relay.relay(fake, "proj", "/d.md", d, "", cap=6, sleep=lambda s: None, clock=lambda: next(clock))
-            self.assertFalse((Path(d) / "lineage-proj.jsonl").exists())
+            self.assertFalse((Path(ld) / "proj.jsonl").exists())
         self.assertNotIn("respawn-pane", fake.names())
 
     def test_main_failure_prints_manual_command(self):

@@ -120,13 +120,16 @@ The tier-to-model map is in `docs/superpowers/model-routing.json` in the repo; i
   The `effort-*` definitions ship in the agent-board plugin (`claude/plugin/agents/`) and pin effort only, so always pass the model.
 - **Escalation:** if a teammate or task outgrows its tier, start it again one tier higher (and update the
   task's `modelTier` if it is a plan task). Raise the tier, not the effort. Never move a tier down silently.
+- **Leaving the tier's model** (a `model` other than the one the task's tier maps to: an escalation,
+  Opus, an inherited model): the prompt carries a line starting `Reason: <why>`, which the spawn-record hook
+  stores. On a Fable limit error, re-dispatch the same prompt on Opus with `Reason: fable-limit`.
 
 ## Teammates and workers don't talk to the user
 
-The user talks only to you. The one thing they do in a teammate's or worker's window is approve a
-permission prompt. Start every teammate's prompt with these rules. A shared preamble file (such as an
-SDD workspace's `teammate-rules.md`) copies rules 1–8 word for word or points to this section; never
-paraphrase them, because a shorter copy loses rule 3's exception first.
+The user talks only to you; in an agent's window they only approve permission prompts. Start every
+teammate's prompt with these rules. A shared preamble file (such as an SDD workspace's
+`teammate-rules.md`) copies rules 1–5 word for word or points to this section, and points to
+`worker.md` for the rest; never paraphrase them, because a shorter copy loses rule 3's exception first.
 
 1. Its role, deliverable, and the files or area it owns. Teammates that share one worktree stage only
    their own paths (`git add <paths>`, never `-A` or `.`) and run no whole-tree git operation (`stash`,
@@ -141,25 +144,10 @@ paraphrase them, because a shorter copy loses rule 3's exception first.
    loaded skill names (docs-compose's outline confirm) is such a gate: it goes to you to relay, and a
    spec or plan never stands in for the user's answer. Only reversible, local work
    continues meanwhile. "My plan unless you say otherwise" is for choices you can still undo.
-4. It reports back with evidence: commands run, their output, files changed, assumptions made. Where
-   the repo maps changed paths to CI checks (`.agent-ci.yml`), it runs the mapped checks for its diff
-   (`agent-ci check`) before reporting done, and again after every fix round. The brief's verify
-   command proves the task's own claim, not that nothing next to it broke.
-5. Run test suites and long builds with `tmux-ctl run [-t secs] [-C dir] tests "<cmd>"` (options before
-   the window): it runs in the hidden session `<project>-bg` (a lane window `tests·<you>` if `tests` is
-   busy), in your own worktree unless `-C` says otherwise, and the user sees every run in the Agent
-   Board's Activity drawer. Use your Bash tool for everything else. Type only into windows you started
-   (`tests`, `shell`, lanes), through `tmux-ctl`. The reason: the Bash tool stops foreground commands at 120s, so a full suite run
-   in Bash times out, and the user cannot see it.
-6. Never stop processes with `pkill` or `killall` by name or pattern: patterns match full command lines,
-   which carry session names and prompts, so they can kill the lead and the whole team. Kill by PID
-   only, the one you started (`$!`) or one you looked up and checked first. A hook blocks patterns that
-   match a Claude process.
-7. To approve a shutdown request, first load SendMessage's full schema (ToolSearch with query
-   `select:SendMessage`; it is a deferred tool), then call it with `message` as a JSON object, not a
-   string: `{"to":"team-lead","message":{"type":"shutdown_response","request_id":"<id from the request>","approve":true}}`.
-8. Do not invoke `task-observer` or write to its log (the session-start protocol is the lead's); put any
-   skill findings in the final report for you to log.
+4. A **Decided** block: each choice you can foresee (a value, a path, a fallback, which reading of
+   the spec), with its answer. A foreseeable question costs a round trip and an idle teammate.
+5. Last: "Read `~/agent-board/claude/worker.md`; its common rules and teammate section apply to you."
+   Do not repeat that file's rules in the prompt.
 
 Answer teammates' questions yourself from the plan, the code and sensible defaults. Bring a question to
 the user only when it is truly theirs to decide, and batch such questions into one message.
@@ -235,6 +223,9 @@ applies to every agent.
   (`git show <ref>:<path>`, `git diff <ref> -- <path>`) or open it in a new worktree
   (`git worktree add --detach <dir> <ref>`). A detach "to compare tests" once left the shared
   checkout on another branch for a minute.
+- Send a teammate its brief before you set a task's `owner`: setting `owner` dispatches, and the
+  teammate starts from the task's short native description. One published a doc before reading the
+  brief that told it to wait for a relayed confirm.
 - Replacing a stalled teammate or subagent: send the shutdown and wait for its termination notice
   first. Idle at its prompt is not dead; a queued message can revive it. Give every dispatch its own
   output path (`<deliverable>.<agent-name>.md`) and promote one to the canonical name yourself, so two

@@ -1,6 +1,6 @@
 ---
 name: docs-runbook
-description: Use when asked for a "runbook", "how-to", "procedure" or "playbook", or "how do I operate/rotate/deploy X" for a repo, to write a `[runbook]` section as a docs-compose guest, or to refresh a runbook after the repo changed. Operator procedures only, written as a Claude Doc with every command cited; not architecture docs, reports or client explainers.
+description: Use for a "runbook", "how-to", "procedure" or "playbook", or "how do I operate/rotate/deploy X" for a repo, a `[runbook]` guest section, or a refresh after the repo changed. Operator procedures as a Claude Doc, every command cited; not architecture, reports or explainers.
 ---
 
 # docs-runbook

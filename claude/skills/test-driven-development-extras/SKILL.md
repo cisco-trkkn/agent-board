@@ -1,6 +1,6 @@
 ---
 name: "test-driven-development-extras"
-description: Local additions to superpowers-extended-cc:test-driven-development. Use together with superpowers-extended-cc:test-driven-development, every time it runs, before the first RED run of any test. For code under test that has side effects (creates windows, worktrees or processes, writes to the network or outside a temp dir), the isolation seam goes in before the RED run, and a leak check follows the run. When a decision rests on an external command's output or a platform API call, at least one test runs it for real, unpatched, on a scratch fixture. A test counts as evidence only when its own results appear in the cited output, a test the host cannot run gets a runtime that can, and the repo's test lints pass before the RED commit. A test that asserts a value is absent from output runs in every output mode, with a planted dummy value.
+description: Local additions to superpowers-extended-cc:test-driven-development. Use together with superpowers-extended-cc:test-driven-development, every time it runs, before the first RED run of any test. Adds an isolation seam and leak check for side-effecting code, one real unpatched run, and evidence rules.
 ---
 
 # test-driven-development extras

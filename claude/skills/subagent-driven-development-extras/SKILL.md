@@ -1,6 +1,6 @@
 ---
 name: "subagent-driven-development-extras"
-description: Local additions to superpowers-extended-cc:subagent-driven-development. Use together with subagent-driven-development, every time it runs, before dispatching the first implementer. It overrides the base "Review the task" and "The fix loop" sections in three places. A report without a green verify goes back to the implementer before any reviewer is dispatched. A small fix on a mechanical task is re-reviewed on the mechanical tier. Consecutive mechanical tasks share one batched review with a verdict per task.
+description: Local additions to superpowers-extended-cc:subagent-driven-development. Use together with subagent-driven-development, every time it runs, before dispatching the first implementer. Overrides its review and fix loop (green before review, small-fix tier, batched review); archives the ledger at Finish.
 ---
 
 # subagent-driven-development extras
@@ -58,6 +58,17 @@ Why: five trivial tasks cost five reviewer cold starts; one reviewer reads them 
 
 Example: tasks 2, 3 and 4 are mechanical and green; task 5 edits `.gitlab-ci.yml`. Tasks 2-4 are reviewed as one batch; task 5 gets its own review.
 
+## 4. Archive the ledger before the workspace is deleted
+
+Overrides: base Finish, "delete this plan's workspace (`rm -rf <workspace>`)". A ledger holds the rulings and fix rounds that `git log` does not, and deleting the workspace deletes them. Archive first, then run the base deletion.
+
+1. Copy `<workspace>/progress.md` to `docs/superpowers/ledgers/<plan-basename>/progress.md` (`<plan-basename>` is the plan file's name without `.md`; create the directory).
+2. Check the plan's `<plan-basename>.md.tasks.json` sits beside the plan file; if it is missing or untracked, restore or add it.
+3. Commit the archive and the tasks file: `docs(ledger): <plan-basename>`, ending with the harness attribution trailer.
+4. Run the base deletion of the workspace.
+
+Done when `git log -1 --stat` shows the archived `progress.md` and `git status` shows the workspace gone.
+
 ## Before you finish
 
 Walk the progress ledger and confirm:
@@ -67,3 +78,4 @@ Walk the progress ledger and confirm:
 - [ ] No batch held a security, migration, CI or shared-config task.
 - [ ] Every batched task got its own spec and quality verdicts.
 - [ ] No routing-gate block was bypassed, and `SUPERPOWERS_ROUTING_GUARD` is unset.
+- [ ] The ledger is archived at `docs/superpowers/ledgers/<plan-basename>/progress.md` and committed before the workspace was deleted.

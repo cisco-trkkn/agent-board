@@ -3,13 +3,14 @@
 #   hook mode (PostToolUse Write|Edit|MultiEdit|Artifact|Claude Docs batch/create/update): reads the hook JSON on stdin
 #   manual mode: artifact-register.sh --path P [--kind K] [--agent A] [--project NAME]
 # Appends {ts,path,kind,agent,hash,url,title,slug,session_id,epoch} to $STATE/artifacts-<project>.jsonl.
-# epoch = lines in $STATE/lineage-<project>.jsonl (one per handoff relay). Silent; always exits 0.
+# epoch = lines in $TC_LINEAGE_DIR/<project>.jsonl (one per handoff relay). Silent; always exits 0.
 emulate -L zsh
 _tcenv="${${(%):-%x}:A:h:h:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
 source "$_tcenv" 2>/dev/null || {   # never fail the Claude call, but say so: stderr plus a log in $TMPDIR
   _m="${${(%):-%x}:t}: cannot load $_tcenv: using the default state dir (a plugin copied away from its repo has no tc-env)"
   print -u2 -r -- "$_m"; print -r -- "$(date +%FT%T) $_m" >> "${${TMPDIR:-/tmp}%/}/tmux-ctl-hook-errors.log" 2>/dev/null
   TC_STATE_DIR="${TC_STATE:-${${TMPDIR:-/tmp}%/}/tmux-ctl-$UID}"   # same rule as tc_state_dir; the plugin keeps working
+  TC_LINEAGE_DIR="${TC_LINEAGE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-board/lineage}"   # same rule as tc-env.zsh
 }
 STATE="$TC_STATE_DIR"
 # tmux: the repo's resolver; if the plugin was copied away from its repo, the server this pane is on
@@ -40,7 +41,7 @@ else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME
     agent="${agent#✦ }"; agent="${agent:-claude}"
   fi
   mkdir -p "$STATE"
-  lineage="$STATE/lineage-$project.jsonl"
+  lineage="$TC_LINEAGE_DIR/$project.jsonl"
   epoch=0; [[ -f "$lineage" ]] && epoch=$(( $(wc -l < "$lineage") ))
   if (( manual )); then payload='{}'; else payload="$(cat)"; fi
   line="$(print -r -- "$payload" | python3 -I -c '

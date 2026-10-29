@@ -1,6 +1,6 @@
 ---
 name: docs-report
-description: Use when asked for a report, handover, close-out, security review, migration summary or "what changed" over a stretch of work in a repo, written as a Claude Doc from git history, MRs, agent artefacts, interview and read-only cloud state, or to add a dated update to such a report. Reports only; not runbooks, how-tos, client explainers or architecture docs.
+description: Use for a report, handover, close-out, security review, migration summary or "what changed" over a stretch of work in a repo, as a Claude Doc from git history, MRs, artefacts and cloud state, or to add a dated update to one. Reports only; not runbooks, explainers or architecture.
 ---
 
 # docs-report
@@ -52,7 +52,7 @@ Read the four source kinds over the range. Each fact you keep gets its citation 
 1. **Git history and MRs.**
    - `git log --format='%H %ad %s' --date=short <a>..<b>` (or `--since=<date> --until=<date>` for a date range), `git show --stat <sha>` per commit worth a row; cite `commit:<sha>`.
    - `glab mr list --merged --repo=<group/project> --output=json` filtered to the range by `merged_at`. Page (`--page=N`, `-p`; `--per-page`, `-P`) until the oldest MR returned predates the range start; never assume one page covers the range. Then `glab mr view <iid> --repo=<group/project>` for the description and discussion; cite `mr:<group/project>!<iid>`. The MR description is the first place to find a row's *why*.
-2. **Agent artefacts.** Plans, specs, SDD ledgers, handoff docs and review reports under `docs/superpowers/` (and `.superpowers/sdd/`) in the repo and under `~/.claude/handoffs/`. In a ledger, `grep -n 'Ruling:'` finds the decisions; cite each as `artefact:<path>:<line>`.
+2. **Agent artefacts.** Plans, specs, SDD ledgers, handoff docs and review reports under `docs/superpowers/` (and `.superpowers/sdd/`) in the repo and under `~/.local/state/agent-board/handoffs/` (older ones: `~/.claude/handoffs/`). In a ledger, `grep -n 'Ruling:'` finds the decisions; cite each as `artefact:<path>:<line>`.
 3. **Interview** (step 3) for what no file records.
 4. **Live cloud state**, read-only, only through the gate.
    - First, once per session: ask the user whether you may read live cloud state, naming the project(s) you will read (from the repo's Terraform, the artefacts, or the request). A yes covers the named projects for the rest of the session; a new project is a new question. A no: make no cloud read, and *What was verified, and how* says `cloud state not checked`. As a guest: a yes in the brief's `Cloud consent` field that names the project(s) counts as the question asked; without one, the guest asks the question itself, once, before its first cloud read, naming the project(s).

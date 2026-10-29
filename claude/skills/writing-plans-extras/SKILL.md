@@ -1,6 +1,6 @@
 ---
 name: "writing-plans-extras"
-description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. It overrides three base rules. Step granularity follows each task's modelTier (frontier tasks get goal, constraints and acceptance criteria instead of code). Audit or discovery tasks are exempt from code in every step. The execution handoff never asks: it invokes subagent-driven-development (a printed kickoff prompt only when context is nearly exhausted). It also adds plan-content rules. e2e tasks check real, aged state; commit steps name the harness attribution trailer; copy-X steps name the differences; event consumers state delivery semantics; each Verify line matches its verifyCommand; plan-authored tests and snippets are run once by the author and name the mutation that fails them; external-tool values cite a probe; migrations, CI variables and runbooks state their gates and preconditions; security gates state the shape they accept and the bypasses tried; repeat-count runs time one iteration first.
+description: Local additions to superpowers-extended-cc:writing-plans. Use together with writing-plans, every time it runs, before drafting any task. Overrides step granularity (by modelTier) and the execution handoff (never asks); adds plan-content rules for e2e, copy-X, event consumers, gates, Verify lines.
 ---
 
 # writing-plans extras

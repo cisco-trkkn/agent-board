@@ -5,7 +5,7 @@
 
 Waits until the lead's turn has ended (paneclass says idle/ready on two polls in a row, 2s apart,
 120s cap), respawns the pane with `claude-orchestrator "Read <doc> ..."`, and appends
-{ts, old_session_id, doc, pane} to <state>/lineage-<session>.jsonl. The board's
+{ts, old_session_id, doc, pane} to tc_env.lineage_dir()/<session>.jsonl (~/.local/state/agent-board/lineage). The board's
 restart_orchestrator uses respawn() too. On failure the old pane is left alone.
 """
 import argparse
@@ -95,8 +95,9 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", **wait):
     if not wait_turn_end(tmux, pane, **wait):
         raise RuntimeError("the lead is still busy after the wait; not switching. Run tmux-ctl relay again when it is idle")
     respawn(tmux, pane, session_root(tmux, sess), prompt_for(doc))
-    Path(state_dir).mkdir(parents=True, exist_ok=True)
-    with open(Path(state_dir) / f"lineage-{sess}.jsonl", "a") as f:
+    lin = tc_env.lineage_dir()   # persistent state; state_dir no longer decides the path
+    lin.mkdir(parents=True, exist_ok=True)
+    with open(lin / f"{sess}.jsonl", "a") as f:
         f.write(json.dumps({"ts": time.time(), "old_session_id": old_session_id, "doc": str(doc), "pane": pane}) + "\n")
     return f"relayed {sess}:claude to a fresh orchestrator with {doc}"
 

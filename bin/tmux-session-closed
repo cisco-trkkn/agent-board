@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # tmux-session-closed <session-name> — session-closed hook: delete a project's per-session state
-# (artifacts manifest, lineage, run records + logs, feeds, relay notices) once the project is gone.
-# Never touches ~/.claude/ideas. Exact file names only. Registered in ~/.tmux.conf.
+# (artifacts manifest, run records + logs, feeds, relay notices) once the project is gone.
+# Never touches ~/.claude/ideas or the handoff lineage (persistent state). Exact file names only. Registered in ~/.tmux.conf.
 emulate -L zsh
 source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)
 n="$1"
@@ -15,7 +15,7 @@ live="$("$T" list-sessions -F '#{session_name}'$'\t''#{?session_group,#{session_
 for row in ${(f)live}; do
   [[ "${row%%$'\t'*}" == "$n" || "${row#*$'\t'}" == "$n" ]] && exit 0
 done
-rm -f -- "$STATE/artifacts-$n.jsonl" "$STATE/lineage-$n.jsonl" "$STATE/runs-$n.jsonl" \
+rm -f -- "$STATE/artifacts-$n.jsonl" "$STATE/runs-$n.jsonl" \
   "$STATE/feed-$n-tests.log" "$STATE/feed-$n-shell.log" "$STATE/relay-$n.log" "$STATE/relay-failed-$n.txt"
 [[ -d "$STATE/logs/$n" ]] && rm -rf -- "$STATE/logs/$n"
 exit 0

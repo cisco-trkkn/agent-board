@@ -4,6 +4,18 @@
 # ~/.task-observer/skill-updates — never edits live skills.
 set -u
 
+REVIEW_BUDGET_USD=${REVIEW_BUDGET_USD:-25}   # ~3x a measured normal run (about $8.3, 2026-10-28)
+
+# classify_run <output-file> <exit-code>: prints limit-hit, budget-hit or ok.
+classify_run() {
+  local f=$1 rc=$2
+  if [ "$rc" -ne 0 ] && grep -q "hit your .*limit" "$f" 2>/dev/null; then echo limit-hit
+  elif [ "$rc" -ne 0 ] && grep -q "Exceeded USD budget" "$f" 2>/dev/null; then echo budget-hit
+  else echo ok; fi
+}
+
+[ "${TO_REVIEW_SOURCE_ONLY:-0}" = 1 ] && return 0   # test seam: source without running the review
+
 export TASK_OBSERVER_WORKSPACE="$HOME/.task-observer"
 export CLAUDE_MD_REVISE_HOOK=0   # headless: nobody to approve CLAUDE.md diffs
 export NODE_EXTRA_CA_CERTS="$HOME/.certs/netskope-bundle.pem"
@@ -70,10 +82,18 @@ refresh_mirror >> "$log" 2>&1 \
 
 cd "$obs" || exit 1
 echo "=== $(date '+%F %H:%M') scheduled review start ($open open) ===" >> "$log"
+out=$(mktemp)
+trap 'rm -f "$out"' EXIT
 claude -p "Scheduled autonomous review. First probe the workspace folder (one ls of $obs), then write the date and time to $obs/review-started.txt, then invoke the task-observer skill with no arguments (Skill arguments rewrite \$1…\$9 in its inline snippets) and run its Comprehensive Review in scheduled mode. Workspace root: $TASK_OBSERVER_WORKSPACE. Offline policy: if the probe finds nothing, end with the one-line 'review skipped — workspace offline'; if the probe or a write fails with a permission or sandbox error on a path that exists, end with a one-line note naming the missing grant in the scheduled task definition (not 'offline'), with no retries. Live skills and target files are mirrored read-only at $mirror (MANIFEST.paths maps each root to its live path, MANIFEST.sha256 holds the hashes): compare, copy and hash from there; record the manifest hash in staged patches. Shell: Bash here allows only single commands matching the allowed prefixes; inline variables, loops, \$? and find -exec are refused, so write each multi-statement snippet to a file under $obs/reviews/<date>/ and run it with bash <file>." \
+  --max-budget-usd "$REVIEW_BUDGET_USD" --fallback-model sonnet \
   --permission-mode acceptEdits \
   --add-dir "$TASK_OBSERVER_WORKSPACE/skill-updates" \
   --allowedTools "Read Glob Grep Write Edit Skill Bash(bash:*) Bash(find:*) Bash(ls:*) Bash(cat:*) Bash(grep:*) Bash(head:*) Bash(wc:*) Bash(date:*) Bash(mkdir:*) Bash(cp:*) Bash(python3:*) Bash(cmp:*) Bash(diff:*) Bash(shasum:*)" \
-  < /dev/null >> "$log" 2>&1
-rc=$?
+  < /dev/null 2>&1 | tee -a "$log" > "$out"
+rc=${PIPESTATUS[0]}
+verdict=$(classify_run "$out" "$rc")
+if [ "$verdict" != ok ]; then
+  echo "$verdict $(date +%F)" > "$obs/review-started.txt"
+  echo "$(date '+%F %H:%M') scheduled review $verdict (exit $rc)" >> "$log"
+fi
 echo "=== $(date '+%F %H:%M') scheduled review end (exit $rc) ===" >> "$log"

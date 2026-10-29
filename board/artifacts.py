@@ -44,7 +44,7 @@ def entries(project):
 
 
 def lineage(project):
-    return jsonl(state_dir() / f"lineage-{project}.jsonl")
+    return jsonl(tc_env.lineage_dir() / f"{project}.jsonl")
 
 
 def _is_mark(e):

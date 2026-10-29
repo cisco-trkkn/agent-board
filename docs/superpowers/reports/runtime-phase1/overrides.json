@@ -1,0 +1,10 @@
+{
+  "anthropic-skills:find-skills": "name-only",
+  "anthropic-skills:pdf": "name-only",
+  "anthropic-skills:skill-creator": "name-only",
+  "code-review": "name-only",
+  "interior-design-expert": "name-only",
+  "loop": "name-only",
+  "run": "name-only",
+  "schedule": "name-only"
+}

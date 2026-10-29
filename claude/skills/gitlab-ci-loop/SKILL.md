@@ -1,6 +1,6 @@
 ---
 name: "gitlab-ci-loop"
-description: Autonomous GitLab CI iteration loop. Use when working in a GitLab-hosted repo and the user wants the agent to push changes, run/watch GitLab pipelines, read failed job logs and fix them until green, or when asked to "set up the gitlab ci loop / agent ci" in a new or blank repository, or to diagnose a failed pipeline on staging/main after an MR was merged. Provides the `agent-ci` CLI (start, check, cycle, watch, failures, status, finish, postmerge) built on glab.
+description: Use in a GitLab repo when asked to push, watch pipelines and fix failures until green, to "set up the gitlab ci loop / agent ci" in a new or blank repo, or to diagnose a failed staging/main pipeline after a merge. Provides `agent-ci` (start, check, cycle, watch, failures, status, finish, postmerge).
 ---
 
 # GitLab CI loop

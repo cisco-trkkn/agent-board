@@ -25,6 +25,14 @@ DEFAULT_MODEL = re.search(r"^TC_DEFAULT_MODEL=(\S+)", _TEXT, re.M).group(1)
 DEFAULT_EFFORT = re.search(r"^TC_DEFAULT_EFFORT=(\S+)", _TEXT, re.M).group(1)
 
 
+def lineage_dir():
+    """Same rule as TC_LINEAGE_DIR in tc-env.zsh: $TC_LINEAGE, else ${XDG_STATE_HOME:-$HOME/.local/state}/agent-board/lineage."""
+    env = os.environ
+    if env.get("TC_LINEAGE"):
+        return Path(env["TC_LINEAGE"])
+    return Path(env.get("XDG_STATE_HOME") or f"{env.get('HOME', '')}/.local/state") / "agent-board" / "lineage"
+
+
 def state_dir():
     """Same rule as tc_state_dir in tc-env.zsh: $TC_STATE, else ${TMPDIR:-/tmp}/tmux-ctl-<uid>."""
     return Path(os.environ.get("TC_STATE") or f"{(os.environ.get('TMPDIR') or '/tmp').rstrip('/')}/tmux-ctl-{os.getuid()}")

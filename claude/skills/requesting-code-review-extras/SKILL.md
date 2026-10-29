@@ -1,6 +1,6 @@
 ---
 name: "requesting-code-review-extras"
-description: Local additions to superpowers-extended-cc:requesting-code-review. Use together with requesting-code-review, every time it runs, before dispatching the reviewer. It adds evidence checks to the reviewer prompt. Fixtures must be captured from the real system, a test must exercise the artefact itself and not a copy or a stubbed external command, visibility checks must measure what the user sees, a pass on fresh scratch state or on the author's own HOME is flagged, and an all/none/every claim, including a secret-absence test, must rest on uncapped output with its count in every output mode. It also checks runbook preconditions, inputs agents cannot read, and endpoint trust, and pins the review range to the merge-base.
+description: "Local additions to superpowers-extended-cc:requesting-code-review. Use together with requesting-code-review, every time it runs, before dispatching the reviewer. Adds evidence checks to the reviewer prompt: real fixtures, the artefact under test, user-visible checks, uncapped all/none evidence."
 ---
 
 # requesting-code-review extras

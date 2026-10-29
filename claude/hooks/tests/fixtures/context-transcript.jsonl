@@ -1,0 +1,4 @@
+{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":3,"cache_read_input_tokens":120000,"cache_creation_input_tokens":500,"output_tokens":90}}}
+{"type":"user","isSidechain":false}
+{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":2,"cache_read_input_tokens":351714,"cache_creation_input_tokens":326,"output_tokens":168}}}
+{"type":"assistant","isSidechain":true,"message":{"usage":{"input_tokens":5,"cache_read_input_tokens":900000,"cache_creation_input_tokens":0,"output_tokens":10}}}
