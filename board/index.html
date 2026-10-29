@@ -196,6 +196,20 @@ dialog .row[hidden] { display: none; }   /* .row sets display:flex, which would 
 }
 
 .layout { display: flex; min-height: 0; }
+.layout[hidden], .home[hidden] { display: none; }   /* .layout sets display:flex, which would beat [hidden] */
+.home { padding: 20px; }
+.home-grid { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(320px, 45%); gap: 16px; }
+.ov-term { display: flex; }
+.ov-term iframe { width: 100%; height: 70vh; border: 0; border-radius: 10px; background: #1e1e2e; }
+.ov-card .ov-lines { font-size: 13px; display: grid; gap: 3px; }
+.ov-needs { color: var(--red); font-weight: 600; }
+.ov-tail, .ov-art { color: var(--muted); }
+.events { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 13px; }
+.events li.unread { font-weight: 600; }
+.ov-when { color: var(--muted); margin-right: 8px; }
+.ov-name { font-weight: 700; font-size: 15px; }
+.ov-card a, .events a { color: var(--accent); text-decoration: none; }
+.ov-card a:hover, .events a:hover { text-decoration: underline; }
 .layout > main { flex: 1; min-width: 0; }
 .side { width: 320px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); min-height: 0; transition: width .15s; }
 .side.collapsed { width: 36px; }
@@ -316,6 +330,22 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 
   <div class="attention" id="attention"><span id="attention-text"></span><button id="attention-go">Show me</button></div>
 
+<section class="home" id="home" hidden>
+  <div class="home-grid">
+    <div class="col">
+      <div class="section-title"><span>Projects</span></div>
+      <div class="grid" id="ov-cards"></div>
+      <div class="section-title"><span>Notifications <span class="count" id="ov-unread"></span></span><button class="ghost" id="notif-enable" hidden>Enable browser notifications</button></div>
+      <ul class="events" id="ov-events"></ul>
+    </div>
+    <section class="term ov-term">
+      <div class="term-head"><b>Overseer</b><button class="ghost" id="ov-pop" title="Open in a new tab">Pop out ↗</button></div>
+      <iframe id="ov-frame" title="overseer terminal" hidden></iframe>
+      <div class="empty" id="ov-noterm">The overseer isn't running (TC_OVERSEER=0, or no project with a lead yet).</div>
+    </section>
+  </div>
+</section>
+
   <div class="layout">
     <aside class="side" id="side">
       <div class="side-head"><b>Artifacts</b><button class="ghost" id="side-toggle" title="Hide panel">◀</button></div>
@@ -424,7 +454,11 @@ const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 let data = { sessions: [] }, current = null, termKey = null, openForms = new Set();
-try { current = localStorage.getItem("dash.session"); } catch (e) {}
+// routing: / is the overseer home; #<project> is a project page (the tabs set the hash; localStorage no longer picks one)
+function homeView() { return location.hash.length < 2; }
+function hashProject() { try { return decodeURIComponent(location.hash.slice(1)); } catch (e) { return ""; } }
+current = hashProject() || null;
+window.addEventListener("hashchange", () => { current = hashProject() || null; render(); pollOverview(); });
 
 function toast(msg, err) {
   const t = el("div", "toast" + (err ? " err" : ""), msg);
@@ -448,12 +482,13 @@ function session() { return data.sessions.find((s) => s.name === current) || dat
 
 function renderTabs() {
   const tabs = $("#tabs"); tabs.replaceChildren();
+  const home = el("button", "tab" + (homeView() ? " on" : ""), "✦ Overview"); home.onclick = () => { location.hash = ""; }; tabs.append(home);
   for (const s of data.sessions) {
     const waiting = s.windows.flatMap((w) => w.panes).filter((p) => p.status === "waiting").length;
-    const b = el("button", "tab" + (s.name === (session() || {}).name ? " on" : ""), s.name);
+    const b = el("button", "tab" + (!homeView() && s.name === (session() || {}).name ? " on" : ""), s.name);
     if (waiting) b.append(el("span", "badge", String(waiting)));
     b.onclick = () => {
-      current = s.name; try { localStorage.setItem("dash.session", current); } catch (e) {}
+      current = s.name; location.hash = "#" + encodeURIComponent(s.name);
       // an open terminal follows the project: show its orchestrator
       const w = termKey && !termKey.startsWith(`${s.name}:`) && orchestrator(s);
       w ? openTerm(s, w) : render();
@@ -600,7 +635,7 @@ function renderAttention() {
   a.classList.toggle("show", waiting.length > 0);
   if (waiting.length) {
     $("#attention-text").textContent = waiting.length === 1 ? `${paneName(waiting[0].w, waiting[0].p)} needs you (${waiting[0].s.name})` : `${waiting.length} agents need you`;
-    $("#attention-go").onclick = () => { current = waiting[0].s.name; openTerm(waiting[0].s, waiting[0].w); };
+    $("#attention-go").onclick = () => { current = waiting[0].s.name; location.hash = "#" + encodeURIComponent(current); openTerm(waiting[0].s, waiting[0].w); };
   }
 }
 
@@ -654,7 +689,7 @@ for (const g of document.querySelectorAll(".grip")) g.addEventListener("pointerd
   g.addEventListener("pointermove", move); g.addEventListener("pointerup", up); g.addEventListener("pointercancel", cancel);
 });
 
-function render() { renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
+function render() { $("#home").hidden = !homeView(); $(".layout").hidden = homeView(); renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
 
 function setOffline(off) {
   $("#live").classList.toggle("off", off); $("#live span").textContent = off ? "offline" : "live";
@@ -1524,12 +1559,85 @@ function sortableTable(rows, cols, key) {
   return wrap;
 }
 
+// ---- overview polling, browser notifications and the title badge
+const OV = { data: null, seenTs: 0, notifiedTs: null };
+try { OV.seenTs = Number(localStorage.getItem("dash.notif.seenTs") || 0); } catch (e) {}
+async function pollOverview() {
+  const p = await pollJSON("overview"); if (!p.ok) return;
+  if (p.changed) { OV.data = p.json; notifyNew(p.json.events || []); }
+  if (homeView()) renderHome();
+  renderBadge();
+}
+function notifyNew(events) {
+  const maxTs = Math.max(0, ...events.map((e) => e.ts));
+  if (OV.notifiedTs === null) { OV.notifiedTs = maxTs; return; }   // events from before this page opened are history, not banners
+  if ("Notification" in window && Notification.permission === "granted")
+    for (const e of events) if (e.ts > OV.notifiedTs) new Notification(e.title, { body: e.text, tag: `ab-${e.id}-${e.ts}` });
+  OV.notifiedTs = Math.max(OV.notifiedTs, maxTs);
+}
+function unreadEvents() { return ((OV.data || {}).events || []).filter((e) => e.ts > OV.seenTs); }
+function renderBadge() {
+  const n = unreadEvents().length;
+  document.title = (n ? `(${n}) ` : "") + "Agent Board";
+  $("#ov-unread").textContent = n ? String(n) : "";
+}
+function markSeen() {
+  const evs = (OV.data || {}).events || [];
+  OV.seenTs = Math.max(OV.seenTs, ...evs.map((e) => e.ts));
+  try { localStorage.setItem("dash.notif.seenTs", String(OV.seenTs)); } catch (e) {}
+  renderBadge();
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && homeView()) markSeen(); });
+$("#notif-enable").onclick = () => Notification.requestPermission().then(renderHome);
+
+const fmtAge = (s) => s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`;
+function renderHome() {
+  const d = OV.data; if (!d) return;
+  $("#notif-enable").hidden = !("Notification" in window) || Notification.permission !== "default";
+  const cards = $("#ov-cards"); cards.replaceChildren();
+  for (const p of d.projects) {
+    const c = el("div", "card ov-card" + (p.needs_you.length ? " waiting" : "")), head = el("div", "card-head");
+    const a = el("a", "ov-name", p.project); a.href = "#" + encodeURIComponent(p.project);
+    head.append(a, el("span", "pill " + (p.needs_you.length ? "waiting" : p.lead.status === "working" ? "working" : "ready"),
+      p.needs_you.length ? "Needs you" : p.lead.status === "ready" && p.lead.idle_s != null ? `Lead idle ${fmtAge(p.lead.idle_s)}` : `Lead ${p.lead.status}`));
+    c.append(head);
+    const lines = el("div", "ov-lines");
+    lines.append(el("div", null, p.plan.name ? `${p.plan.name} · ${p.plan.done}/${p.plan.total} done${p.plan.active ? "" : " · no active plan"}` : "no plan"));
+    for (const t of p.plan.in_progress) lines.append(el("div", "ov-task", `▶ ${t.subject}${t.owner ? ` → ${t.owner} (${t.state})` : ""}`));
+    for (const n of p.needs_you) lines.append(el("div", "ov-needs", `${n.window} needs you`));
+    if (p.last_run) lines.append(el("div", null, `last run: ${p.last_run.exit == null ? "running" : "exit " + p.last_run.exit} · ${fmtAge(p.last_run.age_s)} ago · ${p.last_run.summary || p.last_run.cmd}`));
+    for (const art of p.artifacts) lines.append(el("div", "ov-art", `${art.kind}: ${art.title || art.path.split("/").pop()}`));
+    const tail = [p.spend_today != null ? `$${p.spend_today.toFixed(2)} today` : null, `epoch ${p.epoch}`].filter(Boolean).join(" · ");
+    lines.append(el("div", "ov-tail", tail));
+    if (p.alerts.length) { const bar = el("div", "alert-badges"); for (const al of p.alerts) { const b = el("span", "alert-badge " + alertColor(al.kind), al.label); b.title = al.detail; bar.append(b); } lines.append(bar); }
+    c.append(lines); cards.append(c);
+  }
+  if (!d.projects.length) cards.append(el("div", "empty", d.error ? "tmux isn't running" : "No projects open."));
+  const ul = $("#ov-events"); ul.replaceChildren();
+  for (const e of [...(d.events || [])].reverse()) {
+    const li = el("li", e.ts > OV.seenTs ? "unread" : null);
+    const when = new Date(e.ts * 1000).toTimeString().slice(0, 5);
+    const link = el("a", null, e.project); link.href = "#" + encodeURIComponent(e.project);
+    li.append(el("span", "ov-when", when), link, el("b", null, ` ${e.title.replace(e.project + ": ", "")}`), el("span", null, ` — ${e.text}`));
+    ul.append(li);
+  }
+  if (!(d.events || []).length) ul.append(el("li", "empty", "No notifications yet."));
+  const o = d.overseer || {};
+  if (o.running && o.window_index != null && data.ttyd) {
+    const url = termUrl({ name: o.session }, { index: o.window_index });
+    if ($("#ov-frame").dataset.url !== url) { $("#ov-frame").src = url; $("#ov-frame").dataset.url = url; }
+    $("#ov-pop").onclick = () => window.open(url, "_blank", "noopener");
+    $("#ov-frame").hidden = false; $("#ov-noterm").hidden = true;
+  } else { $("#ov-frame").hidden = true; $("#ov-noterm").hidden = false; }
+  if (document.visibilityState === "visible") markSeen();
+}
+
 // poll 2s after the previous answer, so a slow server never gets a pile of requests
 // (finally: a render error must not stop the polling)
 const loggedErrors = new Set();   // log each distinct error once, not every 2 s
 function logOnce(e) { const k = String((e && e.message) || e); if (!loggedErrors.has(k)) { loggedErrors.add(k); console.error(e); } }
 (async function poll() {
-  try { if (await refresh()) { await pollArtifacts(); await pollIdeas(); await pollActivity(); } }
+  try { if (await refresh()) { await pollOverview(); if (!homeView()) { await pollArtifacts(); await pollIdeas(); await pollActivity(); } } }
   catch (e) { if (e instanceof TypeError && /fetch/i.test(e.message)) setOffline(true); else logOnce(e); }
   finally { setTimeout(poll, 2000); }
 })();
