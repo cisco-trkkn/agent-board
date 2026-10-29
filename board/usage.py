@@ -202,6 +202,70 @@ def _family(model):
     return parts[1] if len(parts) > 1 else ""
 
 
+def tap_entries(now, live_s):
+    """Fresh statusLine tap files: {session_id: payload}. A payload is fresh when received_at is within live_s of now.
+
+    The tap stores nothing on failure, so a missing or empty dir is normal; unparseable files are skipped.
+    """
+    out = {}
+    for f in sorted((state_dir() / "statusline").glob("*.json")):
+        try:
+            d = json.loads(f.read_text())
+            sid, at = d["session_id"], float(d["received_at"])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if now - live_s < at <= now + live_s:
+            out[sid] = d
+    return out
+
+
+def _get(d, *path):
+    for k in path:
+        d = d.get(k) if isinstance(d, dict) else None
+    return d
+
+
+def plan_limits(taps):
+    """The five-hour and weekly windows from the freshest tap that has rate_limits, else None."""
+    best = None
+    for sid, d in taps.items():
+        rl = d.get("rate_limits")
+        if isinstance(rl, dict) and (rl.get("five_hour") or rl.get("seven_day")):
+            if best is None or d["received_at"] > best[1]["received_at"]:
+                best = (sid, d)
+    if best is None:
+        return None
+    sid, d = best
+    rl = d["rate_limits"]
+    return {"session_id": sid, "received_at": d["received_at"],
+            "five_hour": rl.get("five_hour"), "seven_day": rl.get("seven_day")}
+
+
+def _overlay_tap(e, tap):
+    """Context %, model and effort from Claude Code's own figures; a null field keeps the transcript value."""
+    pct = _get(tap, "context_window", "used_percentage")
+    if isinstance(pct, (int, float)):
+        e["context_pct"] = round(pct)
+    model = _get(tap, "model", "id")
+    if model:
+        e["model"] = model
+    e["model_name"] = _get(tap, "model", "display_name")
+    effort = _get(tap, "effort", "level")
+    if effort:
+        e["effort"] = effort
+    e["source"] = "tap"
+    return e
+
+
+def _tap_only_entry(sid, tap):
+    cwd = tap.get("cwd") or _get(tap, "workspace", "current_dir")
+    e = {"session_id": sid, "name": tap.get("session_name") or sid[:8],
+         "role": "worker" if "/.claude/worktrees/" in (cwd or "") else "lead",
+         "model": None, "effort": None, "agent_name": None, "cwd": cwd, "context": 0, "context_pct": 0,
+         "last_hour": 0.0, "total": 0.0, "alerts": []}
+    return _overlay_tap(e, tap)
+
+
 def _live_entry(conn, sid, prices, th, now):
     newest = _rows(conn, "select * from calls where session_id=? order by ts desc limit 1", (sid,))[0]
     window = max(th["burn_window_s"], 3600)
@@ -235,14 +299,31 @@ def _live_entry(conn, sid, prices, th, now):
                                  f"a cheaper model or higher effort may fit (alert on {'/'.join(th['mismatch_models'])} at {'/'.join(th['mismatch_efforts'])})."})
     return {"session_id": sid, "name": name, "role": rl, "model": newest["model"], "effort": newest["effort"],
             "agent_name": newest["agent_name"], "cwd": newest["cwd"], "context": ctx, "context_pct": pct,
-            "last_hour": last_hour, "total": total, "alerts": alerts}
+            "last_hour": last_hour, "total": total, "alerts": alerts,
+            "model_name": None, "source": "transcript"}
 
 
-def live_sessions(conn, prices, th, now):
-    """Every session whose newest call is less than live_s old, with its computed alerts."""
+def live_sessions(conn, prices, th, now, taps=None):
+    """Every live session, with its computed alerts.
+
+    Live: its tap file is fresh, or its newest call is less than live_s old (a stale or missing tap file still
+    shows a row, from transcripts). A fresh tap supplies context %, model and effort.
+    """
+    taps = tap_entries(now, th["live_s"]) if taps is None else taps
     sids = [r[0] for r in conn.execute("select session_id, max(ts) from calls where ts > ? group by session_id order by 2 desc",
                                        (now - th["live_s"],))]
-    return [_live_entry(conn, sid, prices, th, now) for sid in sids]
+    indexed = {r[0] for r in conn.execute("select distinct session_id from calls where session_id in (%s)"
+                                          % ",".join("?" * len(taps)), list(taps))} if taps else set()
+    out = []
+    for sid in sids:
+        e = _live_entry(conn, sid, prices, th, now)
+        out.append(_overlay_tap(e, taps[sid]) if sid in taps else e)
+    # a fresh tap with no transcript call in the window: a session that just started, or whose calls aged out
+    for sid, tap in taps.items():
+        if sid not in sids:
+            out.append(_overlay_tap(_live_entry(conn, sid, prices, th, now), tap) if sid in indexed
+                       else _tap_only_entry(sid, tap))
+    return out
 
 
 def _midnight(now, days_back):
@@ -296,9 +377,10 @@ def report(conn, repo, prices, th, now):
         day = days.get(datetime.fromtimestamp(r["ts"]).date().isoformat())
         if day is not None:
             day[r["model"]] = day.get(r["model"], 0.0) + c
-    live = [e for e in live_sessions(conn, prices, th, now) if in_project(e["cwd"], repo)]
+    taps = tap_entries(now, th["live_s"])
+    live = [e for e in live_sessions(conn, prices, th, now, taps) if in_project(e["cwd"], repo)]
     alerts = [dict(a, session=e["name"]) for e in live for a in e["alerts"]]
-    return {"headline": headline, "alerts": alerts, "live": live,
+    return {"headline": headline, "alerts": alerts, "live": live, "plan_limits": plan_limits(taps),
             "daily": [{"date": d, "by_model": m} for d, m in days.items()],
             "by_role": _breakdown(rows, role, prices),
             "by_model": _breakdown(rows, lambda r: r["model"], prices, extra=True),

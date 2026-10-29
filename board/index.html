@@ -1406,7 +1406,7 @@ async function renderUsage(s) {
   if (d.indexing && d.indexing.done < d.indexing.total)
     box.append(el("div", "usage-note", `indexing… ${Math.round(100 * d.indexing.done / d.indexing.total)}%`));
   if (d.index_error) box.append(el("div", "usage-note", `index error: ${d.index_error}`));
-  box.append(usageHeadline(d), usageAlerts(d), el("h4", null, "Live sessions"), usageLive(d),
+  box.append(usageHeadline(d), usageAlerts(d), usagePlanLimits(d), el("h4", null, "Live sessions"), usageLive(d),
     el("h4", null, "Last 30 days"), ...usageChart(d.daily),
     el("h4", null, "By role"), sortableTable(d.by_role, [["key", "Role"], ["usd", "$", usd], ["calls", "Calls"]], "role"),
     el("h4", null, "By model"), sortableTable(d.by_model, [["key", "Model"], ["usd", "$", usd], ["calls", "Calls"],
@@ -1441,6 +1441,20 @@ function usageAlerts(d) {
     more.onclick = () => { ACT.alertsOpen = !ACT.alertsOpen; ACT.sig = null; pollActivity(); };
     box.append(more);
   }
+  return box;
+}
+
+function usagePlanLimits(d) {
+  const pl = d.plan_limits;
+  if (!pl) return el("div");
+  const hm = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const day = (t) => new Date(t * 1000).toLocaleDateString([], { weekday: "short" });
+  const part = (label, w, fmt) => w && w.used_percentage != null
+    ? `${label} ${Math.round(w.used_percentage)}%` + (w.resets_at ? ` (resets ${fmt(w.resets_at)})` : "") : null;
+  const parts = [part("5h", pl.five_hour, hm), part("week", pl.seven_day, day)].filter(Boolean);
+  if (!parts.length) return el("div");
+  const box = el("div", "usage-note", "Plan limits · " + parts.join(" · "));
+  box.id = "usage-plan-limits";
   return box;
 }
 
