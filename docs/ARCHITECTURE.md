@@ -65,10 +65,10 @@ flowchart LR
 ## Lifecycle of a project session
 
 1. **`dev [dir]`** resolves the git top level (a non-repo folder under a home-directory repo stays itself), derives the session name and, if no session exists, creates it with window `claude` running `${DEV_CLAUDE_CMD:-<clone>/bin/claude-orchestrator}` (the absolute path, so it needs nothing on `PATH`) and window `plan` running `bin/tmux-plan`; there is no `shell` window, `prefix S` opens a throwaway one. It then runs `tmux-dev-layout` and attaches (or `switch-client` when already inside tmux; `DEV_NO_ATTACH=1` only creates, which the board uses).
-2. **`tmux-dev-layout <session> <root>`** is idempotent. It migrates old layouts (moves an idle `tests` window into `-bg`, removes an idle user `shell` window (a busy one stays, with a note), creates `plan` when missing (behind a busy user `shell` if one is still there), kills feed/watch panes, drops labels), creates `<project>-bg` atomically (`new-session` is the lock; latecomers wait for `@tc_bg`), and adds optional watch panes from `<root>/.dev/windows`.
+2. **`tmux-dev-layout <session> <root>`** is idempotent. It migrates old layouts (moves an idle `tests` window into `-bg`, removes an idle user `shell` window (a busy one stays, with a note), creates `plan` when missing (behind a busy user `shell` if one is still there), kills feed/watch panes, drops labels), creates `<project>-bg` atomically (`new-session` is the lock; latecomers wait for `@tc_bg`), and adds optional watch panes from `<root>/.dev/windows`. Finally it runs `tmux-overseer ensure`, so the first project session also starts the [overseer](#overseer).
 3. **`claude-orchestrator`** puts the clone's `bin/` first on `PATH`, exports `AGENT_BOARD_REPO`, and runs `claude --name orchestrator --model opus --settings <clone>/claude/session-settings.json --plugin-dir <clone>/claude/plugin --append-system-prompt-file <rules> "$@"`, where `<rules>` is `~/.config/agent-board/orchestrator.md` if it exists, else `<clone>/claude/orchestrator.md`. Passing your own `--name` or `--model` overrides the defaults. Inside tmux it also records `AGENT_BOARD_REPO` and `PATH` on the tmux session with `set-environment`, so windows and teammates started from the session find the clone's commands. Side effect: every window opened in that session afterwards has the clone's `bin/` first on its `PATH`.
 4. The lead splits work into teammates or workers (see below). The user watches in tmux or on the board.
-5. **Closing** the session (board "Close project", or `tmux kill-session`) fires the `session-closed` hook. `tmux-session-closed` checks that no session or grouped view of that name is left, then deletes that project's state files. It never touches the ideas files, and it never runs for `_web-*` or `*-bg` names.
+5. **Closing** the session (board "Close project", or `tmux kill-session`) fires the `session-closed` hook. `tmux-session-closed` checks that no session or grouped view of that name is left, then deletes that project's state files. It never touches the ideas files, and it never runs for `_web-*` or `*-bg` names. It then runs `tmux-overseer stop`, which closes the `overseer` session once no project session is left.
 
 ## tmux-ctl: agents driving windows
 
@@ -118,6 +118,7 @@ Design points:
 | `artifact <path> [--kind K]` | register a file in the board's artifacts panel |
 | `idea <text>` | append to `~/.local/state/agent-board/ideas/<project>.md` |
 | `context show \| path \| add <section> "<entry>"` | the project's shared context file, `${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md`; see [Shared project context](#shared-project-context) |
+| `overview [project] [--json]` | one line per open project (plan, in-progress tasks, needs-you, lead, last run, spend, alerts) from the running board, else a local build without usage data; `--json` prints the `api/overview` body |
 | `relay <doc> [--old-session ID]` | after this turn, restart the `claude` window as a fresh orchestrator reading `<doc>` (used by `/handoff`) |
 
 ## Agent teams and workers
@@ -190,6 +191,7 @@ All paths are under `/<token>/`.
 | --- | --- |
 | `GET /` | the page (`TMUX_DASH_PAGE`, default `index.html`) |
 | `GET api/state` | sessions → windows → panes (kind, status, preview), worktrees, ttyd location |
+| `GET api/overview` | the overseer digest: one record per project, the notifier's recent events, the overseer session's state (see [Overseer](#overseer)) |
 | `GET api/artifacts?session=` | artifact summary (items with history, epoch, lineage, active plan) + pending comments |
 | `GET api/artifact?session=&path=` | one artifact's text and hash (allowlisted) |
 | `GET api/runs?session=` | last 100 `tmux-ctl run` records |
@@ -208,7 +210,7 @@ Plan comments and `[Board]` requests sit in an in-memory `CommentQueue` per proj
 
 ### The page
 
-`board/index.html` is a single file with inline CSS and JS (no build step). It polls `api/state` and the per-project endpoints, renders project tabs, agent cards (status, "Needs you" attention bar), usage alert badges on agent cards, an embedded ttyd terminal, the Activity drawer (a **Usage** tab: cost headline, alerts, live sessions, 30-day chart and breakdowns; a **Runs** tab: `tmux-ctl run` records and failures), the artifacts panel (grouped by epoch, markdown rendered with marked + DOMPurify, inline edit with conflict detection, comments, move), the ideas box, the worktrees list and the Open project dialog. UI preferences (current project, drawer width, collapsed sidebar, show hidden folders, show dropped ideas) are kept in `localStorage`.
+`board/index.html` is a single file with inline CSS and JS (no build step). `/` is the overseer home (digest cards per project, the overseer's terminal, the notifications list; new events become browser notifications and an `(n)` badge in the tab title); a project page is `#<project>`. It polls `api/state` and the per-project endpoints, renders project tabs, agent cards (status, "Needs you" attention bar), usage alert badges on agent cards, an embedded ttyd terminal, the Activity drawer (a **Usage** tab: cost headline, alerts, live sessions, 30-day chart and breakdowns; a **Runs** tab: `tmux-ctl run` records and failures), the artifacts panel (grouped by epoch, markdown rendered with marked + DOMPurify, inline edit with conflict detection, comments, move), the ideas box, the worktrees list and the Open project dialog. UI preferences (drawer width, collapsed sidebar, show hidden folders, show dropped ideas, last seen notification) are kept in `localStorage`.
 
 ## Usage tracking
 
@@ -225,10 +227,19 @@ Plan comments and `[Board]` requests sit in an in-memory `CommentQueue` per proj
   | `context_pct` | 80 | the session's context is at least this % of the model window |
   | `burn_per_hour`, `burn_window_s` | 15, 900 | spend over the last `burn_window_s`, scaled to an hour, is above `burn_per_hour` USD |
   | `session_total` | 25 | the session's total is above this many USD |
+  | `day_total` | (none) | the project's spend today is above this many USD; off until the key is set |
   | `mismatch_efforts`, `mismatch_models` | `["low","medium"]`, `["opus","fable"]` | a teammate runs one of these model families at one of these efforts |
   | `live_s` | 1800 | (not an alert) how recent a session's last call must be to count as live |
 
   `usage.card_alerts()` pins each live session's alerts to its pane on the board. A teammate window `✦ <name>` matches by agent name, a worker pane by cwd, and the `claude` window by the newest non-teammate session in the repo root.
+
+## Overseer
+
+One read-only view across every project (`docs/superpowers/specs/2026-10-28-overseer-design.md`). Three parts:
+
+- **Digest.** `board/overview.py` builds one record per project from state the board already has (no LLM): the active plan and `done/total` (planview), in-progress tasks with owners, "Needs you" panes, the last `tmux-ctl run` (command, exit, age), the lead's state and idle time (`#{window_activity}` of the `claude` window), the last three registered artifacts, the epoch, live usage alerts and today's spend (`usage.spend_since`). `GET api/overview` returns `{generated, projects, events, overseer}`; `tmux-ctl overview [project] [--json]` prints one line per project (or the JSON) from the running board, else a local build without usage data (`source: local`).
+- **Notifier.** `board/notify.py`, run by a server thread every 10 s. It compares each overview with the previous one and emits six event kinds: `needs_you` (a pane starts waiting), `plan_done` (a plan's tasks are all complete), `test_failed` (a run ends non-zero), `lead_idle` (the lead ready for 15 min with open tasks), `context` (a session crosses `context_pct`) and `usage` (`burn_per_hour`, `session_total`, or the project's spend today over `day_total`). An event fires once when its condition appears, not again while it holds, again after it clears and returns; at most one of a kind per project every 5 minutes; the first overview and a project's first appearance only seed the state. Delivery: a macOS banner (`osascript -e 'display notification …'`; a failure is logged) and the events list the page turns into browser notifications and a `(n)` badge in the tab title. `TC_NOTIFY=0` turns it off.
+- **The overseer agent.** tmux session `overseer` (one `claude` window) on the same server as the projects, started by `bin/tmux-overseer ensure` from `tmux-dev-layout` (so the first `dev` starts it) and from the board on each overview build (a killed overseer comes back), stopped by `tmux-session-closed` when the last project session goes. The session starts in its own folder, `${XDG_STATE_HOME:-~/.local/state}/agent-board/overseer`, not in the repo: usage matches sessions to projects by working directory, so a session started in the repo would count toward that project's context and spend alerts. `bin/claude-overseer` runs `claude --model haiku --effort low -n overseer --settings claude/overseer-settings.json --append-system-prompt-file claude/overseer.md`, without the agent-board plugin. It is read-only by permission settings, not by prompt: `defaultMode: dontAsk` auto-denies every call no allow rule matches; allowed are Read, Grep, Glob, `tmux-ctl overview`, and read-only `git log/status/show`; Write, Edit, MultiEdit, NotebookEdit, Agent, SendMessage, Skill, WebFetch, WebSearch, the writing `tmux-ctl` subcommands (`send`, `run`, `tell`, `agent`, `keys`, `relay`, `new`, `idea`, `artifact`, `context`), `tmux send-keys` and `kill-*`, the state-changing `git` commands and `git log/show --output=<file>` (which would write a file) are denied outright. It answers from `tmux-ctl overview --json` first, then plan files, task lists, briefs and artifacts; asked to act, it names the project window to go to. `TC_OVERSEER=0` disables it; `TC_OVERSEER_CMD` is the test seam for the window's command. The board hides the `overseer` session from the project cards and shows its terminal on the home page; on that home view the project-scoped header controls ("+ New agent", "Close project…") are hidden, since no project is selected. The board runs `tmux-overseer ensure` once per fresh overview build, outside the overview lock, so a slow start cannot stall `api/overview`.
 
 ## Handoff relay
 
@@ -277,7 +288,7 @@ Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `c
 | --- | --- | --- |
 | Board (Python `unittest`) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR` / `TC_CONTEXT_DIR`, fake tmux runners |
 | Install helpers (Python `unittest`) | `python3 -m unittest discover -s tools/tests -p 'test_*.py'` | `install_lib` (the `install.sh --migrate` settings and tmux edits) on temporary files |
-| Toolkit (zsh) | `zsh tools/tests/run-all.zsh` | `tools/tests/lib.zsh` starts a private tmux server (`-L tctest-…  -f /dev/null`) with a temp `TC_STATE`, and kills it on exit. Covers tmux-ctl, the dev layout, the plugin and hooks, `install.sh` |
+| Toolkit (zsh) | `zsh tools/tests/run-all.zsh` | `tools/tests/lib.zsh` starts a private tmux server (`-L tctest-…  -f /dev/null`) with a temp `TC_STATE`, and kills it on exit. Covers tmux-ctl, the dev layout, the overseer lifecycle, the plugin and hooks, `install.sh` |
 
 Hook tests feed captured Claude hook JSON from `tools/tests/fixtures/`. Each zsh test prints `ok - …` / `FAIL - …` and ends with `ALL PASS` or `N FAILED`, which `tmux-ctl run` summarizes.
 

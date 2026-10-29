@@ -44,6 +44,10 @@ A project-specific settings file is not an override: it is passed per lead, see 
 | `FZF_BIN` | `fzf` on `PATH`, else `~/.local/bin/fzf` | `tmux-jump`, `tmux-agent-cleanup` | fzf binary. |
 | `USAGE_ROOT` | `~/.claude/projects` | `board/usage.py` | Where the Usage tab reads Claude Code transcripts (read-only). |
 | `SUPERPOWERS_PLUGIN_ROOT` | auto-discovered | `superpowers-hook.sh` | Pin which superpowers-extended-cc install the optional hooks run. |
+| `TC_NOTIFY` | unset (on) | `board/notify.py` (the board server) | `0` turns the overseer notifications off: no macOS banners, no events list, no badge. |
+| `TC_OVERSEER` | unset (on) | `bin/tmux-overseer`, `server.py` | `0` never starts the `overseer` session (the test harness sets it). |
+| `TC_OVERSEER_CMD` | `<clone>/bin/claude-overseer` | `bin/tmux-overseer` | Test seam: the command typed into the overseer's window instead of `claude-overseer`. The session itself starts in `${XDG_STATE_HOME:-~/.local/state}/agent-board/overseer`. |
+| `TMUX_DASH_STATE` | `~/.local/state/tmux-dash` | `board/overview.py` (`tmux-ctl overview`) | Where the running board's `token` file is read from, to query `api/overview`. |
 
 `TMUX_DASH_TOKEN` is set by `tmux-dash` itself; don't set it by hand. Rotate it with `agent-board dash rotate`.
 
@@ -158,10 +162,10 @@ When a Claude Code release changes its screen, the board may show the wrong stat
 Alert thresholds: create `~/.config/agent-board/usage-alerts.json` (or the older `~/.claude/usage-alerts.json`, read only when the new one is absent) with any of these keys (the defaults are in [ARCHITECTURE.md → Usage tracking](ARCHITECTURE.md#usage-tracking)):
 
 ```json
-{ "context_pct": 85, "burn_per_hour": 30, "session_total": 50, "mismatch_models": ["opus"] }
+{ "context_pct": 85, "burn_per_hour": 30, "session_total": 50, "day_total": 100, "mismatch_models": ["opus"] }
 ```
 
-Only the board reads this file. A malformed file or value falls back to the defaults and shows a warning in the Usage tab. Changes apply on the next poll; no restart is needed.
+`day_total` has no default (absent = off): it alerts, and notifies through the overseer, when a project's spend today passes that many USD. Only the board reads this file. A malformed file or value falls back to the defaults and shows a warning in the Usage tab. Changes apply on the next poll; no restart is needed.
 
 Prices: `board/prices.json` holds $/Mtok and context size per model. Add an entry for a new model, or calls on it show as *unpriced*. Cross-check totals after editing with `python3 tools/usage-sum.py --repo <path>`.
 

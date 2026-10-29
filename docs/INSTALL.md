@@ -97,6 +97,8 @@ agent-board dev ~/some/git/repo    # session "repo": windows claude (the lead) a
 agent-board dash                   # starts the board, opens http://127.0.0.1:7700/<token>/
 ```
 
+The first project session also starts the `overseer` session (a read-only haiku Claude that answers "what is each project doing?"; the board's home page shows it). `TC_OVERSEER=0` in your shell profile turns it off.
+
 On first start in a folder, Claude may ask you to trust it; accept it in the `claude` window. Teammates spawned in an untrusted folder die silently at that prompt.
 
 Detach with the usual `Ctrl-b d`. agent-board's tmux server uses tmux's default prefix `Ctrl-b`, and your own tmux setup doesn't apply to it. Its key bindings, all after the prefix: `D` opens the project for the current folder, `f` jumps to any window, `W` cleans up agent worktrees, `S` opens a throwaway shell in a popup. For your own prefix, colours or bindings on this server see [CUSTOMIZATION §4](CUSTOMIZATION.md#4-tmux-key-bindings-and-hooks).

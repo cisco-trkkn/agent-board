@@ -4,7 +4,7 @@ The tmux `dev` orchestration toolkit and the Agent Board web UI, for running tea
 
 - **`agent-board dev <repo>`** opens a tmux session for a project: a `claude` window running the lead (an orchestrator that splits work across an agent team by default) and nothing else (`prefix S` opens a throwaway shell popup). The agents' `tests`/`shell` windows live in a hidden `<project>-bg` session.
 - **`tmux-ctl`** lets agents run tests in those windows safely (locking, busy-window lanes, output capture, run records), start worker Claudes in their own git worktrees, and talk to them.
-- **The Agent Board** (`agent-board dash`) is a localhost web UI with every project, agent status ("Needs you"), live terminals, API-equivalent cost and usage alerts per project, test runs, plans and specs (with inline edit and comments to the lead), ideas, and worktrees.
+- **The Agent Board** (`agent-board dash`) is a localhost web UI with every project, agent status ("Needs you"), live terminals, API-equivalent cost and usage alerts per project, test runs, plans and specs (with inline edit and comments to the lead), ideas, and worktrees. Its home page is the overseer view: a digest card per project, a read-only overseer agent to ask, and macOS/browser notifications for needs-you, finished plans, failed runs, idle leads, high context and high usage.
 - **Claude rules and a session plugin** make the lead orchestrate and workers act alone, mirror agent commands to the board, register artifacts, and block `pkill` patterns that would kill Claude itself.
 
 ## Documentation
@@ -48,7 +48,7 @@ Coming from the author's earlier global setup? `./install.sh --migrate` (see [do
 | `install.sh` | installs the one link; `--check`, `--uninstall`, `--migrate` |
 | `bin/` | the commands; `bin/agent-board` is the single entry point |
 | `board/` | the Agent Board server and page |
-| `claude/orchestrator.md`, `claude/worker.md`, `claude/session-settings.json` | lead and worker rules, settings for agent teams |
+| `claude/orchestrator.md`, `claude/worker.md`, `claude/session-settings.json`, `claude/overseer.md`, `claude/overseer-settings.json` | lead and worker rules, settings for agent teams, and the read-only overseer's rules and permissions |
 | `claude/plugin/` | the session plugin: hooks, `tmux-orchestrator` and `handoff` skills, `effort-*` agents |
 | `claude/CLAUDE.md`, `claude/settings.json`, `claude/agents/`, `claude/skills/`, `claude/hooks/` | the author's own global `~/.claude` config (mirror; `bin/claude-config-link` / `claude-config-sync`). Not used by agent-board sessions or `install.sh`; the session settings and hooks come from `claude/session-settings.json` and `claude/plugin/` |
 | `config/tmux.conf` | agent-board's tmux server configuration |
