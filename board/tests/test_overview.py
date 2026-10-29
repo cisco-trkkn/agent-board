@@ -159,5 +159,54 @@ class LineTest(unittest.TestCase):
         self.assertIn("plan - 0/0 (idle)", l); self.assertIn("run running 0m ago", l); self.assertNotIn("today", l); self.assertNotIn("alerts", l)
 
 
+class FakeBoard(BaseHTTPRequestHandler):
+    payload = {"generated": NOW, "projects": [], "events": []}
+
+    def do_GET(self):
+        body = json.dumps(self.payload).encode() if self.path.endswith("/api/overview") else b"not found"
+        self.send_response(200 if body != b"not found" else 404); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+class CliTest(unittest.TestCase):
+    """overview.py reads the board; tmux-ctl overview is its caller. Token dir: TMUX_DASH_STATE (same layout as ~/.local/state/tmux-dash: a `token` file)."""
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory(); self.addCleanup(self.td.cleanup)
+        self.state = Path(self.td.name); (self.state / "token").write_text("tok\n")
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), FakeBoard)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.shutdown)
+        self.addCleanup(self.httpd.server_close)
+        FakeBoard.payload = {"generated": NOW, "events": [], "projects": [
+            {"project": "a", "path": "/a", "attached": True, "plan": {"name": "p", "active": True, "done": 0, "total": 2, "in_progress": []}, "needs_you": [],
+             "last_run": None, "lead": {"status": "working", "last_active": None, "idle_s": None}, "artifacts": [], "epoch": 0, "alerts": [], "spend_today": None},
+            {"project": "b", "path": "/b", "attached": False, "plan": {"name": "", "active": False, "done": 0, "total": 0, "in_progress": []}, "needs_you": [],
+             "last_run": None, "lead": {"status": "missing", "last_active": None, "idle_s": None}, "artifacts": [], "epoch": 0, "alerts": [], "spend_today": 0.0}]}
+        self.env = {**os.environ, "TMUX_DASH_STATE": str(self.state), "TMUX_DASH_PORT": str(self.httpd.server_address[1])}
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, "-I", str(HERE / "overview.py"), *args], capture_output=True, text=True, env=self.env, timeout=30)
+
+    def test_lines_one_per_project(self):
+        r = self.run_cli()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertEqual(len(lines), 2); self.assertTrue(lines[0].startswith("a ")); self.assertIn("plan p 0/2", lines[0]); self.assertIn("plan - 0/0 (idle)", lines[1])
+
+    def test_json_and_project_filter(self):
+        r = self.run_cli("--project", "b", "--json")
+        self.assertEqual([p["project"] for p in json.loads(r.stdout)["projects"]], ["b"])
+        self.assertEqual(self.run_cli("--project", "zz").returncode, 1)
+
+    def test_unknown_token_dir_falls_back_to_local(self):
+        # main() runs in this process: point it (not just self.env) at a token dir with no token, never the user's live board
+        with mock.patch.dict(os.environ, {"TMUX_DASH_STATE": str(self.state / "none")}), \
+             mock.patch.object(overview, "local_overview", return_value={"projects": [], "events": [], "source": "local"}) as m:
+            self.assertEqual(overview.main([]), 0)
+            self.assertEqual(m.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

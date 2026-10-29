@@ -30,6 +30,8 @@
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)
+#   tmux-ctl overview [project] [--json]   the overseer digest: one line per open project (plan, in-progress
+#                                          tasks, needs-you, lead, last run, spend, alerts), or the JSON
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
@@ -476,8 +478,18 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     t run-shell -b "python3 -I $(h ${(q)${0:A:h:h}})/board/relay.py --session $(h ${(q)FEEDKEY}) --doc $(h ${(q)doc}) --old-session $(h ${(q)old}) --state $(h ${(q)STATE}) --socket $(h ${(q)sock}) > $(h ${(q)log}) 2>&1 || $(h ${(q)${0:A}}) _relay_failed $(h ${(q)log}) $(h ${(q)doc}) $(h ${(q)FEEDKEY})"
     print -r -- "relay scheduled: ${FEEDKEY}:claude restarts with $doc once this turn ends (log: $log)" ;;
 
+  overview)
+    proj=""; jflag=()
+    for a in "$@"; do
+      if [[ "$a" == --json ]]; then jflag=(--json)
+      elif [[ -z "$proj" && "$a" != -* ]]; then proj="$a"
+      else die "usage: tmux-ctl overview [project] [--json]"; fi
+    done
+    popt=(); [[ -n "$proj" ]] && popt=(--project "$proj")
+    exec python3 -I "${0:A:h:h}/board/overview.py" "${popt[@]}" "${jflag[@]}" ;;
+
   ""|-h|--help|help)
-    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
