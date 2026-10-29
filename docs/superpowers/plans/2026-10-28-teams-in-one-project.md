@@ -733,7 +733,7 @@ KINDS = ("needs_you", "plan_done", "test_failed", "lead_idle", "context", "usage
 
 **Steps:**
 
-- [ ] **Step 1: Write the script** (pattern: `tools/tests/e2e-plan-window.zsh`; `check`/`ok`/`fail` from `lib.zsh`; print every command before running it so the output is the report's source). Before `tt_setup`: `ls -la ~/.local/state/agent-board/ideas ~/.local/state/agent-board/context "${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}" 2>/dev/null | shasum > "$before"`.
+- [ ] **Step 1: Write the script** (pattern: the scratch-server setup in `tools/tests/lib.zsh` (`tt_setup`) and `tools/tests/test_layout.zsh`; `check`/`ok`/`fail` from `lib.zsh`; print every command before running it so the output is the report's source). Before `tt_setup`: `ls -la ~/.local/state/agent-board/ideas ~/.local/state/agent-board/context "${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}" 2>/dev/null | shasum > "$before"`.
 - [ ] **Step 2: Run it** through `tmux-ctl run -t 600 tests "zsh tools/tests/e2e-teams.zsh > /tmp/e2e-teams.out 2>&1; echo rc=\$?"`; fix the product (never the check) on a failure, with `systematic-debugging`.
 - [ ] **Step 3: Real-state checks** (AC) and the optional headless run; write the report.
 - [ ] **Step 4: Commit** `test(e2e): two teams in one project, with real-state checks`.
