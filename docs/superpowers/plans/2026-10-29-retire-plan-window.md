@@ -135,7 +135,7 @@ git commit -m "feat(dev): retire the plan window; re-layout closes an old one"
 **Acceptance Criteria:**
 - [ ] `grep -nE 'def (render|watch|display_width|clip)\b|GLYPHS|"watch"' board/planview.py` prints nothing, and `grep -c 'def ' board/planview.py` is printed beside it, so the empty result is not an empty file. `display_width` and `clip` are deleted only if no remaining function calls them; check with `grep -n 'display_width\|clip(' board/planview.py`.
 - [ ] `python3 board/planview.py watch x --root .` exits non-zero with argparse's "invalid choice". `python3 board/planview.py view nosuch --root .` still prints the empty view, as `test_view_without_tmux_prints_empty_line` asserts.
-- [ ] Every remaining test in `board/tests/test_planview.py` passes, and no `view()` test was edited. Check with `git diff main -- board/tests/test_planview.py`, which shows only deletions.
+- [ ] Every remaining test in `board/tests/test_planview.py` passes, and no `view()` test was edited. Check with `git diff main -- board/tests/test_planview.py`, which shows only deletions plus the one new `test_watch_subcommand_is_gone` test.
 - [ ] The docstring no longer says "for the tmux `plan` window". It says the module reads the active plan's tasks and their owners' pane state for board consumers (`view()`).
 
 **Verify:** `python3 -m unittest board.tests.test_planview` → `OK`
