@@ -56,6 +56,13 @@ check "ab_claude_args loads the plugin" zsh -c 'source "$1/bin/_ab_claude.zsh"; 
 # the agent-facing rules name the ideas path board/ideas.py writes (TC_IDEAS_DIR first), not the old ~/.claude one
 check "lead and handoff rules name \${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}" test "$(grep -lF '${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}/<project>.md' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | wc -l)" -eq 2
 check "no rule names the ideas dir without TC_IDEAS_DIR" test -z "$(grep -n '~/.local/state/agent-board/ideas' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | grep -vF '${TC_IDEAS_DIR:-~/.local/state/agent-board/ideas}')"
+# the shared context file (spec 2026-10-28-shared-project-context): the teammate rule, the lead's merge duty and the handoff line
+check "orchestrator.md names Context learned" grep -qF 'Context learned' "$R/claude/orchestrator.md"
+check "worker.md names Context learned" grep -qF 'Context learned' "$R/claude/worker.md"
+check "orchestrator.md tells the lead to merge with tmux-ctl context add" grep -qF 'tmux-ctl context add' "$R/claude/orchestrator.md"
+check "lead and handoff rules name \${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}" test "$(grep -lF '${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | wc -l)" -eq 2
+check "no rule names the context dir without TC_CONTEXT_DIR" test -z "$(grep -n '~/.local/state/agent-board/context' "$R/claude/orchestrator.md" "$R/claude/worker.md" "$P/skills/handoff/SKILL.md" | grep -vF '${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}')"
+check "handoff skill merges Context learned before relaying" grep -qF 'Context learned' "$P/skills/handoff/SKILL.md"
 check "no rule or doc outside docs/superpowers history points at ~/.claude/ideas as THE path" test -z "$(grep -rn '~/.claude/ideas' "$R/claude" "$R/CLAUDE.md" "$R/README.md" "$R/docs/INSTALL.md" "$R/docs/CUSTOMIZATION.md" 2>/dev/null | grep -v 'older\|old ')"
 
 # 3. headless probe
