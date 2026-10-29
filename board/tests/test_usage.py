@@ -967,6 +967,39 @@ class TapTest(ReportTest):
         (self.state / "statusline" / "bad.json").write_text("{nope")
         self.assertEqual([e["source"] for e in self.live()], ["transcript"])
 
+    def raw_tap(self, name, text):
+        (self.state / "statusline").mkdir(parents=True, exist_ok=True)
+        (self.state / "statusline" / name).write_text(text)
+
+    def test_non_dict_tap_json_is_skipped(self):
+        self.put(line("a", ts=ts(60)))
+        self.raw_tap("list.json", "[1, 2]")
+        self.assertEqual([e["source"] for e in self.live()], ["transcript"])
+
+    def test_bad_received_at_is_skipped(self):
+        for i, bad in enumerate(("soon", None, [1])):
+            self.tap(sid=f"b{i}", received_at=bad)
+        self.assertEqual(self.live(), [])
+        self.assertIsNone(self.report()["plan_limits"])
+
+    def test_numeric_string_received_at_is_normalised_to_float(self):
+        self.tap(sid="n1", received_at=str(NOW - 20))
+        pl = self.report()["plan_limits"]
+        self.assertEqual(pl["session_id"], "n1")
+        self.assertIsInstance(pl["received_at"], float)
+        self.assertEqual(pl["received_at"], NOW - 20)
+
+    def test_numeric_string_received_at_compares_with_a_numeric_tap(self):
+        self.tap(sid="n1", received_at=str(NOW - 20))
+        self.tap(sid="n2", age=50)
+        self.assertEqual(self.report()["plan_limits"]["session_id"], "n1")
+
+    def test_non_string_session_id_is_skipped(self):
+        self.tap(sid="ok", age=30)
+        self.tap(sid="lst", session_id=["x"])
+        self.tap(sid="int", session_id=5)
+        self.assertEqual([e["session_id"] for e in self.report()["live"]], ["ok"])
+
     def test_plan_limits_from_freshest_tap_with_rate_limits(self):
         self.tap(sid="old", age=300)
         self.tap(sid="new", age=20)

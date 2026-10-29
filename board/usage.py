@@ -212,9 +212,12 @@ def tap_entries(now, live_s):
         try:
             d = json.loads(f.read_text())
             sid, at = d["session_id"], float(d["received_at"])
+            if not isinstance(sid, str):
+                continue
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
         if now - live_s < at <= now + live_s:
+            d["received_at"] = at
             out[sid] = d
     return out
 
