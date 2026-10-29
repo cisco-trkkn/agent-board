@@ -122,12 +122,12 @@
     {
       "id": 13,
       "subject": "Task 13: Measurement and dated follow-up",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Before/after numbers against the 2026-10-25 baseline, recorded with their sources, plus the 2026-11-04 follow-up list.\n\n**Files:**\n- Create: `docs/superpowers/reports/runtime-phase1/measurement.md`\n\n**Acceptance Criteria:**\n- [ ] Runs after Task 11. `bash tools/audit/run_baseline.sh 1` for the after-window; the 2026-10-25 `audit-out/` JSON for before (path cited).\n- [ ] Table rows (metrics as defined in Global Constraints): `skill_listing chars`, `first-request tokens`, `SessionStart chars`, `Stop durationMs per guard` (from one live session started after Task 11, transcript id cited). Each cell cites its JSON path or command.\n- [ ] Each verdict states its metric's scope (e.g. \"after-window n=\u2026, sessions started after the install only\").\n- [ ] Follow-up section dated 2026-11-04: spawns with a non-tier model have a reason; Stop medians over the week; observations per week; review job marker.\n- [ ] The lead adds the follow-up as an idea (`tmux-ctl idea`) and reports the numbers to the user.\n\n**Verify:** `grep -c '^| ' docs/superpowers/reports/runtime-phase1/measurement.md` \u2192 \u2265 6\n\n```json:metadata\n{\"files\": [\"docs/superpowers/reports/runtime-phase1/measurement.md\"], \"verifyCommand\": \"grep -c '^| ' docs/superpowers/reports/runtime-phase1/measurement.md\", \"acceptanceCriteria\": [\"after Task 11; before = 2026-10-25 JSON\", \"four metric rows with sources\", \"scope stated per verdict\", \"2026-11-04 follow-up\", \"idea filed\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         11
       ]
     }
   ],
-  "lastUpdated": "2026-10-29T01:00:00Z"
+  "lastUpdated": "2026-10-29T04:34:47.562153+00:00"
 }
