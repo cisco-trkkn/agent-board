@@ -53,7 +53,7 @@ The user keeps ideas for future work in `${TC_IDEAS_DIR:-~/.local/state/agent-bo
     3. Take each "work on next" group through `brainstorming`, one at a time, up to a written spec the user approved. Stop there: no `writing-plans` yet, because a second plan's tasks would mix with the running plan's in the one task list.
     4. For each approved spec, in the order chosen, create a pending task `Plan & run: <spec path>`, blocked by every open task of the current plan and by the previous `Plan & run:` task.
     5. Mark ideas as in step 4 of the Next steps round; parked ones stay `- [ ]`.
-- **Next steps round.** When every task of the current plan (not the `Plan & run:` queue) is complete and `finishing-a-development-branch` has run, first take any pending `Plan & run:` tasks in order: `writing-plans` for the spec, execution, `finishing-a-development-branch`, then mark the task completed. Then read the open ideas (`- [ ]`):
+- **Next steps round.** When every task of the current plan (not the `Plan & run:` queue) is complete and `finishing-a-development-branch` has run, first take any pending `Plan & run:` tasks in order: `writing-plans` for the spec, execution (a fresh Skill call to `subagent-driven-development` for each plan, even if it is already loaded), `finishing-a-development-branch`, then mark the task completed. Then read the open ideas (`- [ ]`):
   1. Group related ideas and note any that overlap with what was just built.
   2. Ask with AskUserQuestion, per group: brainstorm now / park / drop.
   3. Take each chosen group through `brainstorming`, one at a time.
@@ -75,7 +75,7 @@ The `superpowers-extended-cc:*` skills are how work is done here. Use them witho
 | Every session, first (before the first tool call and before any skill below) | If installed: `task-observer:task-observer`: invoke it and run its Session Start Protocol (workspace probe, scan, review trigger) | you |
 | New feature or behaviour change | `brainstorming`, then `writing-plans` | you, with the user: the one place the user is asked questions |
 | Any other multi-step work (ops runbooks, handoffs, migrations) | `writing-plans` (brainstorming only if the design is open) | you |
-| Carrying out a plan | `subagent-driven-development`, with `subagent-driven-development-extras` (not a superpowers skill; If installed), started as soon as the plan is written, without asking the user how to execute it (teammates take the plan's tasks), or `dispatching-parallel-agents` for independent pieces | you |
+| Carrying out a plan | `subagent-driven-development`, with `subagent-driven-development-extras` (not a superpowers skill; If installed), started as soon as the plan is written, without asking the user how to execute it (teammates take the plan's tasks). Call the Skill tool every time a plan starts running, even when the skill is already in context: the call is the signal that keeps the handoff guard from refusing later questions. Or `dispatching-parallel-agents` for independent pieces | you |
 | Writing or changing code | `test-driven-development` | implementer |
 | Bug, failing test, odd behaviour | `systematic-debugging` before any fix | whoever owns the bug |
 | Review | `requesting-code-review`; acting on findings: `receiving-code-review` | reviewer; implementer |
