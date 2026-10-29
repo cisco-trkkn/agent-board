@@ -150,23 +150,35 @@ class ServerThreadTest(unittest.TestCase):
         self.assertFalse(any(t.name == "gitlab-sync" for t in threading.enumerate()))
         self.assertTrue(callable(mod.gitlab_loop))
 
-    def test_loop_syncs_each_mapped_project_and_survives_errors(self):
+    def test_loop_pass_kicks_each_mapped_project_and_never_syncs_in_process(self):
+        # mutation: call sync() directly in gitlab_pass -> sync is called on a board-server thread
         spec = importlib.util.spec_from_file_location("tmux_dash_server_kick2", BOARD / "server.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        seen = []
+        kicked = []
 
-        def fake_sync(p):
-            seen.append(p)
+        def fake_kick(p):
+            kicked.append(p)
             if p == "a":
                 raise RuntimeError("boom")
 
         with mock.patch.object(mod.gitlab_sync, "mapped_projects", return_value=["a", "b"]), \
-             mock.patch.object(mod.gitlab_sync, "sync", side_effect=fake_sync), \
+             mock.patch.object(mod.gitlab_sync, "kick", side_effect=fake_kick), \
+             mock.patch.object(mod.gitlab_sync, "sync") as sync, \
              mock.patch("sys.stderr") as err:
             mod.gitlab_pass()
-        self.assertEqual(seen, ["a", "b"])
+        self.assertEqual(kicked, ["a", "b"])
+        sync.assert_not_called()
         self.assertTrue(err.write.called)
+
+
+class SysPathTest(KickBase):
+    def test_writes_do_not_grow_sys_path(self):
+        ideas.add("p", "one")
+        n = len(sys.path)
+        ideas.add("p", "two")
+        ideas.add("p", "three")
+        self.assertEqual(len(sys.path), n)
 
 
 if __name__ == "__main__":

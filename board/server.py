@@ -994,9 +994,11 @@ GITLAB_EVERY = 60   # seconds between re-syncs of the mapped projects
 
 
 def gitlab_pass():
+    """Start a detached `ideas.py sync` per mapped project. Never sync in-process: the ideas lock is a
+    per-process lockf, so a sync on a board thread could overlap a request thread's write."""
     for p in gitlab_sync.mapped_projects():
         try:
-            gitlab_sync.sync(p)
+            gitlab_sync.kick(p)
         except Exception as e:
             print(f"gitlab-sync {p}: {e}", file=sys.stderr, flush=True)
 

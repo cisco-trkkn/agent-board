@@ -75,7 +75,9 @@ def _append(project, first, detail_lines):
 def _kick(project):
     """Start a background GitLab sync for a mapped project. Capture must never fail because of it."""
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))   # python3 -I implies -P
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)   # python3 -I implies -P
         import gitlab_sync
         gitlab_sync.kick(project)
     except Exception:
