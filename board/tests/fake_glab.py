@@ -2,7 +2,8 @@
 """A stand-in for `glab api -i -X METHOD PATH [-f k=v]...` in tests.
 
 $FAKE_GLAB_DIR/log.jsonl  gets one {"method", "path", "fields"} line per call.
-$FAKE_GLAB_DIR/rules.json is a list of {"method", "path_re", "status", "body", "remaining", "once"};
+$FAKE_GLAB_DIR/rules.json is a list of {"method", "path_re", "status", "body", "remaining", "once", "text", "ctype"};
+a "text" rule answers that raw string instead of the JSON body, with Content-Type "ctype" (default text/plain);
 the first rule whose method matches and whose path_re re.search-es the path answers (a "once" rule is
 then removed). No match: GET -> 200 [], anything else -> 200 {}. The header block is the real
 capture in fixtures/glab/list-empty-200.txt, with the status line and Ratelimit-Remaining replaced.
@@ -34,13 +35,16 @@ if hit and hit.get("once"):
     rules.remove(hit)
     rules_f.write_text(json.dumps(rules))
 status = hit["status"] if hit else 200
-body = hit["body"] if hit else ([] if method == "GET" else {})
+body = hit.get("body", {}) if hit else ([] if method == "GET" else {})
 remaining = str(hit.get("remaining", 1990)) if hit else "1990"
 head = (Path(__file__).resolve().parent / "fixtures" / "glab" / "list-empty-200.txt").read_text()
 head = head.replace("\r\n", "\n").partition("\n\n")[0].split("\n")[1:]
-head = [l for l in head if not l.lower().startswith(("ratelimit-remaining", "content-length"))]
-reason = {200: "OK", 201: "Created", 404: "Not Found", 429: "Too Many Requests", 500: "Internal Server Error"}.get(status, "X")
-text = json.dumps(body)
+drop = ("ratelimit-remaining", "content-length") + (("content-type",) if hit and "text" in hit else ())
+head = [l for l in head if not l.lower().startswith(drop)]
+if hit and "text" in hit:
+    head.append("Content-Type: " + hit.get("ctype", "text/plain"))
+reason = {200: "OK", 201: "Created", 404: "Not Found", 429: "Too Many Requests", 500: "Internal Server Error", 502: "Bad Gateway"}.get(status, "X")
+text = hit["text"] if hit and "text" in hit else json.dumps(body)
 out = f"HTTP/2.0 {status} {reason}\n" + "".join(f"{l}\r\n" for l in head + [f"Ratelimit-Remaining: {remaining}", f"Content-Length: {len(text)}"]) + "\r\n" + text
 sys.stdout.write(out)
 if status >= 400:

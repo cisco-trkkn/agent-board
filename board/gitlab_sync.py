@@ -28,7 +28,18 @@ def _parse(raw):
     head, _, body = raw.replace("\r\n", "\n").partition("\n\n")
     lines = head.split("\n")
     hdr = {k.strip().lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:])}
-    return int(lines[0].split()[1]), hdr, (json.loads(body) if body.strip() else None)
+    return int(lines[0].split()[1]), hdr, body
+
+
+def _json(code, body):
+    """The decoded body; text that is not JSON (a Rack::Attack 429, a Cloudflare 502 page) is a GlabError."""
+    if not body.strip():
+        return None
+    try:
+        return json.loads(body)
+    except ValueError:
+        what = f"HTTP {code}: {body.strip()[:200]}" if code >= 400 else f"HTTP {code}: reply is not JSON: {body.strip()[:200]}"
+        raise GlabError(what) from None
 
 
 def api(method, path, fields=()):
@@ -41,9 +52,10 @@ def api(method, path, fields=()):
         raise GlabError(f"glab: {e}") from e
     if not r.stdout.startswith("HTTP/"):
         raise GlabError((r.stderr.strip().splitlines() or [f"glab exited {r.returncode}"])[-1])
-    code, hdr, body = _parse(r.stdout)
+    code, hdr, raw = _parse(r.stdout)
     if code == 429 or hdr.get("ratelimit-remaining") == "0":
         raise RateLimited(f"rate limited (HTTP {code})")
+    body = _json(code, raw)
     if code >= 400:
         raise GlabError(f"HTTP {code}: {body.get('message') if isinstance(body, dict) else body}")
     return body

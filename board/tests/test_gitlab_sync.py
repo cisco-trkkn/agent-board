@@ -122,7 +122,7 @@ class ClientTest(Env):
     def test_parse_real_captures(self):
         fx = HERE / "fixtures" / "glab"
         code, hdr, body = g._parse((fx / "list-empty-200.txt").read_text())
-        self.assertEqual((code, body), (200, []))
+        self.assertEqual((code, g._json(code, body)), (200, []))
         self.assertEqual(hdr["ratelimit-remaining"], "1999")
         code, hdr, body = g._parse((fx / "get-404.txt").read_text())
         self.assertEqual(code, 404)
@@ -138,11 +138,20 @@ class ClientTest(Env):
             g.api("GET", f"{BASE}/9")
 
     def test_rate_limited_by_status_and_by_header(self):
-        self.rules({"method": "GET", "path_re": "a$", "status": 429, "body": {"message": "slow"}},
+        self.rules({"method": "GET", "path_re": "a$", "status": 429, "text": "Retry later\n"},
                    {"method": "GET", "path_re": "b$", "status": 200, "body": [], "remaining": 0})
         for p in ("a", "b"):
             with self.subTest(p=p), self.assertRaises(g.RateLimited):
                 g.api("GET", p)
+
+    def test_non_json_replies_are_glab_errors(self):
+        html = "<html><body>Bad gateway</body></html>"
+        self.rules({"method": "GET", "path_re": "a$", "status": 502, "text": html, "ctype": "text/html"},
+                   {"method": "GET", "path_re": "b$", "status": 200, "text": "<html>oops</html>", "ctype": "text/html"})
+        with self.assertRaisesRegex(g.GlabError, "HTTP 502: <html>"):
+            g.api("GET", "a")
+        with self.assertRaisesRegex(g.GlabError, "HTTP 200.*not JSON"):
+            g.api("GET", "b")
 
     def test_missing_binary(self):
         os.environ["PATH"] = str(self.dir)   # no glab here
@@ -396,13 +405,48 @@ class SyncTest(Env):
 
     def test_rate_limit_stops_the_pass(self):
         self.ideas(f"- [ ] {TS} · first", f"- [ ] {TS} · second")
-        self.rules({"method": "GET", "path_re": "issues$", "status": 429, "body": {"message": "slow"}})
+        self.rules({"method": "GET", "path_re": "issues$", "status": 429, "text": "Retry later\n"})
         r = g.sync("p")
         self.assertEqual(len(self.log()), 1)
         st = self.status()
         self.assertFalse(st["ok"])
         self.assertEqual(st["pending"], 2)
         self.assertFalse(r["ok"])
+
+    def test_text_plain_429_records_a_warning(self):
+        self.ideas(f"- [ ] {TS} · first")
+        self.rules({"method": "GET", "path_re": "issues$", "status": 429, "text": "Retry later\n"})
+        r = g.sync("p")
+        st = self.status()
+        self.assertFalse(st["ok"])
+        self.assertTrue(st["error"])
+        self.assertFalse(r["ok"])
+
+    def test_html_502_fails_one_idea_and_the_pass_moves_on(self):
+        self.ideas(f"- [ ] {TS} · first", f"- [ ] {TS} · second")
+        self.rules({"method": "GET", "path_re": "issues$", "status": 502, "once": True,
+                    "text": "<html>502</html>", "ctype": "text/html"},
+                   {"method": "POST", "path_re": "issues$", "status": 201, "body": {"iid": 8}})
+        r = g.sync("p")
+        st = self.status()
+        self.assertFalse(st["ok"])
+        self.assertTrue(st["error"])
+        self.assertEqual(st["pending"], 1)
+        self.assertEqual([m for m, _, _ in self.calls()], ["GET", "GET", "POST"])   # second idea still created
+        self.assertIn("gl#8", self.text())
+        self.assertFalse(r["ok"])
+
+    def test_adopting_a_closed_issue_reopens_it_for_an_open_idea(self):
+        self.ideas(f"- [ ] {TS} · retries")
+        mk = marker("p", TS)
+        self.rules({"method": "GET", "path_re": "issues$", "status": 200,
+                    "body": [{"iid": 9, "title": "retries", "state": "closed", "description": mk}]})
+        g.sync("p")
+        self.assertEqual(self.sidecar()["9"]["state"], "open")
+        puts = [c for c in self.calls("PUT")]
+        self.assertEqual(len(puts), 1)
+        self.assertEqual(puts[0][2], {"state_event": "reopen", "remove_labels": "not-planned"})
+        self.assertEqual([m for m, _, _ in self.calls("POST")], [])
 
     def test_config_error_writes_status_and_raises(self):
         self.conf.write_text("{not json")
