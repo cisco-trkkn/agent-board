@@ -1,0 +1,8 @@
+#!/usr/bin/env zsh
+# claude-overseer — start the read-only overseer Claude: haiku at low effort, its own settings (read-only permissions,
+# dontAsk) and rules, no agent-board plugin (its hooks mirror and register for a project; the overseer has none).
+# Extra arguments pass through to claude. Used by tmux-overseer for the `overseer` session's claude window.
+source "${0:A:h}/_ab_claude.zsh"
+export PATH="$(ab_path)" AGENT_BOARD_REPO="$AB_REPO" TC_ROLE=overseer CLAUDE_MD_REVISE_HOOK=0
+exec claude --model haiku --effort low -n overseer --settings "$AB_REPO/claude/overseer-settings.json" \
+  --append-system-prompt-file "$AB_REPO/claude/overseer.md" "$@"

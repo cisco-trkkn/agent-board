@@ -1,0 +1,41 @@
+#!/usr/bin/env zsh
+# tmux-overseer ensure|stop [--force]|status — the read-only overseer Claude, session `overseer` on the server the projects are on.
+#   ensure   create the session when a project session with a `claude` window exists and `overseer` doesn't (TC_OVERSEER=0: never)
+#   stop     kill the session once no project session remains (--force: now)
+#   status   print running|stopped; exit 0|1
+# Callers: tmux-dev-layout (ensure, so the first `dev` starts it), the board server (ensure on each overview build, so a
+# killed overseer comes back), tmux-session-closed (stop). Never touches a project session. Test seam: TC_OVERSEER_CMD
+# replaces the claude-overseer command line typed into the window.
+emulate -L zsh
+source "${0:A:h}/_tc_bins.zsh"; T=tc_tmux
+source "${0:A:h}/_ab_claude.zsh"
+OV=overseer
+projects() {   # sessions with a `claude` window that are not the overseer, a -bg session or a _web- view
+  local line s
+  for line in ${(f)"$("$T" list-windows -a -F '#{session_name}'$'\t''#{window_name}' 2>/dev/null)"}; do
+    [[ "${line#*$'\t'}" == claude ]] || continue
+    s="${line%%$'\t'*}"
+    [[ "$s" == "$OV" || "$s" == *-bg || "$s" == _web-* ]] && continue
+    print -r -- "$s"
+  done
+}
+case "$1" in
+  ensure)
+    [[ "$TC_OVERSEER" == 0 ]] && exit 0
+    "$T" has-session -t "=$OV" 2>/dev/null && exit 0
+    [[ -n "$(projects)" ]] || exit 0
+    cmd="${TC_OVERSEER_CMD:-${(q)AB_REPO}/bin/claude-overseer}"
+    # new-session is the atomic gate: a second caller racing this one loses and exits quietly
+    "$T" new-session -d -s "$OV" -n claude -x 200 -y 50 -c "$AB_REPO" 2>/dev/null || exit 0
+    "$T" set-option -t "=${OV}:" @tc_overseer 1
+    "$T" send-keys -t "=${OV}:claude" -l -- "$cmd"
+    "$T" send-keys -t "=${OV}:claude" Enter
+    print -r -- "started the overseer (session $OV)" ;;
+  stop)
+    "$T" has-session -t "=$OV" 2>/dev/null || exit 0
+    [[ "$2" == --force || -z "$(projects)" ]] || exit 0
+    "$T" kill-session -t "=$OV" && print -r -- "stopped the overseer" ;;
+  status)
+    if "$T" has-session -t "=$OV" 2>/dev/null; then print running; else print stopped; exit 1; fi ;;
+  *) sed -n '2,8p' "${0:A}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

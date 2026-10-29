@@ -1,0 +1,20 @@
+{
+  "env": { "AGENT_BOARD": "1", "TC_ROLE": "overseer" },
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Read", "Grep", "Glob",
+      "Bash(tmux-ctl overview *)",
+      "Bash(git log *)", "Bash(git status *)", "Bash(git show *)",
+      "Bash(git -C * log *)", "Bash(git -C * status *)", "Bash(git -C * show *)"
+    ],
+    "deny": [
+      "Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "SendMessage", "WebFetch", "WebSearch",
+      "Bash(tmux-ctl send *)", "Bash(tmux-ctl run *)", "Bash(tmux-ctl tell *)", "Bash(tmux-ctl agent *)",
+      "Bash(tmux-ctl keys *)", "Bash(tmux-ctl relay *)", "Bash(tmux-ctl new *)", "Bash(tmux-ctl idea *)", "Bash(tmux-ctl artifact *)",
+      "Bash(tmux send-keys *)", "Bash(tmux * send-keys *)", "Bash(tmux kill-*)", "Bash(tmux * kill-*)",
+      "Bash(git push *)", "Bash(git commit *)", "Bash(git checkout *)", "Bash(git merge *)", "Bash(git reset *)"
+    ]
+  },
+  "teammateMode": "in-process"
+}
