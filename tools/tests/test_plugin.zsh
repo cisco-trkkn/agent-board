@@ -27,6 +27,12 @@ for c in cmds:
         if "/" + n + ".sh" in c: want[n] += 1
 assert all(want.values()), want
 PY
+check "hooks.json registers sdd-call-guard on PreToolUse Agent, --scoped, timeout 10" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+hit = [(e["matcher"], h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/sdd-call-guard.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] == "Agent" and hit[0][1]["timeout"] == 10, hit
+PY
 check "settings.json no longer registers hooks (no double run)" python3 -c 'import json,sys; assert "hooks" not in json.load(open(sys.argv[1]))' "$R/claude/session-settings.json"
 check "legacy hook paths are symlinks into the plugin" zsh -c 'cd "$1/claude/hooks" && for n in kill-guard bash-mirror artifact-register worktree-sweep; do [[ -L $n.sh && $(readlink $n.sh) == ../plugin/scripts/$n.sh && -x $n.sh ]] || exit 1; done' _ "$R"
 check "superpowers-hook.sh stays in claude/hooks (regular file)" test -f "$R/claude/hooks/superpowers-hook.sh" -a ! -L "$R/claude/hooks/superpowers-hook.sh"
