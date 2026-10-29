@@ -91,7 +91,7 @@
     {
       "id": 11,
       "subject": "Task 11: Lead \u2014 user-config install",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Live config carries the new overrides and hook registrations; the handoff skill and directory are unified; existing lineage is migrated.\n\n**Files:**\n- Modify (repo, branch): `claude/settings.json`\n- Live (main session only): `~/.claude/settings.json`, `~/.claude/skills/handoff` (link), `~/.claude/handoffs` \u2192 link, `~/.local/state/agent-board/lineage/`\n\n**Acceptance Criteria:**\n- [ ] `~/.claude/settings.json.bak-20261028` exists and equals the pre-change file (`cmp`).\n- [ ] Live and repo settings both gain, with command strings byte-identical between them: `skillOverrides` entries from `overrides.json`; `Stop` \u2192 `~/.claude/hooks/context-size-guard.sh` (timeout 10); `PostToolUse` matcher `SendMessage|Agent` \u2192 `~/.claude/hooks/context-size-guard.sh` (timeout 10); `PostToolUse` matcher `Agent` \u2192 `~/.claude/hooks/spawn-record.sh` (timeout 5, async).\n- [ ] `~/.claude/hooks/spawn-record.sh` is a link to `~/agent-board/claude/hooks/spawn-record.sh` (created after the branch merges, or pointed at the main checkout path, which resolves once merged; the step order below makes it resolve before the settings swap).\n- [ ] The swap was a generated `settings.json.next` (`jq` edit of a copy), `jq . ` valid, diffed against live, then `mv`.\n- [ ] `readlink ~/.claude/skills/handoff` \u2192 the repo `claude/plugin/skills/handoff`; old target recorded in the ledger.\n- [ ] All docs from `~/.claude/handoffs/` are in `~/.local/state/agent-board/handoffs/` (count before = count after, printed); `~/.claude/handoffs` is a link to it.\n- [ ] Lineage migration: every line of `$TMPDIR/tmux-ctl-$UID/lineage-<p>.jsonl` appended to `~/.local/state/agent-board/lineage/<p>.jsonl` (line counts before/after printed); old files left in place.\n- [ ] `tools/tests/test_install.zsh` passes (fixtures updated if the repo settings change affects them).\n\n**Verify:** `jq -e '.hooks.Stop[].hooks[].command' ~/.claude/settings.json | grep -c context-size-guard && readlink ~/.claude/handoffs` \u2192 `1` and the new handoffs path\n\n```json:metadata\n{\"files\": [\"claude/settings.json\"], \"verifyCommand\": \"jq -e '.hooks.Stop[].hooks[].command' ~/.claude/settings.json | grep -c context-size-guard && readlink ~/.claude/handoffs\", \"acceptanceCriteria\": [\"backup equals pre-change\", \"live and repo settings identical new entries\", \"spawn-record link\", \"generated .next swap\", \"handoff link repointed, old target recorded\", \"handoff docs moved, counts equal, link left\", \"lineage migrated, counts printed\", \"test_install passes\"], \"modelTier\": \"standard\", \"owner\": \"lead\"}\n```",
       "blockedBy": [
         2,
@@ -129,5 +129,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-29T00:19:00Z"
+  "lastUpdated": "2026-10-29T01:00:00Z"
 }
