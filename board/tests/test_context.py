@@ -112,6 +112,16 @@ class ContextAddTest(unittest.TestCase):
             context.add("p", "Gotchas", "g", now=T0)
         self.assertEqual(self.read(), "# p: shared agent context\nLast curated: 2026-01-01\n\n## Map\n")
 
+    def test_last_heading_without_trailing_newline(self):
+        self.p.write_text(SKELETON.rstrip("\n"))
+        context.add("p", "Decisions", "d", now=T0)
+        self.assertTrue(self.read().endswith("## Decisions\n- d · 2026-10-28\n"), self.read())
+
+    def test_last_entry_without_trailing_newline(self):
+        self.p.write_text(SKELETON.replace("## Decisions\n", "## Decisions\n- a · 2026-01-01").rstrip("\n"))
+        context.add("p", "Decisions", "two", now=T0)
+        self.assertTrue(self.read().endswith("## Decisions\n- a · 2026-01-01\n- two · 2026-10-28\n"), self.read())
+
     def test_empty_file_is_treated_as_new(self):
         self.p.write_text("")
         context.add("p", "Map", "m", now=T0)
@@ -125,7 +135,7 @@ class ContextAddTest(unittest.TestCase):
 
     def test_add_blocks_while_the_lock_is_held(self):
         # Hold the lock in this process; a child `add` must not touch the file until it is released.
-        # Mutation: remove the lockf call in _locked() -> "unchanged while locked" fails.
+        # Mutation: remove the lockf call in add() -> "unchanged while locked" fails.
         context.add("p", "Map", "first", now=T0)
         before = self.read()
         env = {**os.environ, "TC_CONTEXT_DIR": self.tmp.name}

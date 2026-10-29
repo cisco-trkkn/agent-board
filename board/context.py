@@ -61,6 +61,8 @@ def show(project):
 
 def _insert(text, section, line, now=None):
     """Append `line` at the end of `## section` (before the next heading), and set Last curated to today."""
+    if not text.endswith("\n"):   # a hand-edited file may lack the final newline; don't fuse lines
+        text += "\n"
     lines = text.splitlines(keepends=True)
     heads = [i for i, l in enumerate(lines) if l.rstrip("\n") == f"## {section}"]
     if len(heads) != 1:
