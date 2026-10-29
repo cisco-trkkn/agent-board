@@ -51,6 +51,7 @@ else
   [ -n "$due" ] && msg="$msg The review is due: offer it in one line and carry on with the user's task."
   msg="$msg Load the task-observer skill (no Skill arguments) only to write an observation, to run a review the user opted into, or to reconcile staged updates. Observations are created only by scripts/new-observation.sh. Re-read this summary before writing or proposing a plan. Teammates and subagents never load it and report findings to the lead. Workspace (pinned, never the cwd or a worktree): $ws. Details: $ws/README.md."
 fi
-# JSON string escaping for the two characters a path or note could carry
-msg=$(printf '%s' "$msg" | sed 's/[\\"]/\\&/g')
+# JSON string escaping: backslash and quote, tab as \t, other control characters dropped
+tab=$(printf '\t')
+msg=$(printf '%s' "$msg" | tr -d '\000-\010\013-\037\177' | sed -e 's/[\\"]/\\&/g' -e "s/$tab/\\\\t/g")
 printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$msg"

@@ -65,6 +65,17 @@ u2=$(STATE="$T/afile/sub" run PostToolUse s7 "$FX" | wc -c | awk '{print ($1>0)}
 check "unwritable state: warns every time" "$u1$u2" "11"
 check "unwritable state: stderr empty" "$(wc -c < "$T/err" | tr -d ' ')" "0"
 
+# Stop's systemMessage never reaches the model: Stop warns but must not use up the band
+o=$(run Stop s8 "$FX")
+check "Stop first: systemMessage present" "$(sm "$o" '.systemMessage | length > 0')" "true"
+check "Stop first: no band file written" "$([ -e "$T/state/s8.band" ] && echo yes || echo no)" "no"
+o=$(run UserPromptSubmit s8 "$FX")
+check "Stop then UPS: UPS still emits additionalContext" "$(sm "$o" '.hookSpecificOutput.additionalContext' | grep -c '/handoff')" "1"
+check "Stop then UPS: band recorded by UPS" "$(cat "$T/state/s8.band")" "7"
+check "UPS repeated in same band: silent" "$(run UserPromptSubmit s8 "$FX" | wc -c | tr -d ' ')" "0"
+echo 3 > "$T/state/s9.band"; run Stop s9 "$FX" >/dev/null
+check "Stop leaves an existing band file alone" "$(cat "$T/state/s9.band")" "3"
+
 # real-state replay of session 48822fd2 (read-only)
 if [ -n "$REAL" ] && [ -f "$REAL" ]; then
   o=$(run PostToolUse real48822fd2 "$REAL")

@@ -25,6 +25,7 @@ nopend="$T/nopend"; ws "$nopend"; date +%F > "$nopend/skill-observations/last-re
 mkdir -p "$nopend/skill-updates/2026-10-26" "$nopend/skill-updates/2026-10-28" "$nopend/skill-updates/.live-mirror"
 regex="$T/regex"; ws "$regex"; date +%F > "$regex/skill-observations/last-review-date.txt"; mkdir -p "$regex/skill-updates/2026-10-2x"
 printf '## 2026-10-28 (scheduled review): awaiting install\n' > "$regex/skill-updates/PENDING.md"
+ctl="$T/ctl"; ws "$ctl"; date +%F > "$ctl/skill-observations/last-review-date.txt"; printf 'limit\thit\001x 2026-10-30\r\n' > "$ctl/skill-observations/review-started.txt"
 missing="$T/missing"   # no directory at all
 
 out=$(text "$empty"); check "empty workspace: valid JSON" "$?" "0"
@@ -51,6 +52,8 @@ check "limit-hit review-started: fired part" "$(text "$limit" | grep -cF '· fir
 check "limit-hit review-started: due despite fresh date" "$(text "$limit" | grep -cF 'last review '"$(date +%F)"' (due) · fired')" "1"
 check "staged: one awaiting install round" "$(text "$staged" | grep -cF '· 1 staged updates.')" "1"
 check "no PENDING.md: counts directories, not dot-entries" "$(text "$nopend" | grep -cF '· 2 staged updates.')" "1"
+check "control chars in review-started.txt: valid JSON" "$(TASK_OBSERVER_WORKSPACE="$ctl" sh "$H" | python3 -c 'import json,sys; json.load(sys.stdin); print("ok")' 2>&1)" "ok"
+check "control chars: tab kept as escaped text" "$(text "$ctl" | grep -c 'fired limit.hit')" "1"
 check "missing workspace: MISSING" "$(text "$missing" | grep -cF 'workspace MISSING')" "1"
 check "missing workspace: full protocol" "$(text "$missing" | grep -cF 'Run the full protocol: load the task-observer skill')" "1"
 check "missing workspace: pinned wording" "$(text "$missing" | grep -cF 'pinned, never the cwd or a worktree')" "1"

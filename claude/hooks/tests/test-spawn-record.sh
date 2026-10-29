@@ -62,6 +62,12 @@ check "malformed: exit 0" "$rc" "0"; check "malformed: no output" "$out" ""; che
 run ""
 check "empty: exit 0" "$rc" "0"; check "empty: no line" "$(lines)" "$n"
 
+# default output path (AGENT_BOARD_SPAWNS unset) with a temp HOME
+H2="$T/home"; mkdir -p "$H2"
+out=$(printf '%s' "$(mk "$T/repo" sonnet 'x' Agent)" | env -u AGENT_BOARD_SPAWNS HOME="$H2" bash "$H" 2>&1); rc=$?
+check "default path: exit 0" "$rc" "0"
+check "default path: file under HOME/.local/state/agent-board" "$(wc -l < "$H2/.local/state/agent-board/spawns.jsonl" 2>/dev/null | tr -d ' ')" "1"
+
 # leak check: the real spawns file must not have been created or touched by this run
 REAL="$HOME/.local/state/agent-board/spawns.jsonl"
 check "no leak to real spawns file" "$([ "${REAL_EXISTED:-0}" = 1 ] && echo skip || { [ -e "$REAL" ] && echo leaked || echo ok; })" "$([ "${REAL_EXISTED:-0}" = 1 ] && echo skip || echo ok)"

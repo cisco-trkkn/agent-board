@@ -121,7 +121,7 @@ The tier-to-model map is in `docs/superpowers/model-routing.json` in the repo; i
 - **Escalation:** if a teammate or task outgrows its tier, start it again one tier higher (and update the
   task's `modelTier` if it is a plan task). Raise the tier, not the effort. Never move a tier down silently.
 - **Leaving the tier's model** (a `model` other than the one the task's tier maps to: an escalation,
-  Opus, an inherited model): the prompt starts with a line `Reason: <why>`, which the spawn-record hook
+  Opus, an inherited model): the prompt carries a line starting `Reason: <why>`, which the spawn-record hook
   stores. On a Fable limit error, re-dispatch the same prompt on Opus with `Reason: fable-limit`.
 
 ## Teammates and workers don't talk to the user

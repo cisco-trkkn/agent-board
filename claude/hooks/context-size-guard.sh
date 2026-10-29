@@ -4,6 +4,7 @@
 # systemMessage + hookSpecificOutput.additionalContext; Stop emits systemMessage only.
 # Once per 50K band: band = tokens / 50000; the hook warns only when the band is above the one stored in
 # ${CLAUDE_CONTEXT_GUARD_STATE:-$HOME/.local/state/agent-board/context-guard}/<session_id>.band.
+# Stop warns (user-visible systemMessage) but never records the band: the model does not see it.
 # Without a session_id (or with an unwritable state dir) it warns every time and stores nothing.
 # A run below the threshold deletes the band file, so after /compact the next crossing warns again.
 # Threshold override: export CLAUDE_CONTEXT_WARN_TOKENS=400000
@@ -34,8 +35,11 @@ band=$((tokens / 50000))
 if [ -n "$sid" ]; then
   last=$(cat "$sdir/$sid.band" 2>/dev/null || echo -1)
   [ "$band" -gt "$last" ] || exit 0
-  # An unwritable state dir is silent: warn as if there were no session_id.
-  { mkdir -p "$sdir" && printf '%s\n' "$band" > "$sdir/$sid.band"; } 2>/dev/null
+  # Stop's systemMessage never reaches the model, so Stop warns but leaves the band alone: only
+  # UserPromptSubmit and PostToolUse record it. An unwritable state dir is silent: warn as if no session_id.
+  if [ "$event" != "Stop" ]; then
+    { mkdir -p "$sdir" && printf '%s\n' "$band" > "$sdir/$sid.band"; } 2>/dev/null
+  fi
 fi
 
 k=$((tokens / 1000))
