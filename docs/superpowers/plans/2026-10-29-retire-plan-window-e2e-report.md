@@ -62,6 +62,14 @@ Each from `grep -c` over the saved, unshortened output above (every `plan` windo
 
 Count 3 is 0, so the new close condition (window named `plan` and start command contains `tmux-plan`) matches every real `plan` window and nothing else. The 3 lines are 2 distinct windows: `agent-board:plan` and `_web-47416:plan` are one window seen through two grouped sessions; `francisco_ruiz:plan` is the other.
 
+Per-session duplicates (the layout targets `=sess:plan`, ambiguous if a session has two or more). Re-checked later on the live server, read-only:
+
+    tmux list-windows -a -F '#{session_name} #{window_name}' | awk '$2=="plan"' | sort | uniq -c
+          1 agent-board plan
+          1 francisco_ruiz plan
+
+Sessions with two or more `plan` windows: 0. (The group view `_web-47416` had closed by this second check, so it no longer lists; it showed 1 in the first check.)
+
 A `dev` re-run would clean the real sessions `agent-board` and `francisco_ruiz` (it is run on the real session; `dev` derives the group key from `#{session_group}`). It would not be run on `_web-47416`: a group view shares the window, so closing it in the real session removes it from the view too (next section). `interiors` and `master-gcp-repo` have no `plan` window and would be untouched.
 
 ## Group-view probe
@@ -94,6 +102,7 @@ Against the live server, only these read-only commands:
 
 - `tmux list-panes -a -F '#{session_name}:#{window_name} | #{pane_start_command}'`
 - `tmux list-windows -a -F '#{session_name}:#{window_name} grp=#{session_group} panes=#{window_panes}'` (also once with `'#{session_name} grp=#{session_group}'`)
+- `tmux list-windows -a -F '#{session_name} #{window_name}'` piped to `awk`/`sort`/`uniq -c` (per-session plan count)
 - `tmux list-windows -a -F '#{session_name}:#{window_name}'` (final check that 3 `plan` lines remain)
 
 No `bin/tmux-dev-layout`, `dev`, or any write command (`new-*`, `kill-*`, `move-*`, `set-*`, `send-keys`) was run against the live server. Everything that writes ran on the scratch server `-L rps-probe-61512`.
