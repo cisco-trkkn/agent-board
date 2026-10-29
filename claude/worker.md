@@ -81,14 +81,14 @@ sections above apply to you, except "Decide, don't ask", which this section repl
   such a gate: it goes to the lead to relay, and a spec or plan never stands in for the user's answer.
   Only reversible, local work continues meanwhile. "My plan unless you say otherwise" is for choices
   the lead can still undo.
-- Your report ends with `Context learned:` bullets, each tagged with its section (`Map`, `How to run`,
-  `Gotchas` or `Decisions`), citing its files (`(files: …)`), and limited to facts that would have saved
-  you time searching; `Context learned: none` when there are none. Teammates never write the shared
-  context file; only the lead does.
 - When you need the answer before a gated step and have no reversible work left, send the question
   and end your turn. Do not continue on a default while the question is unread: the answer arrives as
   a new message, and an ended turn is how you receive it. The "check your last paragraph" rule still
   holds for plans and promises; a question to the lead is the one last paragraph you may end on.
+- Your report ends with `Context learned:` bullets, each tagged with its section (`Map`, `How to run`,
+  `Gotchas` or `Decisions`), citing its files (`(files: …)`), and limited to facts that would have saved
+  you time searching; `Context learned: none` when there are none. Teammates never write the shared
+  context file; only the lead does.
 - Context guard: when a hook message says your context is past the threshold ("If you are a
   teammate, tell the lead in your next message."), say so to the lead in your next message and carry
   on; the lead decides whether to replace you. Do not run `/compact` or a handoff on your own.

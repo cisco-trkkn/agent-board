@@ -14,7 +14,7 @@ agent-board installs from a clone of this repo with one script, `install.sh`, an
 | `~/.claude/` (user settings, skills, agents, hooks) | **none** | none |
 | your tmux setup | **none** | none: agent-board's tmux server loads the config in `config/` from the clone instead |
 | your running tmux server | **none** | none: agent-board runs its own server, `tmux -L agent-board` |
-| `~/.local/state/agent-board/` | created on first use: ideas, handoffs | none |
+| `~/.local/state/agent-board/` | created on first use: ideas, handoffs, context | none |
 | `~/.local/state/tmux-dash/` | created by `agent-board dash`: board token, pids, logs | none |
 | `${TMPDIR:-/tmp}/tmux-ctl-$UID/` | runtime state (runs, logs, artifacts, usage index) | none |
 | `~/.config/agent-board/` | **not created**; optional overrides you write yourself ([CUSTOMIZATION](CUSTOMIZATION.md)) | none |

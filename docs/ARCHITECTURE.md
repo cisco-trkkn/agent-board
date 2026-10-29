@@ -259,7 +259,7 @@ Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It 
 | `<id>.rc`, `<id>.gone` | `tmux-ctl run`/`_done` (transient) | `tmux-ctl run` |
 | `recent-projects.json` | board `dev` action | Open project dialog |
 
-Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `worktree-sweep.log`, the transient `sweep-*.lock`). Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
+Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `context/`, `worktree-sweep.log`, the transient `sweep-*.lock`). Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
 
 ## Install footprint
 
