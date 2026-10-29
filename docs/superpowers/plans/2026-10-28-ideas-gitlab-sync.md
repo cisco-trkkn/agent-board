@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - One way only: nothing reads GitLab state back into the ideas file or the sidecar, except the marker search before a create.
-- Issue title = the idea text only. Detail lines are never sent. Label `idea` on create. The description is the marker line only: `<!-- agent-board:<project>:<ts>:<sha8> -->`, where `sha8` = the first 8 hex digits of `sha256(text at create time)`. The hash is needed because ideas share minutes: the real master-gcp-repo file has three at `2026-10-22 17:52`.
+- Issue title = the idea text only. Detail lines are never sent. Label `idea` on create. The description is the marker line only: `<!-- agent-board:<project>:<ts>#<n> -->`, where `n` is the 1-based position among all lines in the file with the same `ts`, in file order, whatever their status (ideas are never deleted, so `n` is stable across edits). The ordinal is needed because ideas share minutes: the real master-gcp-repo file has three at `2026-10-22 17:52`.
 - Config `~/.config/agent-board/gitlab.json`: `{"<project>": {"repo": "<group/…/name>", "since": "YYYY-MM-DD"}}`. `TC_GITLAB_CONF` overrides the path. **When `TC_IDEAS_DIR` is set and `TC_GITLAB_CONF` is not, the feature is off.** That is the isolation seam: a redirected ideas dir (every test, every scratch run) can never push to the real tracker.
 - Every GitLab call goes through `glab api -i -X <METHOD> <path> -f k=v…` (probe-pinned; see Task 2). Never `glab issue …`: its output is not JSON.
 - Capturing an idea never waits on GitLab and never fails because of it.
@@ -260,9 +260,9 @@ Also add one line to the module docstring after the "[x] = taken up…" sentence
 - [ ] Reconcile, per idea in file order, with `enc = urllib.parse.quote(repo, safe="")` and `base = f"projects/{enc}/issues"`:
   - **create**: the idea is open, has no token, and `ts[:10] >= since`. Run `GET base` with `search=<marker>`, `in=description`, `state=all`, `per_page=20`, and adopt the first result whose `description` contains the exact marker. Otherwise `POST base` with `title`, `labels=idea` and `description=<marker>`, and read `iid`. Then `ideas.set_issue(project, key, iid)`. On `Stale`, skip; the next pass picks it up. Only after that, write the sidecar entry `{"ts", "title", "state": "open"}`.
   - **retitle**: the idea is open, has a token, and the sidecar title ≠ text. Run `PUT base/<iid>` with `title=<text>`.
-  - **taken** `[x]` (the desired state is `closed-done`; the suffix is the part after the last ` → ` in `text`): `POST base/<iid>/notes` with `body=Taken up → <suffix>`, then `PUT base/<iid>` with `state_event=close`.
+  - **taken** `[x]` (the desired state is `closed-done`; the suffix is the part after the last ` → ` in `text`): `PUT base/<iid>` with `state_event=close`, then `POST base/<iid>/notes` with `body=Taken up → <suffix>`.
   - **dropped** `[-]` with no `moved_to` (`closed-dropped`): `PUT base/<iid>` with `state_event=close` and `add_labels=not-planned`.
-  - **moved** (`closed-moved`): `POST …/notes` with `body=Moved to <target>`, then `PUT base/<iid>` with `state_event=close`.
+  - **moved** (`closed-moved`): `PUT base/<iid>` with `state_event=close`, then `POST …/notes` with `body=Moved to <target>`.
   - **restored** (the idea is open, the sidecar state is not `open`): `PUT base/<iid>` with `state_event=reopen` and `remove_labels=not-planned`.
   - **token but no sidecar entry**: assume `{"title": <current title>, "state": "open"}`, then reconcile as above.
   - **no-op**: the sidecar already matches. No call is made.

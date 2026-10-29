@@ -13,6 +13,7 @@ Optional files you create yourself; none exists after install. They override or 
 | `orchestrator.md` | `claude-orchestrator` | replaces `claude/orchestrator.md` as the lead's appended system prompt |
 | `worker.md` | `tmux-ctl agent` | replaces `claude/worker.md` as a worker's appended system prompt |
 | `tmux.local.conf` | the agent-board tmux server | sourced at the end of `config/tmux.conf` (prefix key, colours, more bindings) |
+| `gitlab.json` | `ideas.py sync`, the board | maps a project to a GitLab repo so its ideas become issues (see "GitLab issues for ideas" in §5); absent = feature off |
 | `usage-alerts.json` | the board | usage alert thresholds (§5); the old `~/.claude/usage-alerts.json` is still read when this one is absent |
 
 A project-specific settings file is not an override: it is passed per lead, see §3.
@@ -30,6 +31,7 @@ A project-specific settings file is not an override: it is passed per lead, see 
 | `TC_SESSION` | caller's session | `tmux-ctl` | Target a different session (the board sets it for actions). |
 | `TC_LAYOUT` | `tmux-dev-layout` next to `dev` | `dev` | Replace the layout step with your own script (called as `<script> <session> <root>`). |
 | `TC_IDEAS_DIR` | `~/.local/state/agent-board/ideas` | `ideas.py` (board, `tmux-ctl idea`) | Where idea files live. |
+| `TC_GITLAB_CONF` | `~/.config/agent-board/gitlab.json`; none (feature off) when `TC_IDEAS_DIR` is set | `gitlab_sync.py` | Path of the GitLab mapping file. Setting `TC_IDEAS_DIR` alone turns the sync off, so tests never reach your real config. |
 | `TC_AGENT_DRYRUN` | unset | `tmux-ctl agent` | Test seam: print the task and stop before creating a window. |
 | `TMUX_DASH_PORT` | `7700` | `tmux-dash`, `server.py` | Board HTTP port. |
 | `TMUX_DASH_TTYD_PORT` | `7701` | `tmux-dash`, `server.py` | ttyd port. |
@@ -160,6 +162,16 @@ Alert thresholds: create `~/.config/agent-board/usage-alerts.json` (or the older
 Only the board reads this file. A malformed file or value falls back to the defaults and shows a warning in the Usage tab. Changes apply on the next poll; no restart is needed.
 
 Prices: `board/prices.json` holds $/Mtok and context size per model. Add an entry for a new model, or calls on it show as *unpriced*. Cross-check totals after editing with `python3 tools/usage-sum.py --repo <path>`.
+
+### GitLab issues for ideas
+
+`~/.config/agent-board/gitlab.json` (or `$TC_GITLAB_CONF`) maps a project to a GitLab repo:
+
+```json
+{"master-gcp-repo": {"repo": "trkkn/trkkn-na/master-gcp-repo", "since": "2026-10-28"}}
+```
+
+`repo` is the project path on gitlab.com; `since` (`YYYY-MM-DD`, required) means only ideas stamped on or after that date become issues. Every ideas write starts a background `ideas.py sync --project P`, and the board re-syncs mapped projects every 60 s. Preview a pass with `ideas.py sync --project P --dry-run`: it only reads GitLab. The sync needs `glab` logged in. Test seam: with `TC_IDEAS_DIR` set and `TC_GITLAB_CONF` unset the feature is off.
 
 ### New board actions
 

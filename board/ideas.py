@@ -72,6 +72,16 @@ def _append(project, first, detail_lines):
             f.write(entry)
 
 
+def _kick(project):
+    """Start a background GitLab sync for a mapped project. Capture must never fail because of it."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))   # python3 -I implies -P
+        import gitlab_sync
+        gitlab_sync.kick(project)
+    except Exception:
+        pass
+
+
 def _split_issue(text):
     """'a · gl#12 → b' -> ('a → b', 12); text without the token -> (text, None)."""
     m = ISSUE_RE.search(text)
@@ -83,12 +93,13 @@ def _clean_detail(detail):
 
 
 def add(project, text, detail="", now=None):
-    text = " ".join(str(text).split())
+    text = _split_issue(" ".join(str(text).split()))[0]   # a typed gl#N must not point at someone else's issue
     if not text:
         raise ValueError("empty idea")
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(now))
     first = f"- [ ] {stamp} · {text}"
     _append(project, first, _clean_detail(detail))
+    _kick(project)
     return first
 
 
@@ -129,7 +140,9 @@ def edit(project, key, text, detail=""):
             raise ValueError("only open ideas can be edited")
         iid = _split_issue(raw)[1]
         return f"- [ ] {ts} · {text}" + (f" · gl#{iid}" if iid else ""), new_detail
-    return _rewrite(project, key, change)[6:]
+    out = _rewrite(project, key, change)[6:]
+    _kick(project)
+    return out
 
 
 def set_status(project, key, status):
@@ -144,7 +157,9 @@ def set_status(project, key, status):
         if to == " " and MOVED_RE.search(raw):
             raise ValueError("a moved idea cannot be restored here; restore it in the project it moved to")
         return f"- [{to}] {ts} · {raw}", detail
-    return _rewrite(project, key, change)
+    out = _rewrite(project, key, change)
+    _kick(project)
+    return out
 
 
 def move(project, key, target):
@@ -164,7 +179,10 @@ def move(project, key, target):
         if box != " ":
             raise Stale("the idea changed since you loaded it")
         return f"- [-] {ts} · {raw} → moved to {target}", detail
-    return _rewrite(project, key, change)
+    out = _rewrite(project, key, change)
+    _kick(project)
+    _kick(target)
+    return out
 
 
 def set_issue(project, key, iid):

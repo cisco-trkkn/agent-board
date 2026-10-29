@@ -74,17 +74,19 @@ any ` → …` suffix the lead or a move appends:
 3. Load the ideas and the sidecar. For each idea, in file order:
    - **Create:** status open, no token, `ts ≥ since`.
      1. Search first: `glab issue list` in the repo for the description marker
-        `<!-- agent-board:<project>:<ts> -->`, across open and closed issues.
+        `<!-- agent-board:<project>:<ts>#<n> -->`, across open and closed issues. `n` is the 1-based position
+        among all lines in the file with the same `ts`, in file order, whatever their status; ideas are
+        never deleted, so `n` is stable across edits.
      2. If an issue is found, adopt its iid. Otherwise create one: title = text, label `idea`,
         description = the marker line only.
      3. Write the token to the line through `_rewrite` (under the lock, by key). If the key is stale,
         skip the idea; the next pass handles it.
      4. Only then update the sidecar.
    - **Retitle:** token present, sidecar title ≠ current text → update the issue title, then the sidecar.
-   - **Taken up `[x]`:** token present, sidecar state `open` → add a note `Taken up → <spec suffix>`,
-     close the issue, set state `closed-done`.
+   - **Taken up `[x]`:** token present, sidecar state `open` → close the issue, then add a note
+     `Taken up → <spec suffix>`, set state `closed-done`.
    - **Dropped `[-]`:** with no `→ moved to`: add label `not-planned`, close, set `closed-dropped`.
-     With `→ moved to X`: add a note `Moved to X`, close, set `closed-moved`. GitLab has no close
+     With `→ moved to X`: close, then add a note `Moved to X`, set `closed-moved`. GitLab has no close
      reason, so the `not-planned` label stands in for one.
    - **Restored `[-]`→`[ ]`** (the board's restore): token present, sidecar state `closed-dropped` →
      reopen, remove the `not-planned` label, set `open`.

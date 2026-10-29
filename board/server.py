@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, ideas, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, gitlab_sync, ideas, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 
@@ -901,7 +901,8 @@ class Handler(BaseHTTPRequestHandler):
         elif sub == "api/ideas":
             try:
                 sess = project_arg(q)
-                self._json(200, {"ideas": ideas.load(sess), "open": ideas.open_count(sess)}, etag=True)
+                self._json(200, {"ideas": ideas.load(sess), "open": ideas.open_count(sess),
+                                 "gitlab": gitlab_sync.board_info(sess)}, etag=True)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
         elif sub == "api/runs":
@@ -989,7 +990,25 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "message": str(e)})
 
 
+GITLAB_EVERY = 60   # seconds between re-syncs of the mapped projects
+
+
+def gitlab_pass():
+    for p in gitlab_sync.mapped_projects():
+        try:
+            gitlab_sync.sync(p)
+        except Exception as e:
+            print(f"gitlab-sync {p}: {e}", file=sys.stderr, flush=True)
+
+
+def gitlab_loop():
+    while True:
+        gitlab_pass()
+        time.sleep(GITLAB_EVERY)
+
+
 if __name__ == "__main__":
+    threading.Thread(target=gitlab_loop, name="gitlab-sync", daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     INDEXER = usage.Indexer(usage.root(), usage.db_path(), on_snapshot=sync_labels)
     INDEXER.start()

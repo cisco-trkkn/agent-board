@@ -263,3 +263,45 @@ def _one(project, m, base, side, idea, todo, dry_run, out):
             api(method, path, fields)
         entry = {**entry, "ts": idea["ts"], **change}
         _save_entry(project, side, idea["issue"], entry)
+
+
+# ---- triggers and board ------------------------------------------------------------------------
+
+def kick(project):
+    """Start a detached `ideas.py sync` for a mapped project; nothing for an unmapped one."""
+    if not mapped(project):
+        return
+    subprocess.Popen([sys.executable, "-I", str(Path(__file__).resolve().parent / "ideas.py"), "sync", "--project", project],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def mapped_projects():
+    try:
+        conf = _read_conf() or {}
+    except ConfigError:
+        return []
+    out = []
+    for name in conf:
+        try:
+            ideas.ideas_path(name)
+        except ValueError:
+            continue
+        out.append(name)
+    return out
+
+
+def board_info(project):
+    """None when unmapped, else what the Ideas box shows: the repo link and the last pass's outcome."""
+    try:
+        m = mapping(project)
+    except ConfigError as e:
+        return {"repo": "", "url": "", "ok": False, "error": str(e)}
+    if m is None:
+        return None
+    try:
+        st = json.loads((ideas.ideas_dir() / f"{project}.gitlab-status.json").read_text())
+    except (OSError, ValueError):
+        st = {}
+    return {"repo": m["repo"], "url": f"https://gitlab.com/{m['repo']}",
+            "ok": bool(st.get("ok", True)), "error": str(st.get("error") or "")}

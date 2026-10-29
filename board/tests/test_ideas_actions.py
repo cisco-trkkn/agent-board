@@ -45,6 +45,25 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(self.act(action="idea_move", session="p", key=k, target="q"), "idea moved to q")
         self.assertEqual([i["text"] for i in ideas.load("q")], ["uno"])
 
+    def test_api_ideas_carries_gitlab(self):
+        conf = Path(self.tmp.name) / "gl.json"
+        conf.write_text(json.dumps({"p": {"repo": "grp/repo", "since": "2026-10-28"}}))
+        httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        self.addCleanup(lambda: (httpd.shutdown(), httpd.server_close(), t.join(5)))
+
+        def get(sess):
+            with mock.patch.object(server, "ALLOWED_HOSTS", {f"127.0.0.1:{port}"}), \
+                 urllib.request.urlopen(f"http://127.0.0.1:{port}/{server.TOKEN}/api/ideas?session={sess}", timeout=5) as r:
+                return json.loads(r.read())
+        with mock.patch.dict(os.environ, {"TC_GITLAB_CONF": str(conf)}):
+            d = get("p")
+            self.assertEqual(sorted(d), ["gitlab", "ideas", "open"])
+            self.assertEqual(d["gitlab"], {"repo": "grp/repo", "url": "https://gitlab.com/grp/repo", "ok": True, "error": ""})
+            self.assertIsNone(get("q")["gitlab"])
+
     def test_target_must_be_open(self):
         k = "2026-10-16 10:00 · one"
         for t in ("zz", "_web-1", "../q"):
