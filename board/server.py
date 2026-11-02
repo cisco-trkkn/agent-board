@@ -289,10 +289,10 @@ def build_state():
         "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}",
         "#{window_bell_flag}", "#{@tc_agent}", "#{pane_index}", "#{pane_id}", "#{pane_title}",
         "#{pane_current_command}", "#{pane_current_path}", "#{pane_active}", "#{window_active}",
-        "#{@tc_teammate}", "#{@tc_bg}",
+        "#{@tc_teammate}", "#{@tc_bg}", "#{session_path}",
     ])
     listing, _, captured = tmux("list-panes", "-a", "-F", fmt, *_capture_cmd(_last["panes"])).partition(MARK)
-    every = [f for f in (l.split(SEP) for l in listing.splitlines()) if len(f) == 15]
+    every = [f for f in (l.split(SEP) for l in listing.splitlines()) if len(f) == 16]
     windows = {}
     for f in every:
         windows.setdefault(f[0], {})[f[3]] = int(f[2])
@@ -306,7 +306,7 @@ def build_state():
     for f in panes:
         sess, attached, widx, wname, bell, agent, pidx, pid, title, cmd, path, pact, wact, mate = f[:14]
         rows = rows_by[pid]
-        s = sessions.setdefault(sess, {"name": sess, "attached": attached != "0", "windows": {}, "path": None})
+        s = sessions.setdefault(sess, {"name": sess, "attached": attached != "0", "windows": {}, "path": relay.root_for(f[15])})
         w = s["windows"].setdefault(widx, {
             "index": int(widx), "name": wname, "bell": bell == "1",
             "worker": agent == "1", "teammate": mate == "1", "active": wact == "1", "panes": [],
@@ -316,8 +316,6 @@ def build_state():
             "id": pid, "index": int(pidx), "title": title, "command": cmd, "path": path,
             "active": pact == "1", "kind": kind, "status": status, "preview": preview(rows),
         })
-        if s["path"] is None or widx == "1":
-            s["path"] = path
     out = list(sessions.values())
     for s in out:  # not on POOL: worktrees() itself waits on POOL jobs
         s["windows"] = sorted(s["windows"].values(), key=lambda w: w["index"])
@@ -425,19 +423,17 @@ def overview_loop():
 def label_targets(run=None):
     """Sessions shaped like build_state's, with each window's current @tc_label; one list-panes, no captures."""
     fmt = SEP.join(["#{session_name}", "#{window_index}", "#{window_name}", "#{@tc_agent}", "#{@tc_teammate}",
-                    "#{@tc_bg}", "#{pane_id}", "#{pane_current_path}", "#{@tc_label}"])
+                    "#{@tc_bg}", "#{pane_id}", "#{pane_current_path}", "#{@tc_label}", "#{session_path}"])
     sessions = {}
     for f in ((run or tmux)("list-panes", "-a", "-F", fmt).splitlines()):
         f = f.split(SEP)
-        if len(f) != 9 or f[0].startswith("_web-") or f[5] == "1":
+        if len(f) != 10 or f[0].startswith("_web-") or f[5] == "1":
             continue
-        sess, widx, wname, agent, mate, _, pid, path, label = f
-        s = sessions.setdefault(sess, {"name": sess, "path": None, "windows": {}})
+        sess, widx, wname, agent, mate, _, pid, path, label, start = f
+        s = sessions.setdefault(sess, {"name": sess, "path": relay.root_for(start), "windows": {}})
         w = s["windows"].setdefault(widx, {"name": wname, "worker": agent == "1", "teammate": mate == "1",
                                            "label": label, "panes": []})
         w["panes"].append({"id": pid, "path": path})
-        if s["path"] is None or widx == "1":
-            s["path"] = path
     for s in sessions.values():
         s["windows"] = [s["windows"][k] for k in sorted(s["windows"], key=int)]
     return list(sessions.values())

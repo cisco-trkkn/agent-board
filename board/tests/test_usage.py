@@ -778,6 +778,7 @@ class UsageApiTest(unittest.TestCase):
         port = self.httpd.server_address[1]
         self.hosts = mock.patch.object(self.server, "ALLOWED_HOSTS", {f"127.0.0.1:{port}"}); self.hosts.start()
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True); self.thread.start()
+        ident = mock.patch.object(self.server.relay, "root_for", side_effect=lambda p: p); ident.start(); self.addCleanup(ident.stop)   # fake paths like "/r" stay as given
         self.base = f"http://127.0.0.1:{port}/{self.server.TOKEN}"
     def tearDown(self):
         self.httpd.shutdown(); self.httpd.server_close(); self.thread.join(5); self.hosts.stop()
@@ -820,6 +821,20 @@ class UsageApiTest(unittest.TestCase):
             self.assertIn(k, d)
         self.assertIsNone(d["indexing"])    # no indexer in tests
 
+    def test_usage_scopes_to_the_start_folder_repo_not_home(self):
+        """A lead whose window-1 pane sits in $HOME but whose session started in the repo gets the repo's rows."""
+        repo = Path(os.path.realpath(self.tmp)) / "proj"; repo.mkdir()
+        src = self.tmp / "p" / "s1.jsonl"; src.parent.mkdir()
+        src.write_text(recent_line("a", inp=1_000_000, out=0, cwd=str(repo)) + recent_line("b", inp=1_000_000, out=0, cwd=str(self.tmp / "home")))
+        conn = usage.connect(usage.db_path()); usage.ingest(conn, src); conn.close()
+        S = self.server.SEP
+        row = S.join(["p", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", str(self.tmp / "home"), "1", "1", "", "", str(repo)])
+        with mock.patch.object(self.server, "tmux", return_value=row), mock.patch.object(self.server, "pane_text", return_value=[]), \
+             mock.patch.object(self.server, "cached_worktrees", return_value=[]):
+            code, body = self.get("api/usage?session=p")
+        self.assertEqual(code, 200)
+        self.assertAlmostEqual(json.loads(body)["headline"]["month"], 4.0)   # the repo's call only, not home's
+
     def test_usage_other_repo_is_empty(self):
         self.seed()
         with mock.patch.object(self.server, "state", return_value={"sessions": [{"name": "q", "path": "/elsewhere"}]}):
@@ -852,7 +867,7 @@ class UsageApiTest(unittest.TestCase):
         fake = mock.Mock(); fake.snapshot.return_value = [{"session_id": "x", "name": "n", "agent_name": None, "cwd": "/r",
                                                              "alerts": [{"kind": "context", "label": "l", "detail": "d"}]}]
         S = self.server.SEP
-        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", ""])
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r"])
         with mock.patch.object(self.server, "INDEXER", fake), mock.patch.object(self.server, "tmux", return_value=row), \
              mock.patch.object(self.server, "pane_text", return_value=[]), mock.patch.object(self.server, "cached_worktrees", return_value=[]), \
              mock.patch.object(usage, "connect", side_effect=AssertionError("sqlite on the state path")):
@@ -875,33 +890,33 @@ class UsageApiTest(unittest.TestCase):
     LEAD = {"session_id": "x", "role": "lead", "model": "claude-sonnet-5-5", "effort": "medium", "agent_name": None, "cwd": "/r", "alerts": []}
 
     def test_sync_labels_sets_wanted_label(self):
-        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", ""]))
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", "", "/r"]))
         self.server.sync_labels([self.LEAD], run=run)
         self.assertEqual(calls, [("set-option", "-w", "-t", "%1", "@tc_label", "claude · sonnet·med")])
 
     def test_sync_labels_writes_only_on_change(self):
-        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", "claude · sonnet·med"]))
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", "claude · sonnet·med", "/r"]))
         self.server.sync_labels([self.LEAD], run=run)
         self.assertEqual(calls, [])
 
     def test_sync_labels_unsets_unmatched_agent_window(self):
-        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", ""],
-                                                    ["p", "2", "✦ gone", "", "1", "", "%2", "/r", "old label"]))
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", "", "/r"],
+                                                    ["p", "2", "✦ gone", "", "1", "", "%2", "/r", "old label", "/r"]))
         self.server.sync_labels([], run=run)
         self.assertEqual(calls, [("set-option", "-wu", "-t", "%2", "@tc_label")])
 
     def test_sync_labels_leaves_non_agent_and_bg_windows(self):
-        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", ""],
-                                                    ["p", "2", "shell", "", "", "", "%2", "/r", "x"],
-                                                    ["p-bg", "1", "claude", "", "", "1", "%3", "/r", "y"],
-                                                    ["_web-1", "1", "claude", "", "", "", "%4", "/r", "z"]))
+        run, calls = self.fake_tmux(self.label_rows(["p", "1", "claude", "", "", "", "%1", "/r", "", "/r"],
+                                                    ["p", "2", "shell", "", "", "", "%2", "/r", "x", "/r"],
+                                                    ["p-bg", "1", "claude", "", "", "1", "%3", "/r", "y", "/r"],
+                                                    ["_web-1", "1", "claude", "", "", "", "%4", "/r", "z", "/r"]))
         self.server.sync_labels([], run=run)
         self.assertEqual(calls, [])
 
     def test_build_state_carries_usage_labels(self):
         fake = mock.Mock(); fake.snapshot.return_value = [dict(self.LEAD)]
         S = self.server.SEP
-        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", ""])
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r"])
         with mock.patch.object(self.server, "INDEXER", fake), mock.patch.object(self.server, "tmux", return_value=row), \
              mock.patch.object(self.server, "pane_text", return_value=[]), mock.patch.object(self.server, "cached_worktrees", return_value=[]):
             s = self.server.build_state()["sessions"][0]
