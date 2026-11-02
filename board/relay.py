@@ -50,17 +50,35 @@ def claude_pane(tmux, sess):
     return None
 
 
-def main_checkout(d):
-    """d's project main checkout: a worktree maps to the repo that owns it; a non-git dir stays as is."""
-    r = subprocess.run(["git", "-C", d, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                       capture_output=True, text=True)
-    common = r.stdout.strip()
-    if r.returncode != 0 or not common:
+def _git_root(d):
+    """d's main checkout, d itself when git answers "not a repo", or None when git could not run (missing, hung)."""
+    try:
+        r = subprocess.run(["git", "-C", d, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = r.stdout.splitlines()
+    if r.returncode != 0 or len(lines) < 2 or not lines[0].strip():
+        return d
+    common, top = lines[0].strip(), lines[1].strip()
+    home = os.environ.get("HOME", "")
+    # ~ is itself a git repo: a plain folder under it must not resolve to ~ (bin/dev's rule). Compare the toplevel,
+    # not the common dir's parent: a linked worktree of the ~ repo has its own toplevel and still maps to ~.
+    if home and os.path.realpath(top) == os.path.realpath(home) and os.path.realpath(d) != os.path.realpath(home):
         return d
     return str(Path(common).parent)
 
 
-_roots = {}   # start path -> main checkout; main_checkout of an existing dir does not change
+def main_checkout(d):
+    """d's project main checkout: a worktree maps to the repo that owns it; a non-git dir, a plain folder under ~,
+    and a dir where git cannot run stay as is."""
+    root = _git_root(d)
+    return d if root is None else root
+
+
+# start path -> (has its own .git, main checkout). A plain folder inside a parent repo changes when it is
+# `git init`ed, so an entry is recomputed when the .git stat differs. A failure to run git is never cached.
+_roots = {}
 
 
 def root_for(start_path):
@@ -70,9 +88,15 @@ def root_for(start_path):
     """
     for d in (start_path, os.environ.get("HOME", "")):
         if d and os.path.isdir(d):
-            if d not in _roots:
-                _roots[d] = main_checkout(d)
-            return _roots[d]
+            has_git = os.path.exists(os.path.join(d, ".git"))
+            hit = _roots.get(d)
+            if hit is not None and hit[0] == has_git:
+                return hit[1]
+            root = _git_root(d)
+            if root is None:
+                return d
+            _roots[d] = (has_git, root)
+            return root
         _roots.pop(d, None)
     return str(Path.home())
 
