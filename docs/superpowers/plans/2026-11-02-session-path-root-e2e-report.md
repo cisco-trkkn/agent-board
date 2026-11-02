@@ -22,7 +22,7 @@ The API (`/api/state`, `/api/usage?session=<name>`) and an in-process `usage.rep
 Row `cwd`s (`live` array; every row has source `tap`; every one passed `usage.in_project(cwd, root)`):
 
 - agent-board (6): `.../agent-board/.claude/worktrees/usage-scope` ×4, `.../agent-board/.claude/worktrees/overseer` ×2.
-- francisco_ruiz: no rows.
+- francisco_ruiz: no rows, so there is no row evidence for the home project: its `in_project` agreement is untested by this run.
 - interiors (2): `/Users/francisco.ruiz/interiors` ×2.
 - master-gcp-repo: no rows (no live session under it at the time).
 
@@ -46,3 +46,5 @@ The board (`/api/state` calls `list-panes` and git on the live server's behalf, 
 A scratch script (outside the repo) fetched `/api/state` and `/api/usage?session=<name>` from 7710 and ran `usage.report()` in-process, then compared. The server was stopped with `kill 8760`; afterwards `ps -p 8760` finds no process. The only `board/server.py` left in `ps aux` is PID 97207, the live 7700 board started Thursday, which was not touched.
 
 Nothing in `board/` was edited.
+
+Correction to "read-only": the 7710 board, run as a script with no `TC_STATE` override, also starts the Indexer (`on_snapshot=sync_labels`). It may therefore have set `@tc_label` on the live tmux server and written the live usage DB. This was not measured. The live board re-syncs labels, so no lasting effect is expected. A later run should set `TC_STATE` to a temp dir and disable the indexer.

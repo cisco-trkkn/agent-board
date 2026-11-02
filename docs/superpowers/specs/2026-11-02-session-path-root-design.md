@@ -1,6 +1,6 @@
 # A session's `path` is its project root
 
-Status: approved in chat 2026-11-02. Idea source: the board-bugs Task 8 e2e (`docs/superpowers/plans/2026-10-29-board-bugs-e2e-report.md`).
+Status: approved in chat 2026-11-02; the home guard and the cache rules below were approved by the user 2026-11-02. Idea source: the board-bugs Task 8 e2e (`docs/superpowers/plans/2026-10-29-board-bugs-e2e-report.md`).
 
 ## Problem
 
@@ -22,7 +22,8 @@ The same root cause was fixed for `session_path()` in board-bugs (a): `relay.ses
 - New `relay.root_for(start_path)`: the first of `start_path`, `$HOME` that is a non-empty existing directory, mapped through `main_checkout()`; if neither is, `str(Path.home())`. This is exactly `session_root`'s current rule.
 - `session_root(tmux, sess)` keeps its signature and calls `root_for` with the `#{session_path}` it reads.
 - `build_state` and `label_targets` add `#{session_path}` to the `list-panes -a` format they already run (no extra tmux call) and set `s["path"] = root_for(<session_path>)` once per session. The "window 1's cwd, else the first pane's" rule is removed.
-- `root_for`'s git lookup is cached per `start_path` inside `relay.root_for` (a module-level dict), for as long as the `start_path` stays a directory. `main_checkout` of a directory does not change while it exists; a removed directory drops its entry and falls back to `$HOME`.
+- Home guard (changed from the first draft; approved by the user 2026-11-02): `~` is itself a git repo, so a plain folder under it would resolve to `~`. `main_checkout(d)` returns `d` when git's `--show-toplevel` for `d` is `$HOME` (compared with `os.path.realpath` on both sides) and `d` is not `$HOME`. This is `bin/dev`'s rule. It compares the toplevel, not the common dir's parent: a linked worktree of the `~` repo has its own toplevel and still maps to `~`. One `git rev-parse --path-format=absolute --git-common-dir --show-toplevel` call reads both; where `--show-toplevel` fails (a bare repo, inside `.git`) the non-zero exit keeps today's outcome, `d`.
+- `root_for`'s git lookup is cached per `start_path` inside `relay.root_for` (a module-level dict) as `(has own .git, root)`. A plain folder inside a parent repo changes when it is `git init`ed, so an entry is recomputed when `os.path.exists(<d>/.git)` differs from the stored value (one stat per lookup, no git). A removed directory drops its entry and falls back to `$HOME`. A failure to run git (see Error handling) is never cached, so the next poll retries; a non-zero git exit (not a repo) is an answer and is cached.
 
 ### Consumers
 
@@ -33,7 +34,8 @@ Why this scopes correctly: Claude Code records the lead's working folder (the re
 ### Error handling
 
 - Empty or removed `#{session_path}` → `$HOME`, then `main_checkout`.
-- `main_checkout` already returns the directory itself for a non-git folder or a failing git call.
+- `main_checkout` returns the directory itself for a non-git folder.
+- The git call has `timeout=10` and catches `OSError` and `subprocess.SubprocessError` (git missing, hung): `main_checkout` returns the directory itself and `root_for` does not cache that result.
 - `state()` must not raise on any of these: a raise blanks the board.
 
 ## Out of scope
