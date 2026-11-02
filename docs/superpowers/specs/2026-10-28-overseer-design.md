@@ -39,6 +39,7 @@ nothing answers questions about them, and nothing tells the user when something 
   - the epoch;
   - the project's live usage alerts (`usage.card_alerts()`);
   - its spend today.
+> **2026-11-02 note:** the lead's state counts teammates. A lead at its prompt reads `working` while any other Claude pane of the project is working, so the board's Working label and the notifier's lead-idle event no longer fire while teammates run. `waiting` still wins, and `idle_s` and `last_active` are unchanged.
 - **`GET /api/overview`** returns them as JSON.
 - **`tmux-ctl overview [project] [--json]`** prints one compact line per project, or the JSON.
 

@@ -43,12 +43,16 @@ def needs_you(s):
 
 
 def lead_state(s, win_activity, now):
-    """status working|waiting|ready from the claude window's first pane, missing without one; last_active from tmux."""
+    """status working|waiting|ready from the claude window's first pane, missing without one; last_active from tmux.
+    A lead at its prompt counts as working while any other claude pane of the project is working (teammates running)."""
     w = next((w for w in s.get("windows") or [] if w.get("name") == "claude" and w.get("panes")), None)
     if w is None:
         return {"status": "missing", "last_active": None, "idle_s": None}
     p = w["panes"][0]
     status = p.get("status") if p.get("kind") == "claude" else "missing"
+    if status == "ready" and any(q.get("kind") == "claude" and q.get("status") == "working"
+                                 for x in s.get("windows") or [] for q in x.get("panes") or [] if q is not p):
+        status = "working"
     last = (win_activity or {}).get("claude")
     return {"status": status or "missing", "last_active": last, "idle_s": int(max(0, now - last)) if last else None}
 

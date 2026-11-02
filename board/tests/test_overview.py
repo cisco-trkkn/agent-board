@@ -36,7 +36,7 @@ def fake_tmux(claude_pane="@80.%82", windows=(("claude", "%82"), ("✦ parse", "
     return run
 
 
-def card(name="proj", path=None, lead_status="working", waiting=()):
+def card(name="proj", path=None, lead_status="working", waiting=(), mate_status="working"):
     """A build_state() session card: windows claude (+ one teammate) with the given lead status; `waiting` names windows at a prompt."""
     def pane(pid, kind, status, idx=0):
         return {"id": pid, "index": idx, "title": "", "command": "claude" if kind == "claude" else "zsh", "path": path or f"/{name}",
@@ -44,7 +44,7 @@ def card(name="proj", path=None, lead_status="working", waiting=()):
     wins = [{"index": 1, "name": "claude", "bell": False, "worker": False, "teammate": False, "active": True,
              "panes": [pane("%82", "claude", "waiting" if "claude" in waiting else lead_status)]},
             {"index": 2, "name": "✦ parse", "bell": False, "worker": False, "teammate": True, "active": False,
-             "panes": [pane("%90", "claude", "waiting" if "✦ parse" in waiting else "working")]}]
+             "panes": [pane("%90", "claude", "waiting" if "✦ parse" in waiting else mate_status)]}]
     return {"name": name, "attached": True, "path": path or f"/{name}", "windows": wins, "worktrees": None}
 
 
@@ -119,10 +119,33 @@ class BuildTest(Base):
         self.assertEqual(self.build()["projects"][0]["last_run"]["label"], "unittest")
 
     def test_lead_state_from_claude_pane_and_window_activity(self):
-        r = self.build([card(lead_status="ready")], activity={"proj": {"claude": NOW - 1000, "✦ parse": NOW}})["projects"][0]["lead"]
+        r = self.build([card(lead_status="ready", mate_status="ready")], activity={"proj": {"claude": NOW - 1000, "✦ parse": NOW}})["projects"][0]["lead"]
         self.assertEqual(r, {"status": "ready", "last_active": NOW - 1000, "idle_s": 1000})
         no_act = self.build([card()])["projects"][0]["lead"]
         self.assertEqual(no_act, {"status": "working", "last_active": None, "idle_s": None})
+
+    def test_lead_at_its_prompt_counts_as_working_while_a_teammate_runs(self):
+        # mutation: read only the lead pane -> the board says Idle (and the notifier's lead-idle event can fire) while teammates work
+        lead = lambda **kw: self.build([card(**kw)], activity={"proj": {"claude": NOW - 1000}})["projects"][0]["lead"]
+        r = lead(lead_status="ready", mate_status="working")
+        self.assertEqual((r["status"], r["last_active"], r["idle_s"]), ("working", NOW - 1000, 1000))
+        self.assertEqual(lead(lead_status="ready", mate_status="ready")["status"], "ready")
+        self.assertEqual(lead(lead_status="waiting", mate_status="working")["status"], "waiting")
+        self.assertEqual(lead(lead_status="working", mate_status="ready")["status"], "working")
+
+    def test_a_non_claude_working_pane_does_not_make_the_lead_working(self):
+        c = card(lead_status="ready", mate_status="ready")
+        c["windows"][1]["panes"][0].update(kind="shell", status="working")
+        self.assertEqual(self.build([c])["projects"][0]["lead"]["status"], "ready")
+
+    def test_lead_idle_event_does_not_fire_while_a_teammate_works(self):
+        import notify
+        def kinds(mate):
+            rec = self.build([card(lead_status="ready", mate_status=mate)], activity={"proj": {"claude": NOW - 3600}})["projects"][0]
+            rec["plan"] = dict(rec["plan"], total=3, done=1, active=True)
+            return [c["kind"] for c in notify.conditions({"projects": [rec]})]
+        self.assertNotIn("lead_idle", kinds("working"))
+        self.assertIn("lead_idle", kinds("ready"))   # the same project, teammates idle: the event still fires
 
     def test_lead_missing_without_claude_window(self):
         c = card(); c["windows"] = c["windows"][1:]
