@@ -74,7 +74,7 @@ def recent_artifacts(project, n=3):
 
 
 def project_alerts(s, live, spend, th):
-    repo = s.get("root") or s.get("path") or ""
+    repo = s.get("path") or ""
     mine = [e for e in live if repo and usage.in_project(e.get("cwd"), repo)]
     who = lambda e: "lead" if e.get("role") == "lead" and e["name"] == (e.get("session_id") or "")[:8] else e["name"]   # an unnamed lead is "lead", not its id prefix
     out = [dict(a, session=who(e), context_pct=e.get("context_pct")) for e in mine for a in e.get("alerts") or []]
@@ -86,7 +86,7 @@ def project_alerts(s, live, spend, th):
 
 def record(s, live, now, *, home, state_dir, tmux, th, spend, activity):
     name = s["name"]
-    root = s.get("root") or s.get("path")   # the session's start dir when the board supplies it; "path" stays the card's pane path
+    root = s.get("path")
     try:
         view = planview.view(name, root or ".", home, state_dir, tmux)
     except Exception:   # noqa: BLE001 - a failing plan view leaves the plan empty
