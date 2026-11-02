@@ -18,7 +18,10 @@ import tc_env  # noqa: E402
 SHELLS = tc_env.SHELLS
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")
 WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
-WORKING_RE = re.compile(r"esc to interrupt", re.I)
+WORKING_RE = re.compile(r"esc to interrupt", re.I)   # Claude Code before 2.1.316
+# 2.1.316+: `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`; the whole line, so prose quoting one does not match
+SPINNER_RE = re.compile(r"^\s*\S\s+[\w-]+…\s*\(\d+\s*[hms]\b[^)]*\)?\s*$")
+SPINNER_FIRST_RE = re.compile(r"^\s*\S\s+[\w-]+…\s*$")   # first frame of a turn, before the "(elapsed" part appears
 SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 
@@ -48,6 +51,25 @@ def input_has_text(rows):
     return False
 
 
+def spinner_live(rows):
+    """True when the lowest spinner line is in the live area above the input box's rule.
+
+    Rows between the spinner and the rule may be blank or indented (a tip, its wrapped line, a task list); a row at
+    column 0 (a finished line, `⏺` output, an open prompt) means the spinner is transcript. The first-frame form
+    (`✢ Thinking…`, no parenthesis) is only live with nothing but blank rows before the rule."""
+    for n in range(len(rows) - 1, -1, -1):
+        first = bool(SPINNER_FIRST_RE.match(rows[n]))
+        if not (first or SPINNER_RE.match(rows[n])):
+            continue
+        for below in rows[n + 1:]:
+            if RULE_RE.match(below):
+                return True
+            if below.strip() and (first or not below[0].isspace()):
+                return False
+        return not any(r.strip() for r in rows[n + 1:])   # no rule in view (a short capture): spinner at the bottom
+    return False
+
+
 def classify(cmd, rows, bell):
     """kind: claude | shell | program ; status: waiting | working | ready | idle | running"""
     is_claude = bool(VERSION_RE.match(cmd)) or "claude" in cmd.lower()
@@ -56,7 +78,7 @@ def classify(cmd, rows, bell):
     if cmd in SHELLS:
         return "shell", "idle"
     if is_claude:
-        if WORKING_RE.search(tail):  # no spinner while a prompt is open
+        if WORKING_RE.search(tail) or spinner_live(rows[-30:]):  # no spinner while a prompt is open
             return "claude", "working"
         if WAITING_RE.search(tail):
             return "claude", "waiting"
