@@ -1,4 +1,4 @@
-# Overseer: end-to-end report (2026-10-28 plan, run 2026-10-29)
+# Overseer: end-to-end report (2026-10-28 plan, last run 2026-11-02 on the merged tree)
 
 Run by `ovr-impl` from the worktree `feat/overseer`. `tools/tests/e2e-overseer.zsh` starts a scratch tmux server (lib.zsh), an ephemeral board on a random port with scratch `HOME`, `USAGE_ROOT`, `XDG_STATE_HOME`, `TC_IDEAS_DIR` and `TC_STATE`, two scratch projects `p1` and `p2` (stand-in leads, a compiled `claude` that sleeps), an `osascript` shim that logs each call and execs the real `/usr/bin/osascript`, and ONE real Claude (the overseer: haiku, low effort). It is not a `test_*.zsh`, so `run-all.zsh` never starts it.
 
@@ -8,9 +8,9 @@ Command (from a `tests` window, the log redirected):
 zsh tools/tests/e2e-overseer.zsh
 ```
 
-Result of the fifth run: `E2E PASS`, rc=0. Runs 1-4 failed on script bugs only (see "Runs before the passing one").
+Result of the rerun on the merged tree (`feat/overseer` at `89346aa`, after merging main's session-path-root work): `E2E PASS`, rc=0, 31 `ok` checks (`grep -c '^ok'`), no failure line. Runs 1-4 of the first round failed on script bugs only (see "Runs before the passing one").
 
-Load average at the end of the passing run: `11:18  up 20 days,  8:41, 2 users, load averages: 75.56 30.50 29.80`
+Load average at the start of the rerun: `3:06  up 24 days,  1:28, 2 users, load averages: 21.64 18.07 11.35` (the checks are polling waits, not timings, and passed under it).
 
 ## Every check
 
@@ -29,6 +29,16 @@ ok   - bare tmux-ctl overview ran (a Bash call whose command is exactly that, wi
 ok   - probe 1 (git log --output) was denied by the permission rules
 ok   - probe 2 (git log > file) was denied by the permission rules
 ok   - probe 3 (tmux-ctl idea) was denied by the permission rules
+ok   - probe 4 (tmux-ctl _append) was denied by the permission rules
+ok   - probe 5 (bare tmux-ctl overview) was not denied: the overseer's own allow matches it
+ok   - probe 6 (tmux-ctl help: allowed only by the user's Bash(tmux-ctl:*), which the excluded source would carry) was denied by the dontAsk catch-all
+ok   - probe 7 (git -c core.fsmonitor) was denied by the permission rules
+ok   - probe 8 (git -c alias) was denied by the permission rules
+ok   - probe 9 (git tag show) was denied by the permission rules
+ok   - fsm.txt was not created
+ok   - alias.txt was not created
+ok   - no tag named show was created in the scratch repo
+ok   - append-probe.txt was not created
 ok   - out1.txt was not written
 ok   - out2.txt was not written
 ok   - the scratch ideas folder holds the same files and contents
@@ -191,7 +201,7 @@ With the user's `Bash(tmux-ctl:*)` allow out of play (see Fix round 1 below), th
 
 `claude/overseer-settings.json` merges with `~/.claude/settings.json`, which allows `Bash(tmux-ctl:*)`. The launcher now starts Claude with `--setting-sources project,local` (no `user` source), unsets `CLAUDE_CODE_CHILD_SESSION`, and the deny list gained `Bash(tmux-ctl _*)` (`_append`, `_done`, `_relay_failed`). Probe of the flag, `claude -p --model haiku` with `tmux-ctl help` (allowed only by the user's `Bash(tmux-ctl:*)`): without the flag the call ran and printed `tmux-ctl — let the Claude in a dev session…`; with `--setting-sources project,local` it was denied (`permission_denials`: `tmux-ctl help`) and the session still authenticated. `--setting-sources ""` also excluded the user source.
 
-The e2e's permission probes now run with that flag. Result of the passing run (`E2E PASS`, 25 `ok` checks):
+The e2e's permission probes now run with that flag. Result of fix round 1's passing run (`E2E PASS`, 25 `ok` checks; the rerun above has 31):
 
 - probes 1 to 4 (`git log --output`, `git log >`, `tmux-ctl idea`, `tmux-ctl _append <absent file>`): `DENIED`; `out1.txt`, `out2.txt` and `append-probe.txt` do not exist.
 - probe 5, bare `tmux-ctl overview`: not denied, and it printed the digest (`p1 · … NEEDS YOU: ✦ mate …`), so `Bash(tmux-ctl overview *)` matches the bare command on the overseer's own rules.
@@ -208,14 +218,13 @@ ok   - overseer made tool calls (2) and no write tool calls (0)
 ```
 
 ```
---- plugins and hooks seen by the overseer's session (report only):
-line types: {'last-prompt': 4, 'custom-title': 4, 'agent-name': 4, 'mode': 4, 'permission-mode': 4, 'atis-latch': 4, 'attachment': 21, 'user': 7, 'api-request-shape': 1, 'api-request-blob': 11, 'api-request': 7, 'tools-used': 1, 'assistant': 12, 'system': 10, 'queue-operation': 2}
-hooks: ['SessionStart', 'SessionStart:startup']
+--- plugins and hooks seen by the overseer's session (rerun, report only):
+hooks: []
 skill attachments: 0
-mentions: superpowers=52 task-observer=16 agent-board:=0
+mentions: superpowers=6 task-observer=3 agent-board:=0
 ```
 
-Report only: the overseer's session ran the user's own global SessionStart hooks, `~/.claude/hooks/task-observer-session-start.sh` (task-observer summary) and the superpowers plugin's `session-start` hook (`using-superpowers` text injected), as the design noted (`--settings` merges, it does not replace). No agent-board plugin was loaded (`bin/claude-overseer` passes no `--plugin-dir`); no skill attachments were present. That adds context the overseer does not need; the prompt tells it not to use those skills.
+The user's SessionStart hooks no longer run in the overseer's session (`hooks: []`, since fix round 1 starts it with `--setting-sources project,local`). No agent-board plugin is loaded (`bin/claude-overseer` passes no `--plugin-dir`) and there are no skill attachments.
 
 ## Transcript saving and `CLAUDE_CODE_CHILD_SESSION`
 
@@ -227,10 +236,14 @@ The scratch environment is stripped for these two calls (`env -u TMUX -u TC_STAT
 
 ```
 --- real state: python3 -I board/overview.py (read-only)
-agent-board        · plan 2026-10-29-retire-plan-window 4/4 (idle) · lead ready 19m · run exit 0 469m ago
-francisco_ruiz     · plan 2026-10-16-skill-review-followups 7/7 (idle) · lead ready 19m · run running 5m ago
---- real usage.sqlite: today's spend of ~/agent-board (read-only)
-117.59592104000001
+                   · plan 2026-10-16-skill-review-followups 7/7 (idle) · lead ready 14m
+agent-board        · plan 2026-11-02-session-path-root 2/2 (idle) · lead ready 0m · run running 5m ago
+francisco_ruiz     · plan 2026-10-16-skill-review-followups 7/7 (idle) · lead ready 6m · run exit 0 58m ago
+interiors          · plan 2026-11-02-building-study-stage-0 5/7 · ▶ Task 6: Real-state check and t→? · lead ready 0m · run exit 124 32m ago
+master-gcp-repo    · plan 2026-10-22-connector-framework 12/12 (idle) · lead ready 13m
+--- real usage.sqlite: today's spend of ~/agent-board (no data written)
+24.3279006
+ok   - no overseer claude left after the scratch server died
 ```
 
 The first block is `python3 -I board/overview.py` against the live tmux server (one line per real project); the number is `usage.spend_since` on the real `usage.sqlite` for `~/agent-board` since local midnight. The usage step writes no data: `usage.connect` still runs `pragma journal_mode=wal` and the schema script, which are no-ops on an existing database but may take a lock. The real board state dir, `~/.config/agent-board`, the real ideas files and the real projects were not written.
