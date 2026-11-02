@@ -8,7 +8,7 @@ SETTINGS = REPO / "claude" / "overseer-settings.json"
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "SendMessage", "WebFetch", "WebSearch", "Skill")
 WRITE_CTL = ("send", "run", "tell", "agent", "keys", "relay", "context")
 # the allowed read-only git commands still write a file with --output=<file>
-GIT_OUTPUT = ("git log", "git show", "git -C * log", "git -C * show")
+GIT_OUTPUT = ("git log", "git show")
 
 
 class OverseerSettingsTest(unittest.TestCase):
@@ -34,6 +34,13 @@ class OverseerSettingsTest(unittest.TestCase):
         self.assertIn("Bash(tmux-ctl overview *)", self.allow)
         for t in ("Read", "Grep", "Glob", "Bash(git log *)", "Bash(git status *)", "Bash(git show *)"):
             self.assertIn(t, self.allow, t)
+
+    def test_no_allow_has_a_wildcard_before_the_git_verb(self):
+        # final review C1: `git -C * log *` also admits `-c core.fsmonitor=…`, `-c alias.x=!…` and `tag show`
+        for a in self.allow:
+            with self.subTest(allow=a):
+                self.assertNotIn("-C", a)
+                self.assertNotRegex(a, r"git \S*\*")
 
     def test_everything_else_is_denied_without_a_prompt(self):
         # deny beats allow in Claude Code, so a bare "Bash" deny would also kill the allowed tmux-ctl overview;

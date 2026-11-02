@@ -70,6 +70,7 @@ nothing answers questions about them, and nothing tells the user when something 
   - Allowed: Read, Grep, Glob, `Bash(tmux-ctl overview*)`, read-only `git log` / `git status` / `git show`.
   - Denied: Write, Edit, NotebookEdit, Agent, SendMessage, `tmux-ctl send|run|tell|agent|keys|relay`, `tmux send-keys`, and any
     other Bash.
+  - 2026-11-02: `git -C` allows removed (final review C1: a wildcard before the verb admits `-c`/aliases/any subcommand); plain `git log/status/show` only.
 - **How it answers:** from `tmux-ctl overview --json` first. If needed, it reads a project's plan file, task list, reports under
   `.superpowers/briefs/` and registered artifacts.
 - **Acting:** asked to act, it names the project window to go to and what to say there.
