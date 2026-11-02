@@ -75,6 +75,17 @@ class WaitTest(unittest.TestCase):
             self.assertTrue(relay.wait_turn_end(FakeTmux(), "%5", sleep=sleeps.append))
         self.assertEqual(len(sleeps), 4)
 
+    def test_new_spinner_keeps_waiting(self):
+        rows = ["· Hyperspacing… (30s · ↓ 2.2k tokens)", "", "─" * 60, "❯ ", "─" * 60]
+        calls = []
+
+        def tmux(*a, check=False):
+            calls.append(a)
+            return f"2.1.316{paneclass.SEP}0\n" if a[0] == "display" else "\n".join(rows)
+
+        clock = iter(range(0, 1000, 2))
+        self.assertFalse(relay.wait_turn_end(tmux, "%5", cap=10, sleep=lambda s: None, clock=lambda: next(clock)))
+
     def test_times_out(self):
         clock = iter(range(0, 1000, 2))
         with statuses(*["working"] * 100):

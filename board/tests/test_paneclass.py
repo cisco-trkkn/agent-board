@@ -52,6 +52,41 @@ class PaneStatusTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+class SpinnerFormatTest(unittest.TestCase):
+    """Claude Code 2.1.316 prints no "esc to interrupt"; the live spinner line is `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`."""
+    RULE = "─" * 70
+    # layout captured from a live 2.1.316 pane: spinner, blank, rule, empty input, rule, status lines
+    def live(self, top):
+        return top + ["", self.RULE, "❯ ", self.RULE, "  Sonnet 5.5 · ctx 8%", "  ⏵⏵ auto mode on"]
+
+    def cls(self, rows):
+        return paneclass.classify("2.1.316", rows, False)
+
+    def test_new_spinner_lines_are_working(self):
+        for line in ("· Spelunking… (6m 56s · ↓ 25.0k tokens)", "· Hyperspacing… (30s · ↓ 2.2k tokens)",
+                     "✽ Spelunking… (7m 51s · ↓ 29.0k tokens)", "✻ Effecting… (19s · ↓ 715 tokens · thought for 1s)"):
+            with self.subTest(line=line):
+                self.assertEqual(self.cls(self.live(["some output", line])), ("claude", "working"))
+
+    def test_finished_line_stays_ready(self):
+        self.assertEqual(self.cls(self.live(["some output", "✻ Baked for 30s · done 3:26 AM"])), ("claude", "ready"))
+
+    def test_prose_quoting_a_spinner_is_not_working(self):
+        rows = self.live(["the spinner reads · Spelunking… (6m 56s · ↓ 25.0k tokens) in 2.1.316"])
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
+    def test_stale_spinner_in_transcript_above_finished_line(self):
+        rows = self.live(["· Spelunking… (6m 56s · ↓ 25.0k tokens)", "", "⏺ all done, results below", "✻ Baked for 30s · done 3:26 AM"])
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
+    def test_task_list_under_the_spinner_is_still_working(self):
+        rows = self.live(["· Spelunking… (6m 56s · ↓ 25.0k tokens)", "  ⎿  ◼ Fix the thing", "     ◻ Test the thing"])
+        self.assertEqual(self.cls(rows), ("claude", "working"))
+
+    def test_permission_prompt_beats_spinner(self):
+        rows = ["· Spelunking… (6m 56s · ↓ 25.0k tokens)", "Do you want to proceed?", "❯ 1. Yes", "  2. No"]
+        self.assertEqual(self.cls(rows), ("claude", "waiting"))
+
 
 class InputTextTest(unittest.TestCase):
     RULE = "─" * 78

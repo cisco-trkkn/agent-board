@@ -131,6 +131,13 @@ class RestartOrchestratorTest(unittest.TestCase):
         self.assertEqual(fake.find("respawn-pane"), [])
         self.assertEqual(fake.find("send-keys"), [])
 
+    def test_busy_new_spinner_without_confirm_refuses(self):
+        fake = Fake([(1, "claude", False)], rows=["· Spelunking… (6m 56s · ↓ 25.0k tokens)", "", "─" * 60, "❯ ", "─" * 60])
+        with self.assertRaises(RuntimeError) as cm:
+            self.run_act(fake)
+        self.assertIn("busy", str(cm.exception))
+        self.assertEqual(fake.find("respawn-pane"), [])
+
     def test_busy_with_confirm_restarts(self):
         fake = Fake([(1, "claude", False)], rows=["esc to interrupt"])
         msg = self.run_act(fake, confirm=True)

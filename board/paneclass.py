@@ -18,7 +18,10 @@ import tc_env  # noqa: E402
 SHELLS = tc_env.SHELLS
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")
 WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
-WORKING_RE = re.compile(r"esc to interrupt", re.I)
+WORKING_RE = re.compile(r"esc to interrupt", re.I)   # Claude Code before 2.1.316
+# 2.1.316+: `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`; the whole line, so prose quoting one does not match
+SPINNER_RE = re.compile(r"^\s*\S\s+[\w-]+…\s*\(\d+\s*[hms]\b[^)]*\)?\s*$")
+SPINNER_SUB_RE = re.compile(r"^\s+[⎿◻◼✔☐☒■□]")   # task list / tip rows Claude draws under the spinner
 SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 
@@ -48,6 +51,21 @@ def input_has_text(rows):
     return False
 
 
+def spinner_live(rows):
+    """True when the lowest spinner line is in the live area: nothing but blank rows between it and the input
+    box's rule. A spinner printed higher up, with a finished line or output after it, is transcript."""
+    for n in range(len(rows) - 1, -1, -1):
+        if not SPINNER_RE.match(rows[n]):
+            continue
+        for below in rows[n + 1:]:
+            if RULE_RE.match(below):
+                return True
+            if below.strip() and not SPINNER_SUB_RE.match(below):   # finished line, output or open prompt: not live
+                return False
+        return True   # no rule in view (a short capture) and only blank rows below: the spinner is at the bottom
+    return False
+
+
 def classify(cmd, rows, bell):
     """kind: claude | shell | program ; status: waiting | working | ready | idle | running"""
     is_claude = bool(VERSION_RE.match(cmd)) or "claude" in cmd.lower()
@@ -56,7 +74,7 @@ def classify(cmd, rows, bell):
     if cmd in SHELLS:
         return "shell", "idle"
     if is_claude:
-        if WORKING_RE.search(tail):  # no spinner while a prompt is open
+        if WORKING_RE.search(tail) or spinner_live(rows[-12:]):  # no spinner while a prompt is open
             return "claude", "working"
         if WAITING_RE.search(tail):
             return "claude", "waiting"
