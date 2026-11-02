@@ -5,6 +5,7 @@
 # the overseer's rules. Extra arguments pass through to claude. Used by tmux-overseer for the `overseer` session's claude window.
 source "${0:A:h}/_ab_claude.zsh"
 unset CLAUDE_CODE_CHILD_SESSION   # inherited from a Claude-started tmux server it would switch transcripts off in the overseer
+unset CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_CODE_SSE_PORT CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN   # session-scoped: they belong to the session that started the tmux server, not to the overseer
 export PATH="$(ab_path)" AGENT_BOARD_REPO="$AB_REPO" TC_ROLE=overseer CLAUDE_MD_REVISE_HOOK=0
 exec claude --model haiku --effort low -n overseer --setting-sources project,local --settings "$AB_REPO/claude/overseer-settings.json" \
   --append-system-prompt-file "$AB_REPO/claude/overseer.md" "$@"

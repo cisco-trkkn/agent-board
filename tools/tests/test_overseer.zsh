@@ -72,10 +72,11 @@ check "tmux-ctl overview with two projects exits 2"     sh -c "cd $TT_DIR && TC_
 check "help names overview"                     sh -c "TC_SESSION=p4 $C help | grep -q 'overview \[project\]'"
 # the launcher itself, with a stub `claude` that records its argv and the child-session marker (no real Claude starts)
 mkdir -p "$TT_DIR/stubbin"
-printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "$TT_DIR/stub.argv"\nprintf "%%s\\n" "${CLAUDE_CODE_CHILD_SESSION-UNSET}" > "$TT_DIR/stub.child"\n' > "$TT_DIR/stubbin/claude"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "$TT_DIR/stub.argv"\nprintf "%%s\\n" "${CLAUDE_CODE_CHILD_SESSION-UNSET}" > "$TT_DIR/stub.child"\nenv | grep -E "^(CLAUDECODE|CLAUDE_CODE_SESSION_ID|CLAUDE_CODE_SSE_PORT|CLAUDE_CODE_MESSAGING_SOCKET|CLAUDE_CODE_MESSAGING_TOKEN)=" | cut -d= -f1 > "$TT_DIR/stub.leaked"\n' > "$TT_DIR/stubbin/claude"
 chmod +x "$TT_DIR/stubbin/claude"
-CLAUDE_CODE_CHILD_SESSION=1 PATH="$TT_DIR/stubbin:$PATH" TT_DIR="$TT_DIR" "$TT_REPO/bin/claude-overseer" >/dev/null 2>&1
+CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=x CLAUDE_CODE_SSE_PORT=1 CLAUDE_CODE_MESSAGING_SOCKET=x CLAUDE_CODE_MESSAGING_TOKEN=x CLAUDE_CODE_CHILD_SESSION=1 PATH="$TT_DIR/stubbin:$PATH" TT_DIR="$TT_DIR" "$TT_REPO/bin/claude-overseer" >/dev/null 2>&1
 check "launcher excludes the user settings source"   grep -q -- '--setting-sources project,local' "$TT_DIR/stub.argv"
 check "launcher keeps the overseer settings file"    grep -q -- "--settings $TT_REPO/claude/overseer-settings.json" "$TT_DIR/stub.argv"
 check "launcher unsets CLAUDE_CODE_CHILD_SESSION"    test "$(cat "$TT_DIR/stub.child")" = UNSET
+check "launcher unsets the session-scoped CLAUDECODE/CLAUDE_CODE_* variables (leaked names: $(tr '\n' ' ' < "$TT_DIR/stub.leaked"))"  test ! -s "$TT_DIR/stub.leaked"
 tt_done
