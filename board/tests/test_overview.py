@@ -114,6 +114,13 @@ class BuildTest(Base):
         other = dict(LIVE, cwd="/elsewhere")
         self.assertEqual(self.build(live=[other])["projects"][0]["alerts"], [])
 
+    def test_lead_entry_is_named_lead_not_its_session_id_prefix(self):
+        lead = dict(LIVE, role="lead", name="abc"[:8], session_id="abc", agent_name=None)
+        r = self.build(live=[lead])["projects"][0]
+        self.assertEqual([a["session"] for a in r["alerts"]], ["lead"])
+        named = dict(lead, name="orchestrator")      # a tap that supplies a name keeps it
+        self.assertEqual([a["session"] for a in self.build(live=[named])["projects"][0]["alerts"]], ["orchestrator"])
+
     def test_empty_project_no_plan_no_runs_no_alerts(self):
         self.state.joinpath("artifacts-proj.jsonl").unlink()
         shutil.rmtree(self.home / "tasks")

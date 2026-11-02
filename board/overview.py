@@ -76,7 +76,8 @@ def recent_artifacts(project, n=3):
 def project_alerts(s, live, spend, th):
     repo = s.get("root") or s.get("path") or ""
     mine = [e for e in live if repo and usage.in_project(e.get("cwd"), repo)]
-    out = [dict(a, session=e["name"], context_pct=e.get("context_pct")) for e in mine for a in e.get("alerts") or []]
+    who = lambda e: "lead" if e.get("role") == "lead" and e["name"] == (e.get("session_id") or "")[:8] else e["name"]   # an unnamed lead is "lead", not its id prefix
+    out = [dict(a, session=who(e), context_pct=e.get("context_pct")) for e in mine for a in e.get("alerts") or []]
     day = usage.day_alert(spend, th)
     if day:
         out.append(dict(day, session=None, context_pct=None))
