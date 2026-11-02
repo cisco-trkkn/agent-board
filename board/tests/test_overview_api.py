@@ -72,6 +72,24 @@ class OverviewApiTest(unittest.TestCase):
         self.assertEqual([s["name"] for s in st["sessions"]], ["proj"])
         self.assertEqual(server.overseer_info()["running"], True)
 
+    def test_project_root_is_the_session_root_not_the_pane_path(self):
+        # the lead's pane sits in $HOME while the session started in the project: alerts, spend and plan follow the session
+        import tempfile
+        root = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, root)
+        self.sessions = [card("proj")]                       # card path (pane) is /proj
+        self.sessions[0]["path"] = "/pane-elsewhere"
+        tm = lambda *a, **k: root if a[0] == "display" else ""
+        with mock.patch.object(server, "tmux", side_effect=tm), \
+             mock.patch.object(server, "spend_today", return_value=1.0) as sp, \
+             mock.patch.object(server.overview.planview, "view", return_value=dict(server.overview.planview.EMPTY)) as pv, \
+             mock.patch.object(server, "INDEXER", mock.Mock(snapshot=lambda: [
+                 {"name": "a1", "cwd": root + "/sub", "context_pct": 90, "alerts": [{"kind": "context", "label": "ctx 90%"}]}])):
+            ov = server.build_overview(1000.0)
+        self.assertEqual(sp.call_args[0][0], root)
+        self.assertEqual(pv.call_args[0][1], root)
+        self.assertEqual([a["label"] for a in ov["projects"][0]["alerts"]], ["ctx 90%"])   # matched by cwd under the session root
+        self.assertEqual(ov["projects"][0]["path"], "/pane-elsewhere")   # the card keeps the pane path
+
     def test_tc_overseer_off_never_spawns(self):
         server._last["windows"] = {"proj": {"claude": 1}}     # no overseer running, a project with a claude window
         server.ensure_overseer()

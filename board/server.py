@@ -384,7 +384,14 @@ def build_overview(now=None):
     st = state()
     live = INDEXER.snapshot() if INDEXER else []
     th, _ = usage.thresholds()
-    return overview.build(st["sessions"], live, now, home=HOME / ".claude", state_dir=tc_env.state_dir(), tmux=tmux, th=th,
+    sessions = []
+    for s in st["sessions"]:   # the digest's project root is the session's start dir (relay.session_root), not the lead pane's cwd
+        try:
+            root = relay.session_root(tmux, s["name"])
+        except Exception:   # noqa: BLE001 - tmux hiccup: fall back to the pane path
+            root = s.get("path")
+        sessions.append({**s, "root": root})
+    return overview.build(sessions, live, now, home=HOME / ".claude", state_dir=tc_env.state_dir(), tmux=tmux, th=th,
                           spend=lambda repo: spend_today(repo, now), activity=window_activity())
 
 
