@@ -76,9 +76,10 @@ class OverviewApiTest(unittest.TestCase):
 
     def test_overseer_session_is_not_a_project_card(self):
         S = server.SEP
-        row = lambda sess: S.join([sess, "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", ""])
+        row = lambda sess: S.join([sess, "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r"])
         out = "\n".join([row("proj"), row("overseer")])
         with mock.patch.object(server, "tmux", side_effect=lambda *a, **k: out if a[0] == "list-panes" else ""), \
+             mock.patch.object(server.relay, "root_for", side_effect=lambda p: p), \
              mock.patch.object(server, "cached_worktrees", return_value=None), mock.patch.object(server, "deliver_comments"):
             st = server.build_state()
         self.assertEqual([s["name"] for s in st["sessions"]], ["proj"])
