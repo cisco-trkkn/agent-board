@@ -175,7 +175,7 @@ def main(argv=None):
     if a.json:
         print(json.dumps(ov, ensure_ascii=False))
     elif not ov["projects"]:
-        print("no open projects")
+        print(f"overview: {ov['error']}" if ov.get("error") else "no open projects")
     else:
         for p in ov["projects"]:
             print(line(p))

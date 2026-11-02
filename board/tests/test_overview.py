@@ -207,6 +207,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual([p["project"] for p in json.loads(r.stdout)["projects"]], ["b"])
         self.assertEqual(self.run_cli("--project", "zz").returncode, 1)
 
+    def test_board_error_payload_is_printed_not_no_open_projects(self):
+        # tmux down: the board answers 200 with projects [] and an error; the CLI must say why
+        FakeBoard.payload = {"generated": NOW, "events": [], "projects": [], "error": "no server running on /tmp/tmux-1/default"}
+        r = self.run_cli()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no server running on /tmp/tmux-1/default", r.stdout)
+        self.assertNotIn("no open projects", r.stdout)
+
     def test_unknown_token_dir_falls_back_to_local(self):
         # main() runs in this process: point it (not just self.env) at a token dir with no token, never the user's live board
         with mock.patch.dict(os.environ, {"TMUX_DASH_STATE": str(self.state / "none")}), \
