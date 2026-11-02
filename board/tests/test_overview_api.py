@@ -32,6 +32,11 @@ class OverviewApiTest(unittest.TestCase):
         server.NOTIFIER = server.notify.Notifier(runner=lambda argv: None, enabled=True)
         server._last["windows"] = {"proj": {"claude": 1}, "overseer": {"claude": 1}}
         self.sessions = [card("proj")]
+        # never the real state dir or alerts file: last_run / recent_artifacts read TC_STATE, thresholds() the alerts file
+        import shutil, tempfile
+        tmp = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, tmp)
+        for p in (mock.patch.dict(os.environ, {"TC_STATE": tmp}), mock.patch.object(server.usage, "ALERTS_PATH", Path(tmp) / "none.json")):
+            p.start(); self.addCleanup(p.stop)
         self.patches = [mock.patch.object(server, "state", side_effect=lambda: {"sessions": self.sessions}),
                         mock.patch.object(server, "window_activity", return_value={"proj": {"claude": 1}}),
                         mock.patch.object(server, "spend_today", return_value=None),
