@@ -2,11 +2,11 @@ source "${0:A:h}/lib.zsh"
 # Overseer lifecycle on a scratch server: created with the first project session, recreated after kill-session,
 # stopped when the last project closes, never with TC_OVERSEER=0. The window runs TC_OVERSEER_CMD (a sleeper), not claude.
 O="${TC_OVERSEER_BIN:-$TT_REPO/bin/tmux-overseer}"; L="${TC_LAYOUT:-$TT_REPO/bin/tmux-dev-layout}"
-tt_setup claude                                 # tt_setup exports TC_OVERSEER=0; this test turns it on itself
+tt_setup shell                                  # tt_setup exports TC_OVERSEER=0; this test turns it on itself
 export TC_OVERSEER_CMD='exec sleep 6007'
 export XDG_STATE_HOME="$TT_DIR/xdg"        # the overseer's start dir lives under it: scratch, never the real ~/.local/state
 running() { tt has-session -t '=overseer' 2>/dev/null }
-tt kill-session -t '=tt'                          # start from no project at all (lib's EXIT trap still kills the server)
+# session tt has only a `shell` window: no project at all, and the server stays up (a restarted scratch server would load ~/.tmux.conf and its resurrect restore)
 unset TC_OVERSEER
 tt new-session -d -s lonely -n shell -c "$TT_DIR"
 "$O" ensure
@@ -28,6 +28,29 @@ check "stop keeps it while a project remains"     running
 tt kill-session -t '=p2'; "$O" stop
 check "stopped when the last project closes"      sh -c "! $TT_BIN has-session -t '=overseer' 2>/dev/null"
 check "status says stopped, exit 1"               sh -c "! $O status >/dev/null"
+# I2: Claude exits (or the trust dialog is refused) and leaves a shell: ensure retypes the command, at most once per TC_OVERSEER_RETRY_S (60)
+tt new-session -d -s p5 -n claude -c "$TT_DIR"
+tt kill-session -t '=overseer' 2>/dev/null; rm -f "$TT_DIR/runs"
+export TC_OVERSEER_CMD="echo run >> $TT_DIR/runs"   # exits at once, the pane falls back to a shell
+"$O" ensure
+check "exiting command: first start typed once"   tt_wait 5 sh -c "[ \"\$(grep -c run '$TT_DIR/runs' 2>/dev/null)\" = 1 ]"
+check "pane is back at a shell"                   tt_wait 5 sh -c "$TT_BIN display -p -t '=overseer:claude' '#{pane_current_command}' | grep -Eqx '(-?)(zsh|bash|sh|fish|dash)'"
+"$O" ensure; sleep 1
+check "ensure within 60s does not retype"         test "$(grep -c run "$TT_DIR/runs")" = 1
+TC_OVERSEER_RETRY_S=0 "$O" ensure
+check "ensure at a shell past the limit retypes"  tt_wait 5 sh -c "[ \"\$(grep -c run '$TT_DIR/runs')\" = 2 ]"
+export TC_OVERSEER_CMD='exec sleep 6007'
+tt kill-session -t '=overseer'; "$O" ensure
+check "a running command is not retyped"          tt_wait 5 sh -c "$TT_BIN display -p -t '=overseer:claude' '#{pane_current_command}' | grep -qx sleep"
+TC_OVERSEER_RETRY_S=0 "$O" ensure; sleep 1
+check "still one sleeper after ensure"            sh -c "[ \"\$(pgrep -f 'sleep 6007' | wc -l | tr -d ' ')\" = 1 ]"
+# I3: a browser view (grouped _web- session) must not keep the overseer's window alive after stop
+tt new-session -d -t '=overseer' -s _web-9999
+tt kill-session -t '=p5'
+"$O" stop
+check "stop with a grouped _web- view: overseer gone"   sh -c "! $TT_BIN has-session -t '=overseer' 2>/dev/null"
+check "stop with a grouped _web- view: view gone too"   sh -c "! $TT_BIN has-session -t '=_web-9999' 2>/dev/null"
+check "stop with a view: no sleeper left"               tt_wait 5 sh -c "! pgrep -f 'sleep 6007' >/dev/null"
 tt new-session -d -s p3 -n claude -c "$TT_DIR"
 TC_OVERSEER=0 "$O" ensure
 check "not created with TC_OVERSEER=0"            sh -c "! $TT_BIN has-session -t '=overseer' 2>/dev/null"

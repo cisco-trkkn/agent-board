@@ -7,6 +7,7 @@
 # killed overseer comes back), tmux-session-closed (stop). Never touches a project session. Test seam: TC_OVERSEER_CMD
 # replaces the claude-overseer command line typed into the window.
 emulate -L zsh
+zmodload zsh/datetime
 source "${0:A:h}/_tc_bins.zsh"; T=tc_tmux
 source "${0:A:h}/_ab_claude.zsh"
 OV=overseer
@@ -22,21 +23,42 @@ projects() {   # sessions with a `claude` window that are not the overseer, a -b
 case "$1" in
   ensure)
     [[ "$TC_OVERSEER" == 0 ]] && exit 0
-    "$T" has-session -t "=$OV" 2>/dev/null && exit 0
-    [[ -n "$(projects)" ]] || exit 0
     cmd="${TC_OVERSEER_CMD:-${(q)AB_REPO}/bin/claude-overseer}"
     # its own cwd, not the repo: usage matches sessions to projects by cwd, and the overseer must not count toward agent-board
     dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-board/overseer"
+    stamp="$dir/.typed"
+    if "$T" has-session -t "=$OV" 2>/dev/null; then
+      # Claude exited (crash, or the trust dialog refused) and left the shell: type the command again, at most once per 60 s
+      case "$("$T" display -p -t "=${OV}:claude" '#{pane_current_command}' 2>/dev/null)" in
+        (-|)(zsh|bash|sh|dash|fish)) ;;
+        (*) exit 0 ;;
+      esac
+      last=0; [[ -r "$stamp" ]] && last="$(<"$stamp")"
+      (( EPOCHSECONDS - ${last:-0} >= ${TC_OVERSEER_RETRY_S:-60} )) || exit 0
+      print -r -- $EPOCHSECONDS > "$stamp"
+      "$T" send-keys -t "=${OV}:claude" -l -- "$cmd"
+      "$T" send-keys -t "=${OV}:claude" Enter
+      print -r -- "restarted the overseer's command (session $OV)"; exit 0
+    fi
+    [[ -n "$(projects)" ]] || exit 0
     mkdir -p "$dir" || exit 0
     # new-session is the atomic gate: a second caller racing this one loses and exits quietly
     "$T" new-session -d -s "$OV" -n claude -x 200 -y 50 -c "$dir" 2>/dev/null || exit 0
     "$T" set-option -t "=${OV}:" @tc_overseer 1
+    print -r -- $EPOCHSECONDS > "$stamp"
     "$T" send-keys -t "=${OV}:claude" -l -- "$cmd"
     "$T" send-keys -t "=${OV}:claude" Enter
     print -r -- "started the overseer (session $OV)" ;;
   stop)
     "$T" has-session -t "=$OV" 2>/dev/null || exit 0
     [[ "$2" == --force || -z "$(projects)" ]] || exit 0
+    # browser views (grouped _web-* sessions) would keep the window alive, as in the board's close_session
+    group="$("$T" display -p -t "=${OV}:" '#{session_group}' 2>/dev/null)"
+    if [[ -n "$group" ]]; then
+      for line in ${(f)"$("$T" list-sessions -F '#{session_name}'$'\t''#{session_group}' 2>/dev/null)"}; do
+        [[ "${line#*$'\t'}" == "$group" && "${line%%$'\t'*}" == _web-* ]] && "$T" kill-session -t "=${line%%$'\t'*}" 2>/dev/null
+      done
+    fi
     "$T" kill-session -t "=$OV" && print -r -- "stopped the overseer" ;;
   status)
     if "$T" has-session -t "=$OV" 2>/dev/null; then print running; else print stopped; exit 1; fi ;;
