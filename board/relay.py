@@ -60,18 +60,27 @@ def main_checkout(d):
     return str(Path(common).parent)
 
 
+_roots = {}   # start path -> main checkout; main_checkout of an existing dir does not change
+
+
+def root_for(start_path):
+    """The project's main checkout for a session started in start_path: that dir, else $HOME, else Path.home().
+
+    A path that is empty or no longer a directory (a removed worktree) is skipped and its cache entry dropped.
+    """
+    for d in (start_path, os.environ.get("HOME", "")):
+        if d and os.path.isdir(d):
+            if d not in _roots:
+                _roots[d] = main_checkout(d)
+            return _roots[d]
+        _roots.pop(d, None)
+    return str(Path.home())
+
+
 def session_root(tmux, sess):
     """Where the new lead starts: the project's main checkout, never a worktree (auto-cleanup may remove it).
-
-    Candidates in order: the session's start path (the project root), $HOME. The claude pane's current path
-    is not used: Claude Code follows the lead's cd, so it is wherever the lead last went, not the project root.
-    A path that is empty or no longer a directory (a removed worktree) is skipped.
-    """
-    cands = [tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip(), os.environ.get("HOME", "")]
-    for d in cands:
-        if d and os.path.isdir(d):
-            return main_checkout(d)
-    return str(Path.home())
+    The claude pane's current path is not used: Claude Code follows the lead's cd."""
+    return root_for(tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip())
 
 
 def orchestrator():

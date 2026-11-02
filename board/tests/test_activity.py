@@ -55,7 +55,7 @@ class ActivityTest(unittest.TestCase):
 class HideBgTest(unittest.TestCase):
     def test_bg_sessions_hidden(self):
         S = server.SEP
-        row = lambda sess, bg: S.join([sess, "1", "1", "tests", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", bg])
+        row = lambda sess, bg: S.join([sess, "1", "1", "tests", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", bg, "/r"])
         out = "\n".join([row("proj", ""), row("proj-bg", "1")])
         with mock.patch.object(server, "tmux", side_effect=lambda *a, **k: out if a[0] == "list-panes" else ""), \
              mock.patch.object(server, "cached_worktrees", return_value=[]):
@@ -131,7 +131,7 @@ class RunsEndpointTest(unittest.TestCase):
     def test_running_record_gets_window_index(self):
         # the index comes from the state build's own list-panes (window "tests" is index 3 in proj): no list-windows exec
         S = server.SEP
-        pane = S.join(["proj", "1", "3", "tests", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", ""]) + "\n"
+        pane = S.join(["proj", "1", "3", "tests", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r"]) + "\n"
         with mock.patch.object(server, "tmux", side_effect=lambda *a, **k: pane if a[0] == "list-panes" else "") as tm, \
              mock.patch.object(server, "cached_worktrees", return_value=[]):
             with urllib.request.urlopen(self.url, timeout=5) as r:
