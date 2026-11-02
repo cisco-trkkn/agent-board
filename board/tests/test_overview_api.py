@@ -55,6 +55,13 @@ class OverviewApiTest(unittest.TestCase):
         self.assertEqual(d["events"], [])
         self.assertEqual(d["overseer"], {"session": "overseer", "running": True, "window_index": 1})
 
+    def test_home_page_ships_the_overview_markup_and_script(self):
+        # spec acceptance "Home route": GET /<token>/ serves the overseer home, its script and the notifier
+        with urllib.request.urlopen(f"{self.base}/", timeout=5) as r:
+            html = r.read().decode()
+        for s in ('id="ov-cards"', 'id="ov-events"', 'id="ov-frame"', "function renderHome", "function homeView", "function notifyNew"):
+            self.assertIn(s, html, s)
+
     def test_events_appear_after_a_change(self):
         self.get()                                            # seeds the notifier
         server._overview_cache.update(at=0.0, value=None)     # expire the cache
