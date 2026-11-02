@@ -14,6 +14,8 @@ usage data ("source": "local"). `tmux-ctl overview` calls this.
 import argparse
 import json
 import os
+import re
+import shlex
 import sys
 import time
 import urllib.request
@@ -51,6 +53,37 @@ def lead_state(s, win_activity, now):
     return {"status": status or "missing", "last_active": last, "idle_s": int(max(0, now - last)) if last else None}
 
 
+def run_label(cmd):
+    """A short name for a run's command, never a path: the first script's basename without its extension,
+    else the module after -m, else the first word. Leading `cd ...` and VAR=value words are skipped."""
+    for seg in re.split(r"&&|\|\||;|\|", cmd or ""):
+        try:
+            toks = shlex.split(seg, comments=False)
+        except ValueError:
+            toks = seg.split()
+        words, skip = [], False
+        for t in toks:   # drop redirects and their target word (`> file`, `2>&1`), and VAR=value words
+            if skip:
+                skip = False
+            elif re.fullmatch(r"\d*(>>?|<)", t):
+                skip = True
+            elif not re.match(r"^\d*[<>]", t) and not re.match(r"^[A-Za-z_]\w*=", t):
+                words.append(t)
+        toks = words
+        if toks and toks[0].rsplit("/", 1)[-1] == "env":
+            toks = toks[1:]
+        if not toks or toks[0] == "cd":
+            continue
+        for i, t in enumerate(toks):
+            if t == "-m" and i + 1 < len(toks):
+                return toks[i + 1]
+            if "/" in t and not t.startswith("-"):
+                name = t.rstrip("/").rsplit("/", 1)[-1]
+                return name.rsplit(".", 1)[0] if "." in name.lstrip(".") else name
+        return toks[0].rsplit("/", 1)[-1]
+    return ""
+
+
 def last_run(project, now):
     try:
         rs = activity_mod.runs(project, limit=1)
@@ -60,7 +93,8 @@ def last_run(project, now):
         return None
     r = rs[0]
     return {"id": r.get("id"), "cmd": r.get("cmd") or "", "exit": r.get("exit"), "ts": r.get("ts"),
-            "age_s": int(now - (r.get("ts") or now)), "summary": r.get("summary") or ""}
+            "age_s": int(now - (r.get("ts") or now)), "summary": r.get("summary") or "",
+            "label": run_label(r.get("cmd") or "")}
 
 
 def recent_artifacts(project, n=3):

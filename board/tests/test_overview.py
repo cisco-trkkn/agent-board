@@ -89,6 +89,35 @@ class BuildTest(Base):
         r = self.build()["projects"][0]["last_run"]
         self.assertEqual((r["id"], r["exit"], r["age_s"], r["summary"]), ("5847-14324", 1, 120, RUN["summary"]))
 
+    def test_last_run_label_from_a_real_long_command(self):
+        cmd = ("cd /private/tmp/claude-503/scratch/x && TC_STATE=/private/tmp/claude-503/scratch/state "
+               "zsh /Users/me/agent-board/.claude/worktrees/overseer/tools/tests/e2e-overseer.zsh "
+               "> /private/tmp/claude-503/scratch/out.log 2>&1")
+        self.assertEqual(overview.run_label(cmd), "e2e-overseer")
+
+    def test_last_run_label_module_after_dash_m(self):
+        self.assertEqual(overview.run_label("python3 -m unittest discover -s board/tests -p 'test_*.py' 2>&1"), "unittest")
+
+    def test_last_run_label_bare_word_and_empty(self):
+        self.assertEqual(overview.run_label("pytest -q"), "pytest")
+        self.assertEqual(overview.run_label("tests"), "tests")
+        self.assertEqual(overview.run_label(""), "")
+        self.assertEqual(overview.run_label("   "), "")
+
+    def test_last_run_label_skips_redirect_targets_and_runs_the_script_itself(self):
+        # live commands seen on 2026-11-02: a spaced redirect target, and an executable script given an output path argument
+        self.assertEqual(overview.run_label("uptime > /tmp/x/scratchpad/h.out; bash claude/hooks/tests/t.sh >> /tmp/h.out"), "uptime")
+        self.assertEqual(overview.run_label("/tmp/x/scratchpad/runa.sh /tmp/x/scratchpad/out-a.txt"), "runa")
+        self.assertEqual(overview.run_label("bash claude/hooks/tests/test-task-observer.sh 2>&1 | tail"), "test-task-observer")
+
+    def test_last_run_label_never_a_path(self):
+        for cmd in ("/usr/bin/env FOO=1 /opt/x/run.sh --all", "'unterminated /a/b/c.py", "cd /tmp/a/b"):
+            self.assertNotIn("/", overview.run_label(cmd), cmd)
+
+    def test_last_run_digest_carries_the_label(self):
+        (self.state / "runs-proj.jsonl").write_text(json.dumps(dict(RUN, cmd="python3 -m unittest -v")) + "\n")
+        self.assertEqual(self.build()["projects"][0]["last_run"]["label"], "unittest")
+
     def test_lead_state_from_claude_pane_and_window_activity(self):
         r = self.build([card(lead_status="ready")], activity={"proj": {"claude": NOW - 1000, "✦ parse": NOW}})["projects"][0]["lead"]
         self.assertEqual(r, {"status": "ready", "last_active": NOW - 1000, "idle_s": 1000})

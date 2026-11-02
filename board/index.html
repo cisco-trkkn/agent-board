@@ -198,21 +198,49 @@ dialog .row[hidden] { display: none; }   /* .row sets display:flex, which would 
 .layout { display: flex; min-height: 0; }
 .layout[hidden], .home[hidden] { display: none; }   /* .layout sets display:flex, which would beat [hidden] */
 .home { padding: 20px; }
-.home-grid { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(320px, 45%); gap: 16px; }
-.ov-term { display: flex; }
-.ov-term { align-self: start; }   /* the grid would stretch it to the card column and the flex iframe would shrink with it */
-.ov-term iframe { flex: none; width: 100%; height: 70vh; border: 0; border-radius: 10px; background: #1e1e2e; }
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.home.ov-on .home-grid { grid-template-columns: minmax(0, 1fr) minmax(320px, 40%); }
+.ov-term { display: flex; flex-direction: column; position: sticky; top: 0; height: calc(100vh - var(--ov-top, 64px) - 40px); }
+.ov-term[hidden] { display: none; }
+.ov-term iframe { flex: 1; min-height: 0; width: 100%; border: 0; border-radius: 10px; background: #1e1e2e; }
 #btn-agent[hidden], #btn-close[hidden], #proj-menu hr[hidden] { display: none; }   /* project-scoped header controls, hidden on the Overview */
 .pill.missing { background: var(--gray-soft); color: var(--muted); }
-.ov-card .ov-lines { font-size: 13px; display: grid; gap: 3px; }
+.ov-off { margin: 0; color: var(--muted); }
+.ov-off[hidden] { display: none; }
+.ov-rows { border-top: 1px solid var(--border); }
+.ov-row { padding: 9px 4px; border-bottom: 1px solid var(--border); min-width: 0; }
+.ov-top { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.ov-mark { width: 1.2em; text-align: center; flex: none; }
+.ov-mark.needs, .ov-status.needs { color: var(--amber); }
+.ov-mark.working, .ov-status.working { color: var(--blue); }
+.ov-mark.idle, .ov-status.idle { color: var(--green); }
+.ov-mark.nolead, .ov-status.nolead { color: var(--muted); }
+.ov-status { font-weight: 600; white-space: nowrap; flex: none; }
+.ov-name { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.ov-name.unnamed { color: var(--muted); font-weight: 400; font-style: italic; }
+.ov-right { margin-left: auto; color: var(--muted); white-space: nowrap; flex: none; }
+.ov-sub { padding: 2px 0 0 calc(1.2em + 10px); display: grid; gap: 2px; min-width: 0; }
+.ov-sub > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-row .alert-badges { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 0 0 calc(1.2em + 10px); }
 .ov-needs { color: var(--red); font-weight: 600; }
-.ov-tail, .ov-art { color: var(--muted); }
-.events { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 13px; }
+.ov-bad { color: var(--red); }
+.ov-muted { color: var(--muted); }
+.events { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--border); }
+.events li { display: flex; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--border); min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.events li > * { flex: none; }
+.events li > :last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .events li.unread { font-weight: 600; }
-.ov-when { color: var(--muted); margin-right: 8px; }
-.ov-name { font-weight: 700; font-size: 15px; }
-.ov-card a, .events a { color: var(--accent); text-decoration: none; }
-.ov-card a:hover, .events a:hover { text-decoration: underline; }
+.ov-when { color: var(--muted); }
+.ov-row a, .events a { color: var(--accent); text-decoration: none; }
+.ov-row a:hover, .events a:hover { text-decoration: underline; }
+.tab.unnamed { color: var(--muted); font-style: italic; }
+@media (max-width: 900px) {
+  .home { padding: 12px 16px; }
+  .home.ov-on .home-grid { grid-template-columns: minmax(0, 1fr); }
+  .ov-term { position: static; height: 60vh; }
+  .ov-top { flex-wrap: wrap; row-gap: 0; }
+  .ov-right { margin-left: calc(1.2em + 10px); flex-basis: 100%; }
+}
 .layout > main { flex: 1; min-width: 0; }
 .side { width: 320px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); min-height: 0; transition: width .15s; }
 .side.collapsed { width: 36px; }
@@ -336,15 +364,15 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 <section class="home" id="home" hidden>
   <div class="home-grid">
     <div class="col">
+      <p class="ov-off" id="ov-off">No overseer is running. It starts by itself once a project has a lead session (unless the board was started with TC_OVERSEER=0).</p>
       <div class="section-title"><span>Projects</span></div>
-      <div class="grid" id="ov-cards"></div>
+      <div class="ov-rows" id="ov-cards"></div>
       <div class="section-title"><span>Notifications <span class="count" id="ov-unread"></span></span><button class="ghost" id="notif-enable" hidden>Enable browser notifications</button></div>
       <ul class="events" id="ov-events"></ul>
     </div>
-    <section class="term ov-term">
+    <section class="term ov-term" id="ov-term" hidden>
       <div class="term-head"><b>Overseer</b><button class="ghost" id="ov-pop" title="Open in a new tab">Pop out ↗</button></div>
-      <iframe id="ov-frame" title="overseer terminal" hidden></iframe>
-      <div class="empty" id="ov-noterm">The overseer isn't running (TC_OVERSEER=0, or no project with a lead yet).</div>
+      <iframe id="ov-frame" title="overseer terminal"></iframe>
     </section>
   </div>
 </section>
@@ -488,7 +516,7 @@ function renderTabs() {
   const home = el("button", "tab" + (homeView() ? " on" : ""), "✦ Overview"); home.onclick = () => { location.hash = ""; }; tabs.append(home);
   for (const s of data.sessions) {
     const waiting = s.windows.flatMap((w) => w.panes).filter((p) => p.status === "waiting").length;
-    const b = el("button", "tab" + (!homeView() && s.name === (session() || {}).name ? " on" : ""), s.name);
+    const b = el("button", "tab" + (!homeView() && s.name === (session() || {}).name ? " on" : "") + (s.name ? "" : " unnamed"), ovName(s.name));
     if (waiting) b.append(el("span", "badge", String(waiting)));
     b.onclick = () => {
       current = s.name; location.hash = "#" + encodeURIComponent(s.name);
@@ -1609,45 +1637,91 @@ function markSeen() {
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && homeView()) markSeen(); });
 $("#notif-enable").onclick = () => Notification.requestPermission().then(renderHome);
 
-const fmtAge = (s) => s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`;
+function fmtAge(s) { return s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`; }
+function ovName(name) { return name || "(unnamed session)"; }
+function ovGroup(p) { return p.needs_you.length || p.lead.status === "waiting" ? 0 : p.lead.status === "working" ? 1 : 2; }
+function ovSorted(ps) {
+  // needs you, then working, then the rest; most recently active first; Array.sort is stable, so equal rows keep their place
+  return [...ps].sort((a, b) => ovGroup(a) - ovGroup(b) || (b.lead.last_active || 0) - (a.lead.last_active || 0));
+}
+function ovStatus(p) {
+  // the mark differs by shape as well as colour
+  const g = ovGroup(p);
+  if (g === 0) return { cls: "needs", mark: "●", label: "Needs you" };
+  if (g === 1) return { cls: "working", mark: "◐", label: "Working" };
+  if (p.lead.status === "ready") return { cls: "idle", mark: "○", label: p.lead.idle_s != null && p.lead.idle_s >= 60 ? `Idle ${fmtAge(p.lead.idle_s)}` : "Idle" };
+  return { cls: "nolead", mark: "◌", label: "No lead" };
+}
+function ovRun(p) {
+  // `label result, age`: the raw command only goes in the row's tooltip
+  const r = p.last_run; if (!r) return null;
+  const label = r.label || "run", age = fmtAge(r.age_s);
+  if (r.exit == null) return { text: `${label} running, ${age}`, failed: false };
+  if (/time(d)?[ -]?out/i.test(r.summary || "")) return { text: `${label} timed out, ${age} ago`, failed: true };
+  if (r.exit === 0) return { text: `${label} passed, ${age} ago`, failed: false };
+  return { text: `${label} failed (exit ${r.exit}), ${age} ago`, failed: true };
+}
+function ovPlanText(p) { return p.plan.active && p.plan.total ? `${p.plan.done}/${p.plan.total}` : ""; }
+function ovMoreTasks(ts) { return { shown: ts.slice(0, 2), more: Math.max(0, ts.length - 2) }; }
+function ovRow(p) {
+  const st = ovStatus(p), row = el("div", "ov-row" + (st.cls === "needs" ? " needs" : ""));
+  const top = el("div", "ov-top"), name = p.project;
+  top.append(el("span", "ov-mark " + st.cls, st.mark));
+  if (name) { const a = el("a", "ov-name", name); a.href = "#" + encodeURIComponent(name); top.append(a); }
+  else top.append(el("span", "ov-name unnamed", ovName(name)));
+  top.append(el("span", "ov-status " + st.cls, st.label));
+  const right = [ovPlanText(p), p.spend_today != null ? `$${p.spend_today.toFixed(2)} today` : ""].filter(Boolean).join("  ·  ");
+  if (right) top.append(el("span", "ov-right", right));
+  row.append(top);
+  const sub = el("div", "ov-sub"), t = ovMoreTasks(p.plan.active ? p.plan.in_progress : []);
+  for (const x of t.shown) sub.append(el("div", null, `▶ ${x.subject}${x.owner ? ` → ${x.owner}` : ""}`));
+  if (t.more) sub.append(el("div", "ov-muted", `+${t.more} more`));
+  for (const n of p.needs_you) sub.append(el("div", "ov-needs", `${n.window} needs you`));
+  const run = ovRun(p);
+  if (run) { const d = el("div", run.failed ? "ov-bad" : "ov-muted", run.text); d.title = p.last_run.cmd || ""; sub.append(d); }
+  if (sub.children.length) row.append(sub);
+  if (p.alerts.length) { const bar = el("div", "alert-badges"); for (const al of p.alerts) { const b = el("span", "alert-badge " + alertColor(al.kind), al.label); b.title = al.detail; bar.append(b); } row.append(bar); }
+  return row;
+}
+function syncRows(parent, rows) {   // keep a row's node while its rendered markup is unchanged, so a hovered tooltip survives the 2 s poll
+  const old = new Map([...parent.children].map((c) => [c.dataset.key, c]));
+  const want = rows.map(([key, mk]) => {
+    const n = mk(), prev = old.get(key);
+    if (prev && prev.outerHTML.replace(/ data-key="[^"]*"/, "") === n.outerHTML) return prev;
+    n.dataset.key = key; return n;
+  });
+  want.forEach((n, i) => { if (parent.children[i] !== n) parent.insertBefore(n, parent.children[i] || null); });
+  while (parent.children.length > want.length) parent.lastChild.remove();
+}
 function renderHome() {
   const d = OV.data; if (!d) return;
   $("#notif-enable").hidden = !("Notification" in window) || Notification.permission !== "default";
-  const cards = $("#ov-cards"); cards.replaceChildren();
-  for (const p of d.projects) {
-    const c = el("div", "card ov-card" + (p.needs_you.length ? " waiting" : "")), head = el("div", "card-head");
-    const a = el("a", "ov-name", p.project); a.href = "#" + encodeURIComponent(p.project);
-    head.append(a, el("span", "pill " + (p.needs_you.length || p.lead.status === "waiting" ? "waiting" : p.lead.status === "working" ? "working" : p.lead.status === "ready" ? "ready" : "missing"),
-      p.needs_you.length ? "Needs you" : p.lead.status === "ready" && p.lead.idle_s != null ? `Lead idle ${fmtAge(p.lead.idle_s)}` : `Lead ${p.lead.status}`));
-    c.append(head);
-    const lines = el("div", "ov-lines");
-    lines.append(el("div", null, p.plan.name ? `${p.plan.name} · ${p.plan.done}/${p.plan.total} done${p.plan.active ? "" : " · no active plan"}` : "no plan"));
-    for (const t of p.plan.in_progress) lines.append(el("div", "ov-task", `▶ ${t.subject}${t.owner ? ` → ${t.owner} (${t.state})` : ""}`));
-    for (const n of p.needs_you) lines.append(el("div", "ov-needs", `${n.window} needs you`));
-    if (p.last_run) lines.append(el("div", null, `last run: ${p.last_run.exit == null ? "running" : "exit " + p.last_run.exit} · ${fmtAge(p.last_run.age_s)} ago · ${p.last_run.summary || p.last_run.cmd}`));
-    for (const art of p.artifacts) lines.append(el("div", "ov-art", `${art.kind}: ${art.title || art.path.split("/").pop()}`));
-    const tail = [p.spend_today != null ? `$${p.spend_today.toFixed(2)} today` : null, `epoch ${p.epoch}`].filter(Boolean).join(" · ");
-    lines.append(el("div", "ov-tail", tail));
-    if (p.alerts.length) { const bar = el("div", "alert-badges"); for (const al of p.alerts) { const b = el("span", "alert-badge " + alertColor(al.kind), al.label); b.title = al.detail; bar.append(b); } lines.append(bar); }
-    c.append(lines); cards.append(c);
+  const o = d.overseer || {}, term = !!(o.running && o.window_index != null && data.ttyd);
+  $("#home").classList.toggle("ov-on", term);
+  $("#ov-off").hidden = term;
+  $("#ov-term").hidden = !term;
+  const cards = $("#ov-cards");
+  if (!d.projects.length) cards.replaceChildren(el("div", "empty", d.error ? "tmux isn't running" : "No projects open."));
+  else {
+    if (!cards.firstElementChild || !cards.firstElementChild.dataset.key) cards.replaceChildren();
+    syncRows(cards, ovSorted(d.projects).map((p) => [p.project, () => ovRow(p)]));
   }
-  if (!d.projects.length) cards.append(el("div", "empty", d.error ? "tmux isn't running" : "No projects open."));
   const ul = $("#ov-events"); ul.replaceChildren();
   for (const e of [...(d.events || [])].reverse()) {
     const li = el("li", e.ts > OV.seenTs ? "unread" : null);
-    const when = new Date(e.ts * 1000).toTimeString().slice(0, 5);
-    const link = el("a", null, e.project); link.href = "#" + encodeURIComponent(e.project);
-    li.append(el("span", "ov-when", when), link, el("b", null, ` ${e.title.replace(e.project + ": ", "")}`), el("span", null, ` — ${e.text}`));
+    const when = new Date(e.ts * 1000).toTimeString().slice(0, 5), title = e.project && e.title.startsWith(e.project + ": ") ? e.title.slice(e.project.length + 2) : e.title;
+    li.title = `${e.project}: ${title} — ${e.text}`;
+    const link = el("a", null, ovName(e.project)); if (e.project) link.href = "#" + encodeURIComponent(e.project);
+    li.append(el("span", "ov-when", when), link, el("b", null, title), el("span", "ov-muted", e.text));
     ul.append(li);
   }
   if (!(d.events || []).length) ul.append(el("li", "empty", "No notifications yet."));
-  const o = d.overseer || {};
-  if (o.running && o.window_index != null && data.ttyd) {
+  if (term) {
     const url = termUrl({ name: o.session }, { index: o.window_index });
     if ($("#ov-frame").dataset.url !== url) { $("#ov-frame").src = url; $("#ov-frame").dataset.url = url; }
     $("#ov-pop").onclick = () => window.open(url, "_blank", "noopener");
-    $("#ov-frame").hidden = false; $("#ov-noterm").hidden = true;
-  } else { $("#ov-frame").hidden = true; $("#ov-noterm").hidden = false; }
+    $("#home").style.setProperty("--ov-top", `${Math.round($("#home").getBoundingClientRect().top)}px`);   // the terminal fills the viewport below the header
+  }
   if (document.visibilityState === "visible") markSeen();
 }
 

@@ -88,6 +88,15 @@ nothing answers questions about them, and nothing tells the user when something 
   - the notification list.
 - The per-project pages keep their current URLs.
 
+> **2026-11-02 note: status rows replaced the digest cards.** The first cut showed one card per project with the raw last command
+> (up to 599 characters of scratch paths), a two-column grid whose short cards stretched to the tallest neighbour, a 45% Overseer
+> column that was mostly empty when the overseer was off, and `epoch` and artifact lines that repeat the project page. The user
+> found it unreadable. The home page is now one full-width row per project (status mark and label, plan progress and spend,
+> then at most two short lines: in-progress tasks, `<window> needs you`, last run as `label result, age`), ordered needs-you,
+> working, then the rest. The digest's `last_run` gained a `label` field; the JSON still carries `epoch` and `artifacts`, only the
+> page drops them. With the overseer off the page is one column and a single muted line says how it starts; with it running the
+> terminal is a sticky 40% column. See `.superpowers/sdd/2026-10-28-overseer/overview-ui-brief.md`.
+
 ## Changes
 
 | File | Change |

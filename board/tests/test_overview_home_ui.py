@@ -20,7 +20,7 @@ class OverviewHomeUiTest(unittest.TestCase):
     def run_page(self, scenario):
         html = (BOARD / "index.html").read_text()
         fns = "\n".join(grab(html, rf"^function {n}\([^)]*\) \{{[^\n]*\}}\n|^function {n}\([^)]*\) \{{\n.*?^\}}\n", n)
-                        for n in ("homeView", "hashProject", "notifyNew", "unreadEvents", "renderBadge"))
+                        for n in ("homeView", "hashProject", "notifyNew", "unreadEvents", "renderBadge", "fmtAge", "ovName", "ovGroup", "ovSorted", "ovStatus", "ovRun", "ovPlanText", "ovMoreTasks"))
         js = """
 const mk = () => ({textContent: "", dataset: {}});
 const nodes = {};
@@ -33,6 +33,8 @@ Notification.permission = "granted";
 const window = {Notification};
 const OV = {data: null, seenTs: 0, notifiedTs: null};
 %s
+const P = (name, o = {}) => Object.assign({project: name, needs_you: [], lead: {status: "ready", last_active: 0, idle_s: 30},
+  plan: {name: null, done: 0, total: 0, active: false, in_progress: []}, last_run: null, spend_today: null, alerts: []}, o);
 const ev = (id, ts) => ({id, ts, title: "T" + id, text: "x" + id});
 const fail = (m) => { console.log("FAIL", m); process.exit(1); };
 %s
@@ -90,6 +92,92 @@ if ($("#ov-unread").textContent !== "2") fail($("#ov-unread").textContent);
 OV.seenTs = 300; renderBadge();
 if (document.title !== "Agent Board" || $("#ov-unread").textContent !== "") fail("not cleared: " + document.title);
 """)
+
+    def test_rows_order_needs_you_then_working_then_rest_by_recent_activity(self):
+        # mutation: sort by name, or drop the group key -> rows jump or the needs-you row sinks
+        self.check("""
+const ps = [P("idle-old", {lead: {status: "ready", last_active: 10, idle_s: 500}}),
+  P("work", {lead: {status: "working", last_active: 50, idle_s: null}}),
+  P("idle-new", {lead: {status: "ready", last_active: 90, idle_s: 20}}),
+  P("needs", {needs_you: [{window: "shell"}], lead: {status: "ready", last_active: 1, idle_s: 9}}),
+  P("nolead", {lead: {status: "missing", last_active: null, idle_s: null}})];
+const names = ovSorted(ps).map((p) => p.project).join(",");
+if (names !== "needs,work,idle-new,idle-old,nolead") fail(names);
+""")
+
+    def test_rows_order_is_stable_for_equal_activity(self):
+        self.check("""
+const mkp = (n) => P(n, {lead: {status: "working", last_active: 5, idle_s: null}});
+const names = ovSorted([mkp("b"), mkp("a"), mkp("c")]).map((p) => p.project).join(",");
+if (names !== "b,a,c") fail(names);
+""")
+
+    def test_status_labels_and_marks_differ_by_shape(self):
+        self.check("""
+const s = (o) => ovStatus(P("x", o));
+if (s({needs_you: [{window: "w"}]}).label !== "Needs you") fail("needs");
+if (s({lead: {status: "working", idle_s: null}}).label !== "Working") fail("working");
+if (s({lead: {status: "ready", idle_s: 420}}).label !== "Idle 7m") fail("idle " + s({lead: {status: "ready", idle_s: 420}}).label);
+if (s({lead: {status: "ready", idle_s: 30}}).label !== "Idle") fail("idle<1m");
+if (s({lead: {status: "missing", idle_s: null}}).label !== "No lead") fail("nolead");
+const marks = [s({needs_you: [{window: "w"}]}), s({lead: {status: "working"}}), s({}), s({lead: {status: "missing"}})].map((x) => x.mark);
+if (new Set(marks).size !== 4) fail("marks share a shape: " + marks);
+""")
+
+    def test_last_run_line_label_result_age(self):
+        # mutation: print the raw cmd, or lose the failed flag
+        self.check("""
+const r = (o) => ovRun(P("x", {last_run: Object.assign({label: "e2e-overseer", cmd: "zsh /very/long/path.zsh > /tmp/x", exit: 0, age_s: 3540, summary: ""}, o)}));
+let x = r({}); if (x.text !== "e2e-overseer passed, 59m ago" || x.failed) fail(JSON.stringify(x));
+x = r({label: "tests", exit: 2, age_s: 180}); if (x.text !== "tests failed (exit 2), 3m ago" || !x.failed) fail(JSON.stringify(x));
+x = r({label: "unittest", exit: 124, age_s: 1980, summary: "timed out after 1800s"}); if (x.text !== "unittest timed out, 33m ago" || !x.failed) fail(JSON.stringify(x));
+x = r({exit: null, age_s: 10}); if (x.text !== "e2e-overseer running, 10s" || x.failed) fail(JSON.stringify(x));
+if (x.text.includes("/")) fail("path in text");
+if (ovRun(P("x")) !== null) fail("no run, no line");
+""")
+
+    def test_unnamed_session_gets_a_placeholder(self):
+        self.check("""
+if (ovName("") !== "(unnamed session)" || ovName("agent-board") !== "agent-board") fail("name");
+""")
+
+    def test_inactive_plan_shows_no_plan_text_and_active_shows_progress(self):
+        self.check("""
+if (ovPlanText(P("x", {plan: {name: "p", done: 7, total: 7, active: false, in_progress: []}})) !== "") fail("finished plan shows text");
+if (ovPlanText(P("x")) !== "") fail("no plan shows text");
+if (ovPlanText(P("x", {plan: {name: "p", done: 5, total: 7, active: true, in_progress: []}})) !== "5/7") fail("progress");
+const t = (n) => ({subject: "T" + n, owner: "o", state: "working"});
+const two = ovMoreTasks([t(1), t(2)]); if (two.shown.length !== 2 || two.more !== 0) fail("two");
+const four = ovMoreTasks([t(1), t(2), t(3), t(4)]); if (four.shown.length !== 2 || four.more !== 2) fail("four");
+""")
+
+    def test_page_markup_rules(self):
+        # truncation, hidden epoch/artifacts, one column when the overseer is off, narrow-screen stack, muted contrast
+        html = (BOARD / "index.html").read_text()
+        render = grab(html, r"^function renderHome\(\) \{\n.*?^\}\n", "renderHome")
+        self.assertNotIn("epoch", render)
+        self.assertNotIn("artifacts", render)
+        self.assertNotIn("ov-art", html)
+        self.assertRegex(html, r"\.ov-sub > \*[^}]*text-overflow: ellipsis")
+        self.assertRegex(html, r"\.events li[^}]*text-overflow: ellipsis")
+        self.assertRegex(html, r"\.home\.ov-on \.home-grid \{[^}]*40%")
+        self.assertRegex(html, r"@media \(max-width: 900px\)[^@]*\.home\.ov-on \.home-grid")
+        self.assertIn("(unnamed session)", grab(html, r"^function renderTabs\(\) \{\n.*?^\}\n", "renderTabs") + grab(html, r"^function ovName\([^\n]*\n", "ovName"))
+
+    def test_muted_text_reaches_4_5_to_1_on_the_board_backgrounds(self):
+        html = (BOARD / "index.html").read_text()
+        def lum(h):
+            c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            c = [x / 12.92 if x <= .03928 else ((x + .055) / 1.055) ** 2.4 for x in c]
+            return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]
+        def ratio(a, b):
+            la, lb = sorted((lum(a), lum(b)), reverse=True)
+            return (la + .05) / (lb + .05)
+        light = grab(html, r":root \{.*?\n\}", "light tokens"); dark = grab(html, r"prefers-color-scheme: dark\) \{.*?\n  \}", "dark tokens")
+        for block in (light, dark):
+            tok = dict(re.findall(r"--([\w-]+): (#[0-9a-fA-F]{6})", block))
+            for bg in ("bg", "panel"):
+                self.assertGreaterEqual(ratio(tok["muted"], tok[bg]), 4.5, (block[:30], bg))
 
 
 if __name__ == "__main__":
