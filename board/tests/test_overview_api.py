@@ -113,6 +113,35 @@ class OverviewApiTest(unittest.TestCase):
         self.run_script.assert_called_once()
         self.assertEqual(self.run_script.call_args[0][0][-1], "ensure")
 
+    def test_existing_overseer_is_rechecked_at_most_once_a_minute(self):
+        # mutation: return early when the session exists (today) -> the first call never runs the script; drop the interval -> the second does
+        server._last["windows"] = {"proj": {"claude": 1}, "overseer": {"claude": 1}}
+        server._overseer_checked = None
+        with mock.patch.dict(os.environ, {"TC_OVERSEER": "1"}), mock.patch.object(server.time, "monotonic") as mono:
+            mono.return_value = 1000.0
+            server.ensure_overseer()
+            self.assertEqual(self.run_script.call_count, 1)
+            self.assertEqual(self.run_script.call_args[0][0][-1], "ensure")
+            mono.return_value = 1059.0
+            server.ensure_overseer()
+            self.assertEqual(self.run_script.call_count, 1)    # within 60 s
+            mono.return_value = 1061.0
+            server.ensure_overseer()
+            self.assertEqual(self.run_script.call_count, 2)    # after 60 s
+
+    def test_tc_overseer_off_never_rechecks_an_existing_session(self):
+        server._last["windows"] = {"proj": {"claude": 1}, "overseer": {"claude": 1}}
+        server._overseer_checked = None
+        server.ensure_overseer()                               # TC_OVERSEER=0 from setUp
+        self.run_script.assert_not_called()
+
+    def test_missing_overseer_spawns_every_call_as_before(self):
+        server._last["windows"] = {"proj": {"claude": 1}}
+        server._overseer_checked = None
+        with mock.patch.dict(os.environ, {"TC_OVERSEER": "1"}):
+            server.ensure_overseer(); server.ensure_overseer()
+        self.assertEqual(self.run_script.call_count, 2)
+
     def test_ensure_runs_outside_the_overview_lock(self):
         held = []
         with mock.patch.object(server, "ensure_overseer", side_effect=lambda: held.append(server._overview_lock.locked())) as ens:

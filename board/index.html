@@ -1641,8 +1641,8 @@ function fmtAge(s) { return s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Ma
 function ovName(name) { return name || "(unnamed session)"; }
 function ovGroup(p) { return p.needs_you.length || p.lead.status === "waiting" ? 0 : p.lead.status === "working" ? 1 : 2; }
 function ovSorted(ps) {
-  // needs you, then working, then the rest; most recently active first; Array.sort is stable, so equal rows keep their place
-  return [...ps].sort((a, b) => ovGroup(a) - ovGroup(b) || (b.lead.last_active || 0) - (a.lead.last_active || 0));
+  // needs you, then working, then the rest; by project name inside a group, so rows don't move between polls
+  return [...ps].sort((a, b) => ovGroup(a) - ovGroup(b) || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
 }
 function ovStatus(p) {
   // the mark differs by shape as well as colour

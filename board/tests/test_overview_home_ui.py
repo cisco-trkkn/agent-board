@@ -93,7 +93,7 @@ OV.seenTs = 300; renderBadge();
 if (document.title !== "Agent Board" || $("#ov-unread").textContent !== "") fail("not cleared: " + document.title);
 """)
 
-    def test_rows_order_needs_you_then_working_then_rest_by_recent_activity(self):
+    def test_rows_order_needs_you_then_working_then_rest(self):
         # mutation: sort by name, or drop the group key -> rows jump or the needs-you row sinks
         self.check("""
 const ps = [P("idle-old", {lead: {status: "ready", last_active: 10, idle_s: 500}}),
@@ -105,11 +105,13 @@ const names = ovSorted(ps).map((p) => p.project).join(",");
 if (names !== "needs,work,idle-new,idle-old,nolead") fail(names);
 """)
 
-    def test_rows_order_is_stable_for_equal_activity(self):
+    def test_rows_within_a_group_sort_by_project_name_not_activity(self):
+        # mutation: sort by last_active inside a group -> rows swap places between polls
         self.check("""
-const mkp = (n) => P(n, {lead: {status: "working", last_active: 5, idle_s: null}});
-const names = ovSorted([mkp("b"), mkp("a"), mkp("c")]).map((p) => p.project).join(",");
-if (names !== "b,a,c") fail(names);
+const mkr = (n, t) => P(n, {lead: {status: "ready", last_active: t, idle_s: 5}});
+const a = ovSorted([mkr("b", 1), mkr("a", 99), mkr("c", 50)]).map((p) => p.project).join(",");
+const b = ovSorted([mkr("b", 77), mkr("a", 3), mkr("c", 8)]).map((p) => p.project).join(",");
+if (a !== "a,b,c" || b !== "a,b,c") fail(a + " | " + b);
 """)
 
     def test_status_labels_and_marks_differ_by_shape(self):

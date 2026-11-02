@@ -364,12 +364,23 @@ def overseer_info():
     return {"session": OVERSEER_SESSION, "running": bool(wins), "window_index": (wins or {}).get("claude")}
 
 
+_overseer_checked = None   # time.monotonic() of the last ensure run while the session existed
+OVERSEER_RECHECK_S = 60
+
+
 def ensure_overseer():
     """Start the overseer when a project with a claude window exists and the overseer session doesn't (TC_OVERSEER=0: never).
-    One spawn only when it is missing; bin/tmux-overseer decides the rest (it is also the dev-layout and session-closed path)."""
-    if os.environ.get("TC_OVERSEER") == "0" or OVERSEER_SESSION in _last["windows"]:
+    When the session exists, run bin/tmux-overseer at most once per OVERSEER_RECHECK_S: it retypes the command if Claude exited
+    at a shell, and has its own rate limit. The script decides; it is also the dev-layout and session-closed path."""
+    global _overseer_checked
+    if os.environ.get("TC_OVERSEER") == "0":
         return
-    if not any("claude" in w for s, w in _last["windows"].items() if not s.startswith("_web-") and not s.endswith("-bg")):
+    if OVERSEER_SESSION in _last["windows"]:
+        now = time.monotonic()
+        if _overseer_checked is not None and now - _overseer_checked < OVERSEER_RECHECK_S:
+            return
+        _overseer_checked = now
+    elif not any("claude" in w for s, w in _last["windows"].items() if not s.startswith("_web-") and not s.endswith("-bg")):
         return
     try:
         run_script([str(BIN / "tmux-overseer"), "ensure"], timeout=20)
