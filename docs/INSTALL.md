@@ -93,7 +93,7 @@ zsh tools/tests/run-all.zsh                                  # tmux-ctl, dev lay
 All three are safe next to live sessions. The zsh tests start their own tmux server on a private socket with `-f /dev/null` and a temporary state directory.
 
 ```zsh
-agent-board dev ~/some/git/repo    # session "repo": windows claude (the lead) and plan, on tmux -L agent-board
+agent-board dev ~/some/git/repo    # session "repo": window claude (the lead), on tmux -L agent-board
 agent-board dash                   # starts the board, opens http://127.0.0.1:7700/<token>/
 ```
 
@@ -124,6 +124,16 @@ agent-board worktrees schedule uninstall
 ```
 
 Run it from `~/agent-board` (the main checkout), not from a worktree: the plist points at the `agent-board` beside the CLI you ran (or at `~/.local/bin/agent-board` when that link exists), and a worktree is the kind of directory the sweep removes. `install` refuses, and writes nothing, when neither is executable. `agent-board worktrees classify` and `sweep --dry-run` show what a sweep would do without removing anything.
+
+### Usage tab statusLine (optional)
+
+The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):
+
+```json
+"statusLine": {"type": "command", "command": "/Users/<you>/agent-board/claude/statusline/agent-board-statusline"}
+```
+
+Each session's status bar then shows a line like `Haiku 5.5 · ctx 4% · 5h 63%`, and the script stores Claude Code's payload per session in `<state_dir>/statusline/<session_id>.json` (`$TC_STATE`, else `${TMPDIR:-/tmp}/tmux-ctl-<uid>`). It never fails Claude Code: on any error it prints `agent-board` and exits 0. To remove it, delete the `statusLine` key; the stored files are scratch and can be deleted.
 
 ## Migrating from the global setup
 

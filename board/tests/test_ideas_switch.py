@@ -49,7 +49,7 @@ const rows = () => box.querySelector(".ideas-list").children.map((r) => r.textCo
 %s
 })().catch((e) => { console.log("ERR", e.stack); process.exit(2); });
 """ % (grab(html, r"^async function pollJSON\(path\) \{.*?^\}\n", "pollJSON"),
-       grab(html, r"^async function pollIdeas\(\) \{.*?^\}\n", "pollIdeas"), scenario)
+       grab(html, r"^async function pollIdeas\([^)]*\) \{.*?^\}\n", "pollIdeas"), scenario)
         return subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=20)
 
     def test_back_to_first_project_shows_its_ideas(self):

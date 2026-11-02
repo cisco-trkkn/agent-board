@@ -418,7 +418,7 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 
 <dialog id="dlg-project"><form method="dialog" id="form-project">
   <h3>Open project</h3>
-  <p>Creates a session with claude (orchestrator) and plan windows, the same as running <code>dev</code>.</p>
+  <p>Creates a session with a claude (orchestrator) window, the same as running <code>dev</code>.</p>
   <div id="pick-input">
     <div class="ac-wrap">
       <input id="project-path" placeholder="~/master-gcp-repo" required autocomplete="off" spellcheck="false"
@@ -1307,9 +1307,10 @@ async function moveDoc(path, target) {
   pollArtifacts();
 }
 
-async function pollIdeas() {
+async function pollIdeas(fromCache) {   // fromCache: re-render from the last reply (the Show dropped toggle), no fetch
   const s = session(); if (!s) return;
-  const p = await pollJSON(`ideas?session=${encodeURIComponent(s.name)}`); if (!p.ok || (!p.changed && ideasShown === s.name)) return;
+  const path = `ideas?session=${encodeURIComponent(s.name)}`, last = fromCache && POLL.get(`${API}/${path}`);
+  const p = last ? { ok: true, changed: true, json: last.json } : await pollJSON(path); if (!p.ok || (!p.changed && ideasShown === s.name)) return;
   const d = p.json;
   window.ideasOpen = d.open;
   const box = $("#ideas-box");
@@ -1325,7 +1326,7 @@ async function pollIdeas() {
       if (status === 200) { inp.value = ""; det.value = ""; pollIdeas(); }
     };
     const lab = el("label", "ideas-dropped"), cb = el("input"); cb.type = "checkbox"; cb.id = "ideas-show-dropped"; cb.checked = ideaShowDropped;
-    cb.onchange = () => { ideaShowDropped = cb.checked; try { localStorage.setItem("dash.ideas.dropped", cb.checked ? "1" : "0"); } catch (e) {} pollIdeas(); };
+    cb.onchange = () => { ideaShowDropped = cb.checked; try { localStorage.setItem("dash.ideas.dropped", cb.checked ? "1" : "0"); } catch (e) {} return pollIdeas(true); };
     lab.append(cb, " Show dropped");
     box.append(inp, det, el("div", "ideas-list"), lab);
   }
@@ -1444,7 +1445,7 @@ async function renderUsage(s) {
   if (d.indexing && d.indexing.done < d.indexing.total)
     box.append(el("div", "usage-note", `indexing… ${Math.round(100 * d.indexing.done / d.indexing.total)}%`));
   if (d.index_error) box.append(el("div", "usage-note", `index error: ${d.index_error}`));
-  box.append(usageHeadline(d), usageAlerts(d), el("h4", null, "Live sessions"), usageLive(d),
+  box.append(usageHeadline(d), usageAlerts(d), usagePlanLimits(d), el("h4", null, "Live sessions"), usageLive(d),
     el("h4", null, "Last 30 days"), ...usageChart(d.daily),
     el("h4", null, "By role"), sortableTable(d.by_role, [["key", "Role"], ["usd", "$", usd], ["calls", "Calls"]], "role"),
     el("h4", null, "By model"), sortableTable(d.by_model, [["key", "Model"], ["usd", "$", usd], ["calls", "Calls"],
@@ -1482,6 +1483,20 @@ function usageAlerts(d) {
   return box;
 }
 
+function usagePlanLimits(d) {
+  const pl = d.plan_limits;
+  if (!pl) return el("div");
+  const hm = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const day = (t) => new Date(t * 1000).toLocaleDateString([], { weekday: "short" });
+  const part = (label, w, fmt) => w && w.used_percentage != null
+    ? `${label} ${Math.round(w.used_percentage)}%` + (w.resets_at ? ` (resets ${fmt(w.resets_at)})` : "") : null;
+  const parts = [part("5h", pl.five_hour, hm), part("week", pl.seven_day, day)].filter(Boolean);
+  if (!parts.length) return el("div");
+  const box = el("div", "usage-note", "Plan limits · " + parts.join(" · "));
+  box.id = "usage-plan-limits";
+  return box;
+}
+
 function usageLive(d) {
   if (!d.live.length) return el("div", "usage-note", "No live sessions (last call under 30 minutes ago).");
   const t = el("table", "usage-table"), head = el("tr");
@@ -1489,8 +1504,8 @@ function usageLive(d) {
   t.append(head);
   for (const e of d.live) {
     const tr = el("tr"), bar = el("span", "ctx-bar" + (e.alerts.some((a) => a.kind === "context") ? " amber" : "")), fill = el("i");
-    fill.style.width = `${Math.min(100, e.context_pct)}%`; bar.append(fill);
-    const cx = el("td"); cx.append(bar, `${e.context_pct}%`);
+    fill.style.width = `${Math.min(100, e.context_pct ?? 0)}%`; bar.append(fill);
+    const cx = el("td"); cx.append(bar, e.context_pct == null ? "–" : `${e.context_pct}%`);
     tr.append(el("td", null, e.name), el("td", null, e.role), el("td", null, e.model), el("td", null, e.effort || ""), cx,
       el("td", "num", usd(e.last_hour)), el("td", "num", usd(e.total)));
     t.append(tr);

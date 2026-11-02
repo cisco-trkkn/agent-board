@@ -543,10 +543,11 @@ def forget_worktrees():
 # ---------------------------------------------------------------- actions
 
 def session_path(sess):
-    p = tmux("display", "-p", "-t", f"={sess}:", "#{pane_current_path}").strip()
-    if not p:
+    """The project's main checkout for sess (relay.session_root): its start path, then $HOME. Not the pane's cwd,
+    which follows the lead's cd into worktrees."""
+    if not tmux("display", "-p", "-t", f"={sess}:", "#{session_name}").strip():
         raise RuntimeError(f"no session '{sess}'")
-    return p
+    return relay.session_root(tmux, sess)
 
 
 def project_repo(sess):

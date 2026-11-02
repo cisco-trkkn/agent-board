@@ -313,6 +313,7 @@ class ReportTest(unittest.TestCase):
         self.text = ""
         self.prices = usage.load_prices()
         self.th = dict(usage.DEFAULT_ALERTS)
+        env = mock.patch.dict(os.environ, {"TC_STATE": str(self.tmp / "state")}); env.start(); self.addCleanup(env.stop)   # never the real tap dir
     def tearDown(self):
         self.conn.close(); shutil.rmtree(self.tmp)
     def put(self, *lines):
@@ -516,6 +517,7 @@ class IndexerTest(unittest.TestCase):
         self.root = self.tmp / "projects"
         self.p = self.root / "proj"; self.p.mkdir(parents=True)
         self.db = self.tmp / "u.sqlite"
+        env = mock.patch.dict(os.environ, {"TC_STATE": str(self.tmp / "state")}); env.start(); self.addCleanup(env.stop)   # never the real tap dir
         self.ix = usage.Indexer(self.root, self.db, alerts_path=self.tmp / "none.json")
         self.addCleanup(shutil.rmtree, self.tmp)
         self.addCleanup(self.ix.close)
@@ -945,6 +947,134 @@ class DayTotalTest(unittest.TestCase):
         self.assertAlmostEqual(usage.spend_since(conn, "/r", since, self.prices), 30.0)   # a + b at $15/Mtok; c other project, d too old
         self.assertEqual(usage.spend_since(conn, "/nowhere", since, self.prices), 0.0)
         self.assertIsNone(usage.spend_since(conn, "/r", since, {"models": {}}))          # all unpriced
+
+TAP_FIX = HERE.parent / "claude" / "statusline" / "tests" / "fixtures" / "statusline-sample.json"
+
+
+class TapTest(ReportTest):
+    """The Usage tab reads Claude Code's own figures from the statusLine tap (<state_dir>/statusline/<sid>.json)."""
+    def setUp(self):
+        super().setUp()
+        self.state = self.tmp / "state"
+
+    def tap(self, sid="s1", age=60, cwd="/r", **over):
+        d = json.loads(TAP_FIX.read_text())
+        d.update(session_id=sid, cwd=cwd, received_at=NOW - age)
+        d.update(over)
+        (self.state / "statusline").mkdir(parents=True, exist_ok=True)
+        (self.state / "statusline" / f"{sid}.json").write_text(json.dumps(d))
+        return d
+
+    def test_fresh_tap_overrides_context_model_effort(self):
+        self.put(line("a", ts=ts(60), inp=100, out=0, effort="high"))
+        self.tap(age=30)
+        e = self.live()[0]
+        self.assertEqual((e["context_pct"], e["model"], e["model_name"], e["effort"], e["source"]),
+                         (4, "claude-haiku-5-5", "Haiku 5.5", "medium", "tap"))
+
+    def test_null_tap_percentage_falls_back_to_transcript_for_that_field(self):
+        self.put(line("a", ts=ts(60), inp=100, out=0))
+        d = self.tap()
+        d["context_window"]["used_percentage"] = None
+        self.tap(context_window=d["context_window"])
+        e = self.live()[0]
+        self.assertEqual((e["context_pct"], e["model"], e["source"]), (0, "claude-haiku-5-5", "tap"))
+
+    def test_low_tap_pct_over_high_transcript_pct_raises_no_context_alert(self):
+        self.put(line("a", ts=ts(60), inp=850_000, out=0))
+        self.tap(age=30)
+        e = self.live()[0]
+        self.assertEqual(e["context_pct"], 4)
+        self.assertEqual([a for a in e["alerts"] if a["kind"] == "context"], [])
+
+    def test_tap_only_row_at_97_pct_raises_the_context_alert(self):
+        d = self.tap(sid="s9", age=30)
+        d["context_window"]["used_percentage"] = 97
+        self.tap(sid="s9", age=30, context_window=d["context_window"])
+        e = self.live()[0]
+        self.assertEqual((e["context_pct"], [a["label"] for a in e["alerts"] if a["kind"] == "context"]), (97, ["ctx 97%"]))
+
+    def test_tap_only_row_with_null_pct_is_unknown_and_raises_no_alert(self):
+        d = self.tap(sid="s9", age=30)
+        d["context_window"]["used_percentage"] = None
+        self.tap(sid="s9", age=30, context_window=d["context_window"])
+        e = self.live()[0]
+        self.assertIsNone(e["context_pct"])
+        self.assertEqual(e["alerts"], [])
+
+    def test_stale_tap_with_recent_call_is_a_transcript_row(self):
+        self.put(line("a", ts=ts(60), inp=100, out=0, effort="high"))
+        self.tap(age=1900)
+        e = self.live()[0]
+        self.assertEqual((e["model"], e["effort"], e["source"]), ("claude-opus-5-5", "high", "transcript"))
+
+    def test_no_tap_keeps_transcript_values(self):
+        self.put(line("a", ts=ts(60), inp=100, out=0, effort="high"))
+        e = self.live()[0]
+        self.assertEqual((e["model"], e["effort"], e["source"]), ("claude-opus-5-5", "high", "transcript"))
+
+    def test_fresh_tap_without_calls_is_a_row_with_zero_money(self):
+        self.tap(sid="s9", age=30)
+        e = self.live()[0]
+        self.assertEqual((e["session_id"], e["source"], e["last_hour"], e["total"], e["cwd"]), ("s9", "tap", 0, 0, "/r"))
+        self.assertEqual([x["session_id"] for x in self.report()["live"]], ["s9"])
+
+    def test_stale_tap_without_calls_is_not_live(self):
+        self.tap(sid="s9", age=1900)
+        self.assertEqual(self.live(), [])
+
+    def test_unparseable_tap_file_is_skipped(self):
+        self.put(line("a", ts=ts(60)))
+        (self.state / "statusline").mkdir(parents=True)
+        (self.state / "statusline" / "bad.json").write_text("{nope")
+        self.assertEqual([e["source"] for e in self.live()], ["transcript"])
+
+    def raw_tap(self, name, text):
+        (self.state / "statusline").mkdir(parents=True, exist_ok=True)
+        (self.state / "statusline" / name).write_text(text)
+
+    def test_non_dict_tap_json_is_skipped(self):
+        self.put(line("a", ts=ts(60)))
+        self.raw_tap("list.json", "[1, 2]")
+        self.assertEqual([e["source"] for e in self.live()], ["transcript"])
+
+    def test_bad_received_at_is_skipped(self):
+        for i, bad in enumerate(("soon", None, [1])):
+            self.tap(sid=f"b{i}", received_at=bad)
+        self.assertEqual(self.live(), [])
+        self.assertIsNone(self.report()["plan_limits"])
+
+    def test_numeric_string_received_at_is_normalised_to_float(self):
+        self.tap(sid="n1", received_at=str(NOW - 20))
+        pl = self.report()["plan_limits"]
+        self.assertEqual(pl["session_id"], "n1")
+        self.assertIsInstance(pl["received_at"], float)
+        self.assertEqual(pl["received_at"], NOW - 20)
+
+    def test_numeric_string_received_at_compares_with_a_numeric_tap(self):
+        self.tap(sid="n1", received_at=str(NOW - 20))
+        self.tap(sid="n2", age=50)
+        self.assertEqual(self.report()["plan_limits"]["session_id"], "n1")
+
+    def test_non_string_session_id_is_skipped(self):
+        self.tap(sid="ok", age=30)
+        self.tap(sid="lst", session_id=["x"])
+        self.tap(sid="int", session_id=5)
+        self.assertEqual([e["session_id"] for e in self.report()["live"]], ["ok"])
+
+    def test_plan_limits_from_freshest_tap_with_rate_limits(self):
+        self.tap(sid="old", age=300)
+        self.tap(sid="new", age=20)
+        self.tap(sid="none", age=5, rate_limits=None)
+        pl = self.report()["plan_limits"]
+        self.assertEqual((pl["session_id"], pl["five_hour"], pl["seven_day"], pl["received_at"]),
+                         ("new", {"used_percentage": 63, "resets_at": 1793266200},
+                          {"used_percentage": 93, "resets_at": 1793469600}, NOW - 20))
+
+    def test_plan_limits_null_without_fresh_tap(self):
+        self.assertIsNone(self.report()["plan_limits"])
+        self.tap(age=1900)
+        self.assertIsNone(self.report()["plan_limits"])
 
 
 if __name__ == "__main__":
