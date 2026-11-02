@@ -1,8 +1,10 @@
 #!/usr/bin/env zsh
 # claude-overseer — start the read-only overseer Claude: haiku at low effort, its own settings (read-only permissions,
 # dontAsk) and rules, no agent-board plugin (its hooks mirror and register for a project; the overseer has none).
-# Extra arguments pass through to claude. Used by tmux-overseer for the `overseer` session's claude window.
+# --setting-sources project,local leaves out the user source: ~/.claude/settings.json allows (Bash(tmux-ctl:*)…) must not widen
+# the overseer's rules. Extra arguments pass through to claude. Used by tmux-overseer for the `overseer` session's claude window.
 source "${0:A:h}/_ab_claude.zsh"
+unset CLAUDE_CODE_CHILD_SESSION   # inherited from a Claude-started tmux server it would switch transcripts off in the overseer
 export PATH="$(ab_path)" AGENT_BOARD_REPO="$AB_REPO" TC_ROLE=overseer CLAUDE_MD_REVISE_HOOK=0
-exec claude --model haiku --effort low -n overseer --settings "$AB_REPO/claude/overseer-settings.json" \
+exec claude --model haiku --effort low -n overseer --setting-sources project,local --settings "$AB_REPO/claude/overseer-settings.json" \
   --append-system-prompt-file "$AB_REPO/claude/overseer.md" "$@"

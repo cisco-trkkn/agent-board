@@ -20,7 +20,7 @@ ok   - overseer session starts in the scratch state dir, not the repo
 ok   - board up, overview lists p1 and p2
 ok   - exactly one needs_you event for p1 within 25s
 ok   - exactly one macOS banner so far (1)
-ok   - still one banner 15s later (no re-fire while it holds)
+ok   - still one banner 15s later (the latch or the 300 s per-kind rate limit held; the unit tests cover the latch)
 ok   - exactly one context event for p1 within 40s
 ok   - two banners in all (2); the second names p1, the agent and the percentage
 ok   - overseer names p1 within 120s
@@ -45,7 +45,7 @@ E2E PASS
 --- first overview events: [] banners: 0
 ok   - exactly one needs_you event for p1 within 25s
 ok   - exactly one macOS banner so far (1)
-ok   - still one banner 15s later (no re-fire while it holds)
+ok   - still one banner 15s later (the latch or the 300 s per-kind rate limit held; the unit tests cover the latch)
 ok   - exactly one context event for p1 within 40s
 ok   - two banners in all (2); the second names p1, the agent and the percentage
 --- banners.log:
@@ -181,11 +181,24 @@ RESULT The Bash call `tmux-ctl idea probe` was denied by the permission system, 
 --- probe results: out1.txt exists: no; out2.txt exists: no; ideas files:
 ```
 
-All three were denied by the permission rules: `git -C <repo> log -1 --output=<file>`, the `>` redirect form (`git -C <repo> log -1 > <file>`), and `tmux-ctl idea probe`. `out1.txt` and `out2.txt` were never created and the scratch ideas folder (`TC_IDEAS_DIR`) holds the same files and contents as before. No settings gap was found.
+All three were denied by the permission rules: `git -C <repo> log -1 --output=<file>`, the `>` redirect form (`git -C <repo> log -1 > <file>`), and `tmux-ctl idea probe`. `out1.txt` and `out2.txt` were never created and the scratch ideas folder (`TC_IDEAS_DIR`) holds the same files and contents as before. These first-run probes were not isolated from `~/.claude/settings.json`: the user's `Bash(tmux-ctl:*)` allow was merged into the rules, so they show that the three named denies beat that allow, and nothing about the unnamed `tmux-ctl` subcommands. A real gap existed (`tmux-ctl _append`, `_done` and `_relay_failed` write files and were not denied); fix round 1 closes it, see below.
 
 ## Bare `tmux-ctl overview`
 
-The overseer ran `tmux-ctl overview` (the exact bare command) and got output: the check "bare tmux-ctl overview ran (a Bash call whose command is exactly that, with a result)" is `ok`, so `Bash(tmux-ctl overview *)` matches the bare command under `dontAsk`.
+With the user's `Bash(tmux-ctl:*)` allow out of play (see Fix round 1 below), the overseer ran `tmux-ctl overview` (the exact bare command) and got output: the check "bare tmux-ctl overview ran (a Bash call whose command is exactly that, with a result)" is `ok`, so `Bash(tmux-ctl overview *)` matches the bare command under `dontAsk`.
+
+## Fix round 1: the overseer's own rules
+
+`claude/overseer-settings.json` merges with `~/.claude/settings.json`, which allows `Bash(tmux-ctl:*)`. The launcher now starts Claude with `--setting-sources project,local` (no `user` source), unsets `CLAUDE_CODE_CHILD_SESSION`, and the deny list gained `Bash(tmux-ctl _*)` (`_append`, `_done`, `_relay_failed`). Probe of the flag, `claude -p --model haiku` with `tmux-ctl help` (allowed only by the user's `Bash(tmux-ctl:*)`): without the flag the call ran and printed `tmux-ctl — let the Claude in a dev session…`; with `--setting-sources project,local` it was denied (`permission_denials`: `tmux-ctl help`) and the session still authenticated. `--setting-sources ""` also excluded the user source.
+
+The e2e's permission probes now run with that flag. Result of the passing run (`E2E PASS`, 25 `ok` checks):
+
+- probes 1 to 4 (`git log --output`, `git log >`, `tmux-ctl idea`, `tmux-ctl _append <absent file>`): `DENIED`; `out1.txt`, `out2.txt` and `append-probe.txt` do not exist.
+- probe 5, bare `tmux-ctl overview`: not denied, and it printed the digest (`p1 · … NEEDS YOU: ✦ mate …`), so `Bash(tmux-ctl overview *)` matches the bare command on the overseer's own rules.
+- probe 6, `tmux-ctl help`: `DENIED`. Only the user's `Bash(tmux-ctl:*)` would allow it, so the refusal is the `dontAsk` catch-all.
+- The overseer's own session (the launcher) now shows `hooks: []`: the user's SessionStart hooks no longer run in it.
+
+Not shown: the first-run probes (above) were not isolated; only these fix-round probes are.
 
 ## Transcript counts and plugins
 
@@ -220,7 +233,7 @@ francisco_ruiz     · plan 2026-10-16-skill-review-followups 7/7 (idle) · lead 
 117.59592104000001
 ```
 
-The first block is `python3 -I board/overview.py` against the live tmux server (one line per real project); the number is `usage.spend_since` on the real `usage.sqlite` for `~/agent-board` since local midnight. The real board state dir, `~/.config/agent-board`, the real ideas files and the real projects were not written.
+The first block is `python3 -I board/overview.py` against the live tmux server (one line per real project); the number is `usage.spend_since` on the real `usage.sqlite` for `~/agent-board` since local midnight. The usage step writes no data: `usage.connect` still runs `pragma journal_mode=wal` and the schema script, which are no-ops on an existing database but may take a lock. The real board state dir, `~/.config/agent-board`, the real ideas files and the real projects were not written.
 
 ## Runs before the passing one
 
@@ -228,7 +241,7 @@ The first block is `python3 -I board/overview.py` against the live tmux server (
 2. 4 failures: the live overseer self-refused the probes; the leftover-process check ran too early. Fixed (wait up to 30 s).
 3. 5 failures: inherited `CLAUDE_CODE_CHILD_SESSION` turned transcripts off. Fixed (unset, force persistence); permission-layer probe added.
 4. 1 failure: the "ideas folder unchanged" check hashed `ls -la` (directory mtime). Fixed (compare files and contents).
-No run wrote a file it should not have. Side effects outside the repo: each run's Claude wrote a transcript folder under `~/.claude/projects/` (`-private-var-folders-...-tctest-...-overseer`) and, after the trust prompt, a trust entry in `~/.claude.json`.
+No run wrote a file it should not have. Side effects outside the repo: each run's Claude wrote a transcript folder under `~/.claude/projects/` (`-private-var-folders-...-tctest-...-overseer`) and, after the trust prompt, a trust entry in `~/.claude.json`. Each run also started three `claude -p` permission-probe sessions (fix round 1: six), each with its own transcript under `~/.claude/projects/` and a few cents of haiku. Before fix round 1 the user's SessionStart hooks ran in every one of them; the probes now exclude the user settings source, so they do not.
 
 ## Teardown
 

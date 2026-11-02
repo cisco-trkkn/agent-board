@@ -24,6 +24,8 @@ class OverseerSettingsTest(unittest.TestCase):
             with self.subTest(ctl=sub):
                 self.assertIn(f"Bash(tmux-ctl {sub} *)", self.deny)
         self.assertIn("Bash(tmux send-keys *)", self.deny)
+        # the hidden writers (_append, _done, _relay_failed) are not covered by the named subcommands above
+        self.assertIn("Bash(tmux-ctl _*)", self.deny)
         for g in GIT_OUTPUT:
             with self.subTest(git=g):
                 self.assertIn(f"Bash({g} *--output*)", self.deny)
@@ -53,6 +55,9 @@ class OverseerSettingsTest(unittest.TestCase):
         for s in ("--model haiku", "--effort low", "claude/overseer-settings.json", "claude/overseer.md"):
             self.assertIn(s, launcher, s)
         self.assertNotIn("--plugin-dir", launcher)
+        # the user's ~/.claude/settings.json allows (Bash(tmux-ctl:*) …) must not widen the overseer's rules
+        self.assertRegex(launcher, r"--setting-sources project,local\b")
+        self.assertIn("unset CLAUDE_CODE_CHILD_SESSION", launcher)
 
     def test_overseer_session_starts_outside_the_repo(self):
         # started in the repo, usage matching by cwd would count its own session toward the agent-board project's alerts

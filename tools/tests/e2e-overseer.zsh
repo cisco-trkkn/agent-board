@@ -5,7 +5,9 @@
 # from a terminal in the worktree:  zsh tools/tests/e2e-overseer.zsh   (about 6 minutes; two real macOS banners appear)
 # Steps: layout starts the overseer unasked in its own state dir; one needs-you = one banner + one event; a lowered
 # context_pct = one high-context banner; the real overseer answers from the digest; read-only probes (git --output, a
-# redirect, tmux-ctl idea) are refused and write nothing; the bare `tmux-ctl overview` is allowed; plugin load is recorded.
+# redirect, tmux-ctl idea, tmux-ctl _append) are refused and write nothing; the bare `tmux-ctl overview` is allowed; plugin load is recorded.
+# macOS only (osascript banners, `md5`). The permission probes run `claude -p --setting-sources project,local`, the launcher's flag,
+# so ~/.claude/settings.json (which allows Bash(tmux-ctl:*)…) does not mix into the overseer's own rules.
 R="${${(%):-%x}:A:h:h:h}"
 unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE; export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1   # an inherited child-session marker would switch transcripts off in the real overseer
 source "$R/tools/tests/lib.zsh"
@@ -98,7 +100,7 @@ print -r -- "--- first overview events: [$(q events)] banners: $(banners)"
 tt new-window -d -t '=p1:' -n '✦ mate' "sh -c 'echo \"Do you want to proceed?\"; echo \"❯ 1. Yes\"; exec $E/fake/claude'"
 check "exactly one needs_you event for p1 within 25s" tt_wait 25 sh -c "[ \"\$(python3 $E/ovq.py $PORT count needs_you p1)\" = 1 ]"
 sleep 2; check "exactly one macOS banner so far ($(banners))" test "$(banners)" = 1
-sleep 15; check "still one banner 15s later (no re-fire while it holds)" test "$(banners)" = 1
+sleep 15; check "still one banner 15s later (the latch or the 300 s per-kind rate limit held; the unit tests cover the latch)" test "$(banners)" = 1
 # 4. high context: a transcript line for a session in p1 crosses the scratch context_pct=1 (haiku window 200k, 150k input)
 now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 printf '{"type":"assistant","requestId":"e2e-1","timestamp":"%s","cwd":"%s","sessionId":"e2e-sess","gitBranch":"main","effort":"low","isSidechain":false,"agentName":"mate","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":150000,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' "$now" "$E/p1" > "$E/home/.claude/projects/p/s1.jsonl"
@@ -152,7 +154,7 @@ for x in d.get("permission_denials") or []: print("DENIED", x.get("tool_name"), 
 print("RESULT", str(d.get("result", ""))[:200].replace("\n", " "))
 EOP
 permprobe() {   # permprobe <name> <marker> <command>
-  ( cd "$OVDIR" && claude -p --model haiku --effort low --settings "$R/claude/overseer-settings.json" --output-format json \
+  ( cd "$OVDIR" && PATH="$R/bin:$PATH" TMUX_DASH_STATE="$E/dash" TMUX_DASH_PORT="$PORT" claude -p --model haiku --effort low --setting-sources project,local --settings "$R/claude/overseer-settings.json" --output-format json \
       "Use the Bash tool to run exactly this command, then report the tool result verbatim: $3" 2>/dev/null ) > "$E/perm-$1.json"
   python3 "$E/denials.py" < "$E/perm-$1.json" > "$E/perm-$1.txt"
   print -r -- "--- permission probe $1: $3"; cat "$E/perm-$1.txt"
@@ -160,9 +162,16 @@ permprobe() {   # permprobe <name> <marker> <command>
 permprobe 1 'out1.txt' "git -C $RP log -1 --output=$E/out1.txt"
 permprobe 2 'out2.txt' "git -C $RP log -1 > $E/out2.txt"
 permprobe 3 'idea' "tmux-ctl idea probe"
+permprobe 4 '_append' "tmux-ctl _append $E/append-probe.txt '{}'"
+permprobe 5 'overview' "tmux-ctl overview"
+permprobe 6 'help' "tmux-ctl help"
 check "probe 1 (git log --output) was denied by the permission rules" grep -q '^DENIED Bash .*--output=' "$E/perm-1.txt"
 check "probe 2 (git log > file) was denied by the permission rules" grep -q '^DENIED Bash .*out2.txt' "$E/perm-2.txt"
 check "probe 3 (tmux-ctl idea) was denied by the permission rules" grep -q '^DENIED Bash tmux-ctl idea' "$E/perm-3.txt"
+check "probe 4 (tmux-ctl _append) was denied by the permission rules" grep -q '^DENIED Bash tmux-ctl _append' "$E/perm-4.txt"
+check "probe 5 (bare tmux-ctl overview) was not denied: the overseer's own allow matches it" sh -c "! grep -q '^DENIED' '$E/perm-5.txt' && grep -q '^RESULT' '$E/perm-5.txt' && ! grep -qi 'unknown command' '$E/perm-5.txt' && grep -q 'p1' '$E/perm-5.txt'"
+check "probe 6 (tmux-ctl help: allowed only by the user's Bash(tmux-ctl:*), which the excluded source would carry) was denied by the dontAsk catch-all" grep -q '^DENIED Bash tmux-ctl help' "$E/perm-6.txt"
+check "append-probe.txt was not created" test ! -e "$E/append-probe.txt"
 check "out1.txt was not written" test ! -e "$E/out1.txt"
 check "out2.txt was not written" test ! -e "$E/out2.txt"
 check "the scratch ideas folder holds the same files and contents" test "$(ideas_sig)" = "$IDEAS_BEFORE"
@@ -175,7 +184,7 @@ print -r -- "--- plugins and hooks seen by the overseer's session (report only):
 # 6. read-only checks against real state (the live board and tmux server, the real usage index)
 print -r -- "--- real state: python3 -I board/overview.py (read-only)"; real() { env -u TMUX -u TMUX_PANE -u TMUX_DASH_TMUX_ARGS -u AGENT_BOARD_TMUX_SOCKET -u TC_STATE -u TC_LINEAGE -u TC_IDEAS_DIR -u XDG_STATE_HOME -u TC_SESSION "$@" }   # the scratch environment must not leak into the read-only real-state checks
 real python3 -I "$R/board/overview.py" | cut -c1-160
-print -r -- "--- real usage.sqlite: today's spend of ~/agent-board (read-only)"
+print -r -- "--- real usage.sqlite: today's spend of ~/agent-board (no data written)"
 real python3 - "$R" <<'PY'
 import sys, time; sys.path.insert(0, sys.argv[1] + "/board"); import usage
 conn = usage.connect(usage.db_path()); print(usage.spend_since(conn, str(__import__("pathlib").Path.home() / "agent-board"), usage._midnight(time.time(), 0), usage.load_prices())); conn.close()

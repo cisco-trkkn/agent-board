@@ -11,7 +11,7 @@
     "deny": [
       "Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "SendMessage", "WebFetch", "WebSearch", "Skill",
       "Bash(tmux-ctl send *)", "Bash(tmux-ctl run *)", "Bash(tmux-ctl tell *)", "Bash(tmux-ctl agent *)",
-      "Bash(tmux-ctl keys *)", "Bash(tmux-ctl relay *)", "Bash(tmux-ctl new *)", "Bash(tmux-ctl idea *)", "Bash(tmux-ctl artifact *)", "Bash(tmux-ctl context *)",
+      "Bash(tmux-ctl keys *)", "Bash(tmux-ctl relay *)", "Bash(tmux-ctl new *)", "Bash(tmux-ctl idea *)", "Bash(tmux-ctl artifact *)", "Bash(tmux-ctl context *)", "Bash(tmux-ctl _*)",
       "Bash(tmux send-keys *)", "Bash(tmux * send-keys *)", "Bash(tmux kill-*)", "Bash(tmux * kill-*)",
       "Bash(git log *--output*)", "Bash(git show *--output*)", "Bash(git -C * log *--output*)", "Bash(git -C * show *--output*)",
       "Bash(git push *)", "Bash(git commit *)", "Bash(git checkout *)", "Bash(git merge *)", "Bash(git reset *)"
