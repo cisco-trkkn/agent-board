@@ -83,7 +83,7 @@ class OverviewApiTest(unittest.TestCase):
              mock.patch.object(server, "spend_today", return_value=1.0) as sp, \
              mock.patch.object(server.overview.planview, "view", return_value=dict(server.overview.planview.EMPTY)) as pv, \
              mock.patch.object(server, "INDEXER", mock.Mock(snapshot=lambda: [
-                 {"name": "a1", "cwd": root + "/sub", "context_pct": 90, "alerts": [{"kind": "context", "label": "ctx 90%"}]}])):
+                 {"name": "a1", "cwd": root, "context_pct": 90, "alerts": [{"kind": "context", "label": "ctx 90%"}]}])):
             ov = server.build_overview(1000.0)
         self.assertEqual(sp.call_args[0][0], root)
         self.assertEqual(pv.call_args[0][1], root)
