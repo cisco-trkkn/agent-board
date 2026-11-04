@@ -24,7 +24,7 @@ done
 
 (cd "$repo" && PATH="$stub:$PATH" $C agent w1 --model haiku --effort low "$brief") >/dev/null 2>&1
 tt_wait 8 test -s "$TT_DIR/argv"
-line="$(tt capture-pane -p -J -t '=tt:w1' -S -20 | grep -F 'claude ' | head -1)"
+line="$(<"$TC_STATE/agents/tt-w1.zsh")"   # the launch line is typed from a file, not into the pane
 check "launch line has --model haiku"  grep -qF -- '--model haiku' <<<"$line"
 check "launch line has --effort low"   grep -qF -- '--effort low' <<<"$line"
 check "argv: --model haiku"  grep -qx -- 'haiku' "$TT_DIR/argv"
@@ -33,7 +33,7 @@ rm -f "$TT_DIR/argv"
 
 (cd "$repo" && PATH="$stub:$PATH" $C agent w2 "$brief") >/dev/null 2>&1
 tt_wait 8 test -s "$TT_DIR/argv"
-line="$(tt capture-pane -p -J -t '=tt:w2' -S -20 | grep -F 'claude ' | head -1)"
+line="$(<"$TC_STATE/agents/tt-w2.zsh")"
 check "default --model sonnet"  grep -qF -- '--model sonnet' <<<"$line"
 check "default --effort medium" grep -qF -- '--effort medium' <<<"$line"
 check "brief still last arg"    grep -qxF -- "$brief" "$TT_DIR/argv"
