@@ -30,7 +30,7 @@ TMUX_CTL = str(BIN / "tmux-ctl")
 DEV = str(BIN / "dev")
 sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
-from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, tmux_cmd  # noqa: E402,F401
+from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
 import activity, artifacts, dirs, gitlab_sync, ideas, notify, overview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
@@ -223,6 +223,7 @@ COMMENTS = artifacts.CommentQueue()
 INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
 NOTIFIER = notify.Notifier()   # TC_NOTIFY=0 turns banners and the events list off
 OVERSEER_SESSION = "overseer"   # the read-only overseer's tmux session: never a project card
+TERMINAL_SESSION = os.environ.get("TC_TERMINAL_SESSION", "main")   # the session new terminals attach to: no card unless Claude runs in it; "" shows it always
 OVERVIEW_EVERY = 10   # seconds between overview builds (the notifier thread) and the cache life of /api/overview
 NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")   # the same rule as ideas.py
 
@@ -298,6 +299,10 @@ def build_state():
         windows.setdefault(f[0], {})[f[3]] = int(f[2])
     _last["windows"] = windows
     panes = [f for f in every if not f[0].startswith("_web-") and f[14] != "1" and f[0] != OVERSEER_SESSION]
+    if TERMINAL_SESSION:
+        has_claude = any(f[0] == TERMINAL_SESSION and is_claude_cmd(f[9]) for f in panes)
+        if not has_claude:
+            panes = [f for f in panes if f[0] != TERMINAL_SESSION]
     ids = list(dict.fromkeys(f[7] for f in panes))
     rows_by = _split_captures(MARK + captured) if captured else {}
     rows_by.update(capture_panes([p for p in ids if p not in rows_by]))   # new since the last build, or after an abort
