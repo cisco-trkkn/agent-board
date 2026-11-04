@@ -19,7 +19,7 @@ repo="$TT_DIR/repo"; mkdir -p "$repo"; git -C "$repo" init -qb main; git -C "$re
 tt_wait 8 test -s "$TT_DIR/seen"
 check "worker env: nudge hook off"   grep -qx 'HOOK=0' "$TT_DIR/seen"
 check "worker env: TC_ROLE=worker"   grep -qx 'ROLE=worker' "$TT_DIR/seen"
-line="$(tt capture-pane -p -J -t '=tt:w1' -S -20 | grep -F ' -w w1')"
+line="$(<"$TC_STATE/agents/tt-w1.zsh")"   # the launch line is typed from a file, not into the pane
 check "launch line has CLAUDE_MD_REVISE_HOOK=0" grep -qF 'CLAUDE_MD_REVISE_HOOK=0' <<<"$line"
 check "launch line has TC_ROLE=worker"          grep -qF 'TC_ROLE=worker' <<<"$line"
 

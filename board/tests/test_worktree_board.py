@@ -97,6 +97,14 @@ class Poll(BoardBase):
         self.assertEqual((old["state"], old["age_days"]), ("stale", 9))
         self.assertEqual((self.item("dirty")["state"], self.item("dirty")["dirty"]), ("dirty", True))
 
+    def test_dirty_follows_classify_for_links(self):
+        link_only = add_worktree(self.repo, "linkonly")
+        os.symlink(self.tmp, link_only / ".venv")
+        regular = add_worktree(self.repo, "regular")
+        (regular / "x").write_text("x")
+        self.assertEqual((self.item("linkonly")["state"], self.item("linkonly")["dirty"]), ("safe", False))
+        self.assertEqual((self.item("regular")["state"], self.item("regular")["dirty"]), ("dirty", True))
+
 
 class RemoveActions(BoardBase):
     def act(self, **body):
