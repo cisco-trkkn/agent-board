@@ -793,6 +793,92 @@ class IgnoredFiles(StateBase):
         self.assertFalse(self.listed("w1"))
 
 
+class Symlinks(StateBase):
+    """A symlink that is untracked or ignored holds no data: it never blocks classify, the sweep or remove,
+    and removing it never touches its target."""
+
+    def setUp(self):
+        super().setUp()
+        self.target = Path(self.tmp) / "outside_venv"
+        self.target.mkdir()
+        (self.target / "keep.txt").write_text("keep")
+
+    def link(self, wt, name=".venv"):
+        os.symlink(self.target, wt / name)
+
+    def ignore(self, line):
+        (self.repo / ".gitignore").write_text(line + "\n")
+        git("add", ".gitignore", cwd=self.repo)
+        git("commit", "-m", "ignore", cwd=self.repo)
+
+    def assert_target_intact(self):
+        self.assertEqual((self.target / "keep.txt").read_text(), "keep")
+
+    def check_safe_and_removed(self, wt):
+        item = self.one(name="w1")
+        self.assertEqual((item["state"], item["reason"]), ("safe", "merged"))
+        ws.remove(str(self.repo), str(wt))
+        self.assertFalse(self.listed("w1"))
+        self.assertFalse(wt.exists())
+        self.assert_target_intact()
+
+    def test_untracked_symlink_is_safe_and_removable(self):
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        self.check_safe_and_removed(wt)
+
+    def test_ignored_symlink_is_safe_and_removable(self):
+        self.ignore(".venv")
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        self.check_safe_and_removed(wt)
+
+    def test_symlink_to_dir_under_a_dir_only_pattern_is_safe_and_removable(self):
+        self.ignore(".venv/")   # matches directories only, so the link shows as `?? .venv`
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        self.assertIn("?? .venv", git("status", "--porcelain", cwd=wt).stdout)
+        self.check_safe_and_removed(wt)
+
+    def test_sweep_removes_it(self):
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        ws.sweep(str(self.repo), now=NOW)
+        self.assertFalse(self.listed("w1"))
+        self.assert_target_intact()
+
+    def test_untracked_regular_file_still_dirty_and_refused(self):
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        (wt / "x.txt").write_text("x")
+        self.assertEqual(self.one(name="w1")["state"], "dirty")
+        with self.assertRaisesRegex(RuntimeError, "uncommitted"):
+            ws.remove(str(self.repo), str(wt))
+        self.assertTrue(wt.exists())
+        self.assertTrue((wt / ".venv").is_symlink())   # a refusal leaves the link alone
+
+    def test_ignored_regular_dir_with_a_file_still_kept(self):
+        self.ignore("notes/")
+        wt = add_worktree(self.repo, "w1")
+        (wt / "notes").mkdir()
+        (wt / "notes" / "a.txt").write_text("a")
+        self.link(wt)
+        item = self.one(name="w1")
+        self.assertEqual(item["state"], "kept")
+        self.assertIn("notes/", item["reason"])
+        self.assertNotIn(".venv", item["reason"])
+
+    def test_tracked_symlink_change_is_still_dirty(self):
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt, "lnk")
+        git("add", "lnk", cwd=wt)
+        git("commit", "-m", "link", cwd=wt)
+        git("merge", "w1", cwd=self.repo)
+        (wt / "lnk").unlink()
+        os.symlink(self.tmp, wt / "lnk")
+        self.assertEqual(self.one(name="w1")["state"], "dirty")
+
+
 class SweepRecent(StateBase):
     def other_repo(self, name):
         d = Path(self.tmp) / name

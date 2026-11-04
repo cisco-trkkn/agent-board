@@ -150,6 +150,31 @@ def _holds_non_cache(root):
     return False
 
 
+def _status(wt, ignored=False):
+    """(entries, error) of `git status --porcelain -z` in `wt`: [(code, path)], paths without a trailing `/`.
+    A rename's source field is folded into its entry."""
+    r = _git(wt, "status", "--porcelain", "-z", *(["--ignored"] if ignored else []))
+    if r.returncode != 0:
+        return [], (r.stderr or "").strip()[:120]
+    out, fields = [], r.stdout.split("\0")
+    i = 0
+    while i < len(fields):
+        f = fields[i]
+        i += 1
+        if len(f) < 4:
+            continue
+        if f[0] in "RC":
+            i += 1
+        out.append((f[:2], f[3:].rstrip("/")))
+    return out, None
+
+
+def _is_link(wt, entry):
+    """An untracked or ignored symlink: it holds no data, so it is not work state. Tracked ones and changes are."""
+    code, rel = entry
+    return code in ("??", "!!") and os.path.islink(os.path.join(wt, rel))
+
+
 def _ignored_files(wt):
     """(non-cache ignored paths, error) of the worktree at `wt`. An ignored directory is listed collapsed as `dir/`."""
     r = _git(wt, "status", "--porcelain", "--ignored", "-z")
@@ -160,6 +185,8 @@ def _ignored_files(wt):
         if not entry.startswith("!! "):
             continue
         p = entry[3:]
+        if os.path.islink(os.path.join(wt, p.rstrip("/"))):   # a link holds no data
+            continue
         if p.endswith(".pyc") or CACHE_NAMES & set(p.split("/")):
             continue
         if p.endswith("/") and not _holds_non_cache(os.path.join(wt, p)):
@@ -263,10 +290,10 @@ def _classify_one(ctx, wt):
 
     if missing:   # no git call may run with a missing directory as cwd
         return done("kept", "directory missing (prunable)")
-    st = _git(path, "status", "--porcelain")
-    if st.returncode != 0:
-        return done("kept", f"can't read status: {st.stderr.strip()[:120]}")
-    if st.stdout.strip():
+    entries, serr = _status(path)
+    if serr is not None:
+        return done("kept", f"can't read status: {serr}")
+    if any(not _is_link(path, e) for e in entries):
         return done("dirty", "uncommitted or untracked files")
 
     lock = wt.get("locked")
@@ -359,10 +386,11 @@ def remove(repo, path, force_branch=False, proc_args_fn=None):
     wpath, reason, branch, name, note = wt["path"], wt.get("locked"), wt.get("branch"), Path(wt["path"]).name, ""
     if wt.get("prunable") or not os.path.isdir(wpath):
         raise RuntimeError(f"{name}: directory missing (prunable); `git worktree prune` clears the stale entry")
-    st = _git(wpath, "status", "--porcelain")
-    if st.returncode != 0:
-        raise RuntimeError(f"can't read status of {name}: {st.stderr.strip()[:120]}")
-    if st.stdout.strip():
+    entries, serr = _status(wpath, ignored=True)
+    if serr is not None:
+        raise RuntimeError(f"can't read status of {name}: {serr}")
+    links = [e for e in entries if _is_link(wpath, e)]
+    if any(e[0] != "!!" and e not in links for e in entries):
         raise RuntimeError(f"{name} has uncommitted or untracked files")
     if reason:
         pid = claude_lock_owner(reason)
@@ -372,6 +400,8 @@ def remove(repo, path, force_branch=False, proc_args_fn=None):
             raise RuntimeError(f"in use by a running Claude session (pid {pid})")
         _git(main, "worktree", "unlock", wpath)
         note = f"unlocked stale lock (pid {pid}); "
+    for _, rel in links:   # disposable links would make git refuse; unlink the link itself, never its target
+        os.unlink(os.path.join(wpath, rel))
     r = _git(main, "worktree", "remove", wpath)
     if r.returncode != 0:
         if reason:
