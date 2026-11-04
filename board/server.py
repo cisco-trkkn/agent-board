@@ -223,6 +223,7 @@ COMMENTS = artifacts.CommentQueue()
 INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
 NOTIFIER = notify.Notifier()   # TC_NOTIFY=0 turns banners and the events list off
 OVERSEER_SESSION = "overseer"   # the read-only overseer's tmux session: never a project card
+TERMINAL_SESSION = os.environ.get("TC_TERMINAL_SESSION", "main")   # the session new terminals attach to: no card unless Claude runs in it; "" shows it always
 OVERVIEW_EVERY = 10   # seconds between overview builds (the notifier thread) and the cache life of /api/overview
 NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")   # the same rule as ideas.py
 
@@ -298,6 +299,10 @@ def build_state():
         windows.setdefault(f[0], {})[f[3]] = int(f[2])
     _last["windows"] = windows
     panes = [f for f in every if not f[0].startswith("_web-") and f[14] != "1" and f[0] != OVERSEER_SESSION]
+    if TERMINAL_SESSION:   # paneclass's own test for a Claude pane (its version-string or "claude" command)
+        has_claude = any(f[0] == TERMINAL_SESSION and (VERSION_RE.match(f[9]) or "claude" in f[9].lower()) for f in panes)
+        if not has_claude:
+            panes = [f for f in panes if f[0] != TERMINAL_SESSION]
     ids = list(dict.fromkeys(f[7] for f in panes))
     rows_by = _split_captures(MARK + captured) if captured else {}
     rows_by.update(capture_panes([p for p in ids if p not in rows_by]))   # new since the last build, or after an abort
