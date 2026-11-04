@@ -504,7 +504,9 @@ def worktrees(path):
         br = b.get("branch")
         age = ages.get(br) if br else git(b["path"], "log", "-1", "--format=%cr").stdout.strip()
         items.append({"path": b["path"], "name": Path(b["path"]).name, "branch": br,
-                      "dirty": bool(d.result().stdout.strip()), "merged": bool(br) and br in merged_set,
+                      # classify ignores untracked/ignored symlinks; take its verdict so the row agrees with `state`
+                      "dirty": (states[b["path"]]["state"] == "dirty") if b["path"] in states else bool(d.result().stdout.strip()),
+                      "merged": bool(br) and br in merged_set,
                       "age": age or "", "locked": b.get("locked"),
                       "state": states.get(b["path"], {}).get("state"), "reason": states.get(b["path"], {}).get("reason", ""),
                       "age_days": states.get(b["path"], {}).get("age_days")})

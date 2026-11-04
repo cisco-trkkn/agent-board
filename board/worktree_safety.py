@@ -163,7 +163,7 @@ def _status(wt, ignored=False):
         i += 1
         if len(f) < 4:
             continue
-        if f[0] in "RC":
+        if "R" in f[:2] or "C" in f[:2]:   # the status letter is in either column
             i += 1
         out.append((f[:2], f[3:].rstrip("/")))
     return out, None
@@ -177,21 +177,20 @@ def _is_link(wt, entry):
 
 def _ignored_files(wt):
     """(non-cache ignored paths, error) of the worktree at `wt`. An ignored directory is listed collapsed as `dir/`."""
-    r = _git(wt, "status", "--porcelain", "--ignored", "-z")
-    if r.returncode != 0:
-        return [], f"can't list ignored files: {(r.stderr or '').strip()[:120]}"
+    entries, err = _status(wt, ignored=True)
+    if err is not None:
+        return [], f"can't list ignored files: {err}"
     out = []
-    for entry in r.stdout.split("\0"):
-        if not entry.startswith("!! "):
-            continue
-        p = entry[3:]
-        if os.path.islink(os.path.join(wt, p.rstrip("/"))):   # a link holds no data
+    for code, p in entries:
+        full = os.path.join(wt, p)
+        if code != "!!" or os.path.islink(full):   # a link holds no data
             continue
         if p.endswith(".pyc") or CACHE_NAMES & set(p.split("/")):
             continue
-        if p.endswith("/") and not _holds_non_cache(os.path.join(wt, p)):
+        isdir = os.path.isdir(full)
+        if isdir and not _holds_non_cache(full):
             continue
-        out.append(p)
+        out.append(p + "/" if isdir else p)
     return out, None
 
 
@@ -400,12 +399,23 @@ def remove(repo, path, force_branch=False, proc_args_fn=None):
             raise RuntimeError(f"in use by a running Claude session (pid {pid})")
         _git(main, "worktree", "unlock", wpath)
         note = f"unlocked stale lock (pid {pid}); "
-    for _, rel in links:   # disposable links would make git refuse; unlink the link itself, never its target
-        os.unlink(os.path.join(wpath, rel))
-    r = _git(main, "worktree", "remove", wpath)
-    if r.returncode != 0:
+    def relock():
         if reason:
             _git(main, "worktree", "lock", "--reason", reason, wpath)
+
+    for _, rel in links:   # disposable links would make git refuse; unlink the link itself, never its target
+        p = os.path.join(wpath, rel)
+        if not os.path.islink(p):   # re-check: the status snapshot is older than the lock check above
+            relock()
+            raise RuntimeError(f"{rel} is no longer a symlink; not removed")
+        try:
+            os.unlink(p)
+        except OSError as e:
+            relock()
+            raise RuntimeError(f"can't remove link {rel}: {e}")
+    r = _git(main, "worktree", "remove", wpath)
+    if r.returncode != 0:
+        relock()
         raise RuntimeError((r.stderr or r.stdout).strip() or "git refused (uncommitted changes?)")
     msg = f"{note}removed worktree {name}"
     if branch:

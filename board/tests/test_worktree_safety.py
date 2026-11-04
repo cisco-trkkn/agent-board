@@ -831,6 +831,7 @@ class Symlinks(StateBase):
         self.ignore(".venv")
         wt = add_worktree(self.repo, "w1")
         self.link(wt)
+        self.assertIn("!! .venv", git("status", "--porcelain", "--ignored", cwd=wt).stdout)
         self.check_safe_and_removed(wt)
 
     def test_symlink_to_dir_under_a_dir_only_pattern_is_safe_and_removable(self):
@@ -877,6 +878,92 @@ class Symlinks(StateBase):
         (wt / "lnk").unlink()
         os.symlink(self.tmp, wt / "lnk")
         self.assertEqual(self.one(name="w1")["state"], "dirty")
+
+
+    # -- review fixes: the re-check before unlinking, unlink errors, the git-refusal path, rename parsing --
+
+    def stale_locked(self, wt):
+        reason = WITH_START.format(n="w1", pid=self.dead_pid())
+        self.lock(wt, reason)
+        return reason
+
+    def is_locked(self, reason):
+        return reason in git("worktree", "list", "--porcelain", cwd=self.repo).stdout
+
+    def test_link_replaced_by_a_file_before_unlinking_is_not_deleted(self):
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        reason = self.stale_locked(wt)
+
+        def swap(pid, fn=None):   # the stale-lock check runs between the status snapshot and the unlink
+            os.unlink(wt / ".venv")
+            (wt / ".venv").write_text("real work")
+            return True
+        with mock.patch.object(ws, "lock_is_stale", swap):
+            with self.assertRaisesRegex(RuntimeError, r"\.venv is no longer a symlink"):
+                ws.remove(str(self.repo), str(wt))
+        self.assertEqual((wt / ".venv").read_text(), "real work")
+        self.assertTrue(self.listed("w1"))
+        self.assertTrue(self.is_locked(reason))
+
+    def failing_unlink(self):
+        real = os.unlink
+
+        def fail(p, *a, **k):
+            if str(p).endswith(".venv"):
+                raise PermissionError(1, "Operation not permitted", str(p))
+            return real(p, *a, **k)
+        return mock.patch.object(ws.os, "unlink", fail)
+
+    def test_unlink_error_is_a_runtime_error_and_restores_the_lock(self):
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        reason = self.stale_locked(wt)
+        with self.failing_unlink():
+            with self.assertRaisesRegex(RuntimeError, r"can't remove link \.venv"):
+                ws.remove(str(self.repo), str(wt))
+        self.assertTrue(self.listed("w1"))
+        self.assertTrue(self.is_locked(reason))
+
+    def test_sweep_goes_on_after_an_unlink_error(self):
+        w1 = add_worktree(self.repo, "w1")
+        add_worktree(self.repo, "w2")
+        self.link(w1)
+        with self.failing_unlink():
+            lines = ws.sweep(str(self.repo), now=NOW)
+        self.assertTrue(self.listed("w1"))
+        self.assertFalse(self.listed("w2"), lines)
+
+    def test_late_file_makes_git_refuse_and_nothing_is_lost(self):
+        wt = add_worktree(self.repo, "w1")
+        self.link(wt)
+        reason = self.stale_locked(wt)
+        real = ws._git
+
+        def late(cwd, *args):
+            if args[:2] == ("worktree", "remove"):
+                (wt / "late.txt").write_text("appeared after the status")
+            return real(cwd, *args)
+        with mock.patch.object(ws, "_git", late):
+            with self.assertRaises(RuntimeError):
+                ws.remove(str(self.repo), str(wt))
+        self.assertTrue(self.listed("w1"))
+        self.assertTrue((wt / "late.txt").exists())
+        self.assertTrue(self.is_locked(reason))
+        self.assert_target_intact()
+
+    def test_rename_with_an_R_in_the_source_path_parses_to_one_entry(self):
+        wt = add_worktree(self.repo, "w1")
+        (wt / "README.md").write_text("same content " * 20)
+        git("add", "README.md", cwd=wt)
+        git("commit", "-m", "r", cwd=wt)
+        os.rename(wt / "README.md", wt / "moved_elsewhere.md")
+        git("add", "-N", "moved_elsewhere.md", cwd=wt)
+        raw = git("status", "--porcelain", "-z", cwd=wt).stdout
+        self.assertEqual(raw[:2], " R", raw)   # the status letter is in the second column
+        entries, err = ws._status(str(wt))
+        self.assertIsNone(err)
+        self.assertEqual(entries, [(" R", "moved_elsewhere.md")])
 
 
 class SweepRecent(StateBase):
