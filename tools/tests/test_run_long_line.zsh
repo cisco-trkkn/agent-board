@@ -50,10 +50,15 @@ check "short run: no sourcing line"        sh -c '! grep -q "^[^ ]* *\. .*cmds/"
 tt kill-window -t "$lane" 2>/dev/null
 rm -rf "$TC_STATE/cmds"; : > "$TC_STATE/cmds"
 rm -f "$TC_STATE"/runs-*.jsonl
+base_cap="$(tt capture-pane -p -J -t '=tt-bg:tests' -S -200)"
 out="$(ctl run -t 25 tests "printf '%s\\n' '$fill'" 2>&1)"; rc=$?
 check "unwritable cmds: run exits 2"     test $rc -eq 2
 check "unwritable cmds: no run record left as running" sh -c '! grep -qh "\"exit\":null" "$1"/runs-*.jsonl 2>/dev/null' _ "$TC_STATE"
-check "unwritable cmds: nothing typed"   sh -c '! tt_pane=$("$1" capture-pane -p -J -t "$2" -S -100 2>/dev/null); ! grep -q xxxxxxxx <<< "$tt_pane"' _ "$TT_BIN" "$lane"
+allpanes() { local w; for w in ${(f)"$(tt list-panes -s -t '=tt-bg' -F '#{pane_id}')"}; do tt capture-pane -p -J -t "$w" -S -200; done }
+after_all="$(allpanes)"
+check "unwritable cmds: base window untouched"  test "$(tt capture-pane -p -J -t '=tt-bg:tests' -S -200)" = "$base_cap"
+check "unwritable cmds: no long text in any window" sh -c '! grep -q xxxxxxxx <<< "$1"' _ "$after_all"
+check "unwritable cmds: no sourcing line in any window" sh -c '! grep -q "\. .*cmds/" <<< "$1"' _ "$after_all"
 ctl send tests "export LONGV=$v" >/dev/null 2>&1; check "unwritable cmds: send exits 2" test $? -eq 2
 rm -f "$TC_STATE/cmds"
 # (6) command files older than a day are reaped, fresh ones stay
