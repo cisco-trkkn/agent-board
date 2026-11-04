@@ -376,7 +376,7 @@ case "$cmd" in
       esac
     done
     [[ -n "$name" && ( -n "$briefile" || $# -gt 0 ) ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
-    [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "usage: tmux-ctl agent <name> ...: the name may hold only letters, digits, . _ -"
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "usage: tmux-ctl agent <name> ...: the name starts with a letter or digit and holds only letters, digits, . _ -"
     if [[ -n "$briefile" ]]; then
       [[ -z "$*" ]] || die "give either --brief FILE or a task on the command line, not both"
       [[ -r "$briefile" ]] || die "no readable brief file '$briefile'"
@@ -405,9 +405,9 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     # the line is long (task, PATH): typed into a shell that has not started ZLE it overflows the tty's 1024-byte typeahead, so it goes in a file and only `. file` is typed
     launchf="$STATE/agents/${SESSION//[^A-Za-z0-9._-]/_}-$name.zsh"   # a tmux session name can hold other characters
     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; print -r -- "DRYRUN launch: $launchf"; exit 0 }   # test seam: stop before any window is created
+    t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"   # before the write: a refused re-launch must not overwrite a running worker's file
     # write the launch file before any window exists: a failed write must not leave an idle window behind
-    ( umask 077; mkdir -p "${launchf:h}" && print -r -- "$line" > "$launchf" ) || die "cannot write launch file $launchf"
-    t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"
+    ( umask 077; mkdir -p "${launchf:h}" && print -r -- "$line" > "$launchf" && chmod 700 "${launchf:h}" && chmod 600 "$launchf" ) || die "cannot write launch file $launchf"
     root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
     t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
     t set-option -w -t "$(target "$name")" @tc_agent 1

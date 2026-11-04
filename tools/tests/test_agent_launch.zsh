@@ -54,4 +54,21 @@ check "unwritable agents dir: no orphan window" test -z "$(tt list-windows -t '=
 check "name a/b: refused with exit 2"  test $rc -eq 2
 check "name a/b: no window"            test -z "$(tt list-windows -t '=tt' -F '#{window_name}' | grep -F 'a/b')"
 check "name a/b: no stray file"        test -z "$(print -rl -- $TC_STATE_DIR/agents/*a*b*(N) | grep -F 'a/b')"
+# a refused re-launch must not overwrite a running worker's launch file
+tt new-window -d -t '=tt:' -n existing -c "$repo"
+print -r -- ORIG > "$TC_STATE_DIR/agents/tt-existing.zsh"
+( cd "$repo" && PATH="$stub:$PATH" TC_STATE="$TC_STATE_DIR" TC_SESSION=tt "$R/bin/tmux-ctl" agent existing --force "a b" ) > "$work/out4" 2>&1; rc=$?
+check "existing window: refused"                      test $rc -ne 0
+check "existing window: launch file left untouched"   test "$(<"$TC_STATE_DIR/agents/tt-existing.zsh")" = ORIG
+# modes are guaranteed even when the dir and file already existed with looser ones
+chmod 755 "$TC_STATE_DIR/agents"; : > "$TC_STATE_DIR/agents/tt-modes.zsh"; chmod 644 "$TC_STATE_DIR/agents/tt-modes.zsh"
+( cd "$repo" && PATH="$stub:$PATH" TC_STATE="$TC_STATE_DIR" TC_SESSION=tt "$R/bin/tmux-ctl" agent modes --force "a b" ) > "$work/out5" 2>&1
+check "pre-existing file tightened to 600"  test "$(stat -f %Lp "$TC_STATE_DIR/agents/tt-modes.zsh")" = 600
+check "pre-existing dir tightened to 700"   test "$(stat -f %Lp "$TC_STATE_DIR/agents")" = 700
+# names that look like options or paths are refused
+for bad in -x .. .; do
+  ( cd "$repo" && PATH="$stub:$PATH" TC_STATE="$TC_STATE_DIR" TC_SESSION=tt "$R/bin/tmux-ctl" agent "$bad" --force "a b" ) > "$work/out6" 2>&1; rc=$?
+  check "name '$bad' refused with exit 2"  test $rc -eq 2
+  check "name '$bad': no window"           test -z "$(tt list-windows -t '=tt' -F '#{window_name}' | grep -xF -- "$bad")"
+done
 tt_done
