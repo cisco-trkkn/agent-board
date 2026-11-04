@@ -14,6 +14,13 @@ server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 
 
+class IsClaudeCmdTest(unittest.TestCase):
+    def test_version_string_and_claude_name_are_claude_a_shell_is_not(self):
+        self.assertTrue(paneclass.is_claude_cmd("2.1.316"))
+        self.assertTrue(paneclass.is_claude_cmd("Claude"))
+        self.assertFalse(paneclass.is_claude_cmd("zsh"))
+
+
 class ClassifyTest(unittest.TestCase):
     def test_shell_idle(self):
         self.assertEqual(paneclass.classify("zsh", [], False), ("shell", "idle"))

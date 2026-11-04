@@ -70,9 +70,13 @@ def spinner_live(rows):
     return False
 
 
+def is_claude_cmd(cmd):
+    return bool(VERSION_RE.match(cmd)) or "claude" in cmd.lower()
+
+
 def classify(cmd, rows, bell):
     """kind: claude | shell | program ; status: waiting | working | ready | idle | running"""
-    is_claude = bool(VERSION_RE.match(cmd)) or "claude" in cmd.lower()
+    is_claude = is_claude_cmd(cmd)
     # Claude draws its prompts and spinner at the bottom; older scrollback may quote prompt text.
     tail = "\n".join(rows[-12:])
     if cmd in SHELLS:
