@@ -10,8 +10,10 @@ import server
 SEP = server.SEP
 
 
-def row(sess, cmd, pid):
-    return SEP.join([sess, "1", "0", "w", "0", "0", "0", pid, "", cmd, "/r", "1", "1", "0", "0", "/r"])
+def row(sess, cmd, pid, widx="0", teammate="0", bg="0"):
+    f = [sess, "1", widx, "w", "0", "0", "0", pid, "", cmd, "/r", "1", "1", teammate, bg, "/r"]
+    assert len(f) == 16   # build_state's fmt has 16 fields
+    return SEP.join(f)
 
 
 class TerminalSessionTest(unittest.TestCase):
@@ -51,6 +53,28 @@ class TerminalSessionTest(unittest.TestCase):
         self.layout = [row("main", "zsh", "%1")]
         with mock.patch.object(server, "TERMINAL_SESSION", ""):
             self.assertEqual(self.names(), ["main"])
+
+    def test_fmt_has_sixteen_fields(self):
+        self.layout = []
+        with mock.patch.object(server, "tmux", return_value="") as t:
+            server.build_state()
+        self.assertEqual(t.call_args.args[3].count(SEP) + 1, 16)
+
+    def test_claude_in_the_second_window_shows_main(self):
+        self.layout = [row("main", "zsh", "%1", widx="0"), row("main", "claude", "%2", widx="1")]
+        self.assertEqual(self.names(), ["main"])
+
+    def test_version_string_command_counts_as_claude(self):
+        self.layout = [row("main", "2.1.316", "%1")]
+        self.assertEqual(self.names(), ["main"])
+
+    def test_teammate_claude_pane_shows_main(self):
+        self.layout = [row("main", "claude", "%1", teammate="1")]
+        self.assertEqual(self.names(), ["main"])
+
+    def test_claude_in_a_bg_row_does_not_show_main(self):
+        self.layout = [row("main", "zsh", "%1"), row("main", "claude", "%2", bg="1")]
+        self.assertEqual(self.names(), [])
 
     def test_env_is_read_at_import(self):
         with mock.patch.dict(os.environ, {"TC_TERMINAL_SESSION": ""}):
