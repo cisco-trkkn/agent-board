@@ -46,4 +46,19 @@ check "short run: ran" grep -q '^short-[0-9]' <<< "$out"
 pane="$(tt capture-pane -p -J -t "$lane" -S -100)"
 check "short run: command typed literally" grep -qF 'echo short-$RANDOM' <<< "$pane"
 check "short run: no sourcing line"        sh -c '! grep -q "^[^ ]* *\. .*cmds/" <<< "$1"' _ "$pane"
+# (5) an unwritable command file: run exits 2 before any record or typing, send just dies
+tt kill-window -t "$lane" 2>/dev/null
+rm -rf "$TC_STATE/cmds"; : > "$TC_STATE/cmds"
+rm -f "$TC_STATE"/runs-*.jsonl
+out="$(ctl run -t 25 tests "printf '%s\\n' '$fill'" 2>&1)"; rc=$?
+check "unwritable cmds: run exits 2"     test $rc -eq 2
+check "unwritable cmds: no run record left as running" sh -c '! grep -qh "\"exit\":null" "$1"/runs-*.jsonl 2>/dev/null' _ "$TC_STATE"
+check "unwritable cmds: nothing typed"   sh -c '! tt_pane=$("$1" capture-pane -p -J -t "$2" -S -100 2>/dev/null); ! grep -q xxxxxxxx <<< "$tt_pane"' _ "$TT_BIN" "$lane"
+ctl send tests "export LONGV=$v" >/dev/null 2>&1; check "unwritable cmds: send exits 2" test $? -eq 2
+rm -f "$TC_STATE/cmds"
+# (6) command files older than a day are reaped, fresh ones stay
+mkdir -p "$TC_STATE/cmds"; : > "$TC_STATE/cmds/old.zsh"; : > "$TC_STATE/cmds/new.zsh"; touch -t 202001010000 "$TC_STATE/cmds/old.zsh"
+ctl list >/dev/null 2>&1
+check "old command file reaped"  test ! -e "$TC_STATE/cmds/old.zsh"
+check "fresh command file kept"  test -e "$TC_STATE/cmds/new.zsh"
 tt_done
