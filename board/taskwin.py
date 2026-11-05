@@ -8,9 +8,9 @@ render(view, timing, width, height, now, frame, color, session="") -> str
 Pure: no I/O, no clock, no tmux. Lines joined by "\\n", at most `height` of them, each at most `width` display cells.
 
 Width ≥ 80: cards in columns by dependency depth, box-drawing connectors from blocker to dependent, the critical
-path (longest unfinished chain) in the accent colour; when too tall, all-completed columns collapse to a one-line
-`● first–last done` summary, and if it still does not fit the list layout is used. Width < 80: one line per task
-with `⇠ 2,3` blocker hints. No ✗ anywhere.
+path (longest unfinished chain) in the accent colour; when too wide (cards under CARD_MIN) or too tall, all-completed
+columns collapse into one `● first–last done` row above the graph, and if it still does not fit the list layout is
+used. Width < 80: one line per task with `⇠ 2,3` blocker hints. No ✗ anywhere.
 """
 import re
 import sys
@@ -338,28 +338,45 @@ def _confetti(cv, y, width, total, frame):
 
 # ---------------------------------------------------------------- graph layout
 
+def _card_width(ncol, width):
+    return min(CARD_MAX, (width - GUTTER * (ncol - 1)) // ncol) if ncol else CARD_MAX
+
+
 def _plan_graph(tasks, width, avail):
-    """Column layout: (cols, collapsed, card width) or None when the graph cannot fit."""
+    """Column layout: (columns to draw, collapsed tasks, card width) or None when the graph cannot fit.
+
+    All-completed columns collapse into one `● first–last done` row: lowest depth first until the remaining
+    columns fit at CARD_MIN, then tallest first until the remaining rows fit `avail`. The collapsed columns
+    leave the grid, so the summary row costs one line and the rest of the graph shifts left.
+    """
     dep = depths(tasks)
-    ncol = max(dep.values(), default=0) + 1
-    cw = min(CARD_MAX, (width - GUTTER * (ncol - 1)) // ncol)
-    if cw < CARD_MIN:
-        return None
-    cols = [[] for _ in range(ncol)]
+    cols = [[] for _ in range(max(dep.values(), default=0) + 1)]
     for t in tasks:
         cols[dep[t["id"]]].append(t)
-    collapsed = set()
+    live = [c for c in cols if c]
+    collapsed = []
 
-    def need(c):
-        return 1 if c in collapsed else len(cols[c]) * (CARD_H + GAP) - GAP
+    def all_done(col):
+        return all(t["status"] == "completed" for t in col)
 
-    while max(need(c) for c in range(ncol)) > avail:
-        cands = [c for c in range(ncol) if c not in collapsed and cols[c]
-                 and all(t["status"] == "completed" for t in cols[c])]
+    def need(col):
+        return len(col) * (CARD_H + GAP) - GAP
+
+    while live and _card_width(len(live), width) < CARD_MIN:
+        cands = [col for col in live if all_done(col)]
         if not cands:
             return None
-        collapsed.add(max(cands, key=lambda c: (need(c), -c)))
-    return cols, collapsed, cw
+        collapsed.append(cands[0])  # lowest depth first
+        live.remove(cands[0])
+    while max((need(col) for col in live), default=0) + (1 if collapsed else 0) > avail:
+        cands = [col for col in live if all_done(col)]
+        if not cands:
+            return None
+        pick = max(cands, key=lambda col: (need(col), -live.index(col)))  # tallest first, ties leftmost
+        collapsed.append(pick)
+        live.remove(pick)
+    gone = {t["id"] for col in collapsed for t in col}
+    return live, [t for t in tasks if t["id"] in gone], _card_width(len(live), width)
 
 
 def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash):
@@ -425,15 +442,13 @@ def _segment(bits, a, b):
             bits[(x1, y)] = bits.get((x1, y), 0) | v
 
 
-def _draw_edges(cv, cols, collapsed, cw, pos):
+def _draw_edges(cv, cols, cw, pos):
     """Connectors blocker → dependent through the gutters; spanning edges travel along a gap row."""
     bits = {}
     for c, col in enumerate(cols):
-        if c in collapsed:
-            continue
         for t in col:
             for b in t.get("blockedBy") or []:
-                if b not in pos or pos[b][0] in collapsed or pos[b][0] >= c:
+                if b not in pos or pos[b][0] >= c:
                     continue
                 a, ra = pos[b]
                 rb = pos[t["id"]][1]
@@ -465,23 +480,26 @@ def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id):
     if plan is None:
         return None
     cols, collapsed, cw = plan
-    rows = max(1 if c in collapsed else len(col) * (CARD_H + GAP) - GAP for c, col in enumerate(cols))
+    head = []
+    if collapsed:
+        top = Canvas(width, 1)
+        top.put(0, 0, truncate(_summary(collapsed), width), ("green",))
+        head = top.lines(color)
+        avail -= 1
+    rows = max((len(col) * (CARD_H + GAP) - GAP for col in cols), default=0)
     pos = {t["id"]: (c, r) for c, col in enumerate(cols) for r, t in enumerate(col)}
-    spans_top = any(pos[b][0] < c - 1 and pos[b][0] not in collapsed for c, col in enumerate(cols)
-                    if c not in collapsed for t in col[:1] for b in t.get("blockedBy") or [] if b in pos)
+    spans_top = any(pos[b][0] < c - 1 for c, col in enumerate(cols)
+                    for t in col[:1] for b in t.get("blockedBy") or [] if b in pos)
     if spans_top and rows + 1 <= avail:
         rows += 1
     cv = Canvas(width, rows)
     crit = set(critical_path(tasks))
     for c, col in enumerate(cols):
         x = c * (cw + GUTTER)
-        if c in collapsed:
-            cv.put(x, 0, truncate(_summary(col), cw), ("green",))
-            continue
         for r, t in enumerate(col):
             _draw_card(cv, x, r * (CARD_H + GAP), cw, t, timing, now, frame, t["id"] in crit, t["id"] == flash_id)
-    _draw_edges(cv, cols, collapsed, cw, pos)
-    return cv.lines(color)
+    _draw_edges(cv, cols, cw, pos)
+    return head + cv.lines(color)
 
 
 # ---------------------------------------------------------------- list layout

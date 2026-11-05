@@ -16,12 +16,12 @@ def task(i, subject, status, blocked_by=(), owner="", state="", tier=""):
             "blockedBy": [str(b) for b in blocked_by]}
 
 
-def chain(n, status="pending", first=1):
-    """Tasks first..first+n-1, each blocked by the previous one."""
+def chain(n, status="pending", first=1, done=0):
+    """Tasks first..first+n-1, each blocked by the previous one; the first `done` of them completed."""
     out = []
     for k in range(n):
         i = first + k
-        out.append(task(i, f"step {i}", status, [i - 1] if k else []))
+        out.append(task(i, f"step {i}", "completed" if k < done else status, [i - 1] if k else []))
     return out
 
 
@@ -54,14 +54,19 @@ def view_of(tasks, name="plan"):
     return {"name": name, "active": True, "tasks": tasks}
 
 
+def check_plain(tc, out, width, height):
+    """Width (display cells), height, no escapes and no ✗: the invariants of every colour-none render."""
+    lines = out.split("\n")
+    tc.assertLessEqual(len(lines), height)
+    for l in lines:
+        tc.assertLessEqual(taskwin.cells(l), width, repr(l))
+    tc.assertNotIn(ESC, out)
+    tc.assertNotIn("✗", out)
+
+
 class SnapshotTest(unittest.TestCase):
     def check_plain(self, out, width, height):
-        lines = out.split("\n")
-        self.assertLessEqual(len(lines), height)
-        for l in lines:
-            self.assertLessEqual(taskwin.cells(l), width, repr(l))
-        self.assertNotIn(ESC, out)
-        self.assertNotIn("✗", out)
+        check_plain(self, out, width, height)
 
     def test_wide_matches_snapshot(self):
         out = plain(SIX, 120, 40, session="dev")
@@ -244,6 +249,43 @@ class GraphTest(unittest.TestCase):
         out = plain(SIX, 120, 40)
         self.assertNotIn("done\n", out.split("\n")[3] + "\n")
         self.assertIn("planview carries", out)
+
+    def test_deep_chain_collapses_done_columns_for_width(self):
+        # 7 columns at 120 cols would leave cards under CARD_MIN; dropping the done column 0 makes 6 fit.
+        tasks = chain(7, done=3)
+        out = plain(view_of(tasks), 120, 40, t={})
+        check_plain(self, out, 120, 40)
+        self.assertIn("╭", out)
+        self.assertIn("● 1 done", out)
+        self.assertEqual(len(re.findall("╭─ [●○◐◓◑◒◌] ", out)), 6, out)
+        for i in range(2, 8):
+            self.assertIn(f"step {i}", out)
+        self.assertNotIn("⇠", out)
+
+    def test_deep_unfinished_chain_falls_back_to_list(self):
+        # 12 unfinished columns cannot fit at CARD_MIN and nothing is done to collapse: the list keeps every task.
+        tasks = chain(12)
+        out = plain(view_of(tasks), 80, 40, t={})
+        check_plain(self, out, 80, 40)
+        self.assertNotIn("╭", out)
+        for i in range(1, 13):
+            self.assertIn(f"step {i}", out)
+        self.assertIn("⇠ 11", out)
+
+    def test_width_and_height_collapse_share_one_summary(self):
+        # column 0 goes for width (7 columns), column 1 (three done tasks, 14 rows) for height (avail 9):
+        # one summary line covers both, the remaining five columns are laid out from the left edge.
+        tasks = chain(7, done=3)
+        tasks += [task(8, "root 8", "completed"), task(9, "root 9", "completed"),
+                  task(10, "after 10", "completed", [1]), task(11, "after 11", "completed", [1])]
+        out = plain(view_of(tasks), 120, 12, t={})
+        check_plain(self, out, 120, 12)
+        body = out.split("\n")[3:]
+        self.assertEqual([l.strip() for l in body if " done" in l], ["● 1–11 done"], out)
+        self.assertEqual(len(re.findall("╭─ [●○◐◓◑◒◌] ", out)), 5, out)
+        for i in range(3, 8):
+            self.assertIn(f"step {i}", out)
+        self.assertTrue(body[1].startswith("╭─ ● 3 "), out)
 
 
 class CelebrationTest(unittest.TestCase):
