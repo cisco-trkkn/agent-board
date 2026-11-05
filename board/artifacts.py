@@ -146,7 +146,7 @@ def save(project, path, base_hash, text):
     tmp = p.with_name(f".{p.name}.tmux-dash.tmp")
     tmp.write_text(text)
     os.replace(tmp, p)
-    subprocess.run([str(HOOK), "--path", path, "--agent", "you", "--project", project],
+    subprocess.run([str(HOOK), "--path", path, "--agent", "you", "--project", project, "--session", ""],
                    capture_output=True, timeout=10, env={**os.environ, "TC_STATE": str(state_dir())})
     return read(project, path)
 
@@ -180,7 +180,7 @@ def move(project, path, target, source_repo, target_repo):
     with open(state_dir() / f"artifacts-{project}.jsonl", "a") as f:
         f.write(json.dumps({"ts": time.time(), "path": path, "moved_to": str(dst), "agent": "you"}) + "\n")
     try:   # best-effort: the move is already recorded even if the register hook is slow or missing
-        subprocess.run([str(HOOK), "--path", str(dst), "--agent", "you", "--project", target],
+        subprocess.run([str(HOOK), "--path", str(dst), "--agent", "you", "--project", target, "--session", ""],
                        capture_output=True, timeout=10, env={**os.environ, "TC_STATE": str(state_dir())})
     except (subprocess.TimeoutExpired, OSError):
         pass

@@ -171,7 +171,14 @@ class ReadSaveTest(Base):
         self.assertEqual(self.plan.read_text(), "# Plan v2\n")
         self.assertEqual(got["hash"], sha("# Plan v2\n"))
         args = run.call_args[0][0]
-        self.assertEqual(args[1:], ["--path", str(self.plan), "--agent", "you", "--project", "p"])
+        self.assertEqual(args[1:], ["--path", str(self.plan), "--agent", "you", "--project", "p", "--session", ""])
+
+    def test_save_does_not_inherit_the_process_session(self):
+        # a board restarted by an agent carries that agent's CLAUDE_CODE_SESSION_ID: the user's save is not that agent's
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "abc"}):
+            artifacts.save("p", str(self.plan), sha("# Plan\n"), "# Plan v2\n")
+        last = json.loads((self.state / "artifacts-p.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((os.path.realpath(last["path"]), last["session_id"]), (os.path.realpath(self.plan), ""))
 
     def test_server_save_conflict(self):
         with self.assertRaises(artifacts.Conflict):
@@ -268,13 +275,21 @@ class MoveTest(Base):
         self.assertFalse(self.doc.exists() or self.side.exists())
         self.assertIn("t", msg)
         args = run.call_args[0][0]
-        self.assertEqual(args[1:], ["--path", str(new), "--agent", "you", "--project", "t"])
+        self.assertEqual(args[1:], ["--path", str(new), "--agent", "you", "--project", "t", "--session", ""])
         self.assertFalse(any("git" in str(c[0][0][0]) for c in run.call_args_list))
         last = json.loads((self.state / "artifacts-p.jsonl").read_text().splitlines()[-1])
         self.assertEqual((last["path"], last["moved_to"], last["agent"]), (str(self.doc), str(new), "you"))
         self.assertNotIn(str(self.doc), [i["path"] for i in artifacts.summary("p")["items"]])
         with self.assertRaises(FileNotFoundError):
             artifacts.read("p", str(self.doc))
+
+    def test_move_does_not_inherit_the_process_session(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "abc"}):
+            self.move()
+        # the register hook records under the target project; the move line itself is in artifacts-p.jsonl
+        last = json.loads((self.state / "artifacts-t.jsonl").read_text().splitlines()[-1])
+        new = os.path.realpath(self.dst / "docs/superpowers/plans/2026-10-19-x.md")
+        self.assertEqual((os.path.realpath(last["path"]), last["session_id"]), (new, ""))
 
     def test_hook_is_the_repos_own_script(self):
         repo = Path(artifacts.__file__).resolve().parent.parent
