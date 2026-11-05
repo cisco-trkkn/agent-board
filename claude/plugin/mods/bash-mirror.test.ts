@@ -17,7 +17,7 @@ type World = {
 
 const SOCK = '/tmp/sock'
 const LOG = (kind: string) => `/s/feed-tt-${kind}.log`
-const HOME = '/Users/me'
+const HOME = '/home/me'
 const HEADER = /^── \d{2}:\d{2}:\d{2} · (.*?) · (.*?) · exit (\d+) · @(\d+)$/
 
 function world(on: any, env: Record<string, string> = {}, init: Partial<World> = {}): World {

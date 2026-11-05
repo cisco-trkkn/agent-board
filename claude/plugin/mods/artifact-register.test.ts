@@ -16,7 +16,7 @@ type World = {
   noSha256sum: boolean
 }
 
-const HOME = '/Users/me'
+const HOME = '/home/me'
 const MANIFEST = '/s/artifacts-tt.jsonl'
 const HASH = 'ab'.repeat(32)
 const PLAN = '/work/r/docs/superpowers/plans/p.md'
