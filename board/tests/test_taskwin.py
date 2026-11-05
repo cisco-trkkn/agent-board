@@ -459,5 +459,70 @@ class PolishTest(unittest.TestCase):
         self.assertNotIn("*", taskwin.strip(taskwin.render(v, {}, 120, 40, NOW, 0, "256")))
 
 
+class LaneTest(unittest.TestCase):
+    """Gutter cells are xs+1..xd-1 (4 cells). Expected strings derived by hand from the lane rules:
+    a cell's glyph is set by which of left/right/up/down arms the edges give it (┬ L+R+D, ┴ L+R+U, ┼ all,
+    ╮ L+D, ╭ R+D, ╰ U+R, ╯ L+U), lane k of a gutter sits at xs+1+k, and each edge ends in ▸ at xd-1."""
+
+    def geom(self, ncols):
+        cw = taskwin._card_width(ncols, 120)
+        return cw, cw - 1, cw + taskwin.GUTTER
+
+    def row_y(self, r):
+        return taskwin.HEADER_ROWS + r * (taskwin.CARD_H + taskwin.GAP) + 1
+
+    def gutter(self, out, y, xs, xd):
+        return out.split("\n")[y][xs + 1:xd]
+
+    def test_two_blockers_two_dependents_get_distinct_lanes(self):
+        v = view_of([task(1, "a", "pending"), task(2, "b", "pending"),
+                     task(3, "c", "pending", [1, 2]), task(4, "d", "pending", [1, 2])])
+        out = plain(v, 120, 40, t={})
+        cw, xs, xd = self.geom(2)
+        y0, y1 = self.row_y(0), self.row_y(1)
+        # row 0: lane xs+1 (blocker 1) T-junction down, lane xs+2 (blocker 2) corner/T down, then ─ and ▸
+        self.assertEqual(self.gutter(out, y0, xs, xd), "┬┬─▸")
+        # row 1: both lanes end here from above and the edges leave right
+        self.assertEqual(self.gutter(out, y1, xs, xd), "┴┴─▸")
+        self.assertEqual(out.split("\n")[y0][xd - 1], "▸")
+        self.assertEqual(out.split("\n")[y1][xd - 1], "▸")
+        self.assertEqual(out.split("\n")[y0][xd], "│")
+        self.assertEqual(out.count("▸"), 2)
+        self.assertNotIn("┤", out)
+
+    def test_crossing_draws_cross_glyph(self):
+        # blocker 1 (row 0) feeds task 5 (row 2): lane xs+1 runs rows 0-2; blocker 2 (row 1) feeds tasks 3 and 4
+        v = view_of([task(1, "a", "pending"), task(2, "b", "pending"), task(3, "c", "pending", [2]),
+                     task(4, "d", "pending", [2]), task(5, "e", "pending", [1])])
+        out = plain(v, 120, 40, t={})
+        cw, xs, xd = self.geom(2)
+        self.assertEqual(self.gutter(out, self.row_y(0), xs, xd), "╮╭─▸")
+        self.assertEqual(self.gutter(out, self.row_y(1), xs, xd), "┼┴─▸")
+        self.assertEqual(self.gutter(out, self.row_y(2), xs, xd), "╰──▸")
+
+    def test_five_blockers_share_the_last_lane(self):
+        v = view_of([task(i, f"b{i}", "pending") for i in range(1, 6)] + [task(6, "d", "pending", [1, 2, 3, 4, 5])])
+        out = plain(v, 120, 40, t={})
+        cw, xs, xd = self.geom(2)
+        gap = taskwin.HEADER_ROWS + 2 * (taskwin.CARD_H + taskwin.GAP) + taskwin.CARD_H  # gap below row 2
+        line = out.split("\n")[gap]
+        self.assertEqual(line[xs + 1:xs + 4], "  │")   # blockers 3-5 share lane 2; lanes 0, 1 ended above
+        self.assertEqual(out.count("▸"), 1)
+        self.assertEqual(out.split("\n")[self.row_y(0)][xd], "│")  # entered border stays │ (lane ┤ junctions are fine)
+
+    def test_spanning_edge_routes_along_gap_row_and_ends_in_arrow(self):
+        v = view_of([task(1, "a", "pending"), task(2, "b", "pending", [1]), task(3, "c", "pending", [1, 2])])
+        out = plain(v, 120, 40, t={})
+        cw = taskwin._card_width(3, 120)
+        bus_a = cw                       # blocker 1 is lane 0 of gutter 0
+        bus_b = (cw + taskwin.GUTTER) + cw   # and lane 0 of gutter 1
+        xd3 = 2 * (cw + taskwin.GUTTER)
+        self.assertEqual(out.split("\n")[self.row_y(0)][xd3 - 1], "▸")
+        gap = out.split("\n")[taskwin.HEADER_ROWS + taskwin.CARD_H]
+        self.assertEqual(gap[bus_a], "╰")
+        self.assertEqual(gap[bus_b], "╯")
+        self.assertEqual(gap[bus_a + 1:bus_b], "─" * (bus_b - bus_a - 1))
+
+
 if __name__ == "__main__":
     unittest.main()

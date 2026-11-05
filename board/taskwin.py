@@ -473,26 +473,39 @@ def _segment(bits, a, b):
 
 
 def _draw_edges(cv, cols, cw, pos):
-    """Connectors blocker → dependent through the gutters; spanning edges travel along a gap row."""
-    bits = {}
+    """Connectors blocker → dependent through the gutters; spanning edges travel along a gap row.
+
+    Each distinct blocker feeding a gutter gets its own vertical lane (xs+1, xs+2, ...; the last lane is shared
+    by the rest), and every edge ends in ▸ just left of its dependent."""
+    edges = []  # (blocker, (a, ra), (c, rb), dependent)
+    users = {}  # gutter -> blockers using it vertically
     for c, col in enumerate(cols):
         for t in col:
             for b in t.get("blockedBy") or []:
                 if b not in pos or pos[b][0] >= c:
                     continue
-                a, ra = pos[b]
-                rb = pos[t["id"]][1]
-                xs, ys = a * (cw + GUTTER) + cw - 1, ra * (CARD_H + GAP) + 1
-                xd, yd = c * (cw + GUTTER), rb * (CARD_H + GAP) + 1
-                bus_a, bus_b = xs + 2, xd - GUTTER + 1
-                if c == a + 1:
-                    pts = [(xs, ys), (bus_a, ys), (bus_a, yd), (xd, yd)]
-                else:
-                    top = rb * (CARD_H + GAP)
-                    g = top - 1 if top > 0 else top + CARD_H
-                    pts = [(xs, ys), (bus_a, ys), (bus_a, g), (bus_b, g), (bus_b, yd), (xd, yd)]
-                for p, q in zip(pts, pts[1:]):
-                    _segment(bits, p, q)
+                a = pos[b][0]
+                edges.append((b, pos[b], pos[t["id"]], c))
+                for g in (a, c - 1) if c > a + 1 else (a,):
+                    users.setdefault(g, set()).add(b)
+    lane = {}
+    for g, bs in users.items():
+        for k, b in enumerate(sorted(bs, key=lambda b: pos[b])):
+            lane[(g, b)] = g * (cw + GUTTER) + cw + min(k, GUTTER - 2)
+    bits, arrows = {}, set()
+    for b, (a, ra), (_, rb), c in edges:
+        xs, ys = a * (cw + GUTTER) + cw - 1, ra * (CARD_H + GAP) + 1
+        xd, yd = c * (cw + GUTTER), rb * (CARD_H + GAP) + 1
+        bus_a, bus_b = lane[(a, b)], lane.get((c - 1, b))
+        if c == a + 1:
+            pts = [(xs, ys), (bus_a, ys), (bus_a, yd), (xd - 1, yd)]
+        else:
+            top = rb * (CARD_H + GAP)
+            g = top - 1 if top > 0 else top + CARD_H
+            pts = [(xs, ys), (bus_a, ys), (bus_a, g), (bus_b, g), (bus_b, yd), (xd - 1, yd)]
+        for p, q in zip(pts, pts[1:]):
+            _segment(bits, p, q)
+        arrows.add((xd - 1, yd))
     for (x, y), v in bits.items():
         cur = cv.get(x, y)
         if cur is None:
@@ -503,6 +516,9 @@ def _draw_edges(cv, cols, cw, pos):
             cv.ch[y][x] = "├"
         elif cur == "│" and v & _L and not v & _R:
             cv.ch[y][x] = "┤"
+    for x, y in arrows:
+        if cv.get(x, y) is not None:
+            cv.put(x, y, "▸", ("grey",))
 
 
 def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model=None, crit=None):
