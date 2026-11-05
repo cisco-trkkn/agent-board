@@ -55,3 +55,7 @@ Then Submit. After that the lead planned, ran (implementer, task reviewer, final
 
 - `tmux -L oq-19948 kill-server` was run. `list-panes` before it showed the lead's `claude` (pid 19962, the pane's process) and the tmux server (pid 19961). `ps -axo pid,command | grep -E 'oq-run|oq-19948'` after it printed nothing: no `claude` or `✦` process from the run survives.
 - Live checkout `/Users/francisco.ruiz/agent-board`: `git status --short` shows ` M claude/orchestrator.md`. The file's mtime is 00:08:54, before the run began at 00:26, and nothing in this run wrote to the live checkout, so the change is not from the run. The worktree shows only the lead's own ` M docs/superpowers/plans/2026-11-05-overnight-queue.md.tasks.json`, unchanged from before.
+
+## Not covered
+
+The dry run skipped these paths: a failed spec, an exception spec (call 2), the MR option (push consent, `gitlab-ci-loop`), a handoff mid-queue, non-empty `Ruling:` lines, the user-edit patch across the merge, the ideas steps, permission prompts and non-auto modes, and a queue built by `regroup` (a running plan plus queued specs).

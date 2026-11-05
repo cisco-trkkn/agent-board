@@ -63,6 +63,16 @@ turns those specs' option into "keep the branch".
 The answers are written to each `Plan & run:` task with TaskUpdate:
 `metadata.queue = {"integration": "merge" | "mr" | "keep", "push": true | false, "answeredAt": "<ISO>"}`.
 
+When a plan is still running (the `regroup` path), the batch also asks how to integrate that plan (same
+three options, counted in call 1's question cap). The answer is stored on the first `Plan & run:` task as
+`metadata.queue.current`, and that plan's `finishing-a-development-branch` uses it. `answeredAt` is read from
+`date -u +%Y-%m-%dT%H:%M:%SZ`, never written by hand. A spec queued after the batch gets its question; apart
+from that one, the lead asks nothing until the morning report.
+
+The Next steps round queues too (user, 2026-11-05): when two or more groups are picked in step 2, each goes
+through `brainstorming` to an approved written spec (no `writing-plans`), is queued as a `Plan & run:` task in
+order (each blocked by the previous), and queue mode starts. One group picked: unchanged.
+
 ### 3. Running the queue
 
 For each `Plan & run:` task in order:
@@ -88,8 +98,9 @@ For each `Plan & run:` task in order:
   as it is, and its own review catches a missing piece.
 - **User-gate tasks** are not run. They stay pending in the plan and are listed in the morning report.
 - **Handoffs** relay without asking (already the rule for a self-started handoff). The handoff doc's State
-  section says `Queue mode: on`; the answers live in task metadata, so the new lead continues without
-  asking.
+  section says `Queue mode: on` and lists each queued spec (spec path, its `metadata.queue`, the running plan's
+  `metadata.queue.current`, its outcome if done). Task lists are per session, so the new lead recreates the
+  pending `Plan & run:` tasks from those lines and asks nothing.
 - **The ideas round** (Next steps round steps 1–4) is skipped until the queue is empty, because it asks
   questions.
 - **Permission prompts** in teammate windows cannot be answered for the user (unchanged rule). The lead
@@ -104,6 +115,9 @@ it uncommitted if the live checkout is mid-change), then runs `tmux-ctl artifact
 title and spec path, outcome (`metadata.outcome`), branch or merge commit or MR URL, every `Ruling:` line
 from its ledger with what it costs if wrong, user-gate checks waiting, permission prompts seen. Then the
 lead leaves queue mode and runs the normal ideas round.
+
+The Rules line "Don't push, merge or delete branches unless the user asks" notes that a queue-mode answer is
+the user asking, for those branches only.
 
 ## Out of scope
 

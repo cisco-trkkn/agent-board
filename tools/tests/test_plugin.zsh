@@ -133,4 +133,9 @@ check "lead rules: morning report path" grep -qF 'docs/superpowers/reports/YYYY-
 check "lead rules: finishing row points at Queue mode" zsh -c 'grep "^| Finishing a branch" "$1" | grep -qF "Queue mode"' _ "$O"
 check "lead rules: queue asks nothing after the batch" grep -qF 'asks the user nothing until the morning report' "$O"
 check "handoff doc records Queue mode: on" grep -qF 'Queue mode: on' "$P/skills/handoff/SKILL.md"
+check "lead rules: running plan's integration stored as metadata.queue.current" grep -qF 'metadata.queue.current' "$O"
+check "handoff doc carries each queued spec's metadata.queue" grep -qF 'metadata.queue' "$P/skills/handoff/SKILL.md"
+check "lead rules: Next steps round queues two or more picked groups" grep -qF 'queue each approved spec as a `Plan & run:` task' "$O"
+check "lead rules: push/merge rule mentions Queue mode" zsh -c 'grep "^- Don.t push, merge" "$1" | grep -qF "Queue mode"' _ "$O"
+check "lead rules: answeredAt read from the clock" grep -qF 'date -u +%Y-%m-%dT%H:%M:%SZ' "$O"
 tt_done
