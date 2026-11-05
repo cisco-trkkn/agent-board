@@ -12,8 +12,14 @@ path (longest unfinished chain) in the accent colour; when too wide (cards under
 columns collapse into one `● first–last done` row above the graph, and if it still does not fit the list layout is
 used. Width < 80: one line per task with `⇠ 2,3` blocker hints. No ✗ anywhere.
 """
+import argparse
+import json
+import os
 import re
+import shutil
+import signal
 import sys
+import time
 import unicodedata
 from pathlib import Path
 
@@ -602,3 +608,98 @@ def render(view, timing, width, height, now, frame, color, session=""):
     if body is None:
         body = _list_lines(tasks, timing, width, avail, now, frame, color, flash_id)
     return "\n".join(_trim(cv.lines(color) + body, height))
+
+
+# ---------------------------------------------------------------- watch loop and CLI
+
+HIDE, SHOW, HOME_, EOL, EOS = "\x1b[?25l", "\x1b[?25h", "\x1b[H", "\x1b[K", "\x1b[J"
+
+
+def _fetch(session, root, home):
+    """One tick's data: (view, lead id)."""
+    import paneclass
+    import planview
+    import tc_env
+    tmux = paneclass.tmux_runner()
+    view = planview.view(session, root, home, tc_env.state_dir(), tmux)
+    return view, planview.lead_session(session, home, tmux)
+
+
+def _draw(text, err=""):
+    lines = text.split("\n") if text else []
+    if err:
+        lines.append("\x1b[31m" + err + "\x1b[0m")
+    sys.stdout.write(HOME_ + "".join(ln + EOL + "\n" for ln in lines[:-1]) + (lines[-1] + EOL if lines else "") + EOS)
+    sys.stdout.flush()
+
+
+def watch(session, root, home, interval=1.0, frames=None):
+    import tc_env
+    import taskwin_state
+    spath = taskwin_state.path_for(tc_env.state_dir(), session)
+    st = taskwin_state.load(spath)
+    last, n, tick = "", 0, 0
+    old = {s: signal.signal(s, lambda *_: sys.exit(0)) for s in (signal.SIGTERM, signal.SIGHUP)} \
+        if _main_thread() else {}
+    sys.stdout.write(HIDE)
+    sys.stdout.flush()
+    try:
+        while frames is None or n < frames:
+            n += 1
+            try:
+                view, lead = _fetch(session, root, home)
+                now = time.time()
+                before = json.dumps(st, sort_keys=True)
+                taskwin_state.update(st, lead, view.get("tasks") or [], now)
+                if json.dumps(st, sort_keys=True) != before:
+                    taskwin_state.save(spath, st)
+                cols, rows = shutil.get_terminal_size()
+                last = render(view, st, cols, rows - 1 if rows > 1 else rows, now, tick, color_mode(os.environ), session)
+                tick += 1
+                _draw(last)
+            except Exception as e:  # one bad tick must not kill the window
+                _draw(last, "taskwin: " + (str(e).splitlines() or [type(e).__name__])[0][:200])
+            if frames is None or n < frames:
+                time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write(SHOW)
+        sys.stdout.flush()
+        for s, h in old.items():
+            signal.signal(s, h)
+
+
+def _main_thread():
+    import threading
+    return threading.current_thread() is threading.main_thread()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="taskwin")
+    sub = ap.add_subparsers(dest="cmd")
+    for name in ("watch", "render"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--session", required=True)
+        sp.add_argument("--root", default=".")
+        sp.add_argument("--home", default=os.path.expanduser("~/.claude"))
+        if name == "watch":
+            sp.add_argument("--interval", type=float, default=1.0)
+        else:
+            sp.add_argument("--width", type=int, default=0)
+            sp.add_argument("--height", type=int, default=0)
+    a = ap.parse_args(argv)
+    if a.cmd is None:  # test_taskwin.ImportTest runs the bare script and expects a quiet exit 0
+        ap.print_usage(sys.stderr)
+        return 0
+    if a.cmd == "watch":
+        watch(a.session, a.root, a.home, a.interval)
+        return 0
+    view, lead = _fetch(a.session, a.root, a.home)
+    cols, rows = shutil.get_terminal_size()
+    print(render(view, {}, a.width or cols, a.height or rows, time.time(), 0, color_mode(os.environ), a.session))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
