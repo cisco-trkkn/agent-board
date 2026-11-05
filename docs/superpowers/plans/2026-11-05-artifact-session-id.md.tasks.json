@@ -1,0 +1,21 @@
+{
+  "planPath": "docs/superpowers/plans/2026-11-05-artifact-session-id.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: Manual registrations carry the session id",
+      "status": "pending",
+      "description": "**Goal:** `artifact-register.sh --path …` writes `session_id` from `--session`, else `$CLAUDE_CODE_SESSION_ID`, else `\"\"`; `plan_entry`'s docstring explains the blank-id fallback.\n\n**Files:**\n- Modify: `claude/plugin/scripts/artifact-register.sh` (usage comment line 4, the `case` parser, the Python argv and `sid`)\n- Modify: `board/planview.py` (`plan_entry` docstring only)\n- Test: `tools/tests/test_artifact_hook.zsh`\n\n**Acceptance Criteria:**\n- [ ] Manual registration with `CLAUDE_CODE_SESSION_ID=abc` writes `\"session_id\": \"abc\"`.\n- [ ] Manual registration with `CLAUDE_CODE_SESSION_ID` unset writes `\"session_id\": \"\"`.\n- [ ] `--session x` with `CLAUDE_CODE_SESSION_ID=abc` writes `\"session_id\": \"x\"`.\n- [ ] Hook mode with `CLAUDE_CODE_SESSION_ID=abc` and JSON `\"session_id\":\"S2\"` writes `S2`.\n- [ ] Both targeted suites pass; `planview.py` diff is docstring-only.\n\n**Verify:** `zsh tools/tests/test_artifact_hook.zsh && python3 -m unittest discover -s board/tests -p 'test_planview*.py'` → `ALL PASS` then `OK`\n\nPlan: docs/superpowers/plans/2026-11-05-artifact-session-id.md (Steps there; Global Constraints apply).\n\n```json:metadata\n{\"files\": [\"claude/plugin/scripts/artifact-register.sh\", \"board/planview.py\", \"tools/tests/test_artifact_hook.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_artifact_hook.zsh && python3 -m unittest discover -s board/tests -p 'test_planview*.py'\", \"acceptanceCriteria\": [\"CLAUDE_CODE_SESSION_ID=abc manual writes abc\", \"unset env manual writes empty\", \"--session x wins over env\", \"hook mode keeps JSON session_id with env set\", \"both targeted suites pass; planview diff docstring-only\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: Real run from an agent's Bash tool",
+      "status": "pending",
+      "description": "**Goal:** Show that `tmux-ctl artifact` run from a Claude Code Bash tool writes the session's real id, against a scratch state dir, and that the live manifest's existing blank-id lines still resolve.\n\n**Files:**\n- Create: `docs/superpowers/notes/2026-11-05-artifact-session-id-real-run.md`\n\n**Acceptance Criteria:**\n- [ ] From the implementer's own Bash tool, inside its tmux pane: a scratch plan file registered with `TC_STATE=<mktemp -d> bin/tmux-ctl artifact <file>` (the worktree's `bin/tmux-ctl`); the new manifest line's `session_id` equals `$CLAUDE_CODE_SESSION_ID` (doc records `MATCH` and the id length, not the id).\n- [ ] The same command with `env -u CLAUDE_CODE_SESSION_ID` writes `\"\"` (doc records it).\n- [ ] Read-only real state: an uncapped count of `kind == \"plan\"` lines with blank and non-blank `session_id` in the live manifest `\"$(tmux-ctl …state dir)\"/artifacts-agent-board.jsonl` (resolve the live state dir with the repo's `tc_state_dir` helper or `python3 -c 'import sys; sys.path.insert(0,\"board\"); import tc_env; print(tc_env.state_dir())'` with `TC_STATE` unset), recorded in the doc; nothing written there.\n- [ ] The scratch state dir and scratch file are removed afterwards (`ls` shows them gone, recorded).\n\n**Verify:** `grep -c 'MATCH' docs/superpowers/notes/2026-11-05-artifact-session-id-real-run.md` → `1` or more\n\nPlan: docs/superpowers/plans/2026-11-05-artifact-session-id.md (Steps there; Global Constraints apply).\n\n```json:metadata\n{\"files\": [\"docs/superpowers/notes/2026-11-05-artifact-session-id-real-run.md\"], \"verifyCommand\": \"grep -c 'MATCH' docs/superpowers/notes/2026-11-05-artifact-session-id-real-run.md\", \"acceptanceCriteria\": [\"real tmux-ctl artifact from an agent Bash tool writes the session id (MATCH, length only)\", \"env -u run writes empty\", \"uncapped blank/non-blank plan-line counts from the live manifest, read-only\", \"scratch state and file removed\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        0
+      ]
+    }
+  ],
+  "lastUpdated": "2026-11-05"
+}
