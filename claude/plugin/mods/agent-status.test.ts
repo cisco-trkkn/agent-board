@@ -2,14 +2,14 @@
 // answered from memory: nothing here touches the real state dir.
 import { expect, test, mock } from 'claude-code/testing'
 
-type World = { files: Map<string, string>; runs: string[][]; failWrite: boolean; failMv: boolean }
+type World = { files: Map<string, string>; runs: string[][]; failWrite: boolean; failMv: boolean; sid: string }
 
 // Registers the stubs; call before the first `$` call. Returns the in-memory file system.
 function world(on: any, env: Record<string, string>, under: { call?: any; check?: any } = {}, now = 1_000_000): { w: World; clock: any } {
-  const w: World = { files: new Map(), runs: [], failWrite: false, failMv: false }
+  const w: World = { files: new Map(), runs: [], failWrite: false, failMv: false, sid: 'sid1' }
   mock.env(on, env)
   const clock = mock.clock(on, { now })
-  on('session.id', () => ({ value: 'sid1' }))
+  on('session.id', () => ({ value: w.sid }))
   on('fs.write', ($: any, e: any) => {
     if (w.failWrite) throw new Error('disk full')
     w.files.set(e.path, e.text)
@@ -189,7 +189,6 @@ test('a throwing write does not propagate and the hook still returns next()', as
 })
 
 test('events carrying agentId (an in-process teammate) leave the file untouched', async ($, on) => {
-  let asked = false
   const { w, clock } = world(on, { TC_STATE: '/s' }, {
     check: (_$: any, e: any) => (e.input.sub ? { decision: 'ask', reason: 'r' } : { decision: 'allow' }),
   })
@@ -205,4 +204,32 @@ test('events carrying agentId (an in-process teammate) leave the file untouched'
   await $.turn.start({ text: 'go', turnId: 't1' })
   await $.turn.complete({ answer: 'm', durationMs: 5, isAborted: false, turnId: 't2', reason: 'answer', agentId: 'mate' } as any)
   expect(read(w).state).toBe('busy')
+})
+
+for (const reason of ['clear', 'resume', 'branch']) {
+  test(`session.end (${reason}) drops the old file, resets to ready, and the next event writes under the new id`, async ($, on) => {
+    const { w, clock } = world(on, { TC_STATE: '/s' })
+    await $.session.start(START)
+    await $.turn.start({ text: 'a', turnId: 't1' })
+    await $.session.end({ reason, sessionId: 'sid1', resume: {} } as any)
+    expect(w.files.has(FILE)).toBe(false)
+    w.sid = 'sid2'
+    await clock.advance(1000)
+    await $.turn.start({ text: 'b', turnId: 't2' })
+    expect(w.files.has(FILE)).toBe(false)
+    expect(read(w, '/s/agent-status/sid2.json')).toMatchObject({ session_id: 'sid2', state: 'busy' })
+    await $.turn.complete({ answer: 'm', durationMs: 5, isAborted: false, turnId: 't2', reason: 'answer' })
+    expect(read(w, '/s/agent-status/sid2.json').state).toBe('ready')
+  })
+}
+
+test('after a clear the heartbeat writes a ready file for the new id', async ($, on) => {
+  const { w, clock } = world(on, { TC_STATE: '/s' })
+  await $.session.start(START)
+  await $.turn.start({ text: 'a', turnId: 't1' })
+  await $.session.end({ reason: 'clear', sessionId: 'sid1', resume: {} } as any)
+  w.sid = 'sid2'
+  await clock.advance(15000)
+  expect(read(w, '/s/agent-status/sid2.json')).toMatchObject({ session_id: 'sid2', state: 'ready' })
+  expect(w.files.has(FILE)).toBe(false)
 })
