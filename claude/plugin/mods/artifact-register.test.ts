@@ -1,0 +1,366 @@
+// Tests for the artifact-register mod. Replays the hook-mode cases of tools/tests/test_artifact_hook.zsh against an
+// in-memory world: tmux, the manifest and lineage files, realpath and shasum are answered by stubs.
+// The Claude Docs result is the tool's own result (out.result), a list of {type:'text', text} like the shell's
+// tool_response; its first line is the frame JSON, here shortened from tools/tests/fixtures/docs-hook/create.json.
+import { expect, test, mock } from 'claude-code/testing'
+
+type World = {
+  files: Map<string, string>
+  runs: string[][]
+  result: any
+  caller: string
+  project: string
+  sid: string
+  failRead: boolean
+  failWrite: boolean
+}
+
+const HOME = '/Users/me'
+const MANIFEST = '/s/artifacts-tt.jsonl'
+const SLUG = 'c40c4cbb-22e5-42f6-8b8d-d059bc72bc78'
+const URL = 'https://claude.ai/artifact/RD7ZrAi3je1ePkMmrBtQ9u'
+const HASH = 'ab'.repeat(32)
+const PLAN = '/work/r/docs/superpowers/plans/p.md'
+
+function world(on: any, env: Record<string, string> = {}, init: Partial<World> = {}): World {
+  const w: World = { files: new Map(), runs: [], result: 'ok', caller: '✦ impl', project: 'tt', sid: 'S1', failRead: false, failWrite: false, ...init }
+  mock.env(on, { TC_STATE: '/s', TC_LINEAGE: '/s/lineage', HOME, TMPDIR: '/tmp/', TMUX: '/tmp/sock,1,0', TMUX_PANE: '%3', TC_TMUX: '/fake/tmux', ...env })
+  mock.clock(on, { now: 5_000_000 })
+  on('session.id', () => ({ value: w.sid }))
+  on('settings.read', () => ({ value: { permissions: {} } }))
+  on('fs.exists', ($: any, e: any) => ({ value: w.files.has(e.path) }))
+  on('fs.read', ($: any, e: any) => {
+    if (w.failRead || !w.files.has(e.path)) throw new Error('ENOENT')
+    return { value: w.files.get(e.path) }
+  })
+  on('fs.write', ($: any, e: any) => {
+    if (w.failWrite && e.path.includes('artifacts-')) throw new Error('disk full')
+    w.files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('process.run', ($: any, e: any) => {
+    w.runs.push([...e.argv])
+    const a: string[] = e.argv
+    const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '' } })
+    if (a.includes('display')) return out(`${w.project}\t${w.caller}\n`)
+    if (a[0] === 'realpath') return w.files.has(a[1]) || a[1] === HOME || a[1] === '/tmp' ? out(a[1] + '\n') : out('', 1)
+    if (a[0] === 'shasum') return w.files.has(a[3]) ? out(`${HASH}  ${a[3]}\n`) : out('', 1)
+    if (a[0] === 'rm') { w.files.delete(a[2]); return out('') }
+    return out('503\n')
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.end', () => ({ sessionId: w.sid }))
+  on('tool.check', () => ({ decision: 'allow' }))
+  on('tool.call', () => (typeof w.result === 'function' ? w.result() : { result: w.result }))
+  on('classic.PreToolUse', () => ({}))
+  on('classic.PermissionRequest', () => ({}))
+  on('classic.SessionStart', () => ({}))
+  return w
+}
+
+const START = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
+const lines = (w: World) => ((w.files.get(MANIFEST) as string) || '').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+const last = (w: World) => lines(w).slice(-1)[0]
+
+async function write($: any, file: string, tool = 'Write') {
+  return $.tool.call({ tool, file_path: file })
+}
+const DOCS = 'mcp__claude_ai_Claude_Docs__'
+const frame = (url = URL) => ({ type: 'text', text: JSON.stringify({ verdict: 'allow', created: { minted: SLUG }, frame: { slug: SLUG, url, artifactUrl: url } }) + '\n\nrest\nof it' })
+async function docs($: any, name: string, container: any) {
+  return $.tool.call({ tool: DOCS + name, container, batch: [] })
+}
+const CREATE = { kind: 'project', create: { name: 'agent-board hook fixture (delete me)', doc: { markdown: 'hello fixture' } } }
+const EDIT = { kind: 'project', id: SLUG }
+
+test('a plan write is recorded with kind, agent, hash, session id and epoch 0', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(lines(w).length).toBe(1)
+  const r = last(w)
+  expect(Object.keys(r)).toEqual(['ts', 'path', 'kind', 'agent', 'hash', 'url', 'title', 'slug', 'session_id', 'epoch'])
+  expect(r).toEqual({ ts: 5000, path: PLAN, kind: 'plan', agent: 'impl', hash: HASH, url: '', title: '', slug: '', session_id: 'S1', epoch: 0 })
+})
+
+test('Edit and MultiEdit are recorded like Write', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN, 'Edit')
+  await write($, PLAN, 'MultiEdit')
+  expect(lines(w).map((r) => r.kind)).toEqual(['plan', 'plan'])
+})
+
+test('the session id comes from $.session.id()', async ($, on) => {
+  const w = world(on, {}, { sid: 'S9' })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(last(w).session_id).toBe('S9')
+})
+
+test('an .md file of no known kind is ignored; a non-.md file too', async ($, on) => {
+  const w = world(on)
+  w.files.set('/work/r/notes.md', 'x')
+  w.files.set('/work/r/a.txt', 'x')
+  await $.session.start(START)
+  await write($, '/work/r/notes.md', 'Edit')
+  await write($, '/work/r/a.txt')
+  expect(lines(w).length).toBe(0)
+})
+
+test('epoch is the line count of the lineage file', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  w.files.set('/s/lineage/tt.jsonl', '{}\n')
+  await $.session.start(START)
+  await write($, PLAN, 'Edit')
+  expect(last(w).epoch).toBe(1)
+})
+
+test('lineage dir follows XDG_STATE_HOME / $HOME/.local/state when TC_LINEAGE is unset', async ($, on) => {
+  const w = world(on, { TC_LINEAGE: '', XDG_STATE_HOME: '/xdg' })
+  w.files.set(PLAN, '# P')
+  w.files.set('/xdg/agent-board/lineage/tt.jsonl', '{}\n{}\n')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(last(w).epoch).toBe(2)
+})
+
+test('report kind: a scratchpad *report*.md', async ($, on) => {
+  const w = world(on)
+  const f = '/work/sp/scratchpad/e2e-report.md'
+  w.files.set(f, 'r')
+  await $.session.start(START)
+  await write($, f)
+  expect(last(w).kind).toBe('report')
+})
+
+test('handoff kinds: a tmp handoff, the state dir handoffs, the legacy ~/.claude/handoffs', async ($, on) => {
+  const w = world(on)
+  const files = ['/tmp/tt-handoff-1.md', HOME + '/.local/state/agent-board/handoffs/new.md', HOME + '/.claude/handoffs/old.md']
+  for (const f of files) w.files.set(f, 'h')
+  await $.session.start(START)
+  for (const f of files) await write($, f)
+  expect(lines(w).map((r) => [r.path, r.kind])).toEqual(files.map((f) => [f, 'handoff']))
+})
+
+test('a published Artifact records its claude.ai url, kind published, path = file_path', async ($, on) => {
+  const w = world(on, {}, { result: 'Published https://claude.ai/code/artifact/abc-123 ok' })
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Artifact', file_path: '/x/page.html' })
+  expect(last(w)).toMatchObject({ kind: 'published', url: 'https://claude.ai/code/artifact/abc-123', path: '/x/page.html', hash: '' })
+})
+
+test('an Artifact result with no claude.ai url records nothing', async ($, on) => {
+  const w = world(on, {}, { result: 'nothing here' })
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Artifact', file_path: '/x/page.html' })
+  expect(lines(w).length).toBe(0)
+})
+
+test('doc create: kind doc, url and path from the frame, title from the create name, slug', async ($, on) => {
+  const w = world(on, {}, { result: [frame()] })
+  await $.session.start(START)
+  await docs($, 'batch', CREATE)
+  expect(last(w)).toMatchObject({ kind: 'doc', url: URL, path: URL, title: 'agent-board hook fixture (delete me)', slug: SLUG, hash: '' })
+})
+
+test('doc edit: the url is reused from the manifest by slug; kind doc, title empty', async ($, on) => {
+  const w = world(on, {}, { result: [frame()] })
+  await $.session.start(START)
+  await docs($, 'batch', CREATE)
+  w.result = [{ type: 'text', text: '{"verdict":"allow","rev":2}' }]
+  await docs($, 'update', EDIT)
+  expect(lines(w).length).toBe(2)
+  expect(last(w)).toMatchObject({ kind: 'doc', url: URL, slug: SLUG, title: '' })
+})
+
+test('doc read and other mcp tools are ignored', async ($, on) => {
+  const w = world(on, {}, { result: [frame()] })
+  await $.session.start(START)
+  await docs($, 'read', EDIT)
+  await $.tool.call({ tool: 'mcp__other__create', container: {} })
+  expect(lines(w).length).toBe(0)
+})
+
+test('a doc result with no url records nothing', async ($, on) => {
+  const w = world(on, {}, { result: 'no link here' })
+  await $.session.start(START)
+  await docs($, 'batch', {})
+  expect(lines(w).length).toBe(0)
+})
+
+test('an update for an unknown slug records nothing', async ($, on) => {
+  const w = world(on, {}, { result: [frame()] })
+  await $.session.start(START)
+  await docs($, 'batch', CREATE)
+  w.result = 'done'
+  await docs($, 'update', { kind: 'project', id: '00000000-unknown' })
+  expect(lines(w).length).toBe(1)
+})
+
+test('file lines carry a title key', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect('title' in last(w)).toBe(true)
+})
+
+test('a prose link after the frame never wins over frame.url', async ($, on) => {
+  const f = frame()
+  f.text += '\n\nsee https://claude.ai/artifact/PROSE-LINK.'
+  const w = world(on, {}, { result: [f] })
+  await $.session.start(START)
+  await docs($, 'batch', CREATE)
+  expect(last(w).url).toBe(URL)
+})
+
+test('a stray item before the frame never wins', async ($, on) => {
+  const w = world(on, {}, { result: [{ type: 'text', text: 'https://claude.ai/artifact/STRAY-FIRST' }, frame()] })
+  await $.session.start(START)
+  await docs($, 'batch', CREATE)
+  expect(last(w).url).toBe(URL)
+})
+
+test('an edit with a stray link in the result takes the manifest url', async ($, on) => {
+  const w = world(on, {}, { result: [frame()] })
+  await $.session.start(START)
+  await docs($, 'batch', CREATE)
+  w.result = [{ type: 'text', text: 'done, see https://claude.ai/artifact/STRAY-EDIT.' }]
+  await docs($, 'batch', EDIT)
+  expect(lines(w).length).toBe(2)
+  expect(last(w).url).toBe(URL)
+})
+
+test('the fallback regex trims a sentence-ending dot', async ($, on) => {
+  const w = world(on, {}, { result: 'Made it: https://claude.ai/artifact/FALLBACK-1.' })
+  await $.session.start(START)
+  await docs($, 'batch', {})
+  expect(last(w).url).toBe('https://claude.ai/artifact/FALLBACK-1')
+})
+
+test('a frame url off claude.ai (javascript:) is never recorded', async ($, on) => {
+  const w = world(on, {}, { result: [frame('javascript:alert(1)')] })
+  await $.session.start(START)
+  await docs($, 'batch', CREATE)
+  expect(lines(w).length).toBe(0)
+  expect(w.files.get(MANIFEST) ?? '').not.toContain('javascript')
+})
+
+test('update with the manifest missing records nothing and does not throw', async ($, on) => {
+  const w = world(on, {}, { result: 'done' })
+  await $.session.start(START)
+  await docs($, 'update', EDIT)
+  expect(w.files.has(MANIFEST)).toBe(false)
+})
+
+test('update with a garbled manifest records nothing and keeps the file as is', async ($, on) => {
+  const w = world(on, {}, { result: 'done' })
+  w.files.set(MANIFEST, 'garbage{\n')
+  await $.session.start(START)
+  await docs($, 'update', EDIT)
+  expect(w.files.get(MANIFEST)).toBe('garbage{\n')
+})
+
+test('a manifest that cannot be read is never overwritten by a record', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  w.files.set(MANIFEST, '{"old":1}\n')
+  await $.session.start(START)
+  w.failRead = true
+  await write($, PLAN)
+  w.failRead = false
+  expect(w.files.get(MANIFEST)).toBe('{"old":1}\n')
+})
+
+test('records append to the existing manifest in order', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  w.files.set(MANIFEST, '{"old":1}\n')
+  await $.session.start(START)
+  await write($, PLAN)
+  const ls = (w.files.get(MANIFEST) as string).split('\n')
+  expect(ls[0]).toBe('{"old":1}')
+  expect(JSON.parse(ls[1]).kind).toBe('plan')
+  expect(ls[2]).toBe('')
+})
+
+test('outside tmux nothing is recorded', async ($, on) => {
+  const w = world(on, { TMUX: '', TMUX_PANE: '' })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(w.files.has(MANIFEST)).toBe(false)
+})
+
+test('a project name that is not [A-Za-z0-9._-]+ records nothing', async ($, on) => {
+  const w = world(on, {}, { project: 'bad name' })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect([...w.files.keys()].filter((k) => k.includes('artifacts-'))).toEqual([])
+})
+
+test('the agent defaults to claude when the window name is empty', async ($, on) => {
+  const w = world(on, {}, { caller: '' })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(last(w).agent).toBe('claude')
+})
+
+test('a file that does not exist records nothing', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(lines(w).length).toBe(0)
+})
+
+test('a failed or refused write records nothing', async ($, on) => {
+  const w = world(on, {}, { result: () => ({ result: 'Error: nope', text: 'nope', isError: true }) })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  w.result = () => ({ deny: 'no' })
+  await write($, PLAN)
+  expect(lines(w).length).toBe(0)
+})
+
+test('a rejected next records nothing and rethrows', async ($, on) => {
+  const w = world(on, {}, { result: () => { throw new Error('interrupted') } })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  let threw = false
+  try { await write($, PLAN) } catch (x) { threw = true }
+  expect(threw).toBe(true)
+  expect(lines(w).length).toBe(0)
+})
+
+test('a subagent call (agentId) is recorded too', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Write', file_path: PLAN, agentId: 'a1' })
+  expect(lines(w).length).toBe(1)
+})
+
+test('a failing manifest write does not fail the call', async ($, on) => {
+  const w = world(on, {}, { failWrite: true })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  const r = await write($, PLAN)
+  expect(JSON.stringify(r)).toContain('ok')
+})
+
+test('session.start writes the artifact-register marker; session.end removes it', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  expect(w.files.get('/s/mods-active/S1.artifact-register')).toBe('S1\n')
+  await $.session.end({ sessionId: 'S1', reason: 'exit' })
+  expect(w.runs).toContainEqual(['rm', '-f', '/s/mods-active/S1.artifact-register'])
+  expect(w.files.has('/s/mods-active/S1.artifact-register')).toBe(false)
+})

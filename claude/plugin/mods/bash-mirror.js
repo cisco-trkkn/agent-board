@@ -1,8 +1,8 @@
 // bash-mirror: after each Bash tool.call resolves or rejects, appends one entry to the session's tests/shell feed log
 // (<state dir>/feed-<project>-<tests|shell>.log), the same entry scripts/bash-mirror.sh writes:
 //   `── HH:MM:SS · <caller> · <cwd> · exit N · @<epoch>` / `$ <first line>` / last 12 lines of output / blank line.
-// Differences from the shell: it does not source bin/_tc_bins.zsh; the tmux binary is $TC_TMUX, else
-// $HOME/.local/bin/tmux when it exists, else `tmux` on PATH, always with `-S ${TMUX%%,*}`. The cwd is read from the
+// Differences from the shell: it does not source bin/_tc_bins.zsh; the tmux binary is chosen by lib/env.js tmuxBin
+// ($TC_TMUX, else $HOME/.local/bin/tmux when it exists, else `tmux`), always with `-S ${TMUX%%,*}`. The cwd is read from the
 // session after the call (the shell hook was handed it in the payload). A call refused by a guard is not mirrored.
 //
 // Appending: there is no $.fs append, so each entry is read-modify-write through $.fs (read the log, trim it when it is
@@ -11,7 +11,7 @@
 // session's shell or mod writing the same log at the same moment could still lose an entry, the same race the two
 // shell hooks had.
 // The mod writes <state dir>/mods-active/<session_id>.bash-mirror at session start so the shell script defers.
-import { stateDir, markerPath, readEnv, writeMarker, removeMarker } from './lib/env.js'
+import { stateDir, markerPath, readEnv, writeMarker, removeMarker, tmuxRun } from './lib/env.js'
 
 const MAX_BYTES = 2097152
 const KEEP_BYTES = 1048576
@@ -82,9 +82,7 @@ export async function start($, e) {
     const sid = await $.session.id()
     startCwd = (e && e.cwd) || ''
     const dir = stateDir(env.tcState, env.tmpdir, env.uid)
-    let tcTmux = ''
-    try { tcTmux = (await $.env.get('TC_TMUX')) || '' } catch (x) { /* '' */ }
-    ctx = { dir, tmux: env.tmux, pane: env.tmuxPane, tcTmux, home: env.home, marker: markerPath(dir, sid, 'bash-mirror') }
+    ctx = { dir, tmux: env.tmux, pane: env.tmuxPane, tcTmux: env.tcTmux, home: env.home, marker: markerPath(dir, sid, 'bash-mirror') }
     await writeMarker($, ctx.marker, sid)
   } catch (x) { /* never block the session */ }
 }
@@ -99,18 +97,7 @@ export async function end($, e) {
   } catch (x) { /* never block the session */ }
 }
 
-async function tmuxBin($) {
-  if (ctx.tcTmux) return ctx.tcTmux
-  const mine = ctx.home + '/.local/bin/tmux'
-  try { if (ctx.home && (await $.fs.exists(mine))) return mine } catch (x) { /* fall through */ }
-  return 'tmux'
-}
-
-async function tmux($, args) {
-  const r = await $.process.run([await tmuxBin($), '-S', ctx.tmux.split(',')[0], ...args])
-  if (r.exitCode !== 0) throw new Error('tmux ' + args[0] + ' failed')
-  return r.stdout
-}
+function tmux($, args) { return tmuxRun($, ctx.tcTmux, ctx.home, ctx.tmux, args) }
 
 // writes one entry; throws on any failure (the caller swallows)
 async function mirror($, e, out, failed, err) {
