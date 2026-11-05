@@ -1,6 +1,7 @@
 // Tests for the bash-mirror mod. Replays the cases of tools/tests/test_mirror.zsh against an in-memory world: tmux
 // (display / list-windows / has-session), the feed log files and the session's cwd are answered by stubs.
 import { expect, test, mock } from 'claude-code/testing'
+import { outcome } from './bash-mirror.js'
 
 type World = {
   files: Map<string, string>
@@ -10,6 +11,8 @@ type World = {
   hasBg: boolean
   caller: string
   failWrite: boolean
+  failRead: boolean
+  gate: Promise<void> | null
 }
 
 const SOCK = '/tmp/sock'
@@ -18,7 +21,7 @@ const HOME = '/Users/me'
 const HEADER = /^── \d{2}:\d{2}:\d{2} · (.*?) · (.*?) · exit (\d+) · @(\d+)$/
 
 function world(on: any, env: Record<string, string> = {}, init: Partial<World> = {}): World {
-  const w: World = { files: new Map(), runs: [], cwd: HOME + '/proj', windows: ['claude', 'shell', 'tests'], hasBg: false, caller: 'claude', failWrite: false, ...init }
+  const w: World = { files: new Map(), runs: [], cwd: HOME + '/proj', windows: ['claude', 'shell', 'tests'], hasBg: false, caller: 'claude', failWrite: false, failRead: false, gate: null, ...init }
   mock.env(on, { TC_STATE: '/s', HOME, TMUX: SOCK + ',123,0', TMUX_PANE: '%3', TC_TMUX: '/fake/tmux', ...env })
   mock.clock(on, { now: 1_000_000 })
   on('session.id', () => ({ value: 'sid1' }))
@@ -26,10 +29,12 @@ function world(on: any, env: Record<string, string> = {}, init: Partial<World> =
   on('settings.read', () => ({ value: { permissions: {} } }))
   on('fs.exists', ($: any, e: any) => ({ value: w.files.has(e.path) }))
   on('fs.read', ($: any, e: any) => {
+    if (w.failRead && e.path.includes('/feed-')) throw new Error('too large')
     if (!w.files.has(e.path)) throw new Error('ENOENT')
     return { value: w.files.get(e.path) }
   })
-  on('fs.write', ($: any, e: any) => {
+  on('fs.write', async ($: any, e: any) => {
+    if (w.gate && e.path.includes('/feed-')) await w.gate
     if (w.failWrite && e.path.includes('/feed-')) throw new Error('disk full')
     w.files.set(e.path, e.text)
     return { value: undefined }
@@ -58,8 +63,12 @@ const lines50 = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n')
 const okResult = (stdout: string, stderr = '') => ({ result: { stdout, stderr, interrupted: false, isImage: false, noOutputExpected: false }, text: stdout })
 const failResult = (code: number, body = '') => ({ result: `Error: Exit code ${code}${body ? '\n' + body : ''}`, text: `Exit code ${code}${body ? '\n' + body : ''}`, isError: true })
 
+// the feed write runs after the tool returns: wait for it to settle
+const settle = () => new Promise((r) => setTimeout(r, 40))
 async function bash($: any, command: string) {
-  return $.tool.call({ tool: 'Bash', command })
+  const r = await $.tool.call({ tool: 'Bash', command })
+  await settle()
+  return r
 }
 
 // the feed with the time and epoch of each header replaced by fixed words
@@ -264,7 +273,8 @@ test('a rejected next writes the entry with exit 1, then rethrows', async ($, on
   on('tool.call', () => { throw new Error('interrupted') })
   await $.session.start(START)
   let threw = false
-  try { await bash($, 'sleep 100') } catch (x) { threw = true }
+  try { await $.tool.call({ tool: 'Bash', command: 'sleep 100' }) } catch (x) { threw = true }
+  await settle()
   expect(threw).toBe(true)
   expect(norm(w.files.get(LOG('shell')) as string)).toContain('── T · claude · ~/proj · exit 1 · @E\n$ sleep 100\n')
 })
@@ -282,6 +292,7 @@ test('a subagent call (agentId) is mirrored too', async ($, on) => {
   on('tool.call', () => okResult('sub'))
   await $.session.start(START)
   await $.tool.call({ tool: 'Bash', command: 'echo sub', agentId: 'a1' })
+  await settle()
   expect(w.files.get(LOG('shell'))).toContain('$ echo sub\nsub\n')
 })
 
@@ -301,4 +312,57 @@ test('session.start writes the bash-mirror marker; session.end removes it', asyn
   await $.session.end({ sessionId: 'sid1', reason: 'exit' })
   expect(w.runs).toContainEqual(['rm', '-f', '/s/mods-active/sid1.bash-mirror'])
   expect(w.files.has('/s/mods-active/sid1.bash-mirror')).toBe(false)
+})
+
+const REFUSALS = [
+  'Permission to use Bash denied by plugins agent-board: BLOCKED',
+  "Claude requested permissions to use Bash, but you haven't granted it yet.",
+  'The server-side auto mode classifier gave no verdict (it skipped this action), so auto mode cannot determine the safety of Bash.',
+]
+for (const text of REFUSALS) {
+  test(`a refused call is not mirrored: ${text.slice(0, 30)}`, async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'Error: ' + text, text, isError: true }))
+    await $.session.start(START)
+    await bash($, 'ls')
+    expect([...w.files.keys()].filter((k) => k.includes('/feed-'))).toEqual([])
+  })
+}
+
+test('an interrupted or timed-out call is still mirrored as exit 1', async ($, on) => {
+  const w = world(on)
+  on('tool.call', () => ({ result: 'Error: Command timed out', text: 'Command timed out', isError: true }))
+  await $.session.start(START)
+  await bash($, 'sleep 999')
+  expect(norm(w.files.get(LOG('shell')) as string)).toContain(' · exit 1 · @E\n$ sleep 999\nCommand timed out\n')
+})
+
+// the kit cannot make next() reject with a chosen message (a throwing stub is reported as a skipped hook), so the
+// rejection rules are checked on outcome() itself
+test('a rejection carrying "Exit code 3" is exit 3 with the rest as output; without a number it is exit 1', () => {
+  expect(outcome(undefined, true, new Error('Exit code 3\nboom'))).toEqual([3, 'boom'])
+  expect(outcome(undefined, true, new Error('interrupted'))).toEqual([1, 'interrupted'])
+})
+
+test('the tool result does not wait for the feed write', async ($, on) => {
+  let release: () => void = () => {}
+  const w = world(on, {}, { gate: new Promise<void>((r) => (release = r)) })
+  on('tool.call', () => okResult('fast'))
+  await $.session.start(START)
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' })
+  expect(JSON.stringify(r)).toContain('fast')
+  await settle()
+  expect(w.files.has(LOG('shell'))).toBe(false) // the write is still pending
+  release()
+  await settle()
+  expect(w.files.has(LOG('shell'))).toBe(true)
+})
+
+test('a log that exists but cannot be read is not replaced by a one-entry log', async ($, on) => {
+  const w = world(on, {}, { failRead: true })
+  w.files.set(LOG('shell'), 'old entries\n')
+  on('tool.call', () => okResult('x'))
+  await $.session.start(START)
+  await bash($, 'ls')
+  expect(w.files.get(LOG('shell'))).toBe('old entries\n')
 })

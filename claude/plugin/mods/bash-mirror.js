@@ -53,6 +53,9 @@ export function entryText(first, tail, caller, cwd, code, ms) {
   return entry + '\n\n'
 }
 
+// a call that never ran: refused by a guard or a rule, or by auto mode's classifier (probe L1:11, L3:3, L4:3)
+const REFUSED = /^(Permission to use |Claude requested permissions|The server-side auto mode classifier gave no verdict)/
+
 // what the call's result says: [exit code, output text], or null for a call that never ran (refused)
 export function outcome(out, failed, err) {
   if (failed) {
@@ -64,7 +67,7 @@ export function outcome(out, failed, err) {
   const r = out.result
   if (out.isError) {
     const text = typeof out.text === 'string' ? out.text : typeof r === 'string' ? r.replace(/^Error: /, '') : ''
-    if (/^Permission to use /.test(text)) return null
+    if (REFUSED.test(text)) return null
     const m = /^Exit code (\d+)/m.exec(text)
     return [m ? Number(m[1]) : 1, text.replace(/^Exit code \d+\n?/, '')]
   }
@@ -129,13 +132,14 @@ async function mirror($, e, out, failed, err) {
   const ms = await $.clock.now()
   const entry = entryText(first, tail, caller, cwd, code, ms)
   let cur = ''
-  try { cur = await $.fs.read(log) } catch (x) { cur = '' }
+  // a log that exists but cannot be read (e.g. over the $.fs size limit) is not replaced by one holding a single entry
+  if (await $.fs.exists(log)) cur = await $.fs.read(log)
   await $.fs.write(log, trimmed(typeof cur === 'string' ? cur : '') + entry)
 }
 
-async function record($, e, out, failed, err) {
+// starts the chained write; the tool never waits for it
+function record($, e, out, failed, err) {
   q = q.then(() => mirror($, e, out, failed, err)).catch(() => {})
-  await q
 }
 
 export function register(on) {
@@ -144,7 +148,7 @@ export function register(on) {
     let failed = false
     let err
     try { out = await next(e) } catch (x) { failed = true; err = x }
-    try { await record($, e, out, failed, err) } catch (x) { /* never fails the call */ }
+    try { record($, e, out, failed, err) } catch (x) { /* never fails the call */ }
     if (failed) throw err
     return out
   })
