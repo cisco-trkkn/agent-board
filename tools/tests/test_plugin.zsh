@@ -27,6 +27,13 @@ for c in cmds:
         if "/" + n + ".sh" in c: want[n] += 1
 assert all(want.values()), want
 PY
+check "hooks.json registers the agent-status mod" python3 - "$P/hooks/hooks.json" "$P" <<'PY'
+import json, os, sys
+d = json.load(open(sys.argv[1]))
+assert d["modules"] == ["../mods/agent-status.js"], d.get("modules")
+assert os.path.isfile(os.path.join(os.path.dirname(sys.argv[1]), d["modules"][0]))
+PY
+check "plugin.json description names agent-status" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF agent-status' _ "$P/.claude-plugin/plugin.json"
 check "hooks.json registers sdd-call-guard on PreToolUse Agent, --scoped, timeout 10" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]

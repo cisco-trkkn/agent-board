@@ -1,136 +1,172 @@
-// SPIKE version (Task 1): on session.start write {session_id, pane, env_ok} to
-// <state dir>/agent-status/<session_id>.json, plus probe files for the notes
-// (<state dir>/agent-status-probe/). Task 2 replaces this with the real mod.
-// The validator forbids passing $ to helpers and non-literal $.env.get names,
-// so every handler spells its calls inline.
-const msg = (x) => String((x && x.message) || x)
+// agent-status: writes this session's state (ready | busy | needs-you) to
+// <state dir>/agent-status/<session_id>.json so the board reads events, not pane text.
+// State dir = $TC_STATE, else ($TMPDIR minus a trailing "/", default /tmp) + /tmux-ctl-<uid>: the same rule as tc_env.state_dir().
+//
+// `claude plugin validate` forces the style: literal $.env.get names, literal on() event names, and every
+// $ call spelled inline in the handler (no helper takes $). The helpers below work on plain values only.
+// Writes: $.fs.write to <file>.tmp, then `mv` (there is no $.fs rename or delete); a failing mv falls back to a
+// direct write. All writes of this session run one after another (st.q) and render st at write time, so a
+// heartbeat can never put an older state back. Every I/O is wrapped: an error never blocks a tool or a turn.
+
+const HEARTBEAT_MS = 15000
+
+// the one record of this session; null until session.start has resolved the file
+let st = null
+
+const stateDir = (tcState, tmpdir, uid) =>
+  (tcState || (tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid) + '/agent-status'
+
+const secs = (ms) => Math.floor(ms / 1000)
+
+// moves st to `state` at `ms`; `since` changes only with the state
+const setState = (state, ms) => {
+  if (!st || st.ended) return false
+  if (st.state !== state) { st.state = state; st.since = secs(ms) }
+  st.updatedAt = secs(ms)
+  if (state !== 'needs-you') st.askId = null
+  return true
+}
+
+const render = () =>
+  JSON.stringify({ session_id: st.sid, pane: st.pane, state: st.state, since: st.since, updatedAt: st.updatedAt })
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    const probe = { event: 'session.start', eventKeys: Object.keys(e || {}) }
     try {
-      const pane = (await $.env.get('TMUX_PANE')) ?? null
-      const tcState = (await $.env.get('TC_STATE')) ?? null
-      const tmpdir = (await $.env.get('TMPDIR')) ?? null
-      let uid = null
-      try { uid = (await $.process.run(['id', '-u'])).stdout.trim() } catch (x) { uid = 'ERR:' + msg(x) }
-      let sid = null
-      try { sid = await $.session.id() } catch (x) { sid = 'ERR:' + msg(x) }
-      const base = tcState || ((tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid)
-      const dir = base + '/agent-status'
-      Object.assign(probe, { pane, tcState, tmpdir, uid, sid, dir })
-      const body = JSON.stringify({ session_id: sid, pane, env_ok: pane !== null })
-      try { await $.fs.write(dir + '/' + sid + '.json', body); probe.writeDirect = 'ok' } catch (x) { probe.writeDirect = 'ERR:' + msg(x) }
-      if (probe.writeDirect !== 'ok') {
-        try { await $.process.run(['mkdir', '-p', dir]); probe.mkdirViaProcess = 'ok' } catch (x) { probe.mkdirViaProcess = 'ERR:' + msg(x) }
-        try { await $.fs.write(dir + '/' + sid + '.json', body); probe.writeAfterMkdir = 'ok' } catch (x) { probe.writeAfterMkdir = 'ERR:' + msg(x) }
-      }
-      try {
-        await $.process.run(['mv', dir + '/' + sid + '.json', dir + '/' + sid + '.tmp'])
-        await $.process.run(['mv', dir + '/' + sid + '.tmp', dir + '/' + sid + '.json'])
-        probe.mvViaProcess = 'ok'
-      } catch (x) { probe.mvViaProcess = 'ERR:' + msg(x) }
-      await $.process.run(['mkdir', '-p', base + '/agent-status-probe'])
-      await $.fs.write(base + '/agent-status-probe/' + sid + '.session.start.json', JSON.stringify(probe, null, 1))
+      const sid = await $.session.id()
+      const pane = (await $.env.get('TMUX_PANE')) || null
+      const tcState = await $.env.get('TC_STATE')
+      const tmpdir = await $.env.get('TMPDIR')
+      let uid = ''
+      if (!tcState) uid = (await $.process.run(['id', '-u'])).stdout.trim()
+      const file = stateDir(tcState, tmpdir, uid) + '/' + sid + '.json'
+      const now = await $.clock.now()
+      st = { sid, pane, file, tmp: file + '.tmp', state: 'ready', since: secs(now), updatedAt: secs(now), askId: null, ended: false, q: Promise.resolve(), tick: null }
+      st.q = st.q.then(async () => {
+        const body = render()
+        try {
+          await $.fs.write(st.tmp, body)
+          const r = await $.process.run(['mv', st.tmp, st.file])
+          if (r.exitCode !== 0) throw new Error('mv failed')
+        } catch (x) { await $.fs.write(st.file, body) }
+      }).catch(() => {})
+      await st.q
+      st.tick = $.clock.every(HEARTBEAT_MS, async () => {
+        try {
+          if (!setState(st.state, await $.clock.now())) return
+          st.q = st.q.then(async () => {
+            const body = render()
+            try {
+              await $.fs.write(st.tmp, body)
+              const r = await $.process.run(['mv', st.tmp, st.file])
+              if (r.exitCode !== 0) throw new Error('mv failed')
+            } catch (x) { await $.fs.write(st.file, body) }
+          }).catch(() => {})
+          await st.q
+        } catch (x) { /* a heartbeat never throws */ }
+      })
     } catch (x) { /* never block the session */ }
     return next(e)
   })
 
-  // payload probes: event keys, tool names, the tool.check decision shape
-  const seen = new Set()
   on('turn.start', async ($, e, next) => {
-    const t0 = Date.now()
-    const out = await next(e)
-    const t1 = Date.now()
-    const name = 'turn.start' + (e && e.tool ? '.' + e.tool : '')
-    if (!seen.has(name)) {
-      seen.add(name)
-      try {
-        const tcState = await $.env.get('TC_STATE')
-        const tmpdir = await $.env.get('TMPDIR')
-        const uid = (await $.process.run(['id', '-u'])).stdout.trim()
-        const base = tcState || ((tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid)
-        const sid = await $.session.id()
-        await $.fs.write(base + '/agent-status-probe/' + sid + '.' + name + '.json',
-          JSON.stringify({ name, keys: Object.keys(e || {}), tool: e && e.tool, agentId: e && e.agentId, enteredAt: t0, returnedAt: t1, result: out }, null, 1))
-      } catch (x) { /* ignore */ }
-    }
-    return out
+    try {
+      if (setState('busy', await $.clock.now())) {
+        st.q = st.q.then(async () => {
+          const body = render()
+          try {
+            await $.fs.write(st.tmp, body)
+            const r = await $.process.run(['mv', st.tmp, st.file])
+            if (r.exitCode !== 0) throw new Error('mv failed')
+          } catch (x) { await $.fs.write(st.file, body) }
+        }).catch(() => {})
+        await st.q
+      }
+    } catch (x) { /* ignore */ }
+    return next(e)
   })
+
   on('turn.complete', async ($, e, next) => {
-    const t0 = Date.now()
     const out = await next(e)
-    const t1 = Date.now()
-    const name = 'turn.complete' + (e && e.tool ? '.' + e.tool : '')
-    if (!seen.has(name)) {
-      seen.add(name)
-      try {
-        const tcState = await $.env.get('TC_STATE')
-        const tmpdir = await $.env.get('TMPDIR')
-        const uid = (await $.process.run(['id', '-u'])).stdout.trim()
-        const base = tcState || ((tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid)
-        const sid = await $.session.id()
-        await $.fs.write(base + '/agent-status-probe/' + sid + '.' + name + '.json',
-          JSON.stringify({ name, keys: Object.keys(e || {}), tool: e && e.tool, agentId: e && e.agentId, enteredAt: t0, returnedAt: t1, result: out }, null, 1))
-      } catch (x) { /* ignore */ }
-    }
+    try {
+      if (setState('ready', await $.clock.now())) {
+        st.q = st.q.then(async () => {
+          const body = render()
+          try {
+            await $.fs.write(st.tmp, body)
+            const r = await $.process.run(['mv', st.tmp, st.file])
+            if (r.exitCode !== 0) throw new Error('mv failed')
+          } catch (x) { await $.fs.write(st.file, body) }
+        }).catch(() => {})
+        await st.q
+      }
+    } catch (x) { /* ignore */ }
     return out
   })
-  on('tool.check', async ($, e, next) => {
-    const t0 = Date.now()
-    const out = await next(e)
-    const t1 = Date.now()
-    const name = 'tool.check' + (e && e.tool ? '.' + e.tool : '')
-    if (!seen.has(name)) {
-      seen.add(name)
-      try {
-        const tcState = await $.env.get('TC_STATE')
-        const tmpdir = await $.env.get('TMPDIR')
-        const uid = (await $.process.run(['id', '-u'])).stdout.trim()
-        const base = tcState || ((tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid)
-        const sid = await $.session.id()
-        await $.fs.write(base + '/agent-status-probe/' + sid + '.' + name + '.json',
-          JSON.stringify({ name, keys: Object.keys(e || {}), tool: e && e.tool, agentId: e && e.agentId, enteredAt: t0, returnedAt: t1, result: out }, null, 1))
-      } catch (x) { /* ignore */ }
-    }
-    return out
-  })
+
+  // tool.call is entered before tool.check; its next() returns only once the user answered a prompt.
   on('tool.call', async ($, e, next) => {
-    const t0 = Date.now()
+    const ask = e && e.tool === 'AskUserQuestion'
+    try {
+      if (ask && setState('needs-you', await $.clock.now())) {
+        st.askId = (e && e.tool_use_id) || null
+        st.q = st.q.then(async () => {
+          const body = render()
+          try {
+            await $.fs.write(st.tmp, body)
+            const r = await $.process.run(['mv', st.tmp, st.file])
+            if (r.exitCode !== 0) throw new Error('mv failed')
+          } catch (x) { await $.fs.write(st.file, body) }
+        }).catch(() => {})
+        await st.q
+      }
+    } catch (x) { /* ignore */ }
     const out = await next(e)
-    const t1 = Date.now()
-    const name = 'tool.call' + (e && e.tool ? '.' + e.tool : '')
-    if (!seen.has(name)) {
-      seen.add(name)
-      try {
-        const tcState = await $.env.get('TC_STATE')
-        const tmpdir = await $.env.get('TMPDIR')
-        const uid = (await $.process.run(['id', '-u'])).stdout.trim()
-        const base = tcState || ((tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid)
-        const sid = await $.session.id()
-        await $.fs.write(base + '/agent-status-probe/' + sid + '.' + name + '.json',
-          JSON.stringify({ name, keys: Object.keys(e || {}), tool: e && e.tool, agentId: e && e.agentId, enteredAt: t0, returnedAt: t1, result: out }, null, 1))
-      } catch (x) { /* ignore */ }
-    }
+    try {
+      const mine = st && st.state === 'needs-you' && (ask || st.askId === null || st.askId === (e && e.tool_use_id))
+      if (mine && setState('busy', await $.clock.now())) {
+        st.q = st.q.then(async () => {
+          const body = render()
+          try {
+            await $.fs.write(st.tmp, body)
+            const r = await $.process.run(['mv', st.tmp, st.file])
+            if (r.exitCode !== 0) throw new Error('mv failed')
+          } catch (x) { await $.fs.write(st.file, body) }
+        }).catch(() => {})
+        await st.q
+      }
+    } catch (x) { /* ignore */ }
     return out
   })
-  on('session.end', async ($, e, next) => {
-    const t0 = Date.now()
+
+  on('tool.check', async ($, e, next) => {
     const out = await next(e)
-    const t1 = Date.now()
-    const name = 'session.end' + (e && e.tool ? '.' + e.tool : '')
-    if (!seen.has(name)) {
-      seen.add(name)
-      try {
-        const tcState = await $.env.get('TC_STATE')
-        const tmpdir = await $.env.get('TMPDIR')
-        const uid = (await $.process.run(['id', '-u'])).stdout.trim()
-        const base = tcState || ((tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid)
-        const sid = await $.session.id()
-        await $.fs.write(base + '/agent-status-probe/' + sid + '.' + name + '.json',
-          JSON.stringify({ name, keys: Object.keys(e || {}), tool: e && e.tool, agentId: e && e.agentId, enteredAt: t0, returnedAt: t1, result: out }, null, 1))
-      } catch (x) { /* ignore */ }
-    }
+    try {
+      if (out && out.decision === 'ask' && setState('needs-you', await $.clock.now())) {
+        st.askId = (e && e.tool_use_id) || null
+        st.q = st.q.then(async () => {
+          const body = render()
+          try {
+            await $.fs.write(st.tmp, body)
+            const r = await $.process.run(['mv', st.tmp, st.file])
+            if (r.exitCode !== 0) throw new Error('mv failed')
+          } catch (x) { await $.fs.write(st.file, body) }
+        }).catch(() => {})
+        await st.q
+      }
+    } catch (x) { /* ignore */ }
     return out
+  })
+
+  on('session.end', async ($, e, next) => {
+    try {
+      if (st && !st.ended) {
+        st.ended = true
+        if (st.tick) st.tick.cancel()
+        await st.q
+        await $.process.run(['rm', '-f', st.file])
+      }
+    } catch (x) { /* ignore */ }
+    return next(e)
   })
 }
