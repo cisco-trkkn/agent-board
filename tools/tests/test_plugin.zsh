@@ -68,6 +68,7 @@ check "handoff skill is model-invocable (no disable-model-invocation)" zsh -c '!
 check "handoff skill has a Teammate mode section with teammate <name>" zsh -c 'grep -q "^## Teammate mode" "$1" && grep -qF "teammate <name>" "$1"' _ "$H"
 check "handoff self-started relay prints its line" grep -qF 'Handing off to a fresh orchestrator: <doc>' "$H"
 check "handoff asks only when the user started it" grep -qF 'When the user started the handoff, never run the relay without a Yes from this question.' "$H"
+check "lead rules: Handing off on your own, with teammate <name>" zsh -c 'awk "/^## Handing off on your own/{f=1;next} /^## /{f=0} f" "$1" | grep -qF "teammate <name>"' _ "$R/claude/orchestrator.md"
 check "no rule or doc outside docs/superpowers history points at ~/.claude/ideas as THE path" test -z "$(grep -rn '~/.claude/ideas' "$R/claude" "$R/CLAUDE.md" "$R/README.md" "$R/docs/INSTALL.md" "$R/docs/CUSTOMIZATION.md" 2>/dev/null | grep -v 'older\|old ')"
 
 # 3. headless probe
