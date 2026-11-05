@@ -32,24 +32,25 @@ def lead_session(session, home, tmux):
 
 
 def lead_entry(session, home, tmux):
-    """(sessionId, pid) of that sessions entry; ("", 0) when there is none."""
+    """(sessionId, pid, startedAt ms) of that sessions entry; ("", 0, 0) when there is none."""
     try:
         pane = tmux("display", "-p", "-t", f"={session}:claude", "#{window_id}.#{pane_id}").strip()
     except ERRORS:
-        return "", 0
+        return "", 0, 0
     if not pane:
-        return "", 0
-    best = (-1, "", 0)
+        return "", 0, 0
+    best = (-1, "", 0, 0)
     for f in sorted((Path(home) / "sessions").glob("*.json")):
         try:
             e = json.loads(f.read_text())
             if str(e.get("tmux", "")).endswith(pane) and e.get("sessionId"):
                 upd = e.get("updatedAt") or 0
                 if upd > best[0]:
-                    best = (upd, str(e["sessionId"]), e.get("pid") if isinstance(e.get("pid"), int) else 0)
+                    best = (upd, str(e["sessionId"]), e.get("pid") if isinstance(e.get("pid"), int) else 0,
+                            e.get("startedAt") if isinstance(e.get("startedAt"), (int, float)) else 0)
         except (ERRORS + (AttributeError, TypeError)):
             continue
-    return best[1], best[2]
+    return best[1], best[2], best[3]
 
 
 _FENCE = re.compile(r"```json:metadata\s*\n(.*?)\n```", re.S)
@@ -89,27 +90,38 @@ def _finish(tasks):
     return out
 
 
-def team_name(home, sid, pid):
-    """Name of the agent team this lead leads: the teams/*/config.json whose leadSessionId is `sid` or whose
-    leadProcess.pid is `pid` (the team keeps the session id it was created under, the pid survives a new session)."""
+PID_SLACK_MS = 60_000
+
+
+def team_name(home, sid, pid, started=0):
+    """Name of the agent team this lead leads. A teams/*/config.json whose leadSessionId is `sid` wins. Else the
+    team whose leadProcess.pid is `pid` (the team keeps the session id it was created under, the pid survives a
+    new session), guarded against pid reuse: its claimedAt must be no earlier than the session's startedAt minus
+    a minute; of several, the newest claim wins."""
+    best = (-1, "")
     for f in sorted((Path(home) / "teams").glob("*/config.json")):
         try:
             c = json.loads(f.read_text())
+            name = str(c.get("name") or f.parent.name)
+            if sid and c.get("leadSessionId") == sid:
+                return name
             lp = c.get("leadProcess")
-            if (sid and c.get("leadSessionId") == sid) or (pid and isinstance(lp, dict) and lp.get("pid") == pid):
-                return str(c.get("name") or f.parent.name)
+            if pid and isinstance(lp, dict) and lp.get("pid") == pid:
+                claimed = lp.get("claimedAt")
+                if isinstance(claimed, (int, float)) and claimed >= started - PID_SLACK_MS and claimed > best[0]:
+                    best = (claimed, name)
         except (ERRORS + (AttributeError, TypeError)):
             continue
-    return ""
+    return best[1]
 
 
-def live_tasks(home, sid, pid=0):
+def live_tasks(home, sid, pid=0, started=0):
     """The lead's own tasks/session-<id8>/ list; when that is empty and the lead leads a team, tasks/<team>/."""
     if not sid:
         return []
     tasks = _read_dir(Path(home) / "tasks" / f"session-{sid[:8]}")
     if not tasks:
-        team = team_name(home, sid, pid)
+        team = team_name(home, sid, pid, started)
         if team:
             tasks = _read_dir(Path(home) / "tasks" / team)
     return _finish(tasks)
@@ -237,9 +249,9 @@ def _plan_name(plan):
 
 
 def view(session, root, home, state_dir, tmux):
-    sid, pid = lead_entry(session, home, tmux)
+    sid, pid, started = lead_entry(session, home, tmux)
     plan = plan_entry(state_dir, project_of(session, tmux), sid)
-    tasks = live_tasks(home, sid, pid)
+    tasks = live_tasks(home, sid, pid, started)
     if tasks:
         return {"name": _plan_name(plan), "active": True, "tasks": owner_states(session, tasks, tmux)}
     return _idle_view(root, plan, tmux, session)

@@ -218,14 +218,20 @@ EMPTY_VIEW = {"name": "", "active": False, "tasks": []}
 
 
 class TestTeamAndWorktree(Base):
-    def team(self, name="session-aaaaaaaa", lead_sid="aaaaaaaa-0000-0000-0000-000000000000", pid=1001, n=3):
+    STARTED = 1793209013811  # startedAt of the fixture's lead (sessions/1001.json), ms
+
+    def team(self, name="session-aaaaaaaa", lead_sid="aaaaaaaa-0000-0000-0000-000000000000", pid=1001, n=3,
+             claimed=None, subject="team"):
         d = self.home / "teams" / name
         d.mkdir(parents=True)
-        (d / "config.json").write_text(json.dumps({"name": name, "leadSessionId": lead_sid, "leadProcess": {"pid": pid}}))
+        claimed = self.STARTED + 300 if claimed is None else claimed  # real teams claim a few hundred ms after the session starts
+        (d / "config.json").write_text(json.dumps({
+            "name": name, "createdAt": claimed, "leadAgentId": f"team-lead@{name}", "leadSessionId": lead_sid,
+            "leadProcess": {"pid": pid, "pidSpace": "US5TKNM0JCWGW", "claimedAt": claimed}, "members": []}))
         td = self.home / "tasks" / name
         td.mkdir(parents=True)
         for i in range(1, n + 1):
-            (td / f"{i}.json").write_text(json.dumps({"id": str(i), "subject": f"team{i}", "status": "completed"}))
+            (td / f"{i}.json").write_text(json.dumps({"id": str(i), "subject": f"{subject}{i}", "status": "completed"}))
 
     def test_team_list_when_own_dir_is_empty_matched_by_lead_pid(self):
         self.clear_tasks("11111111")
@@ -239,6 +245,28 @@ class TestTeamAndWorktree(Base):
         shutil.rmtree(self.home / "tasks" / "session-11111111")
         self.team(pid=9999, lead_sid=SID1)
         self.assertEqual([t["subject"] for t in self.view()["tasks"]], ["team1", "team2", "team3"])
+
+    def test_old_team_with_a_reused_pid_is_ignored(self):
+        self.clear_tasks("11111111")
+        self.team(claimed=self.STARTED - 3600_000)
+        self.assertFalse(self.view()["active"])
+
+    def test_pid_claim_within_a_minute_before_the_session_start_is_accepted(self):
+        self.clear_tasks("11111111")
+        self.team(claimed=self.STARTED - 59_000)
+        self.assertEqual(len(self.view()["tasks"]), 3)
+
+    def test_newest_claim_wins_among_pid_matches(self):
+        self.clear_tasks("11111111")
+        self.team(name="session-aaaaaaaa", claimed=self.STARTED + 100, subject="old")
+        self.team(name="session-bbbbbbbb", claimed=self.STARTED + 900, subject="new")
+        self.assertEqual(self.view()["tasks"][0]["subject"], "new1")
+
+    def test_lead_session_id_match_beats_a_pid_match(self):
+        self.clear_tasks("11111111")
+        self.team(name="session-aaaaaaaa", claimed=self.STARTED + 900, subject="pid")
+        self.team(name="session-zzzzzzzz", lead_sid=SID1, pid=77, claimed=0, subject="sid")
+        self.assertEqual(self.view()["tasks"][0]["subject"], "sid1")
 
     def test_own_list_wins_over_a_team_list(self):
         self.team()
