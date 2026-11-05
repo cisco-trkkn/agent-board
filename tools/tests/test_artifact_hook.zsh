@@ -38,6 +38,18 @@ hook '{"tool_name":"Artifact","tool_input":{"file_path":"/x/page.html"},"tool_re
 check "published url"       test "$(jq -r .url "$m" | tail -1)" = "https://claude.ai/code/artifact/abc-123"
 ( unset TMUX TMUX_PANE; "$H" --path "$other" --kind other --agent you --project tt )
 check "manual mode"         test "$(jq -r '.agent+" "+.kind' "$m" | tail -1)" = "you other"
+( unset TMUX TMUX_PANE CLAUDE_CODE_SESSION_ID; "$H" --path "$other" --project tt )
+check "manual, no session env"   test "$(jq -r .session_id "$m" | tail -1)" = ""
+( unset TMUX TMUX_PANE; CLAUDE_CODE_SESSION_ID=abc "$H" --path "$other" --project tt )
+check "manual, session from env" test "$(jq -r .session_id "$m" | tail -1)" = abc
+( unset TMUX TMUX_PANE; CLAUDE_CODE_SESSION_ID=abc "$H" --path "$other" --session x --project tt )
+check "manual, --session wins"   test "$(jq -r .session_id "$m" | tail -1)" = x
+CLAUDE_CODE_SESSION_ID=abc hook "{\"tool_name\":\"Write\",\"session_id\":\"S2\",\"tool_input\":{\"file_path\":\"$plan\"}}"
+check "hook mode ignores env"    test "$(jq -r .session_id "$m" | tail -1)" = S2
+# a valueful flag given last, with no value, must not hang the argument loop (the watchdog kills a hang: rc 142)
+( unset TMUX TMUX_PANE; perl -e 'alarm 5; exec @ARGV' "$H" --path "$other" --project tt --session )
+rc=$?
+check "dangling --session exits" test $rc -eq 0
 hook 'not json'; rc=$?
 check "bad input exit 0"    test $rc -eq 0
 out="$( unset TMUX TMUX_PANE; print -r -- "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$plan\"}}" | "$H"; print rc=$? )"

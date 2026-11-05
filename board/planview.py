@@ -141,7 +141,9 @@ def _read_dir(d):
 
 def plan_entry(state_dir, project, sid):
     """Path of the newest `kind == "plan"` manifest line of this session, or None. A line with a blank session_id
-    (`tmux-ctl artifact` of a worktree copy) counts when it names a file this session registered itself."""
+    (`tmux-ctl artifact` of a worktree copy) counts when it names a file this session registered itself. Blank ids
+    come from lines written before manual registrations recorded $CLAUDE_CODE_SESSION_ID, and from `tmux-ctl
+    artifact` run in a plain shell; a non-blank id is matched only by that id."""
     try:
         lines = (Path(state_dir) / f"artifacts-{project}.jsonl").read_text().splitlines()
     except ERRORS:
