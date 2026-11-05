@@ -50,9 +50,9 @@ A closed lid sleeps the Mac whatever `caffeinate` holds, unless it is in clamshe
 
 ### 2. Rules
 
-- **`claude/orchestrator.md` Queue mode, step 1** (after the answers are written to the tasks): run `tmux-ctl awake on`. If it printed the battery warning, tell the user in one line. That is a notice, not a question, so the "ask once" rule is unchanged.
+- **`claude/orchestrator.md` Queue mode, step 1** (after the answers are written to the tasks): run `tmux-ctl awake on --lid`. Without the sudoers rule, this falls back to the plain hold, so the queue asks nothing new. If it printed a battery, lid or heat warning, tell the user in one line. That is a notice, not a question, so the "ask once" rule is unchanged.
 - **Step 5, morning report:** run `tmux-ctl awake sleeps <run start>`, using the earliest `answeredAt`. Add a **Sleep** section listing its lines, or `none`. Then run `tmux-ctl awake off`.
-- **Handoff skill (`claude/plugin/skills/handoff/SKILL.md`), State of the work in queue mode:** add an `Awake: on since <since>` line from `tmux-ctl awake status`. The orchestrator's "Starting from a handoff" step runs `tmux-ctl awake on` when the doc says `Queue mode: on`. The old lead's caffeinate dies with the old lead (`-w`), so the new lead re-arms the hold.
+- **Handoff skill (`claude/plugin/skills/handoff/SKILL.md`), State of the work in queue mode:** add an `Awake: on since <since>` line from `tmux-ctl awake status`. The orchestrator's "Starting from a handoff" step runs `tmux-ctl awake on --lid` when the doc says `Queue mode: on`. The old lead's caffeinate dies with the old lead (`-w`), so the new lead re-arms the hold.
 
 ### 3. Tests
 
