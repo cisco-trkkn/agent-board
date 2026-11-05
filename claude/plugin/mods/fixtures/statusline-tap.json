@@ -1,0 +1,84 @@
+{
+  "session_id": "sid1",
+  "transcript_path": "/work/.claude/projects/-work/sid1.jsonl",
+  "cwd": "/work",
+  "scratchpad_dir": "/tmp/claude-0/-work/sid1/scratchpad",
+  "agent_type": "effort-medium",
+  "effort": {
+    "level": "medium"
+  },
+  "model": {
+    "id": "claude-sonnet-5-5",
+    "display_name": "Sonnet 5.5"
+  },
+  "workspace": {
+    "current_dir": "/work",
+    "project_dir": "/work",
+    "added_dirs": [],
+    "git_worktree": "/work/.claude/worktrees/wt",
+    "repo": {
+      "host": "github.com",
+      "owner": "owner",
+      "name": "repo"
+    }
+  },
+  "version": "2.1.318",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0.7522946000000001,
+    "total_duration_ms": 401251,
+    "total_api_duration_ms": 169342,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "context_window": {
+    "total_input_tokens": 114872,
+    "total_output_tokens": 3,
+    "context_window_size": 1000000,
+    "current_usage": {
+      "input_tokens": 2,
+      "output_tokens": 3,
+      "cache_creation_input_tokens": 3289,
+      "cache_read_input_tokens": 111581
+    },
+    "used_percentage": 11,
+    "remaining_percentage": 89
+  },
+  "exceeds_200k_tokens": false,
+  "prompt_cache": {
+    "warm": true,
+    "caching_observed": true,
+    "ttl": "1h",
+    "expires_at": 1793904301,
+    "requests": 25,
+    "misses": 0,
+    "expected_rebuilds": 0,
+    "hit_ratio": 0.9593523647963679,
+    "cache_write_tokens": 91762,
+    "miss_recache_tokens": 0,
+    "last_miss_at": null,
+    "last_miss_cause": null,
+    "miss_causes": {},
+    "recache_tokens_if_cold": 111585
+  },
+  "fast_mode": false,
+  "thinking": {
+    "enabled": true
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 31,
+      "resets_at": 1793912400
+    },
+    "seven_day": {
+      "used_percentage": 92,
+      "resets_at": 1794074400
+    }
+  },
+  "agent": {
+    "name": "effort-medium"
+  },
+  "received_at": 1793900709.308106
+}

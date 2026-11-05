@@ -2,6 +2,7 @@
 // It also owns the plugin's only session.start and session.end hooks and calls each mod's start/end in order.
 import { register as registerAgentStatus, start as startAgentStatus, end as endAgentStatus } from './agent-status.js'
 import { register as registerTeamBand, start as startTeamBand, end as endTeamBand } from './team-band.js'
+import { register as registerUsageGauges, start as startUsageGauges, end as endUsageGauges } from './usage-gauges.js'
 
 // claude plugin validate allows $ only as an argument to a named function of this module or an imported one, so the
 // per-mod calls are thunks and runAll never sees $.
@@ -13,13 +14,14 @@ export async function runAll(steps) {
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    await runAll([() => startAgentStatus($, e), () => startTeamBand($, e)])
+    await runAll([() => startAgentStatus($, e), () => startTeamBand($, e), () => startUsageGauges($, e)])
     return next(e)
   })
   on('session.end', async ($, e, next) => {
-    await runAll([() => endAgentStatus($, e), () => endTeamBand($, e)])
+    await runAll([() => endAgentStatus($, e), () => endTeamBand($, e), () => endUsageGauges($, e)])
     return next(e)
   })
   registerAgentStatus(on)
   registerTeamBand(on)
+  registerUsageGauges(on)
 }
