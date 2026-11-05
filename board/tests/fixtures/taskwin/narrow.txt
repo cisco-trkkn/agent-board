@@ -3,7 +3,7 @@ tasks-window                           2/6 done   elapsed 2h
 
 ● 1  planview carries tier and bl…  haiku  ✦ scribe gone  1h
 ● 2  timing and celebration state                        30m
-◐ 3  the renderer, cards and …  fable  ✦ painter  12m  ⇠ 1,2
-◌ 🔒 4  watch loop, CLI and a real run      sonnet  12m  ⇠ 3
+◐ *3  the renderer, cards and…  fable  ✦ painter  12m  ⇠ 1,2
+◌ 🔒 *4  watch loop, CLI and a real run     sonnet  12m  ⇠ 3
 ◐ 5  layout opens the …  sonnet  ✦ wiring needs you  3m  ⇠ 1
-◌ 🔒 6  docs name the wind…  fable  ✦ quill idle  12m  ⇠ 4,5
+◌ 🔒 *6  docs name the win…  fable  ✦ quill idle  12m  ⇠ 4,5

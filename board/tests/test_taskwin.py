@@ -120,8 +120,8 @@ class GlyphTest(unittest.TestCase):
         lines = out.split("\n")
         self.assertTrue(any(l.startswith("● 1") for l in lines), out)
         self.assertTrue(any(l.startswith("◐ 2") for l in lines), out)
-        self.assertTrue(any(l.startswith("○ 3") for l in lines), out)
-        self.assertTrue(any(l.startswith("◌ 🔒 4") for l in lines), out)
+        self.assertTrue(any(re.match(r"○ \*?3", l) for l in lines), out)
+        self.assertTrue(any(re.match(r"◌ 🔒 \*?4", l) for l in lines), out)
 
     def test_in_progress_glyph_cycles_with_frame(self):
         v = view_of([task(2, "b", "in_progress")])
@@ -319,17 +319,22 @@ class CelebrationTest(unittest.TestCase):
         self.assertNotIn("Plan done", plain(SIX))
 
 
+def _no_marks(text):
+    """Text without the NO_COLOR critical-path `*` and the layout fill it shifts (dashes, spaces)."""
+    return re.sub(r"[*─ ]+", " ", text)
+
+
 class ColourTest(unittest.TestCase):
     def test_truecolor_uses_24bit_sequences(self):
         out = taskwin.render(SIX, SIX_TIMING, 120, 40, NOW, 0, "truecolor")
         self.assertIn("38;2;", out)
-        self.assertEqual(taskwin.strip(out), plain(SIX))
+        self.assertEqual(_no_marks(taskwin.strip(out)), _no_marks(plain(SIX)))
 
     def test_256_uses_palette_sequences_only(self):
         out = taskwin.render(SIX, SIX_TIMING, 120, 40, NOW, 0, "256")
         self.assertIn("38;5;", out)
         self.assertNotIn("38;2;", out)
-        self.assertEqual(taskwin.strip(out), plain(SIX))
+        self.assertEqual(_no_marks(taskwin.strip(out)), _no_marks(plain(SIX)))
 
     def test_colour_lines_reset_and_respect_width(self):
         out = taskwin.render(SIX, SIX_TIMING, 120, 40, NOW, 0, "truecolor")
@@ -389,6 +394,69 @@ class TierModelTest(unittest.TestCase):
         out = plain(v, 120, 30, t={}, tier_model={"standard": "opus"})
         self.assertIn("haiku", out)
         self.assertIn("opus", out)
+
+
+class PolishTest(unittest.TestCase):
+    def two_done(self):
+        ev = [{"kind": "done", "id": "1", "at": NOW - 1}, {"kind": "done", "id": "2", "at": NOW - 1.5}]
+        return timing({"1": NOW - 1, "2": NOW - 1.5}, events=ev)
+
+    def test_every_young_done_flashes_in_graph(self):
+        v = view_of([task(1, "a", "completed"), task(2, "b", "completed"), task(3, "c", "pending", [1, 2])])
+        col = taskwin.render(v, self.two_done(), 120, 40, NOW, 0, "256")
+        tops = [l for l in col.split("\n") if "╭" in l]
+        self.assertTrue(any("\x1b[7" in l and " 1 " in taskwin.strip(l) for l in tops))
+        self.assertTrue(any("\x1b[7" in l and " 2 " in taskwin.strip(l) for l in tops))
+
+    def test_every_young_done_flashes_in_list(self):
+        v = view_of([task(1, "a", "completed"), task(2, "b", "completed"), task(3, "c", "pending", [1, 2])])
+        lines = taskwin.render(v, self.two_done(), 60, 40, NOW, 0, "256").split("\n")
+        for i in ("1", "2"):
+            line = next(l for l in lines if taskwin.strip(l).startswith("● " + i + " "))
+            self.assertIn("\x1b[7", line, i)
+
+    def test_old_done_does_not_flash(self):
+        ev = [{"kind": "done", "id": "1", "at": NOW - 5}]
+        v = view_of([task(1, "a", "completed"), task(2, "b", "pending", [1])])
+        col = taskwin.render(v, timing({"1": NOW - 5}, events=ev), 60, 40, NOW, 0, "256")
+        self.assertNotIn("\x1b[7", col)
+
+    def test_header_names_one_done_task(self):
+        v = view_of([task(1, "a", "completed"), task(2, "b", "completed"), task(3, "c", "pending", [1, 2])])
+        self.assertEqual(plain(v, 120, 40, t=self.two_done()).count("✦ Task"), 1)  # one header line, first event
+
+    def test_list_overflow_ends_in_plus_n_more(self):
+        v = view_of([task(i, f"t{i}", "pending") for i in range(1, 21)])
+        out = plain(v, 60, 10, t={})          # 3 header rows, 7 body rows
+        lines = out.split("\n")
+        self.assertEqual(lines[-1].strip(), "+14 more")   # 6 shown, 14 not
+        check_plain(self, out, 60, 10)
+
+    def test_plus_n_more_counts_only_unfinished(self):
+        v = view_of([task(i, f"t{i}", "completed") for i in range(1, 4)] +
+                    [task(i, f"t{i}", "pending") for i in range(4, 24)])
+        lines = plain(v, 60, 10, t={}).split("\n")
+        self.assertTrue(lines[3].startswith("●"))          # done summary row
+        self.assertEqual(lines[-1].strip(), "+15 more")    # 7 body rows: summary, 5 tasks, +N → 20-5
+
+    def test_no_plus_n_more_when_everything_fits(self):
+        v = view_of([task(i, f"t{i}", "pending") for i in range(1, 5)])
+        self.assertNotIn("more", plain(v, 60, 20, t={}))
+
+    def test_no_color_marks_critical_path(self):
+        v = view_of(chain(3) + [task(9, "lone", "pending")])
+        out = plain(v, 120, 40, t={})
+        for i in ("1", "2", "3"):
+            self.assertRegex(out, r"╭─ \S \*" + i + " ")
+        self.assertNotIn("*9", out)
+        narrow = plain(v, 60, 40, t={})
+        for i in ("1", "2", "3"):
+            self.assertRegex(narrow, r"(?m)^\S \*" + i + " ")
+        self.assertRegex(narrow, r"(?m)^\S 9 ")
+
+    def test_colour_has_no_star(self):
+        v = view_of(chain(3))
+        self.assertNotIn("*", taskwin.strip(taskwin.render(v, {}, 120, 40, NOW, 0, "256")))
 
 
 if __name__ == "__main__":

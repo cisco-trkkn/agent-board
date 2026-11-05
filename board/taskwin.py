@@ -312,6 +312,12 @@ def _young(timing, kind, now, ttl):
     return None
 
 
+def _young_ids(timing, now):
+    """Ids of every task with a `done` event younger than DONE_TTL."""
+    return {str(e.get("id")) for e in (timing or {}).get("events") or []
+            if isinstance(e, dict) and e.get("kind") == "done" and 0 <= now - (e.get("at") or 0) < DONE_TTL}
+
+
 def _summary(tasks):
     return f"● {tasks[0]['id']}–{tasks[-1]['id']} done" if len(tasks) > 1 else f"● {tasks[0]['id']} done"
 
@@ -402,7 +408,7 @@ def _plan_graph(tasks, width, avail):
     return live, [t for t in tasks if t["id"] in gone], _card_width(len(live), width)
 
 
-def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash, tier_model=None):
+def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash, tier_model=None, color=""):
     border = ("accent",) if accent else ("grey",)
     extra = ("inverse",) if flash else ()
     inner = cw - 2
@@ -410,7 +416,8 @@ def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash, tier_model=No
     # top: ╭─ ◐ 3 ─────╮
     cv.put(x, y, "╭─ ", border + extra)
     xx = cv.put(x + 3, y, _status_glyph(t, frame), (STATUS_STYLE.get(st, "grey"),) + extra)
-    xx = cv.put(xx, y, " " + t["id"] + " ", ("bold",) + extra)
+    mark = "*" if accent and color == "none" else ""
+    xx = cv.put(xx, y, " " + mark + t["id"] + " ", ("bold",) + extra)
     cv.put(xx, y, "─" * max(0, x + cw - 1 - xx), border + extra)
     cv.put(x + cw - 1, y, "╮", border + extra)
     # subject
@@ -498,7 +505,7 @@ def _draw_edges(cv, cols, cw, pos):
             cv.ch[y][x] = "┤"
 
 
-def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model=None):
+def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model=None, crit=None):
     plan = _plan_graph(tasks, width, avail)
     if plan is None:
         return None
@@ -516,22 +523,22 @@ def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_
     if spans_top and rows + 1 <= avail:
         rows += 1
     cv = Canvas(width, rows)
-    crit = set(critical_path(tasks))
+    crit = set(critical_path(tasks)) if crit is None else crit
     for c, col in enumerate(cols):
         x = c * (cw + GUTTER)
         for r, t in enumerate(col):
-            _draw_card(cv, x, r * (CARD_H + GAP), cw, t, timing, now, frame, t["id"] in crit, t["id"] == flash_id,
-                       tier_model)
+            _draw_card(cv, x, r * (CARD_H + GAP), cw, t, timing, now, frame, t["id"] in crit, t["id"] in flash_ids,
+                       tier_model, color)
     _draw_edges(cv, cols, cw, pos)
     return head + cv.lines(color)
 
 
 # ---------------------------------------------------------------- list layout
 
-def _list_line(cv, y, width, t, timing, now, frame, flash, tier_model=None):
+def _list_line(cv, y, width, t, timing, now, frame, flash, tier_model=None, mark=False):
     extra = ("inverse",) if flash else ()
     st = t["status"]
-    head = [(_status_glyph(t, frame), (STATUS_STYLE.get(st, "grey"),)), (" " + t["id"] + "  ", ("bold",))]
+    head = [(_status_glyph(t, frame), (STATUS_STYLE.get(st, "grey"),)), (" " + ("*" if mark else "") + t["id"] + "  ", ("bold",))]
     # tail pieces in display order; `drop` is the order they go when the line is too narrow
     parts = {}
     badge = _badge(t, tier_model)
@@ -569,7 +576,7 @@ def _list_line(cv, y, width, t, timing, now, frame, flash, tier_model=None):
     cv.put_segs(width - tw, y, tail, tw, extra)  # right-aligned, so the hints line up at the edge
 
 
-def _list_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model=None):
+def _list_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model=None, crit=None):
     rows = list(tasks)
     summary = None
     if len(rows) > avail:
@@ -583,11 +590,17 @@ def _list_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_m
     if summary and y < n:
         cv.put(0, y, truncate(summary, width), ("green",))
         y += 1
-    for t in rows:
-        if y >= n:
-            break
-        _list_line(cv, y, width, t, timing, now, frame, t["id"] == flash_id, tier_model)
+    crit = set(critical_path(tasks)) if crit is None else crit
+    room = n - y
+    show = rows
+    if len(rows) > room:
+        show = rows[:max(0, room - 1)]
+    for t in show:
+        _list_line(cv, y, width, t, timing, now, frame, t["id"] in flash_ids, tier_model,
+                   color == "none" and t["id"] in crit)
         y += 1
+    if len(show) < len(rows) and y < n:
+        cv.put(0, y, truncate(f"+{len(rows) - len(show)} more", width), ("grey",))
     return cv.lines(color)
 
 
@@ -618,13 +631,14 @@ def render(view, timing, width, height, now, frame, color, session="", tier_mode
         return "\n".join(_idle(view or {}, width, height, color, session))
     cv = Canvas(width, HEADER_ROWS)
     done_ev = _header(cv, view, tasks, timing, width, now, frame)
-    flash_id = str(done_ev.get("id")) if done_ev else None
+    flash_ids = _young_ids(timing, now)
+    crit = set(critical_path(tasks))
     avail = max(0, height - HEADER_ROWS)
     body = None
     if width >= GRAPH_MIN_WIDTH:
-        body = _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model)
+        body = _graph_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model, crit)
     if body is None:
-        body = _list_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model)
+        body = _list_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model, crit)
     return "\n".join(_trim(cv.lines(color) + body, height))
 
 
