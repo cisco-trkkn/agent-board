@@ -97,6 +97,25 @@ class TestWatch(Base):
         self.assertTrue(out.endswith("\x1b[?25h"))
         self.assertEqual(len(calls), 3, "the loop continued after the error")
 
+    def one_task_view(self, name):
+        return {"name": name, "active": True, "tasks": [
+            {"id": "1", "subject": "only", "status": "pending", "owner": "", "state": "", "tier": "standard",
+             "blockedBy": []}]}
+
+    def test_load_tier_model_once_per_plan_name(self):
+        names = iter(["a", "a", "b"])
+        with mock.patch("taskwin.load_tier_model", wraps=taskwin.load_tier_model) as m:
+            self.run_watch(3, view=lambda *a, **k: self.one_task_view(next(names)))
+        self.assertEqual(m.call_count, 2)
+
+    def test_frame_shows_routed_model(self):
+        p = self.repo / "docs" / "superpowers"
+        p.mkdir(parents=True, exist_ok=True)
+        (p / "model-routing.json").write_text('{"standard": "opus"}')
+        out = self.run_watch(1, view=lambda *a, **k: self.one_task_view("a"))
+        self.assertIn("opus", out)
+        self.assertNotIn("sonnet", out)
+
     def test_sigterm_handler_restores_cursor(self):
         out = io.StringIO()
         with redirect_stdout(out), mock.patch("time.sleep"), mock.patch("planview.view", side_effect=SystemExit(0)), \
@@ -104,6 +123,29 @@ class TestWatch(Base):
             with self.assertRaises(SystemExit):
                 taskwin.watch("proj", self.repo, self.home, interval=0, frames=5)
         self.assertTrue(out.getvalue().endswith("\x1b[?25h"))
+
+
+class TestTierModel(Base):
+    def write(self, text):
+        p = self.repo / "docs" / "superpowers"
+        p.mkdir(parents=True, exist_ok=True)
+        (p / "model-routing.json").write_text(text)
+
+    def test_reads_string_values(self):
+        self.write('{"mechanical": "haiku", "standard": "opus", "frontier": "inherit", "enforceEffort": true}')
+        self.assertEqual(taskwin.load_tier_model(self.repo),
+                         {"mechanical": "haiku", "standard": "opus", "frontier": "inherit"})
+
+    def test_falls_back_per_tier(self):
+        self.write('{"standard": 3, "frontier": "opus"}')
+        self.assertEqual(taskwin.load_tier_model(self.repo),
+                         {"mechanical": "haiku", "standard": "sonnet", "frontier": "opus"})
+
+    def test_missing_malformed_and_non_dict_fall_back(self):
+        self.assertEqual(taskwin.load_tier_model(self.repo / "nope"), taskwin.TIER_MODEL)
+        for bad in ("{not json", "[1, 2]", ""):
+            self.write(bad)
+            self.assertEqual(taskwin.load_tier_model(self.repo), taskwin.TIER_MODEL, bad)
 
 
 if __name__ == "__main__":

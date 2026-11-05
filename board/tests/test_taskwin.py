@@ -120,8 +120,8 @@ class GlyphTest(unittest.TestCase):
         lines = out.split("\n")
         self.assertTrue(any(l.startswith("● 1") for l in lines), out)
         self.assertTrue(any(l.startswith("◐ 2") for l in lines), out)
-        self.assertTrue(any(l.startswith("○ 3") for l in lines), out)
-        self.assertTrue(any(l.startswith("◌ 🔒 4") for l in lines), out)
+        self.assertTrue(any(re.match(r"○ \*?3", l) for l in lines), out)
+        self.assertTrue(any(re.match(r"◌ 🔒 \*?4", l) for l in lines), out)
 
     def test_in_progress_glyph_cycles_with_frame(self):
         v = view_of([task(2, "b", "in_progress")])
@@ -319,17 +319,22 @@ class CelebrationTest(unittest.TestCase):
         self.assertNotIn("Plan done", plain(SIX))
 
 
+def _no_marks(text):
+    """Text without the NO_COLOR critical-path `*` and the layout fill it shifts (dashes, spaces)."""
+    return re.sub(r"[*─ ]+", " ", text)
+
+
 class ColourTest(unittest.TestCase):
     def test_truecolor_uses_24bit_sequences(self):
         out = taskwin.render(SIX, SIX_TIMING, 120, 40, NOW, 0, "truecolor")
         self.assertIn("38;2;", out)
-        self.assertEqual(taskwin.strip(out), plain(SIX))
+        self.assertEqual(_no_marks(taskwin.strip(out)), _no_marks(plain(SIX)))
 
     def test_256_uses_palette_sequences_only(self):
         out = taskwin.render(SIX, SIX_TIMING, 120, 40, NOW, 0, "256")
         self.assertIn("38;5;", out)
         self.assertNotIn("38;2;", out)
-        self.assertEqual(taskwin.strip(out), plain(SIX))
+        self.assertEqual(_no_marks(taskwin.strip(out)), _no_marks(plain(SIX)))
 
     def test_colour_lines_reset_and_respect_width(self):
         out = taskwin.render(SIX, SIX_TIMING, 120, 40, NOW, 0, "truecolor")
@@ -366,6 +371,251 @@ class ImportTest(unittest.TestCase):
         r = subprocess.run([sys.executable, "-I", str(Path(taskwin.__file__))], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, "")
+
+
+class TierModelTest(unittest.TestCase):
+    def test_routing_override_badges_new_model_in_default_style(self):
+        v = view_of([task(1, "a", "pending", tier="standard")])
+        out = plain(v, 120, 30, t={}, tier_model={"standard": "opus"})
+        self.assertIn("opus", out)
+        self.assertNotIn("sonnet", out)
+        col = taskwin.render(v, {}, 120, 30, NOW, 0, "256", tier_model={"standard": "opus"})
+        i = col.index("opus")
+        self.assertNotIn(taskwin.SGR["blue"][1], col[max(0, i - 20):i])  # default style, not sonnet's blue
+
+    def test_inherit_shows_no_badge(self):
+        v = view_of([task(1, "a", "pending", tier="frontier")])
+        out = plain(v, 120, 30, t={}, tier_model={"frontier": "inherit"})
+        self.assertNotIn("inherit", out)
+        self.assertNotIn("fable", out)
+
+    def test_partial_mapping_keeps_defaults_for_other_tiers(self):
+        v = view_of([task(1, "a", "pending", tier="mechanical"), task(2, "b", "pending", tier="standard")])
+        out = plain(v, 120, 30, t={}, tier_model={"standard": "opus"})
+        self.assertIn("haiku", out)
+        self.assertIn("opus", out)
+
+
+class PolishTest(unittest.TestCase):
+    def two_done(self):
+        ev = [{"kind": "done", "id": "1", "at": NOW - 1}, {"kind": "done", "id": "2", "at": NOW - 1.5}]
+        return timing({"1": NOW - 1, "2": NOW - 1.5}, events=ev)
+
+    def test_every_young_done_flashes_in_graph(self):
+        v = view_of([task(1, "a", "completed"), task(2, "b", "completed"), task(3, "c", "pending", [1, 2])])
+        col = taskwin.render(v, self.two_done(), 120, 40, NOW, 0, "256")
+        tops = [l for l in col.split("\n") if "╭" in l]
+        self.assertTrue(any("\x1b[7" in l and " 1 " in taskwin.strip(l) for l in tops))
+        self.assertTrue(any("\x1b[7" in l and " 2 " in taskwin.strip(l) for l in tops))
+
+    def test_every_young_done_flashes_in_list(self):
+        v = view_of([task(1, "a", "completed"), task(2, "b", "completed"), task(3, "c", "pending", [1, 2])])
+        lines = taskwin.render(v, self.two_done(), 60, 40, NOW, 0, "256").split("\n")
+        for i in ("1", "2"):
+            line = next(l for l in lines if taskwin.strip(l).startswith("● " + i + " "))
+            self.assertIn("\x1b[7", line, i)
+
+    def test_old_done_does_not_flash(self):
+        ev = [{"kind": "done", "id": "1", "at": NOW - 5}]
+        v = view_of([task(1, "a", "completed"), task(2, "b", "pending", [1])])
+        col = taskwin.render(v, timing({"1": NOW - 5}, events=ev), 60, 40, NOW, 0, "256")
+        self.assertNotIn("\x1b[7", col)
+
+    def test_header_names_one_done_task(self):
+        v = view_of([task(1, "a", "completed"), task(2, "b", "completed"), task(3, "c", "pending", [1, 2])])
+        self.assertEqual(plain(v, 120, 40, t=self.two_done()).count("✦ Task"), 1)  # one header line, first event
+
+    def test_list_overflow_ends_in_plus_n_more(self):
+        v = view_of([task(i, f"t{i}", "pending") for i in range(1, 21)])
+        out = plain(v, 60, 10, t={})          # 3 header rows, 7 body rows
+        lines = out.split("\n")
+        self.assertEqual(lines[-1].strip(), "+14 more")   # 6 shown, 14 not
+        check_plain(self, out, 60, 10)
+
+    def test_plus_n_more_counts_only_unfinished(self):
+        v = view_of([task(i, f"t{i}", "completed") for i in range(1, 4)] +
+                    [task(i, f"t{i}", "pending") for i in range(4, 24)])
+        lines = plain(v, 60, 10, t={}).split("\n")
+        self.assertTrue(lines[3].startswith("●"))          # done summary row
+        self.assertEqual(lines[-1].strip(), "+15 more")    # 7 body rows: summary, 5 tasks, +N → 20-5
+
+    def test_no_plus_n_more_when_everything_fits(self):
+        v = view_of([task(i, f"t{i}", "pending") for i in range(1, 5)])
+        self.assertNotIn("more", plain(v, 60, 20, t={}))
+
+    def test_no_color_marks_critical_path(self):
+        v = view_of(chain(3) + [task(9, "lone", "pending")])
+        out = plain(v, 120, 40, t={})
+        for i in ("1", "2", "3"):
+            self.assertRegex(out, r"╭─ \S \*" + i + " ")
+        self.assertNotIn("*9", out)
+        narrow = plain(v, 60, 40, t={})
+        for i in ("1", "2", "3"):
+            self.assertRegex(narrow, r"(?m)^\S \*" + i + " ")
+        self.assertRegex(narrow, r"(?m)^\S 9 ")
+
+    def test_colour_has_no_star(self):
+        v = view_of(chain(3))
+        self.assertNotIn("*", taskwin.strip(taskwin.render(v, {}, 120, 40, NOW, 0, "256")))
+
+
+class LaneTest(unittest.TestCase):
+    """Gutter cells are xs+1..xd-1 (4 cells). Expected strings derived by hand from the lane rules:
+    a cell's glyph is set by which of left/right/up/down arms the edges give it (┬ L+R+D, ┴ L+R+U, ├ U+D+R,
+    ┤ L+U+D, ┼ all, ╮ L+D, ╭ R+D, ╰ U+R, ╯ L+U), lane k of a gutter sits at xs+1+k. In full cards an edge leaves
+    its blocker on the subject row (card row +1) and enters the dependent on the badge row (+2) with ▸ at xd-1."""
+
+    def geom(self, ncols):
+        cw = taskwin._card_width(ncols, 120)
+        return cw, cw - 1, cw + taskwin.GUTTER
+
+    def exit_y(self, r):
+        return taskwin.HEADER_ROWS + r * (taskwin.CARD_H + taskwin.GAP) + 1
+
+    def entry_y(self, r):
+        return self.exit_y(r) + 1
+
+    def gutter(self, out, y, xs, xd):
+        return out.split("\n")[y][xs + 1:xd]
+
+    def test_exit_and_entry_rows_are_distinct(self):
+        # A (row 0) blocks D1 (row 1); B (row 1) blocks D0 (row 0): A's exit must not read as B's entry.
+        v = view_of([task(1, "a", "pending"), task(2, "b", "pending"), task(3, "c", "pending", [2]),
+                     task(4, "d", "pending", [1])])
+        out = plain(v, 120, 40, t={})
+        cw, xs, xd = self.geom(2)
+        # lanes: A xs+1, B xs+2. A exits row 0 (╮: left arm + down), enters D1 on row 1's entry row.
+        self.assertEqual(self.gutter(out, self.exit_y(0), xs, xd), "╮   ")          # exit: no ▸
+        self.assertEqual(self.gutter(out, self.entry_y(0), xs, xd), "│╭─▸")          # D0 entered by B (lane 2 top)
+        self.assertEqual(self.gutter(out, self.exit_y(1), xs, xd), "┼╯  ")           # B exits, crossing A's lane; no ▸
+        self.assertEqual(self.gutter(out, self.entry_y(1), xs, xd), "╰──▸")          # D1 entered by A
+        for r in (0, 1):
+            self.assertNotIn("▸", self.gutter(out, self.exit_y(r), xs, xd))
+            self.assertEqual(out.split("\n")[self.entry_y(r)][xd], "│")
+
+    def test_two_blockers_two_dependents_get_distinct_lanes(self):
+        v = view_of([task(1, "a", "pending"), task(2, "b", "pending"),
+                     task(3, "c", "pending", [1, 2]), task(4, "d", "pending", [1, 2])])
+        out = plain(v, 120, 40, t={})
+        cw, xs, xd = self.geom(2)
+        self.assertEqual(self.gutter(out, self.exit_y(0), xs, xd), "╮   ")
+        self.assertEqual(self.gutter(out, self.entry_y(0), xs, xd), "├┬─▸")
+        self.assertEqual(self.gutter(out, self.exit_y(1), xs, xd), "┼┤  ")
+        self.assertEqual(self.gutter(out, self.entry_y(1), xs, xd), "╰┴─▸")
+        for r in (0, 1):
+            self.assertEqual(out.split("\n")[self.entry_y(r)][xd - 1], "▸")
+            self.assertEqual(out.split("\n")[self.entry_y(r)][xd], "│")
+        self.assertEqual(out.count("▸"), 2)
+
+    def test_crossing_draws_cross_glyph(self):
+        # blocker 1 (row 0) feeds task 5 (row 2): lane xs+1 runs rows 0-2; blocker 2 (row 1) feeds tasks 3 and 4
+        v = view_of([task(1, "a", "pending"), task(2, "b", "pending"), task(3, "c", "pending", [2]),
+                     task(4, "d", "pending", [2]), task(5, "e", "pending", [1])])
+        out = plain(v, 120, 40, t={})
+        cw, xs, xd = self.geom(2)
+        self.assertEqual(self.gutter(out, self.exit_y(0), xs, xd), "╮   ")
+        self.assertEqual(self.gutter(out, self.entry_y(0), xs, xd), "│╭─▸")
+        self.assertEqual(self.gutter(out, self.exit_y(1), xs, xd), "┼┤  ")
+        self.assertEqual(self.gutter(out, self.entry_y(2), xs, xd), "╰──▸")
+
+    def test_five_blockers_share_the_last_lane(self):
+        v = view_of([task(i, f"b{i}", "pending") for i in range(1, 6)] + [task(6, "d", "pending", [1, 2, 3, 4, 5])])
+        out = plain(v, 120, 40, t={})
+        cw, xs, xd = self.geom(2)
+        gap = taskwin.HEADER_ROWS + 2 * (taskwin.CARD_H + taskwin.GAP) + taskwin.CARD_H  # gap below row 2
+        line = out.split("\n")[gap]
+        self.assertEqual(line[xs + 1:xs + 4], "  │")   # blockers 3-5 share lane 2; lanes 0, 1 ended above
+        self.assertEqual(out.count("▸"), 1)
+        self.assertEqual(out.split("\n")[self.entry_y(0)][xd - 1:xd + 1], "▸│")  # entered border stays │
+
+    def test_spanning_edge_routes_along_gap_row_and_ends_in_arrow(self):
+        v = view_of([task(1, "a", "pending"), task(2, "b", "pending", [1]), task(3, "c", "pending", [1, 2])])
+        out = plain(v, 120, 40, t={})
+        cw = taskwin._card_width(3, 120)
+        bus_a = cw                       # blocker 1 is lane 0 of gutter 0
+        bus_b = (cw + taskwin.GUTTER) + cw   # and lane 0 of gutter 1
+        xd3 = 2 * (cw + taskwin.GUTTER)
+        self.assertEqual(out.split("\n")[self.entry_y(0)][xd3 - 1], "▸")
+        gap = out.split("\n")[taskwin.HEADER_ROWS + taskwin.CARD_H]
+        self.assertEqual(gap[bus_a], "╰")
+        self.assertEqual(gap[bus_b], "╯")
+        self.assertEqual(gap[bus_a + 1:bus_b], "─" * (bus_b - bus_a - 1))
+
+
+def roots_plan(nroots):
+    """14 tasks: `nroots` roots, the rest a short dependency tail over them."""
+    ts = [task(i, f"root task {i}", "pending", tier="standard") for i in range(1, nroots + 1)]
+    rest = list(range(nroots + 1, 15))
+    for k, i in enumerate(rest):
+        blockers = [rest[k - 1]] if k else [1, 2]
+        if k == len(rest) - 1:
+            blockers = blockers + [3, 4]
+        ts.append(task(i, f"tail task {i}", "pending", blockers, tier="standard"))
+    return view_of(ts)
+
+
+class CompactTest(unittest.TestCase):
+    def is_compact(self, out):
+        lines = out.split("\n")
+        tops = [k for k, l in enumerate(lines) if "╭─ " in l]  # card tops; a connector corner ╭ is not followed by a space
+        return bool(tops) and all("╰" in lines[k + 1] for k in tops)
+
+    def test_nine_roots_at_120x40_is_compact(self):
+        out = plain(roots_plan(9), 120, 40, t={})
+        check_plain(self, out, 120, 40)
+        self.assertIn("╭", out)
+        self.assertTrue(self.is_compact(out))
+
+    def test_twelve_roots_at_120x50_is_compact(self):
+        out = plain(roots_plan(12), 120, 50, t={})
+        check_plain(self, out, 120, 50)
+        self.assertTrue(self.is_compact(out))
+
+    def test_tall_terminal_keeps_full_cards(self):
+        out = plain(roots_plan(9), 120, 200, t={})
+        self.assertIn("╭", out)
+        self.assertFalse(self.is_compact(out))
+        self.assertRegex(out, r"│ root task 1")
+
+    def test_invariants_at_all_sizes(self):
+        for n in (9, 12):
+            for w, h in ((120, 40), (120, 50), (120, 200), (80, 30)):
+                check_plain(self, plain(roots_plan(n), w, h, t={}), w, h)
+
+    def test_compact_rows_and_drop_order(self):
+        v = view_of([task(1, "first subject", "in_progress", owner="ann", state="working", tier="standard")] +
+                    [task(i, f"r{i}", "pending") for i in range(2, 13)])
+        t = timing({"1": NOW - 720})
+        out = plain(v, 120, 40, t=t)
+        lines = out.split("\n")
+        k = next(k for k, l in enumerate(lines) if " 1 first" in l)
+        self.assertRegex(lines[k], r"╭─ \S 1 first subject")
+        self.assertRegex(lines[k + 1], r"╰─ sonnet · ✦ ann.* · 12m ─+╯")
+
+    def test_drop_order_badge_then_owner_then_duration(self):
+        t = task(1, "s", "in_progress", owner="ann", state="working", tier="standard")
+        tm = timing({"1": NOW - 720})
+        full = len("╰─ sonnet · ✦ ann · 12m ─╯")
+
+        def bottom(cw):
+            cv = taskwin.Canvas(cw, 2)
+            taskwin._draw_compact(cv, 0, 0, cw, t, tm, NOW, 0, False, False)
+            return cv.lines("none")[1]
+        self.assertIn("sonnet", bottom(full + 4))
+        mid = bottom(len("╰─ ✦ ann · 12m ─╯") + 2)
+        self.assertNotIn("sonnet", mid)
+        self.assertIn("ann", mid)
+        tiny = bottom(len("╰─ 12m ─╯") + 1)
+        self.assertIn("12m", tiny)
+        self.assertNotIn("sonnet", tiny)
+        self.assertNotIn("ann", tiny)
+
+    def test_compact_edges_enter_on_top_row(self):
+        out = plain(roots_plan(12), 120, 50, t={})
+        arrows = [l for l in out.split("\n") if "▸" in l]
+        self.assertTrue(arrows)
+        for l in arrows:
+            self.assertIn("╭", l)
 
 
 if __name__ == "__main__":
