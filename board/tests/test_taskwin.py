@@ -524,5 +524,81 @@ class LaneTest(unittest.TestCase):
         self.assertEqual(gap[bus_a + 1:bus_b], "─" * (bus_b - bus_a - 1))
 
 
+def roots_plan(nroots):
+    """14 tasks: `nroots` roots, the rest a short dependency tail over them."""
+    ts = [task(i, f"root task {i}", "pending", tier="standard") for i in range(1, nroots + 1)]
+    rest = list(range(nroots + 1, 15))
+    for k, i in enumerate(rest):
+        blockers = [rest[k - 1]] if k else [1, 2]
+        if k == len(rest) - 1:
+            blockers = blockers + [3, 4]
+        ts.append(task(i, f"tail task {i}", "pending", blockers, tier="standard"))
+    return view_of(ts)
+
+
+class CompactTest(unittest.TestCase):
+    def is_compact(self, out):
+        lines = out.split("\n")
+        tops = [k for k, l in enumerate(lines) if "╭─ " in l]  # card tops; a connector corner ╭ is not followed by a space
+        return bool(tops) and all("╰" in lines[k + 1] for k in tops)
+
+    def test_nine_roots_at_120x40_is_compact(self):
+        out = plain(roots_plan(9), 120, 40, t={})
+        check_plain(self, out, 120, 40)
+        self.assertIn("╭", out)
+        self.assertTrue(self.is_compact(out))
+
+    def test_twelve_roots_at_120x50_is_compact(self):
+        out = plain(roots_plan(12), 120, 50, t={})
+        check_plain(self, out, 120, 50)
+        self.assertTrue(self.is_compact(out))
+
+    def test_tall_terminal_keeps_full_cards(self):
+        out = plain(roots_plan(9), 120, 200, t={})
+        self.assertIn("╭", out)
+        self.assertFalse(self.is_compact(out))
+        self.assertRegex(out, r"│ root task 1")
+
+    def test_invariants_at_all_sizes(self):
+        for n in (9, 12):
+            for w, h in ((120, 40), (120, 50), (120, 200), (80, 30)):
+                check_plain(self, plain(roots_plan(n), w, h, t={}), w, h)
+
+    def test_compact_rows_and_drop_order(self):
+        v = view_of([task(1, "first subject", "in_progress", owner="ann", state="working", tier="standard")] +
+                    [task(i, f"r{i}", "pending") for i in range(2, 13)])
+        t = timing({"1": NOW - 720})
+        out = plain(v, 120, 40, t=t)
+        lines = out.split("\n")
+        k = next(k for k, l in enumerate(lines) if " 1 first" in l)
+        self.assertRegex(lines[k], r"╭─ \S 1 first subject")
+        self.assertRegex(lines[k + 1], r"╰─ sonnet · ✦ ann.* · 12m ─+╯")
+
+    def test_drop_order_badge_then_owner_then_duration(self):
+        t = task(1, "s", "in_progress", owner="ann", state="working", tier="standard")
+        tm = timing({"1": NOW - 720})
+        full = len("╰─ sonnet · ✦ ann · 12m ─╯")
+
+        def bottom(cw):
+            cv = taskwin.Canvas(cw, 2)
+            taskwin._draw_compact(cv, 0, 0, cw, t, tm, NOW, 0, False, False)
+            return cv.lines("none")[1]
+        self.assertIn("sonnet", bottom(full + 4))
+        mid = bottom(len("╰─ ✦ ann · 12m ─╯") + 2)
+        self.assertNotIn("sonnet", mid)
+        self.assertIn("ann", mid)
+        tiny = bottom(len("╰─ 12m ─╯") + 1)
+        self.assertIn("12m", tiny)
+        self.assertNotIn("sonnet", tiny)
+        self.assertNotIn("ann", tiny)
+
+    def test_compact_edges_enter_on_top_row(self):
+        out = plain(roots_plan(12), 120, 50, t={})
+        arrows = [l for l in out.split("\n") if "▸" in l]
+        self.assertTrue(arrows)
+        for l in arrows:
+            self.assertIn("╭", l)
+
+
 if __name__ == "__main__":
     unittest.main()
