@@ -29,6 +29,7 @@ SPIN = "◐◓◑◒"
 GLYPH = {"completed": "●", "pending": "○", "blocked": "◌ 🔒"}
 STATUS_STYLE = {"completed": "green", "in_progress": "amber", "pending": "grey", "blocked": "dim"}
 TIER_STYLE = {"haiku": "cyan", "sonnet": "blue", "fable": "violet"}
+TIER_MODEL = {"mechanical": "haiku", "standard": "sonnet", "frontier": "fable"}  # plan modelTier -> badge
 STATE_WORD = {"waiting": "needs you", "ready": "idle", "gone": "gone"}
 STATE_STYLE = {"working": "amber", "waiting": "red", "ready": "grey", "gone": "dim"}
 IDLE_LINE = "No tasks yet — the lead's list shows up here"
@@ -253,6 +254,12 @@ def critical_path(tasks):
 
 # ---------------------------------------------------------------- pieces
 
+def _badge(t):
+    """(model name, style) for the task's tier: a modelTier name or a model name; None when there is no badge."""
+    tier = TIER_MODEL.get(t.get("tier") or "", t.get("tier") or "")
+    return (tier, (TIER_STYLE[tier],)) if tier in TIER_STYLE else None
+
+
 def _status_glyph(t, frame):
     return SPIN[frame % 4] if t["status"] == "in_progress" else GLYPH.get(t["status"], "○")
 
@@ -374,11 +381,14 @@ def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash):
     # tier and owner
     cv.put(x, y + 2, "│ ", border + extra)
     segs = []
-    if t.get("tier") in TIER_STYLE:
-        segs.append((t["tier"], (TIER_STYLE[t["tier"]],)))
+    badge = _badge(t)
+    if badge:
+        segs.append(badge)
     owner = _owner_segs(t, frame)
     if segs and owner:
         segs.append(("  ", ()))
+        if sum(cells(t) for t, _ in segs + owner) > inner - 2:
+            segs = []  # the owner's state matters more than the badge
     segs += owner
     cv.put_segs(x + 2, y + 2, segs, inner - 2, extra)
     cv.put(x + cw - 1, y + 2, "│", border + extra)
@@ -482,8 +492,9 @@ def _list_line(cv, y, width, t, timing, now, frame, flash):
     head = [(_status_glyph(t, frame), (STATUS_STYLE.get(st, "grey"),)), (" " + t["id"] + "  ", ("bold",))]
     # tail pieces in display order; `drop` is the order they go when the line is too narrow
     parts = {}
-    if t.get("tier") in TIER_STYLE:
-        parts["tier"] = [(t["tier"], (TIER_STYLE[t["tier"]],))]
+    badge = _badge(t)
+    if badge:
+        parts["tier"] = [badge]
     owner = _owner_segs(t, frame)
     if owner:
         parts["owner"] = owner

@@ -147,14 +147,26 @@ class GlyphTest(unittest.TestCase):
 
     def test_tier_badges_only_for_known_models(self):
         v = view_of([task(1, "a", "pending", tier="haiku"), task(2, "b", "pending", tier="sonnet"),
-                     task(3, "c", "pending", tier="fable"), task(4, "d", "pending", tier="standard")])
+                     task(3, "c", "pending", tier="fable"), task(4, "d", "pending", tier="opus")])
         out = plain(v, 120, 30, t={})
         for word in ("haiku", "sonnet", "fable"):
             self.assertIn(word, out)
-        self.assertNotIn("standard", out)
+        self.assertNotIn("opus", out)
         col = taskwin.render(v, {}, 120, 30, NOW, 0, "256")
         for word, key in (("haiku", "cyan"), ("sonnet", "blue"), ("fable", "violet")):
             self.assertIn(taskwin.SGR[key][1] + "m" + word, col.replace("\x1b[", ""))
+
+    def test_tier_names_map_to_model_badges(self):
+        v = view_of([task(1, "a", "pending", tier="mechanical"), task(2, "b", "pending", tier="standard"),
+                     task(3, "c", "pending", tier="frontier")])
+        out = plain(v, 120, 30, t={})
+        for word in ("haiku", "sonnet", "fable"):
+            self.assertIn(word, out)
+        for word in ("mechanical", "standard", "frontier"):
+            self.assertNotIn(word, out)
+        col = taskwin.render(v, {}, 120, 30, NOW, 0, "256").replace("\x1b[", "")
+        for word, key in (("haiku", "cyan"), ("sonnet", "blue"), ("fable", "violet")):
+            self.assertIn(taskwin.SGR[key][1] + "m" + word, col)
 
     def test_time_in_status(self):
         self.assertEqual(taskwin.fmt_dur(12 * 60), "12m")
