@@ -160,3 +160,17 @@ test('session.start writes the kill-guard marker; session.end removes it', async
   expect(w.runs).toContainEqual(['rm', '-f', '/s/mods-active/sid1.kill-guard'])
   expect(w.files.has('/s/mods-active/sid1.kill-guard')).toBe(false)
 })
+
+test('the marker path follows the state dir rule: TMPDIR minus the trailing slash, /tmux-ctl-<uid>; an empty TMPDIR is /tmp', async ($, on) => {
+  const w = world(on, base, { TMPDIR: '/x/' })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  expect([...w.files.keys()].filter((k) => k.includes('/mods-active/'))).toEqual(['/x/tmux-ctl-503/mods-active/sid1.kill-guard'])
+  await $.session.end({ sessionId: 'sid1', reason: 'exit' })
+  expect(w.files.has('/x/tmux-ctl-503/mods-active/sid1.kill-guard')).toBe(false)
+})
+
+test('an empty TMPDIR writes the marker under /tmp', async ($, on) => {
+  const w = world(on, base, { TMPDIR: '' })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  expect(w.files.get('/tmp/tmux-ctl-503/mods-active/sid1.kill-guard')).toBe('sid1\n')
+})

@@ -65,4 +65,9 @@ run_sid S1;   check "marker for this session: silent exit 0" test $rc -eq 0 -a -
 run_sid S2;   check "marker for another session: still blocks" test $rc -eq 2 -a -n "$err"
 : > "$mkstate/mods-active/.kill-guard"
 run_sid "";   check "empty session_id never matches a marker" test $rc -eq 2 -a -n "$err"
+# TMPDIR set but empty counts as unset (the mod and tc-env give /tmp/tmux-ctl-<uid>): the marker there is honoured
+tdir="/tmp/tmux-ctl-$(id -u)/mods-active"; tsid="kgtest-$$"; mkdir -p "$tdir"; : > "$tdir/$tsid.kill-guard"
+jsid "pkill -f 'GUARDPAT-$$'" "$tsid" | env -u TC_STATE TMPDIR= "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?; err="$(<$tmp/e)"
+rm -f "$tdir/$tsid.kill-guard"
+check "empty TMPDIR is unset: marker under /tmp/tmux-ctl-<uid> honoured" test $rc -eq 0 -a -z "$err"
 tt_done

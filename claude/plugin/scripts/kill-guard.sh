@@ -10,7 +10,7 @@ try:
     d = json.loads(sys.argv[1])
     # the kill-guard mod is live for this session: it does the check, so this script defers (same state dir rule as tc-env)
     sid = d.get("session_id")
-    state = os.environ.get("TC_STATE") or os.environ.get("TMPDIR", "/tmp").rstrip("/") + "/tmux-ctl-%d" % os.getuid()
+    state = os.environ.get("TC_STATE") or (os.environ.get("TMPDIR") or "/tmp").rstrip("/") + "/tmux-ctl-%d" % os.getuid()
     if isinstance(sid, str) and sid and os.path.exists("%s/mods-active/%s.kill-guard" % (state, sid)):
         sys.exit(0)
     if d.get("tool_name") != "Bash":
