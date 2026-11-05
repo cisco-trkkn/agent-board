@@ -63,9 +63,12 @@ turns those specs' option into "keep the branch".
 The answers are written to each `Plan & run:` task with TaskUpdate:
 `metadata.queue = {"integration": "merge" | "mr" | "keep", "push": true | false, "answeredAt": "<ISO>"}`.
 
-When a plan is still running (the `regroup` path), the batch also asks how to integrate that plan (same
-three options, counted in call 1's question cap). The answer is stored on the first `Plan & run:` task as
-`metadata.queue.current`, and that plan's `finishing-a-development-branch` uses it. `answeredAt` is read from
+When a plan is still running (the `regroup` path), it takes the queue's default integration and is the
+first item of the "which differ" multiSelect, as `Running plan: <title>` (one item toward the 3 per
+question); if picked, call 2 asks its option like an excepted spec's. The MR push consent covers its branch
+too, never `main` or `master`. The answer is stored on the first `Plan & run:` task as
+`metadata.queue.current = {"plan": "<plan path>", "integration": "merge" | "mr" | "keep", "push": true | false, "answeredAt": "<ISO>"}`,
+and that plan's `finishing-a-development-branch` uses it. `answeredAt` is read from
 `date -u +%Y-%m-%dT%H:%M:%SZ`, never written by hand. A spec queued after the batch gets its question; apart
 from that one, the lead asks nothing until the morning report.
 
