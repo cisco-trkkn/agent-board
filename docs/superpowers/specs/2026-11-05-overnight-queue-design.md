@@ -104,7 +104,7 @@ For each `Plan & run:` task in order:
   section says `Queue mode: on` and lists each queued spec (spec path, its `metadata.queue`, the running plan's
   `metadata.queue.current`, its outcome if done). Task lists are per session, so the new lead recreates the
   pending `Plan & run:` tasks from those lines and asks nothing.
-- **The ideas round** (Next steps round steps 1–4) is skipped until the queue is empty, because it asks
+- **The ideas round** (Next steps round steps 1–4 of the next round) is skipped until the queue is empty, because it asks
   questions.
 - **Permission prompts** in teammate windows cannot be answered for the user (unchanged rule). The lead
   records each one it sees waiting longer than 10 minutes and, if the spec cannot progress, treats it as
