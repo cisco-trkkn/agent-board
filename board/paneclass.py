@@ -117,6 +117,9 @@ def classify(cmd, rows, bell, mod=None):
         return "shell", "idle"
     if is_claude:
         if mod:
+            # a dialog the mod cannot see (subagent, sandbox network prompt) only shows in the pane: raise to waiting
+            if mod != "waiting" and WAITING_RE.search(tail):
+                return "claude", "waiting"
             return "claude", mod
         if WORKING_RE.search(tail) or spinner_live(rows[-30:]):  # no spinner while a prompt is open
             return "claude", "working"

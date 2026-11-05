@@ -112,6 +112,7 @@ export function register(on) {
   on('turn.start', async ($, e, next) => {
     if (e && e.agentId) return next(e)
     try {
+      if (st) st.asks = []
       if (setState('busy', await $.clock.now())) await flush($)
     } catch (x) { /* ignore */ }
     return next(e)
@@ -121,6 +122,7 @@ export function register(on) {
     const out = await next(e)
     if (e && e.agentId) return out
     try {
+      if (st) st.asks = []
       if (setState('ready', await $.clock.now())) await flush($)
     } catch (x) { /* ignore */ }
     return out
@@ -133,10 +135,16 @@ export function register(on) {
     try {
       if (ask) await dialogOpen($, { id: (e && e.tool_use_id) || null })
     } catch (x) { /* ignore */ }
-    const out = await next(e)
+    let out
     try {
+      out = await next(e)
+    } finally {
+      // also when next() rejects (an interrupt): a stale ask would pair with a retry's dialog
       const id = e && e.tool_use_id
       if (st) st.asks = st.asks.filter((a) => a.id !== id)
+    }
+    try {
+      const id = e && e.tool_use_id
       const mine = st && st.state === 'needs-you' && (ask || st.askId === null || st.askId === id)
       if (mine && setState('busy', await $.clock.now())) await flush($)
     } catch (x) { /* ignore */ }
@@ -161,6 +169,8 @@ export function register(on) {
   // fires when a permission dialog is about to show (after the classifier; carries tool_name and tool_input, no id)
   on('classic.PermissionRequest', async ($, e, next) => {
     classicLive = true
+    // a background subagent's auto-deny also fires this; it is not the main agent's dialog
+    if (e && (e.agent_id || e.agentId)) return next(e)
     try {
       const a = st && e ? askFor(e.tool_name, e.tool_input) : null
       if (a) await dialogOpen($, a)

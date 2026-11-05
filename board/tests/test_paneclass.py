@@ -227,6 +227,29 @@ class ModStatesTest(unittest.TestCase):
         self.assertEqual(paneclass.classify("2.1.318", ["> "], False, None), ("claude", "ready"))
         self.assertEqual(paneclass.classify("zsh", [], False, "working"), ("shell", "idle"))
 
+    # Rows are the pane capture pasted verbatim in tools/tests/e2e-agent-status.md (Session B permission dialog, a real
+    # Claude Code 2.1.318 dialog). A dialog the mod cannot see (subagent, sandbox network prompt) shows the same rows
+    # while the status file still says busy.
+    REAL_DIALOG = [
+        " Bash command",
+        " Tip: auto mode handles these prompts for you — choose \"switch to auto mode\" below",
+        " Create the probe-x file with touch and print its exit code",
+        " │ touch /var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.y1verZrdJg/probe-x; echo \"rc=$?\"",
+        " This command requires approval",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. Yes, and don't ask again for touch /var/folders/.../probe-x and \"echo \\\"rc=$?\\\"\" commands in",
+        "      /Users/francisco.ruiz/agent-board/.claude/worktrees/mod-agent-status",
+        "   3. Yes, and switch to auto mode · auto mode handles these prompts for you",
+        "   4. No",
+        " Esc to cancel · Tab to amend",
+    ]
+
+    def test_classify_pane_dialog_beats_a_busy_or_ready_mod_state(self):  # mutation: `if mod: return mod` -> fails
+        for mod in ("working", "ready"):
+            self.assertEqual(paneclass.classify("2.1.318", self.REAL_DIALOG, False, mod), ("claude", "waiting"), mod)
+        self.assertEqual(paneclass.classify("2.1.318", self.REAL_DIALOG, False, "waiting"), ("claude", "waiting"))
+
     def test_pane_status_reads_the_pane_file(self):  # mutation: pane_status not passing mod -> fails
         self.put("s1.json", session_id="s1", pane="%7", state="needs-you", since=time.time(), updatedAt=time.time())
 

@@ -251,6 +251,37 @@ test("a PermissionRequest with no matching ask of the main agent (a teammate's) 
   expect(read(w).state).toBe('busy')
 })
 
+test('a tool.call whose next() rejects leaves no stale ask: the retry\'s dialog answer -> busy', async ($, on) => {
+  const d2 = gatedDialog()
+  let n = 0
+  let m = 0
+  const { w, clock } = world(on, { TC_STATE: '/s' }, {
+    call: () => { if (++n === 1) throw new Error('interrupted'); return { result: 'ran' } },
+    check: () => ({ decision: 'ask', reason: 'r' }),
+    dialog: () => (++m === 1 ? ALLOW : d2.dialog()),   // the first dialog is answered at once, the retry's is gated
+  })
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call({ tool: 'Bash', command: 'touch /x', tool_use_id: 'a1' } as any).catch(() => {})
+  const p = $.tool.call({ tool: 'Bash', command: 'touch /x', tool_use_id: 'a2' } as any)
+  await d2.opened
+  await clock.settle()
+  expect(read(w).state).toBe('needs-you')
+  d2.answer()
+  await p
+  expect(read(w).state).toBe('busy')
+})
+
+test('a PermissionRequest carrying agent_id (a subagent\'s auto-deny) leaves the state alone', async ($, on) => {
+  const { w } = world(on, { TC_STATE: '/s' }, { check: () => ({ decision: 'ask', reason: 'r' }) })
+  await $.session.start(START)
+  await $.classic.SessionStart({ source: 'startup' } as any)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.check({ tool: 'Bash', input: { command: 'x' }, tool_use_id: 'm1' } as any)
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'x' }, permission_mode: 'auto', agent_id: 'sub1' } as any)
+  expect(read(w).state).toBe('busy')
+})
+
 // Where the built-in guard loads (Team/Enterprise login or managed settings), no classic.* hook of this mod runs: no
 // classic.SessionStart at startup, no classic.PreToolUse before tool.check. There an `ask` counts as a dialog unless
 // the settings' default mode never prompts (the mode a flag or shift+tab set is not readable).
