@@ -146,8 +146,29 @@ Check (a), `session.end` catch-all matcher: `/exit` in the peer, then its proces
     ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 (Before `/exit` the peer shell had child 14009; after, `pgrep -P` finds none (rc=1) and `ps -p 14009` lists only the header, so
-the peer claude is gone. The lead still draws, with the peer's file now aging into `? 2`.) The peer's `session.end` stops only
+the peer claude is gone. The lead still draws. The `? 2` is `✦ old` plus the `✦ peer` window, which still exists but no longer
+has a file: the peer's file was removed on `/exit` (shown in the next subsection).) The peer's `session.end` stops only
 the peer's own record (it never had one), so the lead is unaffected.
+
+### Peer's status file on /exit
+
+Rerun on a fresh scratch server (new `$TMP`, `/var/folders/…/tmp.BccacsQbCE/state`), one peer claude in window `✦ peer` (`%1`),
+same flags. `ls` once it is up, then `/exit`, `sleep 5`, `ls` again:
+
+    %0 claude
+    %1 ✦ peer
+    --- ls up
+    total 8
+    -rw-r--r--  1 francisco.ruiz  staff  123 Nov  5 12:16 af152e1b-2ed6-406a-8e97-98fd8d6f83b1.json
+    {"session_id":"af152e1b-2ed6-406a-8e97-98fd8d6f83b1","pane":"%1","state":"ready","since":1793899002,"updatedAt":1793899017}
+    --- ls after /exit
+    total 0
+    drwxr-xr-x  2 francisco.ruiz  staff   64 Nov  5 12:17 .
+    drwxr-xr-x  4 francisco.ruiz  staff  128 Nov  5 12:16 ..
+    count=       0
+
+The file is removed on `/exit`: agent-status's `session.end` still runs behind `index.js`. Server killed afterwards; `ps` for
+`sleep 9999` or the scratch state dir printed nothing (rc=1).
 
 No agents: kill the refresher and all three `✦` windows, remove all fixtures, sample the lead every 4 s:
 
@@ -162,11 +183,19 @@ No agents: kill the refresher and all three `✦` windows, remove all fixtures, 
     ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
     ❯ Try "edit tmux-ctl to..."
     +8s
-     (same: no band line)
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-team-band
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯ Try "edit tmux-ctl to..."
     +12s
-     (same: no band line)
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-team-band
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯ Try "edit tmux-ctl to..."
 
-(The +8 s and +12 s captures are abbreviated here to "same"; the raw output was identical to +4 s, no line between the logo and the rule.) The band was already gone at the first sample, +4 s; the lead's own file is excluded and no window remains, so the line is empty.
+(Each sample is `snap %0 | sed -n '1,5p'`; the +4 s capture above is the same. No line between the logo and the rule.) The band was already gone at the first sample, +4 s; the lead's own file is excluded and no window remains, so the line is empty.
 
 ## Cleanup
 
