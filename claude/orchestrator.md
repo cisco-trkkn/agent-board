@@ -175,6 +175,7 @@ the user only when it is truly theirs to decide, and batch such questions into o
 | Window | Use |
 | --- | --- |
 | `claude` | you, the team lead |
+| `tasks` | a live graph of your task list: status, owners, tiers, timing (`TC_TASKS_WINDOW=0` turns it off) |
 | `✦ <name>` | one per teammate while the team runs; closes when you shut it down |
 | `<project>-bg` (hidden session) | the agents' `tests` and `shell` windows and their lanes, driven only through `tmux-ctl` |
 

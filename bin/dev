@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # dev [dir] — open (or reattach to) a tmux session for a project.
-# Windows: 1 claude (a throwaway shell is prefix S). Agent windows live in the hidden session <name>-bg.  Run it again and it just reattaches.
+# Windows: 1 claude, 2 tasks (a live graph of the lead's task list; TC_TASKS_WINDOW=0 turns it off). A throwaway shell is prefix S. Agent windows live in the hidden session <name>-bg.  Run it again and it just reattaches.
 emulate -L zsh
 source "${0:A:h}/_tc_bins.zsh"
 [[ "$1" == (-h|--help|help) ]] && { sed -n '2,3p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 }

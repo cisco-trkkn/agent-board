@@ -48,6 +48,7 @@ A project-specific settings file is not an override: it is passed per lead, see 
 | `TC_OVERSEER` | unset (on) | `bin/tmux-overseer`, `server.py` | `0` never starts the `overseer` session (the test harness sets it). |
 | `TC_OVERSEER_CMD` | `<clone>/bin/claude-overseer` | `bin/tmux-overseer` | Test seam: the command typed into the overseer's window instead of `claude-overseer`. The session itself starts in `${XDG_STATE_HOME:-~/.local/state}/agent-board/overseer`. |
 | `TC_TERMINAL_SESSION` | `main` | `board/server.py` | The tmux session new terminals attach to (e.g. `new-session -A -s main` in `~/.zshrc`). The board hides it from the Projects tab unless Claude runs in it: its card appears while Claude runs and goes when Claude exits. Set it empty to always show it. |
+| `TC_TASKS_WINDOW` | unset (on) | `bin/tmux-dev-layout` | `0` does not open the `tasks` window (the test harness sets it). An existing window stays until you close it. |
 | `TMUX_DASH_STATE` | `~/.local/state/tmux-dash` | `board/overview.py` (`tmux-ctl overview`) | Where the running board's `token` file is read from, to query `api/overview`. |
 
 `TMUX_DASH_TOKEN` is set by `tmux-dash` itself; don't set it by hand. Rotate it with `agent-board dash rotate`.
