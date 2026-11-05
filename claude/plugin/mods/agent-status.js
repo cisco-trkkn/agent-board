@@ -6,7 +6,8 @@
 // $ call spelled inline in the handler (no helper takes $). The helpers below work on plain values only.
 // Writes: $.fs.write to <file>.tmp, then `mv` (there is no $.fs rename or delete); a failing mv falls back to a
 // direct write. All writes of this session run one after another (st.q) and render st at write time, so a
-// heartbeat can never put an older state back. Every I/O is wrapped: an error never blocks a tool or a turn.
+// heartbeat can never put an older state back. Events with e.agentId (an in-process teammate's) are skipped:
+// the file describes the session's own main agent only. Every I/O is wrapped: an error never blocks a tool or a turn.
 
 const HEARTBEAT_MS = 15000
 
@@ -70,6 +71,7 @@ export function register(on) {
   })
 
   on('turn.start', async ($, e, next) => {
+    if (e && e.agentId) return next(e)
     try {
       if (setState('busy', await $.clock.now())) {
         st.q = st.q.then(async () => {
@@ -88,6 +90,7 @@ export function register(on) {
 
   on('turn.complete', async ($, e, next) => {
     const out = await next(e)
+    if (e && e.agentId) return out
     try {
       if (setState('ready', await $.clock.now())) {
         st.q = st.q.then(async () => {
@@ -106,6 +109,7 @@ export function register(on) {
 
   // tool.call is entered before tool.check; its next() returns only once the user answered a prompt.
   on('tool.call', async ($, e, next) => {
+    if (e && e.agentId) return next(e)
     const ask = e && e.tool === 'AskUserQuestion'
     try {
       if (ask && setState('needs-you', await $.clock.now())) {
@@ -141,6 +145,7 @@ export function register(on) {
 
   on('tool.check', async ($, e, next) => {
     const out = await next(e)
+    if (e && e.agentId) return out
     try {
       if (out && out.decision === 'ask' && setState('needs-you', await $.clock.now())) {
         st.askId = (e && e.tool_use_id) || null

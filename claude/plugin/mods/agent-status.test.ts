@@ -187,3 +187,22 @@ test('a throwing write does not propagate and the hook still returns next()', as
   expect(JSON.stringify(out)).toContain('ran')
   await $.turn.complete({ answer: 'ok', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' })
 })
+
+test('events carrying agentId (an in-process teammate) leave the file untouched', async ($, on) => {
+  let asked = false
+  const { w, clock } = world(on, { TC_STATE: '/s' }, {
+    check: (_$: any, e: any) => (e.input.sub ? { decision: 'ask', reason: 'r' } : { decision: 'allow' }),
+  })
+  await $.session.start(START)
+  await clock.advance(2000)
+  await $.turn.start({ text: 'x', turnId: 't2', agentId: 'mate' } as any)
+  expect(read(w)).toMatchObject({ state: 'ready', since: 1000 })
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [], agentId: 'mate' } as any)
+  expect(read(w)).toMatchObject({ state: 'ready', since: 1000 })
+  await $.tool.check({ tool: 'Bash', input: { command: 'x', sub: true }, agentId: 'mate' } as any)
+  expect(read(w)).toMatchObject({ state: 'ready', since: 1000 })
+  // main agent busy: a teammate's turn.complete must not make it ready
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete({ answer: 'm', durationMs: 5, isAborted: false, turnId: 't2', reason: 'answer', agentId: 'mate' } as any)
+  expect(read(w).state).toBe('busy')
+})
