@@ -10,6 +10,7 @@ type World = {
   session: string
   panes: string
   tmuxFail: boolean
+  listOnlyPane: boolean
   failList: boolean
   invalidations: number
   listCalls: number
@@ -23,7 +24,7 @@ const NOW = 1_000_000 // ms; the mod sees 1000 s
 function world(on: any, env: Record<string, string>): { w: World; clock: any } {
   const w: World = {
     files: new Map(), runs: [], window: 'claude', session: 'dev',
-    panes: '%1 claude\n%2 ✦ qrev\n%3 ✦ impl\n%4 tasks\n', tmuxFail: false, failList: false, invalidations: 0, listCalls: 0,
+    panes: '%1 claude\n%2 ✦ qrev\n%3 ✦ impl\n%4 tasks\n', tmuxFail: false, listOnlyPane: false, failList: false, invalidations: 0, listCalls: 0,
   }
   mock.env(on, env)
   const clock = mock.clock(on, { now: NOW })
@@ -52,7 +53,11 @@ function world(on: any, env: Record<string, string>): { w: World; clock: any } {
     if (cmd === 'tmux') {
       if (w.tmuxFail) return { value: { exitCode: 1, stdout: 'claude\tdev\n', stderr: 'no server' } }
       if (a === 'display') return ok(w.window + '\t' + w.session + '\n')
-      if (a === 'list-panes') return ok(w.panes)
+      if (a === 'list-panes') {
+        // a grouped _web-* view session is gone: the saved session name no longer resolves, a pane id does
+        if (w.listOnlyPane && !String(e.argv[4]).startsWith('%')) return { value: { exitCode: 1, stdout: '', stderr: "can't find window: " + e.argv[4] } }
+        return ok(w.panes)
+      }
     }
     return ok()
   })
@@ -209,7 +214,7 @@ test('pane list is read once at start with the session, files polled every 2 s',
   const { w, clock } = world(on, { TC_STATE: '/s', TMUX_PANE: '%1' })
   await $.session.start(START)
   expect(w.runs).toContainEqual(['tmux', 'display', '-p', '-t', '%1', '#{window_name}\t#{session_name}'])
-  expect(w.runs).toContainEqual(['tmux', 'list-panes', '-s', '-t', 'dev', '-F', '#{pane_id} #{window_name}'])
+  expect(w.runs).toContainEqual(['tmux', 'list-panes', '-s', '-t', '%1', '-F', '#{pane_id} #{window_name}'])
   const at0 = w.listCalls
   expect(at0).toBe(1)
   await clock.advance(2000)
@@ -218,6 +223,19 @@ test('pane list is read once at start with the session, files polled every 2 s',
   expect(lp()).toBe(1)
   await clock.advance(8000)
   expect(lp()).toBe(2)
+})
+
+// mutation: target the saved session name again (`loadPanes($, session)`) -> the session name no longer resolves, the pane list
+// stays frozen and the teammate window added after start is never counted -> this test fails
+test('pane list is read by the lead pane id: a window added after start is counted though the session name stops resolving', async ($, on) => {
+  const { w, clock } = world(on, { TC_STATE: '/s', TMUX_PANE: '%1' })
+  w.listOnlyPane = true
+  await $.session.start(START)
+  w.panes += '%5 ✦ late\n'
+  put(w, 'late', '%5', 'needs-you', 1000)
+  await clock.advance(10000)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'Needs you: ✦ late' })).toBeDefined()
 })
 
 test('a changed file is drawn after the next poll, with ui.render invalidated', async ($, on) => {

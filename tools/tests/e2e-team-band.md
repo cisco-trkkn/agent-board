@@ -10,6 +10,8 @@ stripped trailing spaces from output lines, and `T` is `~/.local/bin/tmux -L tea
 
 ## Setup
 
+Preconditions: `WT` is the worktree toplevel (`WT=$(git rev-parse --show-toplevel)`), and `T` uses any tmux 3.x (here `~/.local/bin/tmux`, the user's install).
+
 Fixtures: `qrev.json` is `needs-you` and rewritten every 10 s by `refresh.zsh` (reads `$S/qstate`); `old.json` has `updatedAt` now − 90000; `ghost.json` names `%99`, which is not in the session; `x.json.tmp` is a half-written leftover. The real state dir is only `ls`ed. The lead's own file appears once it is up.
 
     $ print "S=$S"; print "TMP=$TMP"

@@ -55,8 +55,9 @@ const stop = () => {
 }
 
 // pane_id -> window name from `tmux list-panes`; null when tmux fails
-async function loadPanes($, session) {
-  const r = await $.process.run(['tmux', 'list-panes', '-s', '-t', session, '-F', '#{pane_id} #{window_name}'])
+// target = the lead's own pane id: a saved session name stops resolving once a grouped _web-* view session is destroyed
+async function loadPanes($, own) {
+  const r = await $.process.run(['tmux', 'list-panes', '-s', '-t', own, '-F', '#{pane_id} #{window_name}'])
   if (r.exitCode !== 0) return null
   const panes = new Map()
   for (const l of r.stdout.split('\n')) {
@@ -95,12 +96,12 @@ export function register(on) {
           if (!tcState) uid = (await $.process.run(['id', '-u'])).stdout.trim()
           const rec = { own: pane, session, dir: stateDir(tcState, tmpdir, uid), panes: new Map(), line: '', ended: false, paneTick: null, pollTick: null }
           tb = rec
-          try { rec.panes = (await loadPanes($, session)) || rec.panes } catch (x) { /* retried by the timer */ }
+          try { rec.panes = (await loadPanes($, pane)) || rec.panes } catch (x) { /* retried by the timer */ }
           try { await poll($, rec) } catch (x) { /* first poll failed: no band yet */ }
           if (tb === rec) {
             rec.paneTick = $.clock.every(PANES_MS, async () => {
               try {
-                const p = await loadPanes($, session)
+                const p = await loadPanes($, pane)
                 if (p && !rec.ended) rec.panes = p
               } catch (x) { /* keep the last list */ }
             })
