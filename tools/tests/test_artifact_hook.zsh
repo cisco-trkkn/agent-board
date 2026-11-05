@@ -46,6 +46,10 @@ check "manual, session from env" test "$(jq -r .session_id "$m" | tail -1)" = ab
 check "manual, --session wins"   test "$(jq -r .session_id "$m" | tail -1)" = x
 CLAUDE_CODE_SESSION_ID=abc hook "{\"tool_name\":\"Write\",\"session_id\":\"S2\",\"tool_input\":{\"file_path\":\"$plan\"}}"
 check "hook mode ignores env"    test "$(jq -r .session_id "$m" | tail -1)" = S2
+# a valueful flag given last, with no value, must not hang the argument loop (the watchdog kills a hang: rc 142)
+( unset TMUX TMUX_PANE; perl -e 'alarm 5; exec @ARGV' "$H" --path "$other" --project tt --session )
+rc=$?
+check "dangling --session exits" test $rc -eq 0
 hook 'not json'; rc=$?
 check "bad input exit 0"    test $rc -eq 0
 out="$( unset TMUX TMUX_PANE; print -r -- "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$plan\"}}" | "$H"; print rc=$? )"

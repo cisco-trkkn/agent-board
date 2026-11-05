@@ -22,12 +22,12 @@ else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME
   apath= kind= agent= project= manual=0 scoped=0 msid= has_msid=0
   while (( $# )); do
     case "$1" in
-      --path)    apath="$2"; manual=1; shift 2 ;;
+      --path)    apath="$2"; manual=1; shift $(( $# >= 2 ? 2 : 1 )) ;;
       --scoped)  scoped=1; shift ;;
-      --kind)    kind="$2"; shift 2 ;;
-      --agent)   agent="$2"; shift 2 ;;
-      --project) project="$2"; shift 2 ;;
-      --session) msid="$2"; has_msid=1; shift 2 ;;
+      --kind)    kind="$2"; shift $(( $# >= 2 ? 2 : 1 )) ;;
+      --agent)   agent="$2"; shift $(( $# >= 2 ? 2 : 1 )) ;;
+      --project) project="$2"; shift $(( $# >= 2 ? 2 : 1 )) ;;
+      --session) msid="$2"; has_msid=1; shift $(( $# >= 2 ? 2 : 1 )) ;;
       *) shift ;;
     esac
   done
