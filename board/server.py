@@ -30,7 +30,7 @@ TMUX_CTL = str(BIN / "tmux-ctl")
 DEV = str(BIN / "dev")
 sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
-from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, tmux_cmd  # noqa: E402,F401
+from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
 import activity, artifacts, dirs, gitlab_sync, ideas, notify, overview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
@@ -307,6 +307,7 @@ def build_state():
     rows_by = _split_captures(MARK + captured) if captured else {}
     rows_by.update(capture_panes([p for p in ids if p not in rows_by]))   # new since the last build, or after an abort
     _last["panes"] = ids
+    mods = mod_states()   # one listing per poll
     sessions = {}
     for f in panes:
         sess, attached, widx, wname, bell, agent, pidx, pid, title, cmd, path, pact, wact, mate = f[:14]
@@ -316,7 +317,7 @@ def build_state():
             "index": int(widx), "name": wname, "bell": bell == "1",
             "worker": agent == "1", "teammate": mate == "1", "active": wact == "1", "panes": [],
         })
-        kind, status = classify(cmd, rows, bell == "1")
+        kind, status = classify(cmd, rows, bell == "1", mods.get(pid))
         w["panes"].append({
             "id": pid, "index": int(pidx), "title": title, "command": cmd, "path": path,
             "active": pact == "1", "kind": kind, "status": status, "preview": preview(rows),
@@ -861,7 +862,7 @@ def restart_orchestrator(sess, confirm):
         line = tmux("list-panes", "-t", f"={sess}:{claude}", "-F",
                     f"#{{pane_id}}{SEP}#{{pane_current_command}}{SEP}#{{window_bell_flag}}", check=True).splitlines()[0]
         pane, cmd, bell = line.split(SEP)
-        kind, status = classify(cmd, pane_text(pane), bell == "1")
+        kind, status = classify(cmd, pane_text(pane), bell == "1", mod_states().get(pane))
         if kind == "claude" and status in ("working", "waiting") and not confirm:
             why = "working" if status == "working" else "waiting on you"
             raise RuntimeError(f"the orchestrator is busy ({why}); confirm to restart it anyway")

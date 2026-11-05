@@ -1,6 +1,9 @@
 import importlib.util
+import json
 import os
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -177,6 +180,60 @@ class InputTextTest(unittest.TestCase):
         self.assertTrue(paneclass.input_has_text(box("half typed")))
         self.assertFalse(paneclass.input_has_text(box("")))
         self.assertFalse(paneclass.input_has_text(["no prompt here"]))
+
+
+class ModStatesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.old = os.environ.get("TC_STATE")
+        os.environ["TC_STATE"] = self.tmp.name
+        self.addCleanup(lambda: os.environ.pop("TC_STATE") if self.old is None else os.environ.__setitem__("TC_STATE", self.old))
+        self.dir = Path(self.tmp.name) / "agent-status"
+        self.dir.mkdir()
+        self.now = 1_800_000_000.0
+
+    def put(self, name, **rec):
+        (self.dir / name).write_text(rec.pop("raw") if "raw" in rec else json.dumps(rec))
+
+    def test_fresh_file_maps_state_for_its_pane(self):
+        self.put("s1.json", session_id="s1", pane="%1", state="busy", since=self.now - 5, updatedAt=self.now - 10)
+        self.put("s2.json", session_id="s2", pane="%2", state="needs-you", since=self.now, updatedAt=self.now)
+        self.put("s3.json", session_id="s3", pane="%3", state="ready", since=self.now, updatedAt=self.now)
+        self.assertEqual(paneclass.mod_states(now=self.now), {"%1": "working", "%2": "waiting", "%3": "ready"})
+
+    def test_stale_file_is_ignored(self):  # mutation: drop the 45 s check -> this fails
+        self.put("s1.json", session_id="s1", pane="%1", state="busy", since=self.now, updatedAt=self.now - 45)
+        self.assertEqual(paneclass.mod_states(now=self.now), {})
+
+    def test_partial_unknown_and_paneless_files_are_ignored(self):  # mutation: drop the except / state check -> fails
+        self.put("bad.json", raw='{"session_id": "s1", "pane": "%1", "sta')
+        self.put("odd.json", session_id="s2", pane="%2", state="thinking", since=self.now, updatedAt=self.now)
+        self.put("nopane.json", session_id="s3", pane=None, state="busy", since=self.now, updatedAt=self.now)
+        self.put("s4.json.tmp", session_id="s4", pane="%4", state="busy", since=self.now, updatedAt=self.now)
+        self.assertEqual(paneclass.mod_states(now=self.now), {})
+
+    def test_newest_file_wins_for_one_pane(self):  # mutation: keep the first file seen -> fails for one listing order
+        self.put("old.json", session_id="old", pane="%1", state="busy", since=self.now, updatedAt=self.now - 20)
+        self.put("new.json", session_id="new", pane="%1", state="ready", since=self.now, updatedAt=self.now - 1)
+        self.assertEqual(paneclass.mod_states(now=self.now), {"%1": "ready"})
+
+    def test_missing_dir_is_empty(self):
+        self.dir.rmdir()
+        self.assertEqual(paneclass.mod_states(now=self.now), {})
+
+    def test_classify_prefers_mod_state_for_claude_only(self):  # mutation: ignore mod -> first assert fails
+        self.assertEqual(paneclass.classify("2.1.318", ["> "], False, "working"), ("claude", "working"))
+        self.assertEqual(paneclass.classify("2.1.318", ["> "], False, None), ("claude", "ready"))
+        self.assertEqual(paneclass.classify("zsh", [], False, "working"), ("shell", "idle"))
+
+    def test_pane_status_reads_the_pane_file(self):  # mutation: pane_status not passing mod -> fails
+        self.put("s1.json", session_id="s1", pane="%7", state="needs-you", since=time.time(), updatedAt=time.time())
+
+        def tmux(*args, check=False):
+            return "2.1.318~|~0" if args[0] == "display" else "> \n"
+
+        self.assertEqual(paneclass.pane_status(tmux, "%7"), ("claude", "waiting"))
 
 
 if __name__ == "__main__":
