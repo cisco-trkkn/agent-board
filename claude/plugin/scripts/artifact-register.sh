@@ -1,7 +1,8 @@
 #!/usr/bin/env zsh
 # artifact-register.sh — record session artifacts for the Agent Board.
 #   hook mode (PostToolUse Write|Edit|MultiEdit|Artifact|Claude Docs batch/create/update): reads the hook JSON on stdin
-#   manual mode: artifact-register.sh --path P [--kind K] [--agent A] [--project NAME]
+#   manual mode: artifact-register.sh --path P [--kind K] [--agent A] [--project NAME] [--session ID]
+#     session_id: --session, else $CLAUDE_CODE_SESSION_ID (set in Claude Code's Bash tool), else ""
 # Appends {ts,path,kind,agent,hash,url,title,slug,session_id,epoch} to $STATE/artifacts-<project>.jsonl.
 # epoch = lines in $TC_LINEAGE_DIR/<project>.jsonl (one per handoff relay). Silent; always exits 0.
 emulate -L zsh
@@ -18,7 +19,7 @@ RES="${0:A:h:h:h:h}/bin/_tc_bins.zsh"
 if [[ -r "$RES" ]]; then source "$RES"; TMUX_BIN=tc_tmux
 else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME/.local/bin/tmux || print -r -- ${commands[tmux]:-$HOME/.local/bin/tmux})}"); [[ -n "$TMUX" ]] && TMUX_BIN+=(-S "${TMUX%%,*}"); fi
 {
-  apath= kind= agent= project= manual=0 scoped=0
+  apath= kind= agent= project= manual=0 scoped=0 msid= has_msid=0
   while (( $# )); do
     case "$1" in
       --path)    apath="$2"; manual=1; shift 2 ;;
@@ -26,6 +27,7 @@ else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME
       --kind)    kind="$2"; shift 2 ;;
       --agent)   agent="$2"; shift 2 ;;
       --project) project="$2"; shift 2 ;;
+      --session) msid="$2"; has_msid=1; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -44,11 +46,14 @@ else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME
   lineage="$TC_LINEAGE_DIR/$project.jsonl"
   epoch=0; [[ -f "$lineage" ]] && epoch=$(( $(wc -l < "$lineage") ))
   if (( manual )); then payload='{}'; else payload="$(cat)"; fi
+  (( has_msid )) || msid="${CLAUDE_CODE_SESSION_ID-}"
   line="$(print -r -- "$payload" | python3 -I -c '
 import hashlib, json, os, re, sys, time
-manual, path, kind, agent, epoch, home, tmp, manifest = sys.argv[1:9]
+manual, path, kind, agent, epoch, home, tmp, manifest, msid = sys.argv[1:10]
 manual = manual == "1"
 url = sid = title = slug = ""
+if manual:
+    sid = msid
 if not manual:
     try:
         d = json.load(sys.stdin)
@@ -134,7 +139,7 @@ if not url:
         digest = hashlib.sha256(f.read()).hexdigest()
 print(json.dumps({"ts": time.time(), "path": path, "kind": kind, "agent": agent, "hash": digest,
                   "url": url, "title": title, "slug": slug, "session_id": sid, "epoch": int(epoch)}))
-' "$manual" "$apath" "$kind" "$agent" "$epoch" "$HOME" "${TMPDIR:-/tmp}" "$STATE/artifacts-$project.jsonl")"
+' "$manual" "$apath" "$kind" "$agent" "$epoch" "$HOME" "${TMPDIR:-/tmp}" "$STATE/artifacts-$project.jsonl" "$msid")"
   [[ -n "$line" ]] && print -r -- "$line" >> "$STATE/artifacts-$project.jsonl"
 } >/dev/null 2>&1
 exit 0
