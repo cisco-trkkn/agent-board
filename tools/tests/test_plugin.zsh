@@ -125,4 +125,11 @@ for f in ("orchestrator.md", "worker.md"):
 for b in bad: print("unresolved:", *b)
 sys.exit(1 if bad else 0)
 PY
+O="$R/claude/orchestrator.md"
+check "lead rules: Queue mode bullet" grep -qF -- '- **Queue mode.**' "$O"
+check "lead rules: queue answers in metadata.queue" grep -qF 'metadata.queue' "$O"
+check "lead rules: queue starts at two or more Plan & run tasks" grep -qF 'two or more pending `Plan & run:` tasks' "$O"
+check "lead rules: morning report path" grep -qF 'docs/superpowers/reports/YYYY-MM-DD-queue.md' "$O"
+check "lead rules: finishing row points at Queue mode" zsh -c 'grep "^| Finishing a branch" "$1" | grep -qF "Queue mode"' _ "$O"
+check "handoff doc records Queue mode: on" grep -qF 'Queue mode: on' "$P/skills/handoff/SKILL.md"
 tt_done
