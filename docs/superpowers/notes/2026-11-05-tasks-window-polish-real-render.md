@@ -9,12 +9,12 @@ tasks-window-polish                                                             
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 ╭─ ○ *0 ───────────╮    ╭─ ◌ 🔒 *1 ────────╮    ╭─ ◌ 🔒 *2 ────────╮    ╭─ ◌ 🔒 *3 ────────╮    ╭─ ◌ 🔒 *4 ────────╮
-│ Task 1: Tier ba… ├───▸│ Task 2: Every c… ├───▸│ Task 3: Per-blo… ├───▸│ Task 4: Compact… ├───▸│ Task 5: Real-st… │
-│ sonnet           │    │ sonnet           │    │ sonnet           │    │ sonnet           │    │ sonnet           │
+│ Task 1: Tier ba… ├╮   │ Task 2: Every c… ├╮   │ Task 3: Per-blo… ├╮   │ Task 4: Compact… ├╮   │ Task 5: Real-st… │
+│ sonnet           │╰──▸│ sonnet           │╰──▸│ sonnet           │╰──▸│ sonnet           │╰──▸│ sonnet           │
 ╰──────────────────╯    ╰──────────────────╯    ╰──────────────────╯    ╰──────────────────╯    ╰──────────────────╯
 ```
 
-Findings: full cards, every unfinished task id (0-4) visible, no glyph problem (one `▸` per card, left borders stay `│`, nothing cut).
+Findings: full cards; every unfinished task id (0-4) visible; each edge leaves on the subject row (`├╮`) and enters the next card on its badge row (`╰──▸`), the `▸` is never on a border and the exit row carries no `▸`; no overlapping lanes or cut cards.
 
 ## 2. The same plan at 200x60
 
@@ -23,12 +23,12 @@ tasks-window-polish                                                             
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 ╭─ ○ *0 ───────────────────────╮    ╭─ ◌ 🔒 *1 ────────────────────╮    ╭─ ◌ 🔒 *2 ────────────────────╮    ╭─ ◌ 🔒 *3 ────────────────────╮    ╭─ ◌ 🔒 *4 ────────────────────╮
-│ Task 1: Tier badges from th… ├───▸│ Task 2: Every completion fl… ├───▸│ Task 3: Per-blocker connect… ├───▸│ Task 4: Compact cards for t… ├───▸│ Task 5: Real-state render c… │
-│ sonnet                       │    │ sonnet                       │    │ sonnet                       │    │ sonnet                       │    │ sonnet                       │
+│ Task 1: Tier badges from th… ├╮   │ Task 2: Every completion fl… ├╮   │ Task 3: Per-blocker connect… ├╮   │ Task 4: Compact cards for t… ├╮   │ Task 5: Real-state render c… │
+│ sonnet                       │╰──▸│ sonnet                       │╰──▸│ sonnet                       │╰──▸│ sonnet                       │╰──▸│ sonnet                       │
 ╰──────────────────────────────╯    ╰──────────────────────────────╯    ╰──────────────────────────────╯    ╰──────────────────────────────╯    ╰──────────────────────────────╯
 ```
 
-Findings: full cards, every unfinished task id (0-4) visible, wider cards show longer subjects; no glyph problem.
+Findings: full cards with longer subjects; every unfinished task id (0-4) visible; same exit/entry glyphs as block 1, no `▸` on a border, no glyph problem.
 
 ## 3. `2026-10-16-handoff-relay-artifacts-panel.md.tasks.json` (14 tasks) at 120x50
 
@@ -37,18 +37,18 @@ handoff-relay-artifacts-panel                                                   
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                                       Plan done ✓
 ╭─ ● 1 ────────╮    ╭─ ● 4 ────────╮    ╭─ ● 5 ────────╮    ╭─ ● 10 ───────╮    ╭─ ● 11 ───────╮    ╭─ ● 14 ───────╮
-│ Task 1: Sha… ├╮ ╭▸│ Task 4: Two… ├┬┬┬▸│ Task 5: `tm… ├─┬┬▸│ Task 10: Bo… ├┬──▸│ Task 11: Bo… ├┬┬┬▸│ Task 14: Li… │
-│ haiku        ││ │ │ sonnet       ││││ │ haiku        │ ││ │ sonnet       ││   │ sonnet       ││││ │ sonnet       │
+│ Task 1: Sha… ├╮   │ Task 4: Two… ├──╮ │ Task 5: `tm… ├──╮ │ Task 10: Bo… ├╮   │ Task 11: Bo… ├──╮ │ Task 14: Li… │
+│ haiku        ││ ╭▸│ sonnet       │╭┬┼▸│ haiku        │ ╭┼▸│ sonnet       │├──▸│ sonnet       │╭┬┼▸│ sonnet       │
 ╰──────────────╯│ │ ╰──────────────╯│││ ╰──────────────╯ ││ ╰──────────────╯│   ╰──────────────╯│││ ╰──────────────╯
                 ├┬┼─────────────────┴┼┼──────────────────┴┼─────────────────┴┬┬─────────────────┴┴╯
 ╭─ ● 2 ────────╮│││ ╭─ ● 6 ────────╮ ││ ╭─ ● 9 ────────╮  │ ╭─ ● 12 ───────╮ ││
-│ Task 2: Art… ├┼┼┼▸│ Task 6: `re… ├─┴┼▸│ Task 9: Ide… ├──┼▸│ Task 12: Ha… ├─╯│
-│ sonnet       ││││ │ sonnet       │  │ │ sonnet       │  │ │ fable        │  │
+│ Task 2: Art… ├┼┤│ │ Task 6: `re… ├─┼┤ │ Task 9: Ide… ├──┤ │ Task 12: Ha… ├─╯│
+│ sonnet       │├┼┼▸│ sonnet       │ ╰┼▸│ sonnet       │  ├▸│ fable        │  │
 ╰──────────────╯│││ ╰──────────────╯  │ ╰──────────────╯  │ ╰──────────────╯  │
                 │││                   ├─────────────────╮ │                   │
 ╭─ ● 3 ────────╮│││ ╭─ ● 8 ────────╮  │                 │ │ ╭─ ● 13 ───────╮  │
-│ Task 3: Hid… ├┴┴┼▸│ Task 8: Art… ├──╯                 ╰─┴▸│ Task 13: Pr… ├──╯
-│ sonnet       │  │ │ sonnet       │                        │ sonnet       │
+│ Task 3: Hid… ├┼┼┤ │ Task 8: Art… ├──╯                 │ │ │ Task 13: Pr… ├──╯
+│ sonnet       │╰┴┼▸│ sonnet       │                    ╰─┴▸│ sonnet       │
 ╰──────────────╯  │ ╰──────────────╯                        ╰──────────────╯
                   │
 ╭─ ● 7 ────────╮  │
@@ -57,22 +57,22 @@ handoff-relay-artifacts-panel                                                   
 ╰──────────────╯
 ```
 
-Findings: full cards, all 14 ids visible (plan is complete, so no unfinished task); lanes beyond the third in a gutter share the last lane by design; no `▸` on a border, no overlapping or cut cards.
+Findings: full cards; all 14 ids visible (plan complete, so no unfinished task); every `▸` sits at the cell left of a `│` border on a badge row and no exit row carries one; lanes past the third in a gutter share the last lane by design (crossings draw `┼`); I checked these invariants, not each of the plan's edges one by one; no cut or overlapping cards.
 
 ## 4. A live task list from `~/.claude/tasks/<session>/` (14 tasks, read-only) at 120x50
 
 ```
-live list                                                                                          8/14 done   elapsed —
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━───────────────────────────────────────────────────
+live list                                                                                          9/14 done   elapsed —
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━───────────────────────────────────────────
 
 ╭─ ● 1 ────────────╮    ╭─ ◌ 🔒 *6 ────────╮    ╭─ ◌ 🔒 *7 ────────╮    ╭─ ◌ 🔒 *8 ────────╮    ╭─ ◌ 🔒 *9 ────────╮
-│ Plan & run: doc… │╭──▸│ Plan & run: doc… ├───▸│ Plan & run: doc… ├───▸│ Plan & run: doc… ├───▸│ Plan & run: doc… │
-│                  ││   │                  │    │                  │    │                  │    │                  │
+│ Plan & run: doc… │    │ Plan & run: doc… ├╮   │ Plan & run: doc… ├╮   │ Plan & run: doc… ├╮   │ Plan & run: doc… │
+│                  │╭──▸│                  │╰──▸│                  │╰──▸│                  │╰──▸│                  │
 ╰──────────────────╯│   ╰──────────────────╯    ╰──────────────────╯    ╰──────────────────╯    ╰──────────────────╯
                     │
-╭─ ● 2 ────────────╮│   ╭─ ● 11 ───────────╮    ╭─ ● 12 ───────────╮    ╭─ ● 13 ───────────╮    ╭─ ◐ 14 ───────────╮
-│ Plan & run: doc… ││╭─▸│ Task 2: Flash a… ├───▸│ Task 3: Per-blo… ├───▸│ Task 4: Compact… ├───▸│ Task 5: Real-st… │
-│                  │││  │ ✦ polish         │    │ ✦ polish         │    │ ✦ polish         │    │ sonnet  ✦ polish │
+╭─ ● 2 ────────────╮│   ╭─ ● 11 ───────────╮    ╭─ ● 12 ───────────╮    ╭─ ● 13 ───────────╮    ╭─ ● 14 ───────────╮
+│ Plan & run: doc… ││   │ Task 2: Flash a… ├─╮  │ Task 3: Per-blo… ├─╮  │ Task 4: Compact… ├─╮  │ Task 5: Real-st… │
+│                  ││╭─▸│ ✦ polish         │ ╰─▸│ ✦ polish         │ ╰─▸│ ✦ polish         │ ╰─▸│ ✦ polish         │
 ╰──────────────────╯││  ╰──────────────────╯    ╰──────────────────╯    ╰──────────────────╯    ╰──────────────────╯
                     ││
 ╭─ ● 3 ────────────╮││
@@ -96,4 +96,4 @@ live list                                                                       
 ╰──────────────────╯
 ```
 
-Findings: full cards, all 6 unfinished ids (5, 6, 7, 8, 9, 14) visible with the critical path 5-9 starred; owner names kept; the edges from tasks 5 and 10 climb their own lanes to the entry rows of 6 and 11, no glyph problem.
+Findings: full cards; all 5 unfinished ids (5, 6, 7, 8, 9) visible with the critical path 5-9 starred; owner names kept; the edges from tasks 5 and 10 climb their own lanes (`├╯`, `├─╯`) to the badge-row entries of 6 and 11, no `▸` on a border, no glyph problem.
