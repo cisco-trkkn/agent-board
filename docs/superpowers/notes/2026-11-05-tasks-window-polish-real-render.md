@@ -1,6 +1,6 @@
 # tasks-window polish: real-plan renders
 
-Colour-none renders from the finished code (`taskwin.render(view, {}, W, H, time.time(), 0, "none", tier_model=load_tier_model("."))`, so the routing file badges apply and no timing state is passed: durations and `elapsed` show as empty). Task ids in the plan files are the file indices (0-based).
+Colour-none renders from the finished code (`taskwin.render(view, {}, W, H, time.time(), 0, "none", tier_model=load_tier_model("."))`, so the routing file badges apply and no timing state is passed: durations and `elapsed` show as empty). Task ids come from each file as written (this plan's file is 0-based, the handoff-relay plan's is 1-based).
 
 ## 1. This plan (`2026-11-05-tasks-window-polish.md.tasks.json`) at 120x50
 
