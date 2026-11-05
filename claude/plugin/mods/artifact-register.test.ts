@@ -1,7 +1,6 @@
 // Tests for the artifact-register mod. Replays the hook-mode cases of tools/tests/test_artifact_hook.zsh against an
 // in-memory world: tmux, the manifest and lineage files, realpath and shasum are answered by stubs.
-// The Claude Docs result is the tool's own result (out.result), a list of {type:'text', text} like the shell's
-// tool_response; its first line is the frame JSON, here shortened from tools/tests/fixtures/docs-hook/create.json.
+// Artifact and Claude Docs calls are not the mod's (they stay on artifact-register.sh), so they are not replayed here.
 import { expect, test, mock } from 'claude-code/testing'
 
 type World = {
@@ -13,17 +12,17 @@ type World = {
   sid: string
   failRead: boolean
   failWrite: boolean
+  noShasum: boolean
+  noSha256sum: boolean
 }
 
 const HOME = '/Users/me'
 const MANIFEST = '/s/artifacts-tt.jsonl'
-const SLUG = 'c40c4cbb-22e5-42f6-8b8d-d059bc72bc78'
-const URL = 'https://claude.ai/artifact/RD7ZrAi3je1ePkMmrBtQ9u'
 const HASH = 'ab'.repeat(32)
 const PLAN = '/work/r/docs/superpowers/plans/p.md'
 
 function world(on: any, env: Record<string, string> = {}, init: Partial<World> = {}): World {
-  const w: World = { files: new Map(), runs: [], result: 'ok', caller: '✦ impl', project: 'tt', sid: 'S1', failRead: false, failWrite: false, ...init }
+  const w: World = { files: new Map(), runs: [], result: 'ok', caller: '✦ impl', project: 'tt', sid: 'S1', failRead: false, failWrite: false, noShasum: false, noSha256sum: false, ...init }
   mock.env(on, { TC_STATE: '/s', TC_LINEAGE: '/s/lineage', HOME, TMPDIR: '/tmp/', TMUX: '/tmp/sock,1,0', TMUX_PANE: '%3', TC_TMUX: '/fake/tmux', ...env })
   mock.clock(on, { now: 5_000_000 })
   on('session.id', () => ({ value: w.sid }))
@@ -44,7 +43,8 @@ function world(on: any, env: Record<string, string> = {}, init: Partial<World> =
     const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '' } })
     if (a.includes('display')) return out(`${w.project}\t${w.caller}\n`)
     if (a[0] === 'realpath') return w.files.has(a[1]) || a[1] === HOME || a[1] === '/tmp' ? out(a[1] + '\n') : out('', 1)
-    if (a[0] === 'shasum') return w.files.has(a[3]) ? out(`${HASH}  ${a[3]}\n`) : out('', 1)
+    if (a[0] === 'shasum') return w.noShasum || !w.files.has(a[3]) ? out('', 1) : out(`${HASH}  ${a[3]}\n`)
+    if (a[0] === 'sha256sum') return w.noSha256sum || !w.files.has(a[1]) ? out('', 1) : out(`${HASH}  ${a[1]}\n`)
     if (a[0] === 'rm') { w.files.delete(a[2]); return out('') }
     return out('503\n')
   })
@@ -65,13 +65,6 @@ const last = (w: World) => lines(w).slice(-1)[0]
 async function write($: any, file: string, tool = 'Write') {
   return $.tool.call({ tool, file_path: file })
 }
-const DOCS = 'mcp__claude_ai_Claude_Docs__'
-const frame = (url = URL) => ({ type: 'text', text: JSON.stringify({ verdict: 'allow', created: { minted: SLUG }, frame: { slug: SLUG, url, artifactUrl: url } }) + '\n\nrest\nof it' })
-async function docs($: any, name: string, container: any) {
-  return $.tool.call({ tool: DOCS + name, container, batch: [] })
-}
-const CREATE = { kind: 'project', create: { name: 'agent-board hook fixture (delete me)', doc: { markdown: 'hello fixture' } } }
-const EDIT = { kind: 'project', id: SLUG }
 
 test('a plan write is recorded with kind, agent, hash, session id and epoch 0', async ($, on) => {
   const w = world(on)
@@ -147,123 +140,12 @@ test('handoff kinds: a tmp handoff, the state dir handoffs, the legacy ~/.claude
   expect(lines(w).map((r) => [r.path, r.kind])).toEqual(files.map((f) => [f, 'handoff']))
 })
 
-test('a published Artifact records its claude.ai url, kind published, path = file_path', async ($, on) => {
-  const w = world(on, {}, { result: 'Published https://claude.ai/code/artifact/abc-123 ok' })
-  await $.session.start(START)
-  await $.tool.call({ tool: 'Artifact', file_path: '/x/page.html' })
-  expect(last(w)).toMatchObject({ kind: 'published', url: 'https://claude.ai/code/artifact/abc-123', path: '/x/page.html', hash: '' })
-})
-
-test('an Artifact result with no claude.ai url records nothing', async ($, on) => {
-  const w = world(on, {}, { result: 'nothing here' })
-  await $.session.start(START)
-  await $.tool.call({ tool: 'Artifact', file_path: '/x/page.html' })
-  expect(lines(w).length).toBe(0)
-})
-
-test('doc create: kind doc, url and path from the frame, title from the create name, slug', async ($, on) => {
-  const w = world(on, {}, { result: [frame()] })
-  await $.session.start(START)
-  await docs($, 'batch', CREATE)
-  expect(last(w)).toMatchObject({ kind: 'doc', url: URL, path: URL, title: 'agent-board hook fixture (delete me)', slug: SLUG, hash: '' })
-})
-
-test('doc edit: the url is reused from the manifest by slug; kind doc, title empty', async ($, on) => {
-  const w = world(on, {}, { result: [frame()] })
-  await $.session.start(START)
-  await docs($, 'batch', CREATE)
-  w.result = [{ type: 'text', text: '{"verdict":"allow","rev":2}' }]
-  await docs($, 'update', EDIT)
-  expect(lines(w).length).toBe(2)
-  expect(last(w)).toMatchObject({ kind: 'doc', url: URL, slug: SLUG, title: '' })
-})
-
-test('doc read and other mcp tools are ignored', async ($, on) => {
-  const w = world(on, {}, { result: [frame()] })
-  await $.session.start(START)
-  await docs($, 'read', EDIT)
-  await $.tool.call({ tool: 'mcp__other__create', container: {} })
-  expect(lines(w).length).toBe(0)
-})
-
-test('a doc result with no url records nothing', async ($, on) => {
-  const w = world(on, {}, { result: 'no link here' })
-  await $.session.start(START)
-  await docs($, 'batch', {})
-  expect(lines(w).length).toBe(0)
-})
-
-test('an update for an unknown slug records nothing', async ($, on) => {
-  const w = world(on, {}, { result: [frame()] })
-  await $.session.start(START)
-  await docs($, 'batch', CREATE)
-  w.result = 'done'
-  await docs($, 'update', { kind: 'project', id: '00000000-unknown' })
-  expect(lines(w).length).toBe(1)
-})
-
 test('file lines carry a title key', async ($, on) => {
   const w = world(on)
   w.files.set(PLAN, '# P')
   await $.session.start(START)
   await write($, PLAN)
   expect('title' in last(w)).toBe(true)
-})
-
-test('a prose link after the frame never wins over frame.url', async ($, on) => {
-  const f = frame()
-  f.text += '\n\nsee https://claude.ai/artifact/PROSE-LINK.'
-  const w = world(on, {}, { result: [f] })
-  await $.session.start(START)
-  await docs($, 'batch', CREATE)
-  expect(last(w).url).toBe(URL)
-})
-
-test('a stray item before the frame never wins', async ($, on) => {
-  const w = world(on, {}, { result: [{ type: 'text', text: 'https://claude.ai/artifact/STRAY-FIRST' }, frame()] })
-  await $.session.start(START)
-  await docs($, 'batch', CREATE)
-  expect(last(w).url).toBe(URL)
-})
-
-test('an edit with a stray link in the result takes the manifest url', async ($, on) => {
-  const w = world(on, {}, { result: [frame()] })
-  await $.session.start(START)
-  await docs($, 'batch', CREATE)
-  w.result = [{ type: 'text', text: 'done, see https://claude.ai/artifact/STRAY-EDIT.' }]
-  await docs($, 'batch', EDIT)
-  expect(lines(w).length).toBe(2)
-  expect(last(w).url).toBe(URL)
-})
-
-test('the fallback regex trims a sentence-ending dot', async ($, on) => {
-  const w = world(on, {}, { result: 'Made it: https://claude.ai/artifact/FALLBACK-1.' })
-  await $.session.start(START)
-  await docs($, 'batch', {})
-  expect(last(w).url).toBe('https://claude.ai/artifact/FALLBACK-1')
-})
-
-test('a frame url off claude.ai (javascript:) is never recorded', async ($, on) => {
-  const w = world(on, {}, { result: [frame('javascript:alert(1)')] })
-  await $.session.start(START)
-  await docs($, 'batch', CREATE)
-  expect(lines(w).length).toBe(0)
-  expect(w.files.get(MANIFEST) ?? '').not.toContain('javascript')
-})
-
-test('update with the manifest missing records nothing and does not throw', async ($, on) => {
-  const w = world(on, {}, { result: 'done' })
-  await $.session.start(START)
-  await docs($, 'update', EDIT)
-  expect(w.files.has(MANIFEST)).toBe(false)
-})
-
-test('update with a garbled manifest records nothing and keeps the file as is', async ($, on) => {
-  const w = world(on, {}, { result: 'done' })
-  w.files.set(MANIFEST, 'garbage{\n')
-  await $.session.start(START)
-  await docs($, 'update', EDIT)
-  expect(w.files.get(MANIFEST)).toBe('garbage{\n')
 })
 
 test('a manifest that cannot be read is never overwritten by a record', async ($, on) => {
@@ -363,4 +245,44 @@ test('session.start writes the artifact-register marker; session.end removes it'
   await $.session.end({ sessionId: 'S1', reason: 'exit' })
   expect(w.runs).toContainEqual(['rm', '-f', '/s/mods-active/S1.artifact-register'])
   expect(w.files.has('/s/mods-active/S1.artifact-register')).toBe(false)
+})
+
+test('Artifact and Claude Docs calls are not handled by the mod', async ($, on) => {
+  const w = world(on, {}, { result: 'Published https://claude.ai/code/artifact/abc-123 ok' })
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Artifact', file_path: '/x/page.html' })
+  await $.tool.call({ tool: 'mcp__claude_ai_Claude_Docs__batch', container: { kind: 'project', id: 'x' }, batch: [] })
+  expect(w.files.has(MANIFEST)).toBe(false)
+  expect(w.runs.filter((a) => a[0] === 'realpath' || a[0] === '/fake/tmux')).toEqual([])
+})
+
+test('an edit with no kind costs only the realpath: no tmux, shasum, lineage read or session lookup', async ($, on) => {
+  const w = world(on)
+  w.files.set('/work/r/src.ts', 'x')
+  w.files.set('/work/r/notes.md', 'x')
+  await $.session.start(START)
+  w.runs.length = 0
+  await write($, '/work/r/src.ts', 'Edit')
+  await write($, '/work/r/notes.md', 'Edit')
+  expect(w.runs.length).toBeGreaterThan(0)
+  expect(w.runs.every((a) => a[0] === 'realpath')).toBe(true)
+  expect(w.runs.some((a) => a[0] === '/fake/tmux' || a[0] === 'shasum' || a[0] === 'sha256sum')).toBe(false)
+  expect(w.files.has(MANIFEST)).toBe(false)
+})
+
+test('sha256sum is tried when shasum fails', async ($, on) => {
+  const w = world(on, {}, { noShasum: true })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(last(w).hash).toBe(HASH)
+  expect(w.runs.some((a) => a[0] === 'sha256sum')).toBe(true)
+})
+
+test('no hash tool works: nothing is recorded', async ($, on) => {
+  const w = world(on, {}, { noShasum: true, noSha256sum: true })
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  expect(lines(w).length).toBe(0)
 })

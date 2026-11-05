@@ -62,8 +62,9 @@ if not manual:
     tool = d.get("tool_name") or ""
     ti = d.get("tool_input") or {}
     sid = d.get("session_id") or ""
-    # the artifact-register mod is live for this session: it records, so this hook defers (manual mode never gets here)
-    if isinstance(sid, str) and sid and os.path.exists("%s/mods-active/%s.artifact-register" % (state, sid)):
+    # the artifact-register mod is live for this session: it records Write/Edit/MultiEdit, so this hook defers for those
+    # (Artifact and Claude Docs calls stay with this script; manual mode never gets here)
+    if tool in ("Write", "Edit", "MultiEdit") and isinstance(sid, str) and sid and os.path.exists("%s/mods-active/%s.artifact-register" % (state, sid)):
         sys.exit(0)
     if tool == "Artifact":
         m = re.search(r"https://claude\.ai/[\w/.-]+", json.dumps(d.get("tool_response") or ""))

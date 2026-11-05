@@ -115,4 +115,13 @@ check "empty session_id never matches a marker"   test "$(wc -l < "$m")" -eq $((
 : > "$TC_STATE/mods-active/S1.artifact-register"
 ( unset TMUX TMUX_PANE; "$H" --path "$other" --kind other --agent you --project tt --session S1 )
 check "manual mode ignores markers"               test "$(wc -l < "$m")" -eq $(( n0 + 3 ))
+# the mod covers file tools only: an Artifact or Claude Docs payload still runs the script even with this session's marker
+: > "$TC_STATE/mods-active/S1.artifact-register"
+n0=$(wc -l < "$m")
+hook '{"tool_name":"Artifact","session_id":"S1","tool_input":{"file_path":"/x/page.html"},"tool_response":"Published https://claude.ai/code/artifact/marker-art ok"}'
+check "marker: Artifact still recorded"   test "$(wc -l < "$m")" -eq $(( n0 + 1 )) -a "$(jq -r .url "$m" | tail -1)" = "https://claude.ai/code/artifact/marker-art"
+hook "$(<"$FX/create.json")"
+check "marker: Claude Docs still recorded" test "$(wc -l < "$m")" -eq $(( n0 + 2 )) -a "$(jq -r .kind "$m" | tail -1)" = doc
+hook "{\"tool_name\":\"Edit\",\"session_id\":\"S1\",\"tool_input\":{\"file_path\":\"$plan\"}}"
+check "marker: Edit still deferred"        test "$(wc -l < "$m")" -eq $(( n0 + 2 ))
 tt_done
