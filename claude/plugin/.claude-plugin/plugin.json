@@ -1,5 +1,5 @@
 {
   "name": "agent-board",
   "version": "0.1.0",
-  "description": "Agent Board session plugin: bash-mirror, kill-guard, artifact-register, plan-handoff-guard, sdd-call-guard and context-inject hooks, the agent-status mod (session state from events, read by the board), the tmux-orchestrator and handoff skills, and the effort-* agent types. Loaded per session with --plugin-dir; nothing is installed into ~/.claude."
+  "description": "Agent Board session plugin: bash-mirror, kill-guard, artifact-register, plan-handoff-guard, sdd-call-guard and context-inject hooks, the agent-status mod (session state from events, read by the board), the team-band mod (who needs you, above the lead's prompt), the tmux-orchestrator and handoff skills, and the effort-* agent types. Loaded per session with --plugin-dir; nothing is installed into ~/.claude."
 }
