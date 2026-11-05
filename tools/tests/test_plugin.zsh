@@ -63,6 +63,11 @@ check "orchestrator.md tells the lead to merge with tmux-ctl context add" grep -
 check "lead and handoff rules name \${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}" test "$(grep -lF '${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md' "$R/claude/orchestrator.md" "$P/skills/handoff/SKILL.md" | wc -l)" -eq 2
 check "no rule names the context dir without TC_CONTEXT_DIR" test -z "$(grep -n '~/.local/state/agent-board/context' "$R/claude/orchestrator.md" "$R/claude/worker.md" "$P/skills/handoff/SKILL.md" | grep -vF '${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}')"
 check "handoff skill merges Context learned before relaying" grep -qF 'Context learned' "$P/skills/handoff/SKILL.md"
+H="$P/skills/handoff/SKILL.md"
+check "handoff skill is model-invocable (no disable-model-invocation)" zsh -c '! sed -n "1,/^---$/{/^---$/!p;}" "$1" | grep -q "^disable-model-invocation"' _ "$H"
+check "handoff skill has a Teammate mode section with teammate <name>" zsh -c 'grep -q "^## Teammate mode" "$1" && grep -qF "teammate <name>" "$1"' _ "$H"
+check "handoff self-started relay prints its line" grep -qF 'Handing off to a fresh orchestrator: <doc>' "$H"
+check "handoff asks only when the user started it" grep -qF 'When the user started the handoff, never run the relay without a Yes from this question.' "$H"
 check "no rule or doc outside docs/superpowers history points at ~/.claude/ideas as THE path" test -z "$(grep -rn '~/.claude/ideas' "$R/claude" "$R/CLAUDE.md" "$R/README.md" "$R/docs/INSTALL.md" "$R/docs/CUSTOMIZATION.md" 2>/dev/null | grep -v 'older\|old ')"
 
 # 3. headless probe

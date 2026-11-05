@@ -1,11 +1,23 @@
 ---
 name: handoff
-description: "Hand this session to a fresh orchestrator: checkpoint the team, write a handoff doc, ask, then relay in place."
-argument-hint: "What will the next session be used for?"
-disable-model-invocation: true
+description: "Two uses. (1) The lead hands its session to a fresh orchestrator: checkpoint the team, write a handoff doc, relay in place (asks first when the user typed /handoff). (2) `teammate <name>` replaces one teammate with a fresh one under the same name, from its checkpoint."
+argument-hint: "What will the next session be used for? Or: teammate <name>"
 ---
 
 Hand the work in this session to a fresh orchestrator. If the user passed arguments, they describe what the next session should focus on; tailor the doc to that.
+
+## Teammate mode
+
+Arguments that start with `teammate <name>` replace that one teammate; the rest of this skill does not run. No doc, no AskUserQuestion.
+
+1. Send `<name>` the checkpoint message from step 1.
+2. Wait up to 2 minutes for the reply. With no reply, record `no checkpoint` and the last 40 lines of its window: `tmux-ctl read "✦ <name>" 40`, or `tmux-ctl read <name> 40` if the window has no ✦ prefix.
+3. Send `<name>` a `shutdown_request` whose `reason` ends with the suffix from step 3, and wait for the termination notice. A teammate idle at its prompt is not gone.
+4. Respawn it with the same `name`, role and tier: the tier map in `claude/orchestrator.md` "Models and effort" gives the `subagent_type` and `model` (mechanical → effort-low + haiku, standard → effort-medium + sonnet, frontier → general-purpose + fable). The prompt is teammate rules 1–5 from `claude/orchestrator.md`, then the checkpoint note (task, files owned, progress, next step, assumptions, risks). For `no checkpoint`, give the captured output and "re-check the state of your files before continuing".
+5. Check the new pane is alive: `tmux list-panes -a -F '#{window_name} #{pane_dead}'`. Respawn again if it is dead.
+6. Report one line to the user: `respawned <name> from checkpoint`, or `respawned <name> from captured output`.
+
+Brief first, owner second: re-set the teammate's task `owner` only after the new brief is sent.
 
 Do the steps in order. **Inside tmux** (`$TMUX` set) do all five. **Outside tmux** (`$TMUX` unset) there is no board, no window to read and no relay: do steps 1–3 without any `tmux-ctl` command, skip step 4, and end with the fallback in step 5.
 
@@ -51,14 +63,16 @@ Only if that is still empty (always the case outside tmux), fall back to the bas
 
 Send each teammate a `shutdown_request`. End its `reason` with: "To approve: first load SendMessage's schema with ToolSearch query \"select:SendMessage\", then send `message` as a JSON object, not a string." Confirm each one is gone.
 
-## 4. Ask before switching (never skip)
+## 4. Ask before switching
 
-Ask with AskUserQuestion: "Switch to a fresh orchestrator now?"
+**Self-started** means the user did not type `/handoff` in the message that started this turn (you chose to hand off, for example after a context-guard warning). Self-started: skip the question, print `Handing off to a fresh orchestrator: <doc>` and take step 5's **On Yes** path.
+
+**User-started:** ask with AskUserQuestion: "Switch to a fresh orchestrator now?"
 
 - **Yes**: "This window restarts as a new orchestrator that starts from the doc and respawns the team. This session stays resumable."
 - **Not yet**: "Keep this session. I'll print the doc path and the command to switch later."
 
-Never run the relay without a Yes from this question.
+When the user started the handoff, never run the relay without a Yes from this question.
 
 ## 5. Relay
 
@@ -79,7 +93,7 @@ Never run the relay without a Yes from this question.
   Switch later: tmux-ctl relay <absolute path> --old-session <id>
   Or start a session by hand: Read <absolute path> and continue from where the previous session left off.
   ```
-- **Outside tmux (`$TMUX` unset):** end with
+- **Outside tmux (`$TMUX` unset), self-started or not:** end with
 
   ```
   Handoff saved: <absolute path>
