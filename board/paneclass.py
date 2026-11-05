@@ -4,12 +4,14 @@
 Shared by tmux-dash (server.py) and the handoff relay (relay.py), so both read panes the same way.
 CLI: paneclass.py status <pane-id>   -> prints "<kind> <status>"
 """
+import json
 import os
 import re
 import shutil
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
@@ -28,6 +30,37 @@ SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal 
 INPUT_RE = re.compile(r"^\s*[│|]?\s*[>❯]\s?(.*?)\s*[│|]?\s*$")
 RULE_RE = re.compile(r"^\s*[─━]{10,}")
 MENU_RE = re.compile(r"^\d+\.\s")
+STATUS_TTL = 45   # seconds: an agent-status file older than this is ignored (the mod's heartbeat is 15 s)
+MOD_STATES = {"busy": "working", "needs-you": "waiting", "ready": "ready"}
+
+
+def status_dir():
+    """Where claude/plugin/mods/agent-status.js writes one <session_id>.json per session."""
+    return tc_env.state_dir() / "agent-status"
+
+
+def mod_states(now=None, d=None):
+    """pane id -> board status from fresh agent-status files: one directory listing per call."""
+    now = time.time() if now is None else now
+    d = status_dir() if d is None else Path(d)
+    best = {}
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return {}
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            rec = json.loads((d / name).read_text())
+            pane, state, upd = rec["pane"], rec["state"], float(rec["updatedAt"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(pane, str) or state not in MOD_STATES or not -5 < now - upd < STATUS_TTL:
+            continue
+        if pane not in best or upd > best[pane][1]:
+            best[pane] = (MOD_STATES[state], upd)
+    return {p: s for p, (s, _) in best.items()}
 
 
 def input_has_text(rows):
@@ -74,14 +107,20 @@ def is_claude_cmd(cmd):
     return bool(VERSION_RE.match(cmd)) or "claude" in cmd.lower()
 
 
-def classify(cmd, rows, bell):
-    """kind: claude | shell | program ; status: waiting | working | ready | idle | running"""
+def classify(cmd, rows, bell, mod=None):
+    """kind: claude | shell | program ; status: waiting | working | ready | idle | running.
+    mod: the pane's fresh agent-status state (mod_states()), preferred over pane text for a claude pane."""
     is_claude = is_claude_cmd(cmd)
     # Claude draws its prompts and spinner at the bottom; older scrollback may quote prompt text.
     tail = "\n".join(rows[-12:])
     if cmd in SHELLS:
         return "shell", "idle"
     if is_claude:
+        if mod:
+            # a dialog the mod cannot see (subagent, sandbox network prompt) only shows in the pane: raise to waiting
+            if mod != "waiting" and WAITING_RE.search(tail):
+                return "claude", "waiting"
+            return "claude", mod
         if WORKING_RE.search(tail) or spinner_live(rows[-30:]):  # no spinner while a prompt is open
             return "claude", "working"
         if WAITING_RE.search(tail):
@@ -140,7 +179,7 @@ def pane_status(tmux, pane, lines=40):
     rows = [l.rstrip() for l in tmux("capture-pane", "-p", "-J", "-t", pane, "-S", f"-{lines}").splitlines()]
     while rows and not rows[-1]:
         rows.pop()
-    return classify(cmd, rows, bell == "1")
+    return classify(cmd, rows, bell == "1", mod_states().get(pane))
 
 
 if __name__ == "__main__":
