@@ -58,6 +58,16 @@ if has_win "$sess" plan && [[ "$(t display -p -t "=${sess}:plan" '#{pane_start_c
   t kill-window -t "=${sess}:plan"
 fi
 
+# the tasks window (2026-11-04): a live view of the lead's task list, right after claude; TC_TASKS_WINDOW=0 turns it off
+if [[ "${TC_TASKS_WINDOW:-1}" != 0 ]] && has_win "$sess" claude && ! has_win "$sess" tasks; then
+  repo="${${(%):-%x}:A:h:h}"
+  if t new-window -d -a -t "=${sess}:claude" -n tasks -c "$root" \
+       "python3 -I ${(q)repo}/board/taskwin.py watch --session ${(q)sess} --root ${(q)root}"; then
+    t set-option -w -t "=${sess}:tasks" @tc_tasks 1
+    t set-option -w -t "=${sess}:tasks" automatic-rename off
+  fi
+fi
+
 # optional watch commands, in the -bg windows
 if [[ -r "$root/.dev/windows" ]]; then
   while IFS= read -r line; do

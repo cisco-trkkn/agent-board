@@ -30,10 +30,10 @@ if [[ -n "$1" ]]; then
   fi
   [[ -n "$name" ]] || exit 0        # not a teammate after all
 
-  # insert after the lead's window, behind teammate windows that already follow it
+  # insert after the lead's window, behind the tasks window and teammate windows that already follow it
   lead="$("$T" display -p -t "$pane" '#{session_name}:#{window_index}')" || exit 0
   sess="${lead%:*}" target="$lead" idx="${lead##*:}"
-  for line in ${(f)"$("$T" list-windows -t "=$sess" -F '#{window_index} #{@tc_teammate}')"}; do
+  for line in ${(f)"$("$T" list-windows -t "=$sess" -F '#{window_index} #{?#{@tc_teammate},1,#{?#{@tc_tasks},1,0}}')"}; do
     (( ${line%% *} <= idx )) && continue
     [[ "${line#* }" == 1 ]] || break
     target="$sess:${line%% *}"; idx="${line%% *}"

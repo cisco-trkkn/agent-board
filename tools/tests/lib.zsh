@@ -17,6 +17,7 @@ tt_setup() {   # tt_setup [windows...]  (default: claude shell tests)
   TT_DIR="${TT_DIR:A}"
   export TC_STATE="$TT_DIR/state"; mkdir -p "$TC_STATE"
   export TC_OVERSEER=0   # the dev layout would start a real overseer Claude on the scratch server; test_overseer.zsh turns it on with a seam command
+  export TC_TASKS_WINDOW=0   # the dev layout would open the tasks window (a python watch loop) in every scratch session; test_tasks_window.zsh turns it on
   export TC_LINEAGE="$TC_STATE/lineage"   # handoff lineage lives outside the state dir in production; tests keep it in the temp dir
   # pane shells are interactive zsh: without a .zshrc in $ZDOTDIR/$HOME they open the zsh-newuser-install menu and eat the typed line (fresh CI runners)
   [[ -n "$ZDOTDIR" ]] || tt_zdot "$TT_DIR/zdot"
