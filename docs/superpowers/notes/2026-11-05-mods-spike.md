@@ -84,6 +84,13 @@ render sites; scratch tmux `-L agent-status-fix -f /dev/null`, `TC_STATE` = a te
 | same | AskUserQuestion | `ask` ("Answer questions?") | fires too (`tool_name: "AskUserQuestion"`), 25 ms after the check | `permission_prompt` 6 s later |
 | same | Read README.md (no PreToolUse settings hook matches Read anywhere) | `allow` | none | none |
 
+What the table does and does not show: `classic.PermissionRequest` did not fire for the one auto-approved call probed (the "auto mode" row);
+that is one call, not "never in auto mode". hooks.md (`https://code.claude.com/docs/en/hooks.md`, "### PermissionRequest") says the event
+fires when Claude Code is about to ask for permission, and also when it would otherwise auto-deny a call that cannot prompt (a background
+subagent): no dialog shows then, and the event's `e` carries `agent_id`. It does not fire for a sandboxed command's network prompt (use the
+`permission_prompt` notification, about 6 s late). So the mod skips events carrying an agent id, and a dialog it cannot see (a foreground
+subagent's or in-process teammate's, a sandbox network prompt) is caught by the board from pane text (`paneclass.classify`).
+
 Other facts from the probe:
 
 - `classic.PreToolUse` fires for every tool call, 3–10 ms after `tool.call` is entered and ~150 ms before `tool.check`, whether or not any

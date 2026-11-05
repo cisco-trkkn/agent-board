@@ -47,6 +47,9 @@ Status file paths below are shortened to `$TMP/` (that is the `/var/folders/.../
 ## Session A transitions
 
 Launch (auto mode, as in the first run); the pane then shows `auto mode on`:
+(Precondition: this session is in auto mode only because `~/.claude/settings.json` sets `permissions.defaultMode: "auto"`;
+`claude/session-settings.json` sets no mode. Without that user setting add `--permission-mode auto`, or the `sleep 20` step shows a dialog
+instead of proving the auto-mode fix.)
 
     TC_STATE=$TMP claude --model haiku --settings $WT/claude/session-settings.json --plugin-dir $WT/claude/plugin
 
