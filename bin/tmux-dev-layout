@@ -2,6 +2,7 @@
 # tmux-dev-layout <session> <root> — idempotently shape a dev session. The user keeps `claude` (a throwaway shell is
 # prefix S); the agents' tests/shell windows live in the hidden session <project>-bg (see tmux-ctl ensure_bg).
 # Migrates old layouts: removes an idle user `shell`, moves an idle `tests` window to -bg, closes feed/watch panes, drops status labels.
+# The `tasks` window (board/taskwin.py watch) sits right after `claude`; TC_TASKS_WINDOW=0 does not open it.
 # Optional .dev/windows lines `tests: <cmd>` / `shell: <cmd>` run as a watch pane in the -bg window.
 emulate -L zsh
 source "${${(%):-%x}:A:h:h}/tools/lib/tc-env.zsh"   # tc-env: state dir, shell/prompt patterns (resolves the symlink into the repo)

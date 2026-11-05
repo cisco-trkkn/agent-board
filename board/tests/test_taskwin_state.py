@@ -59,6 +59,17 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual(st["lead"], "M")
         self.assertEqual(st["tasks"]["1"]["since"], 200.0)
 
+    def test_blank_lead_tick_keeps_state(self):
+        st = ts.update({}, "a", [T(1, "in_progress")], 100.0)
+        st = ts.update(st, "", [], 150.0)
+        self.assertEqual(st["lead"], "a")
+        st = ts.update(st, "a", [T(1, "in_progress")], 200.0)
+        self.assertEqual(st["tasks"]["1"]["since"], 100.0)
+        self.assertEqual(st["tasks"]["1"]["started"], 100.0)
+        st = ts.update(st, "b", [T(1, "in_progress")], 300.0)
+        self.assertEqual(st["lead"], "b")
+        self.assertEqual(st["tasks"]["1"]["since"], 300.0)
+
     def test_load_missing_or_corrupt_and_save_unwritable(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(ts.load(Path(d) / "nope.json"), {})

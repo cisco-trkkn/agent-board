@@ -11,9 +11,9 @@ mk() {   # mk <project>: per-session state files
   local p="$1"
   mkdir -p "$TC_STATE/logs/$p"; print x > "$TC_STATE/logs/$p/r.log"
   mkdir -p "$TC_LINEAGE"; print x > "$TC_LINEAGE/$p.jsonl"
-  for f in artifacts-$p.jsonl runs-$p.jsonl feed-$p-tests.log feed-$p-shell.log; do print x > "$TC_STATE/$f"; done
+  for f in artifacts-$p.jsonl runs-$p.jsonl feed-$p-tests.log feed-$p-shell.log taskwin/$p.json; do mkdir -p "$TC_STATE/${f:h}"; print x > "$TC_STATE/$f"; done
 }
-has() { test -e "$TC_STATE/artifacts-$1.jsonl" -o -e "$TC_STATE/runs-$1.jsonl" -o -e "$TC_STATE/feed-$1-tests.log" -o -e "$TC_STATE/feed-$1-shell.log" -o -d "$TC_STATE/logs/$1" }
+has() { test -e "$TC_STATE/artifacts-$1.jsonl" -o -e "$TC_STATE/runs-$1.jsonl" -o -e "$TC_STATE/feed-$1-tests.log" -o -e "$TC_STATE/feed-$1-shell.log" -o -e "$TC_STATE/taskwin/$1.json" -o -d "$TC_STATE/logs/$1" }
 gone() { ! has "$1" }
 mk foo; mk foo-bar; mk proj; print idea > "$TC_IDEAS_DIR/foo.md"
 tt new-session -d -s foo -c "$TT_DIR"; tt new-session -d -s foo-bar -c "$TT_DIR"; tt new-session -d -s proj -c "$TT_DIR"

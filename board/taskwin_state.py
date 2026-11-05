@@ -38,9 +38,12 @@ def save(path, st):
 
 
 def update(st, lead, tasks, now):
-    if st.get("lead") != lead or not isinstance(st.get("tasks"), dict):
+    old = st.get("lead")
+    if not isinstance(st.get("tasks"), dict) or (old and lead and old != lead):
         st.clear()
         st.update({"lead": lead, "tasks": {}, "events": [], "all_done": None})
+    elif lead:  # a blank lead (tmux or sessions json unreadable for a tick) keeps the state and the stored id
+        st["lead"] = lead
     known = st["tasks"]
     events = [e for e in st.get("events") or [] if isinstance(e, dict) and now - e.get("at", 0) < EVENT_TTL]
     for t in tasks:

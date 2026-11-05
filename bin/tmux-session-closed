@@ -16,7 +16,8 @@ for row in ${(f)live}; do
   [[ "${row%%$'\t'*}" == "$n" || "${row#*$'\t'}" == "$n" ]] && exit 0
 done
 rm -f -- "$STATE/artifacts-$n.jsonl" "$STATE/runs-$n.jsonl" \
-  "$STATE/feed-$n-tests.log" "$STATE/feed-$n-shell.log" "$STATE/relay-$n.log" "$STATE/relay-failed-$n.txt"
+  "$STATE/feed-$n-tests.log" "$STATE/feed-$n-shell.log" "$STATE/relay-$n.log" "$STATE/relay-failed-$n.txt" \
+  "$STATE/taskwin/$n.json"   # n passed the name check above, so taskwin_state.path_for maps it to itself
 [[ -d "$STATE/logs/$n" ]] && rm -rf -- "$STATE/logs/$n"
 "${0:A:h}/tmux-overseer" stop >/dev/null 2>&1   # the overseer goes when the last project session has gone
 exit 0
