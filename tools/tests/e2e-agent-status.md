@@ -1,67 +1,257 @@
-# E2E: agent-status mod, real session (2026-11-05, Claude Code 2.1.318, haiku)
+# E2E: agent-status mod, real sessions (2026-11-05, fixed mod 1345f3c)
 
-Procedure as run. Every state below is the content of the session's status file next to the `status` of its pane in a
-test board's `/api/state`. Epoch seconds are `date +%s` taken in the same snapshot, so they can be compared.
+Run against the fixed mod (needs-you from `classic.PermissionRequest`). Every result below is raw output pasted under the
+command that produced it. `claude --version`:
+
+    $ claude --version
+    2.1.318 (Claude Code)
 
 ## Setup
 
-- Scratch tmux server `T() { ~/.local/bin/tmux -L agent-status-e2e -f /dev/null "$@"; }`, session `e2e`, one pane `%0`.
-- `TMP=$(mktemp -d)`; `T set-environment -g TC_STATE $TMP` before any claude, and `TC_STATE=$TMP` on the claude command line.
-- Lead: `TC_STATE=$TMP claude --model haiku --settings <wt>/claude/session-settings.json --plugin-dir <wt>/claude/plugin`
-  (the session came up in "auto mode").
-- Test board, from the worktree: `TMUX_DASH_PORT=7710 TMUX_DASH_TOKEN=x TMUX_DASH_TMUX_ARGS='-L agent-status-e2e' TC_OVERSEER=0 TC_STATE=$TMP python3 board/server.py`
-  (API `http://127.0.0.1:7710/x/api/state`).
-- Live dir untouched: `$TMPDIR/tmux-ctl-503/agent-status/*.json` count before = 0, after = 0.
-- A prompt typed with `send-keys "text" Enter` in one call was not always submitted; a separate `Enter` after a 1 s pause was.
-- Note: zsh `*.json(N)` raised "no matches found" in this agent's shell; `setopt null_glob` and a plain glob worked.
+    T() { ~/.local/bin/tmux -L agent-status-e2e -f /dev/null "$@"; }
+    WT=/Users/francisco.ruiz/agent-board/.claude/worktrees/mod-agent-status; cd $WT
+    TMP=$(mktemp -d)        # /var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.y1verZrdJg
+    LIVE=$TMPDIR/tmux-ctl-$(id -u)/agent-status
+    setopt null_glob; files=($LIVE/*.json); print live-before ${#files}
+    T new-session -d -s e2e -x 200 -y 50 && T set-environment -g TC_STATE $TMP   # before any claude
+    TMUX_DASH_PORT=7710 TMUX_DASH_TOKEN=x TMUX_DASH_TMUX_ARGS='-L agent-status-e2e' TC_OVERSEER=0 TC_STATE=$TMP python3 board/server.py &
 
-## Transitions
+    live-before 0
+    %0 e2e                      # T list-panes -a -F '#{pane_id} #{session_name}'
 
-| Moment | status file `state` (since / updatedAt) | `/api/state` pane `status` |
-| :- | :- | :- |
-| session up, idle | `ready` (since 1793894657, updatedAt 1793894672, `date` 1793894674) | `ready` |
-| turn with no tool (story prompt), 3 s in | `busy` (since 1793894758, updatedAt 1793894758, `date` 1793894760) | `working` |
-| same turn, 7 s in | `busy` (updatedAt 1793894762, heartbeat) | `working` |
-| after that turn | `ready` (since 1793894765, `date` 1793894780) | `ready` |
-| AskUserQuestion open | `needs-you` (since 1793894793, `date` 1793894802) | `waiting` |
-| same dialog, 15 s later | `needs-you` (updatedAt 1793894807, `date` 1793894818) | `waiting` |
-| answered (one Enter), +1.5 s | `busy` (since 1793894823) | `working` |
-| answered, +3 s | `ready` (since 1793894826) | `ready` |
-| Bash `sleep 20; echo done`, 5 s in | **`needs-you`** (since 1793894705) | **`waiting`** |
-| same Bash, ~12 s in (tool still running) | **`needs-you`** (updatedAt 1793894717) | **`waiting`** |
-| Bash finished | `busy` (since 1793894727), then `ready` (since 1793894729) | `working`, then `ready` |
+Snapshot command, defined once and used for every snapshot below (date, status file(s) in the temp dir, the lead pane's
+`status` from the test board's `/api/state`):
 
-No permission dialog was on screen for the Bash call (auto mode): the pane showed the spinner and an empty prompt.
+    snap() {
+      print "date=$(date +%s)"
+      setopt null_glob
+      for f in $TMP/agent-status/*.json; do print "$f"; cat "$f"; print; done
+      curl -s http://127.0.0.1:7710/x/api/state | python3 -c '<walk the JSON, print id/status/kind of pane %0>'
+    }
 
-Carried-over checks:
+Prompts are sent with `T send-keys -t %0 "text"; sleep 1; T send-keys -t %0 Enter`. Target is the pane id `%0`.
+Status file paths below are shortened to `$TMP/` (that is the `/var/folders/.../tmp.y1verZrdJg/` prefix in the raw output).
 
-1. `since`/`updatedAt` are epoch seconds: they sit within 2 s of `date +%s` in every snapshot (`$.clock.now()` is ms and `secs()` converts it right).
-2. Heartbeat: with no turn running `updatedAt` went 1793894672 to 1793894687 (+15 s); during the open dialog 1793894793 to 1793894807 (+14 s); idle 1793894826 to 1793894837.
-3. `/clear`: the old file `a294bc29-….json` was gone at the first snapshot, 3 s later; no file existed for about 25 s; the next heartbeat (since 1793894840, updatedAt 1793894867) wrote `5c778f14-7399-481a-a9ef-e791de91b00f.json`, `ready`, same pane `%0`. The board fell back to pane text (`ready`) in between.
+## Session A transitions
 
-## Exit
+Launch (auto mode, as in the first run); the pane then shows `auto mode on`:
 
-`/exit` (after the `/clear`): `ls $TMP/agent-status` printed `total 0` five seconds later, so the real `rm -f` ran; the pane then
-showed the shell (`kind: shell`, `status: idle` in `/api/state`).
+    TC_STATE=$TMP claude --model haiku --settings $WT/claude/session-settings.json --plugin-dir $WT/claude/plugin
 
-## Live read-only
+Idle:
 
-Run with the live environment (`TC_STATE` unset), from the worktree:
+    date=1793896487
+    $TMP/agent-status/2ffdbec1-94d1-471e-b5a8-5f396eeb3a84.json
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"ready","since":1793896476,"updatedAt":1793896476}
+    pane %0 status= ready kind= claude
+
+Turn with no tool ("Write a 200 word story about a lighthouse. Do not use any tools."), then `snap` at +3 s, +7 s, +20 s:
+
+    date=1793896496
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"busy","since":1793896494,"updatedAt":1793896494}
+    pane %0 status= working kind= claude
+    date=1793896500
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"busy","since":1793896494,"updatedAt":1793896494}
+    pane %0 status= working kind= claude
+    date=1793896513
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"ready","since":1793896508,"updatedAt":1793896508}
+    pane %0 status= ready kind= claude
+
+`sleep 20; echo done` (prompt: "Run this exact Bash command and report its output: sleep 20; echo done"), six snapshots, four of
+them while the tool ran (tool ended near 1793896544):
+
+    date=1793896523
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"busy","since":1793896519,"updatedAt":1793896521}
+    pane %0 status= working kind= claude
+    date=1793896528
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"busy","since":1793896519,"updatedAt":1793896521}
+    pane %0 status= working kind= claude
+    date=1793896534
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"busy","since":1793896519,"updatedAt":1793896521}
+    pane %0 status= working kind= claude
+    date=1793896540
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"busy","since":1793896519,"updatedAt":1793896536}
+    pane %0 status= working kind= claude
+    date=1793896548
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"ready","since":1793896544,"updatedAt":1793896544}
+    pane %0 status= ready kind= claude
+    date=1793896554
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"ready","since":1793896544,"updatedAt":1793896551}
+    pane %0 status= ready kind= claude
+
+Result: `busy` (never `needs-you`) for the whole tool run; the earlier bug is gone. Heartbeat: `updatedAt` 1793896521 to 1793896536
+(+15 s) mid-run, and 1793896544 to 1793896551 idle.
+
+AskUserQuestion ("Use AskUserQuestion to ask me to pick red or blue, then reply with my pick."); snapshots at +8 s and +16 s with the
+dialog open, the pane capture, then one `Enter` (option 1 is selected, single-select) and snapshots +1 s, +4 s, +9 s:
+
+    date=1793896569
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"needs-you","since":1793896563,"updatedAt":1793896566}
+    pane %0 status= waiting kind= claude
+
+    Which color do you pick: red or blue?
+    ❯ 1. Red
+         Pick red
+      2. Blue
+         Pick blue
+      3. Type something.
+      4. Chat about this
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+
+    date=1793896577
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"needs-you","since":1793896563,"updatedAt":1793896566}
+    pane %0 status= waiting kind= claude
+    date=1793896579
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"busy","since":1793896578,"updatedAt":1793896578}
+    pane %0 status= working kind= claude
+    date=1793896582
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"ready","since":1793896580,"updatedAt":1793896581}
+    pane %0 status= ready kind= claude
+    date=1793896587
+    {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"ready","since":1793896580,"updatedAt":1793896581}
+    pane %0 status= ready kind= claude
+
+Clock unit: in every snapshot above `since` and `updatedAt` are within 0 to 12 s before `date +%s` and never after it (the
+12 s gap is `updatedAt` waiting for its next 15 s heartbeat), so `$.clock.now()` ms is converted to epoch seconds correctly.
+
+## Session B permission dialog
+
+Same launch plus `--permission-mode default` (the pane shows `manual mode on`), then the prompt
+"Run this exact Bash command and report the result: touch $TMP/probe-x" (a command on no allow list):
+
+    TC_STATE=$TMP claude --model haiku --permission-mode default --settings $WT/claude/session-settings.json --plugin-dir $WT/claude/plugin
+
+    date=1793896675
+    $TMP/agent-status/b9d37083-9a4a-4618-9164-ede0faee4170.json
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"ready","since":1793896664,"updatedAt":1793896664}
+    pane %0 status= ready kind= claude
+    date=1793896680
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"busy","since":1793896677,"updatedAt":1793896680}
+    pane %0 status= working kind= claude
+    date=1793896686
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"needs-you","since":1793896680,"updatedAt":1793896680}
+    pane %0 status= waiting kind= claude
+    date=1793896694
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"needs-you","since":1793896680,"updatedAt":1793896680}
+    pane %0 status= waiting kind= claude
+
+Snapshot and pane capture with the dialog on screen (`T capture-pane -p -t %0 | grep -v '^$' | tail -14`):
+
+    date=1793896698
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"needs-you","since":1793896680,"updatedAt":1793896695}
+    pane %0 status= waiting kind= claude
+     Bash command
+     Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+     Create the probe-x file with touch and print its exit code
+     │ touch /var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.y1verZrdJg/probe-x; echo "rc=$?"
+     This command requires approval
+     Do you want to proceed?
+     ❯ 1. Yes
+       2. Yes, and don't ask again for touch /var/folders/.../probe-x and "echo \"rc=$?\"" commands in
+          /Users/francisco.ruiz/agent-board/.claude/worktrees/mod-agent-status
+       3. Yes, and switch to auto mode · auto mode handles these prompts for you
+       4. No
+     Esc to cancel · Tab to amend
+
+`needs-you` for 14+ s (1793896680 to 1793896698) while the dialog was open. Then one `Enter` (option 1), snapshots +1 s, +5 s, +9 s:
+
+    date=1793896699
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"busy","since":1793896699,"updatedAt":1793896699}
+    pane %0 status= waiting kind= claude
+    date=1793896704
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"ready","since":1793896702,"updatedAt":1793896702}
+    pane %0 status= ready kind= claude
+    date=1793896708
+    {"session_id":"b9d37083-9a4a-4618-9164-ede0faee4170","pane":"%0","state":"ready","since":1793896702,"updatedAt":1793896702}
+    pane %0 status= ready kind= claude
+
+The command ran (`ls -l $TMP/probe-x` printed `-rw-r--r--  1 francisco.ruiz  staff  0 Nov  5 11:38 …/probe-x`).
+
+Observation, not a mod bug: in the snapshot taken 1 s after Enter (date=1793896699) the file already said `busy` while the board
+still showed `waiting`; the board's `/api/state` is cached, and the next snapshot agrees. Not investigated further.
+
+## Exit and /clear
+
+`/clear` in session A (after the AskUserQuestion). The first two lines were meant to be headers but zsh `print` rejected the leading
+`---` (`bad option`), so only the `ls` outputs appear: the first `ls` (before `/clear`) printed the old file; the second `ls` and the
+snapshot, 3 s after `/clear`, show no status file. Then `snap` every 8 s:
+
+    (eval):print:2: bad option: - 
+    2ffdbec1-94d1-471e-b5a8-5f396eeb3a84.json
+    (eval):print:3: bad option: - 
+    date=1793896596
+    pane %0 status= ready kind= claude
+    date=1793896604
+    $TMP/agent-status/e4e8b5c8-619d-4434-85a4-8f1100337724.json
+    {"session_id":"e4e8b5c8-619d-4434-85a4-8f1100337724","pane":"%0","state":"ready","since":1793896593,"updatedAt":1793896596}
+    pane %0 status= ready kind= claude
+    date=1793896612
+    {"session_id":"e4e8b5c8-619d-4434-85a4-8f1100337724","pane":"%0","state":"ready","since":1793896593,"updatedAt":1793896611}
+    pane %0 status= ready kind= claude
+    date=1793896620
+    {"session_id":"e4e8b5c8-619d-4434-85a4-8f1100337724","pane":"%0","state":"ready","since":1793896593,"updatedAt":1793896611}
+    pane %0 status= ready kind= claude
+    date=1793896628
+    {"session_id":"e4e8b5c8-619d-4434-85a4-8f1100337724","pane":"%0","state":"ready","since":1793896593,"updatedAt":1793896626}
+    pane %0 status= ready kind= claude
+    date=1793896636
+    {"session_id":"e4e8b5c8-619d-4434-85a4-8f1100337724","pane":"%0","state":"ready","since":1793896593,"updatedAt":1793896626}
+    pane %0 status= ready kind= claude
+    date=1793896645
+    {"session_id":"e4e8b5c8-619d-4434-85a4-8f1100337724","pane":"%0","state":"ready","since":1793896593,"updatedAt":1793896641}
+    pane %0 status= ready kind= claude
+
+Old id `2ffdbec1-94d1-471e-b5a8-5f396eeb3a84` (file gone), new id `e4e8b5c8-619d-4434-85a4-8f1100337724` (file present from
+the snapshot at date=1793896604, `since` 1793896593; with no turn, `updatedAt` advanced 1793896611, 626, 641: +15 s each, the
+heartbeat ran for real). The board showed `ready` throughout (pane-text fallback while no file existed).
+
+`/exit` (session A, after the `/clear`):
+
+    --- ls before /exit
+    e4e8b5c8-619d-4434-85a4-8f1100337724.json
+    --- ls after
+    total 0
+    drwxr-xr-x  2 francisco.ruiz  staff   64 Nov  5 11:37 .
+    drwx------  7 francisco.ruiz  staff  224 Nov  5 11:34 ..
+    date=1793896656
+    pane %0 status= idle kind= shell
+
+`/exit` (session B), 5 s after:
+
+    --- ls before /exit
+    b9d37083-9a4a-4618-9164-ede0faee4170.json
+    --- ls after
+    total 0
+    drwxr-xr-x  2 francisco.ruiz  staff   64 Nov  5 11:38 .
+    drwx------  8 francisco.ruiz  staff  256 Nov  5 11:38 ..
+    date=1793896722
+    pane %0 status= idle kind= shell
+
+## Live read-only check
+
+Run from the worktree with the live environment (`TC_STATE` unset), after the sessions; it writes nothing:
 
     $ python3 -c 'import sys; sys.path.insert(0,"board"); import paneclass; print(paneclass.status_dir(), paneclass.mod_states())'
     /var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmux-ctl-503/agent-status {}
     rc=0
 
-Live dir file count: 0 before the run, 0 after.
+Live dir file count (`setopt null_glob; files=($LIVE/*.json); print ${#files}`): before the run `live-before 0` (Setup);
+after the run `live-after 0`.
 
 ## Cleanup
 
-Test board (pid 7453) killed; `tmux -L agent-status-e2e kill-server` then `ls` said `no server running`; `ps` shows no process
-with `-L agent-status-e2e`; no `-w` worktree or branch was created. The only `board/server.py` left is the live board (pid 2531,
-started Nov 3, listening on :7700), not started by this run.
+The test board was killed by pid (`kill 51407`), the scratch server by `T kill-server`; both claude sessions ended through `/exit` above.
 
-## Finding
+    $ T ls
+    no server running on /private/tmp/tmux-503/agent-status-e2e
+    $ ps -axo pid,command | grep -E 'agent-status-e2e|board/server.py|51407' | grep -v grep
+     2531 /Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python /Users/francisco.ruiz/agent-board/board/server.py
+    $ git worktree list
+    /Users/francisco.ruiz/agent-board                                               17bebdf [main]
+    /Users/francisco.ruiz/agent-board/.claude/worktrees/exploring-claude-mods-agent 12291fd [worktree-exploring-claude-mods-agent]
+    /Users/francisco.ruiz/agent-board/.claude/worktrees/find-missing-tailscale-work 12291fd [worktree-find-missing-tailscale-work]
+    /Users/francisco.ruiz/agent-board/.claude/worktrees/mod-agent-status            1345f3c [feat/mod-agent-status]
+    $ files=($LIVE/*.json); print ${#files}
+    0
 
-A Bash call that auto mode approves leaves the file at `needs-you` for the whole run of the tool: `tool.check` resolves
-`{decision: 'ask'}` (auto mode's own classifier step), the mod sets `needs-you`, and only the `tool.call` `next()` returning (the tool
-finished) sets `busy`. The board shows `waiting` for about 22 s of a `sleep 20` with no dialog open. Not fixed here.
+Pid 2531 is the live board (`board/server.py` without the test environment, not started by this run). No `-w` worktree was created.
