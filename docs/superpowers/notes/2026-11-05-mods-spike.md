@@ -65,5 +65,48 @@ The mod loads in all five contexts. The spec stands. Two spec details need chang
 2. **There is no `$.fs` rename or delete.** Atomic-write-by-rename and `session.end` deletion go through `$.process.run(['mv', …])` and `['rm', '-f', …]`; `$.fs.write` creates parent dirs, so no mkdir call.
 3. **Teammates get their own session id and file, but may not see `TC_STATE`** (it is not in the tmux server environment unless `tt set-environment -g`/the launcher sets it); the board must read the same dir the mod resolves, i.e. fall back to `$TMPDIR/tmux-ctl-<uid>` exactly as `tc_env.state_dir()` does.
 4. **A `--bg` session has `pane: null`**: the board cannot match it by pane; the file is still written.
-5. The validator forces inline `$.env.get('LITERAL')`, literal `on('event')` names, and no helpers taking `$`; the mod's handler bodies need repeating or the logic must be written over plain values.
+5. The validator forces inline `$.env.get('LITERAL')` and literal `on('event')` names. A module-level helper that takes `$` as a parameter is accepted (Task 2: `flush($)`, reported as `via flush`), so shared logic does not need repeating per handler.
 6. Loading a plugin dir interactively makes Claude Code write `claude/plugin/tsconfig.json` (and `.claude-plugin/types/`); the spike did not commit them.
+
+## Permission signal (Task 2 fix round 3, 2026-11-05, Claude Code 2.1.318)
+
+Why: the real run found that in auto mode `tool.check` resolves `{decision:'ask'}` for a call the classifier then approves on its own
+(events.md: `tool.check` fires *before* the permission prompt, auto mode's classifier, or a `PermissionRequest` hook), so "ask = needs-you"
+marked every auto-approved Bash call needs-you for the tool's whole run. Probe: a throwaway mod (temp `--plugin-dir`, outside the repo)
+logging `tool.call`, `tool.check` (full `e` and result), `classic.PreToolUse`, `classic.PermissionRequest`, `classic.PermissionDenied`,
+`classic.Notification`, `classic.SessionStart`, `$.settings.read` and the `SessionMode`/`Spinner`/`ToolProgress`/`PromptHint`/`AbovePrompt`
+render sites; scratch tmux `-L agent-status-fix -f /dev/null`, `TC_STATE` = a temp dir, haiku, loaded next to the real plugin.
+
+| Session | Call | `tool.check` result | `classic.PermissionRequest` | `classic.Notification` |
+| :- | :- | :- | :- | :- |
+| auto mode (user settings `permissions.defaultMode: auto`) | Bash `sleep 5; echo done-auto` | `ask` ("Claude requested permissions to use Bash, but you haven't granted it yet."), `e.approver: "person"`, `isReadOnly: true`; tool ran 0.5 s later | none | none |
+| `--permission-mode default` | Bash `touch <tmp>/probe-x` (dialog on screen) | `ask` ("…needs approval. The path is outside the working directories…") at +26.032 s | enter +26.070 s, return +26.072 s (38 ms after the ask; the dialog is drawn after it). `e`: `tool_name`, `tool_input` (= the check's `e.input`), `permission_mode: "default"`, `permission_suggestions`, `session_id`, `prompt_id`; **no `tool_use_id`** | `permission_prompt` at +32.069 s (6 s after the dialog, as hooks.md says) |
+| same | AskUserQuestion | `ask` ("Answer questions?") | fires too (`tool_name: "AskUserQuestion"`), 25 ms after the check | `permission_prompt` 6 s later |
+| same | Read README.md (no PreToolUse settings hook matches Read anywhere) | `allow` | none | none |
+
+Other facts from the probe:
+
+- `classic.PreToolUse` fires for every tool call, 3–10 ms after `tool.call` is entered and ~150 ms before `tool.check`, whether or not any
+  settings hook matches the tool (Read had none). `classic.SessionStart` fires ~0.4 s before the mod's `session.start`. Both are
+  `classic.*` events, which never run for a user's mod where the built-in guard loads (admin.md); on this machine (Max plan via Stripe, no
+  managed settings, no `prependPlugins`) they run, so the guard is not loaded here.
+- `$.settings.read()` reports `permissions.defaultMode: "auto"` (user settings) in both sessions, including the one started with
+  `--permission-mode default`: the settings do not reflect the runtime permission mode (flag or shift+tab).
+- The `SessionMode` render site had `props.modes: []` in both modes, and the `Spinner` `mode` prop (`responding`, `thinking`, `tool-input`,
+  `tool-use`) never names a permission wait; the permission prompt is not a render site (interface.md). No render site marks the dialog.
+- `e.approver` on `tool.check` is `"person"` in both modes: not a mode signal.
+
+Decision (the mod as fixed): `needs-you` for a permission dialog comes from `classic.PermissionRequest`, paired with the pending `ask`
+(same `tool` and `tool_input`, else the oldest ask with that tool) so a parallel tool finishing does not clear it; `busy` when that
+`tool.call`'s `next()` returns. `classic.SessionStart` or `classic.PreToolUse` seen = classic hooks run here. If neither has fired by the
+time an `ask` resolves (a guarded session), the ask itself counts as a dialog unless the settings' `defaultMode` is `auto`,
+`bypassPermissions` or `dontAsk`; in a guarded session that switched mode at runtime this fallback can be wrong in either direction
+(`--permission-mode auto` with settings `default`: needs-you for the tool's run, the old bug; settings `auto` with a runtime `default`:
+busy during a dialog). `classic.Notification permission_prompt` was not used: 6 s late.
+
+Real run of the fixed mod (same scratch setup, status file polled every 2 s): auto mode `sleep 10; echo done-auto` stayed `busy`
+(since 1793896004) for the whole run, then `ready`; default mode `touch <tmp>/probe-y` went `busy` → `needs-you` (since 1793896068, 1 s
+after the prompt, the dialog on screen for 12 s) → `busy` 0.5 s after Enter → `ready`. The test kit (`claude plugin test`) runs the same
+chain inside `$.tool.call`: `classic.PreToolUse`, `tool.check`, and `classic.PermissionRequest` when the check says ask (the stub's
+answer is the user's; `{ decision: { behavior: 'allow' } }` runs the tool, anything else denies it). `$.classic` has no `PreToolUse`
+method; the `settings.read` stub receives `{ layers: [] }` with no `key`, so the mod reads the merged settings.
