@@ -368,5 +368,28 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(r.stdout, "")
 
 
+class TierModelTest(unittest.TestCase):
+    def test_routing_override_badges_new_model_in_default_style(self):
+        v = view_of([task(1, "a", "pending", tier="standard")])
+        out = plain(v, 120, 30, t={}, tier_model={"standard": "opus"})
+        self.assertIn("opus", out)
+        self.assertNotIn("sonnet", out)
+        col = taskwin.render(v, {}, 120, 30, NOW, 0, "256", tier_model={"standard": "opus"})
+        i = col.index("opus")
+        self.assertNotIn(taskwin.SGR["blue"][1], col[max(0, i - 20):i])  # default style, not sonnet's blue
+
+    def test_inherit_shows_no_badge(self):
+        v = view_of([task(1, "a", "pending", tier="frontier")])
+        out = plain(v, 120, 30, t={}, tier_model={"frontier": "inherit"})
+        self.assertNotIn("inherit", out)
+        self.assertNotIn("fable", out)
+
+    def test_partial_mapping_keeps_defaults_for_other_tiers(self):
+        v = view_of([task(1, "a", "pending", tier="mechanical"), task(2, "b", "pending", tier="standard")])
+        out = plain(v, 120, 30, t={}, tier_model={"standard": "opus"})
+        self.assertIn("haiku", out)
+        self.assertIn("opus", out)
+
+
 if __name__ == "__main__":
     unittest.main()

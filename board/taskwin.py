@@ -260,10 +260,27 @@ def critical_path(tasks):
 
 # ---------------------------------------------------------------- pieces
 
-def _badge(t):
-    """(model name, style) for the task's tier: a modelTier name or a model name; None when there is no badge."""
-    tier = TIER_MODEL.get(t.get("tier") or "", t.get("tier") or "")
-    return (tier, (TIER_STYLE[tier],)) if tier in TIER_STYLE else None
+def _badge(t, tier_model=None):
+    """(model name, style) for the task's tier; None when there is no badge."""
+    raw = t.get("tier") or ""
+    tm = TIER_MODEL if tier_model is None else {**TIER_MODEL, **tier_model}
+    if raw in tm:
+        model = tm[raw]
+        if not isinstance(model, str) or not model or model == "inherit":
+            return None
+        return (model, (TIER_STYLE[model],) if model in TIER_STYLE else ())
+    return (raw, (TIER_STYLE[raw],)) if raw in TIER_STYLE else None
+
+
+def load_tier_model(root):
+    """{tier: model} from <root>/docs/superpowers/model-routing.json; TIER_MODEL per tier on any problem."""
+    try:
+        data = json.loads((Path(root) / "docs" / "superpowers" / "model-routing.json").read_text())
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {k: (data[k] if isinstance(data.get(k), str) else v) for k, v in TIER_MODEL.items()}
 
 
 def _status_glyph(t, frame):
@@ -385,7 +402,7 @@ def _plan_graph(tasks, width, avail):
     return live, [t for t in tasks if t["id"] in gone], _card_width(len(live), width)
 
 
-def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash):
+def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash, tier_model=None):
     border = ("accent",) if accent else ("grey",)
     extra = ("inverse",) if flash else ()
     inner = cw - 2
@@ -404,7 +421,7 @@ def _draw_card(cv, x, y, cw, t, timing, now, frame, accent, flash):
     # tier and owner
     cv.put(x, y + 2, "│ ", border + extra)
     segs = []
-    badge = _badge(t)
+    badge = _badge(t, tier_model)
     if badge:
         segs.append(badge)
     owner = _owner_segs(t, frame)
@@ -481,7 +498,7 @@ def _draw_edges(cv, cols, cw, pos):
             cv.ch[y][x] = "┤"
 
 
-def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id):
+def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model=None):
     plan = _plan_graph(tasks, width, avail)
     if plan is None:
         return None
@@ -503,20 +520,21 @@ def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id):
     for c, col in enumerate(cols):
         x = c * (cw + GUTTER)
         for r, t in enumerate(col):
-            _draw_card(cv, x, r * (CARD_H + GAP), cw, t, timing, now, frame, t["id"] in crit, t["id"] == flash_id)
+            _draw_card(cv, x, r * (CARD_H + GAP), cw, t, timing, now, frame, t["id"] in crit, t["id"] == flash_id,
+                       tier_model)
     _draw_edges(cv, cols, cw, pos)
     return head + cv.lines(color)
 
 
 # ---------------------------------------------------------------- list layout
 
-def _list_line(cv, y, width, t, timing, now, frame, flash):
+def _list_line(cv, y, width, t, timing, now, frame, flash, tier_model=None):
     extra = ("inverse",) if flash else ()
     st = t["status"]
     head = [(_status_glyph(t, frame), (STATUS_STYLE.get(st, "grey"),)), (" " + t["id"] + "  ", ("bold",))]
     # tail pieces in display order; `drop` is the order they go when the line is too narrow
     parts = {}
-    badge = _badge(t)
+    badge = _badge(t, tier_model)
     if badge:
         parts["tier"] = [badge]
     owner = _owner_segs(t, frame)
@@ -551,7 +569,7 @@ def _list_line(cv, y, width, t, timing, now, frame, flash):
     cv.put_segs(width - tw, y, tail, tw, extra)  # right-aligned, so the hints line up at the edge
 
 
-def _list_lines(tasks, timing, width, avail, now, frame, color, flash_id):
+def _list_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model=None):
     rows = list(tasks)
     summary = None
     if len(rows) > avail:
@@ -568,7 +586,7 @@ def _list_lines(tasks, timing, width, avail, now, frame, color, flash_id):
     for t in rows:
         if y >= n:
             break
-        _list_line(cv, y, width, t, timing, now, frame, t["id"] == flash_id)
+        _list_line(cv, y, width, t, timing, now, frame, t["id"] == flash_id, tier_model)
         y += 1
     return cv.lines(color)
 
@@ -593,7 +611,7 @@ def _trim(lines, height):
 
 # ---------------------------------------------------------------- entry point
 
-def render(view, timing, width, height, now, frame, color, session=""):
+def render(view, timing, width, height, now, frame, color, session="", tier_model=None):
     width, height = max(1, int(width)), max(1, int(height))
     tasks = list((view or {}).get("tasks") or [])
     if not tasks:
@@ -604,9 +622,9 @@ def render(view, timing, width, height, now, frame, color, session=""):
     avail = max(0, height - HEADER_ROWS)
     body = None
     if width >= GRAPH_MIN_WIDTH:
-        body = _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id)
+        body = _graph_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model)
     if body is None:
-        body = _list_lines(tasks, timing, width, avail, now, frame, color, flash_id)
+        body = _list_lines(tasks, timing, width, avail, now, frame, color, flash_id, tier_model)
     return "\n".join(_trim(cv.lines(color) + body, height))
 
 
@@ -639,6 +657,7 @@ def watch(session, root, home, interval=1.0, frames=None):
     spath = taskwin_state.path_for(tc_env.state_dir(), session)
     st = taskwin_state.load(spath)
     last, n, tick = "", 0, 0
+    tm, tm_for = None, object()
     old = {s: signal.signal(s, lambda *_: sys.exit(0)) for s in (signal.SIGTERM, signal.SIGHUP)} \
         if _main_thread() else {}
     sys.stdout.write(HIDE)
@@ -648,13 +667,15 @@ def watch(session, root, home, interval=1.0, frames=None):
             n += 1
             try:
                 view, lead = _fetch(session, root, home)
+                if view.get("name") != tm_for:
+                    tm, tm_for = load_tier_model(root), view.get("name")
                 now = time.time()
                 before = json.dumps(st, sort_keys=True)
                 taskwin_state.update(st, lead, view.get("tasks") or [], now)
                 if json.dumps(st, sort_keys=True) != before:
                     taskwin_state.save(spath, st)
                 cols, rows = shutil.get_terminal_size()
-                last = render(view, st, cols, rows - 1 if rows > 1 else rows, now, tick, color_mode(os.environ), session)
+                last = render(view, st, cols, rows - 1 if rows > 1 else rows, now, tick, color_mode(os.environ), session, tm)
                 tick += 1
                 _draw(last)
             except Exception as e:  # one bad tick must not kill the window
@@ -697,7 +718,8 @@ def main(argv=None):
         return 0
     view, lead = _fetch(a.session, a.root, a.home)
     cols, rows = shutil.get_terminal_size()
-    print(render(view, {}, a.width or cols, a.height or rows, time.time(), 0, color_mode(os.environ), a.session))
+    print(render(view, {}, a.width or cols, a.height or rows, time.time(), 0, color_mode(os.environ), a.session,
+                 load_tier_model(a.root)))
     return 0
 
 
