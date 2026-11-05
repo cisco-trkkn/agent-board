@@ -26,8 +26,20 @@ Snapshot command, defined once and used for every snapshot below (date, status f
       print "date=$(date +%s)"
       setopt null_glob
       for f in $TMP/agent-status/*.json; do print "$f"; cat "$f"; print; done
-      curl -s http://127.0.0.1:7710/x/api/state | python3 -c '<walk the JSON, print id/status/kind of pane %0>'
+      curl -s http://127.0.0.1:7710/x/api/state | python3 -c 'import sys,json
+    d=json.load(sys.stdin)
+    def walk(o):
+        if isinstance(o,dict):
+            if o.get("id")=="%0" or o.get("pane")=="%0": print("pane", o.get("id"), "status=", o.get("status"), "kind=", o.get("kind"))
+            for v in o.values(): walk(v)
+        elif isinstance(o,list):
+            for v in o: walk(v)
+    walk(d)'
     }
+
+(The `/api/state` reader is the exact text e2e2 ran, recovered from its session transcript; it prints one line per object
+whose `id` or `pane` is `%0`. Inside the quoted python the lines must start at column 0; the indent here is only the
+code-block indent.)
 
 Prompts are sent with `T send-keys -t %0 "text"; sleep 1; T send-keys -t %0 Enter`. Target is the pane id `%0`.
 Status file paths below are shortened to `$TMP/` (that is the `/var/folders/.../tmp.y1verZrdJg/` prefix in the raw output).
@@ -111,8 +123,8 @@ dialog open, the pane capture, then one `Enter` (option 1 is selected, single-se
     {"session_id":"2ffdbec1-94d1-471e-b5a8-5f396eeb3a84","pane":"%0","state":"ready","since":1793896580,"updatedAt":1793896581}
     pane %0 status= ready kind= claude
 
-Clock unit: in every snapshot above `since` and `updatedAt` are within 0 to 12 s before `date +%s` and never after it (the
-12 s gap is `updatedAt` waiting for its next 15 s heartbeat), so `$.clock.now()` ms is converted to epoch seconds correctly.
+Clock unit: in every snapshot above `since` and `updatedAt` are within 0 to 14 s before `date +%s` (the largest gap pasted is 14 s,
+date=1793896694 against `updatedAt` 1793896680 in Session B; below the 15 s heartbeat) and never after it, so `$.clock.now()` ms is converted to epoch seconds correctly.
 
 ## Session B permission dialog
 
@@ -173,12 +185,12 @@ still showed `waiting`; the board's `/api/state` is cached, and the next snapsho
 ## Exit and /clear
 
 `/clear` in session A (after the AskUserQuestion). The first two lines were meant to be headers but zsh `print` rejected the leading
-`---` (`bad option`), so only the `ls` outputs appear: the first `ls` (before `/clear`) printed the old file; the second `ls` and the
+`---` (a harmless `bad option` error from `print '---'`-style header lines, unrelated to the mod), so only the `ls` outputs appear: the first `ls` (before `/clear`) printed the old file; the second `ls` and the
 snapshot, 3 s after `/clear`, show no status file. Then `snap` every 8 s:
 
-    (eval):print:2: bad option: - 
+    (eval):print:2: bad option: -     <- harmless: zsh print rejecting a '---' header
     2ffdbec1-94d1-471e-b5a8-5f396eeb3a84.json
-    (eval):print:3: bad option: - 
+    (eval):print:3: bad option: -     <- harmless, same cause
     date=1793896596
     pane %0 status= ready kind= claude
     date=1793896604
@@ -236,7 +248,7 @@ Run from the worktree with the live environment (`TC_STATE` unset), after the se
     rc=0
 
 Live dir file count (`setopt null_glob; files=($LIVE/*.json); print ${#files}`): before the run `live-before 0` (Setup);
-after the run `live-after 0`.
+after the run the count is the `0` pasted under `print ${#files}` in Cleanup below.
 
 ## Cleanup
 
@@ -254,4 +266,5 @@ The test board was killed by pid (`kill 51407`), the scratch server by `T kill-s
     $ files=($LIVE/*.json); print ${#files}
     0
 
-Pid 2531 is the live board (`board/server.py` without the test environment, not started by this run). No `-w` worktree was created.
+The `ps` pattern does not match claude command lines (they carry no `agent-status-e2e`), so it does not prove the claude
+sessions ended; that evidence is the post-`/exit` panes above (`kind= shell`, `status= idle`, both sessions). Pid 2531 is the live board (`board/server.py` without the test environment, not started by this run). No `-w` worktree was created.
