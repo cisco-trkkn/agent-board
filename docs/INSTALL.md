@@ -130,10 +130,12 @@ Run it from `~/agent-board` (the main checkout), not from a worktree: the plist 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):
 
 ```json
-"statusLine": {"type": "command", "command": "/Users/<you>/agent-board/claude/statusline/agent-board-statusline"}
+"statusLine": {"type": "command", "command": "/Users/<you>/agent-board/claude/statusline/agent-board-statusline", "refreshInterval": 60}
 ```
 
 Each session's status bar then shows a line like `Haiku 5.5 · ctx 4% · 5h 63%`, and the script stores Claude Code's payload per session in `<state_dir>/statusline/<session_id>.json` (`$TC_STATE`, else `${TMPDIR:-/tmp}/tmux-ctl-<uid>`). It never fails Claude Code: on any error it prints `agent-board` and exits 0. To remove it, delete the `statusLine` key; the stored files are scratch and can be deleted.
+
+`refreshInterval` re-runs the script every 60 s while a session is idle, which keeps the stored payload fresh for the usage-gauges row under the prompt (cleared when the file is older than 5 minutes).
 
 ## Migrating from the global setup
 
