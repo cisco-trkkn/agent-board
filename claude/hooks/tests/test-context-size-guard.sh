@@ -24,6 +24,8 @@ check "UPS: systemMessage mentions 352K" "$(sm "$o" '.systemMessage' | grep -c '
 check "UPS: hookEventName" "$(sm "$o" '.hookSpecificOutput.hookEventName')" "UserPromptSubmit"
 check "UPS: additionalContext has /handoff" "$(sm "$o" '.hookSpecificOutput.additionalContext' | grep -c '/handoff')" "1"
 check "UPS: no teammate sentence" "$(printf '%s' "$o" | grep -c 'If you are a teammate')" "0"
+check "UPS: lead told to hand off itself" "$(sm "$o" '.hookSpecificOutput.additionalContext' | grep -c 'run the agent-board:handoff skill yourself')" "1"
+check "UPS: systemMessage says the lead may hand off" "$(sm "$o" '.systemMessage' | grep -cF '(The lead may hand off on its own.)')" "1"
 check "band file holds 7" "$(cat "$T/state/s1.band")" "7"
 check "same band twice -> one warning" "$(run UserPromptSubmit s1 "$FX" | wc -c | tr -d ' ')" "0"
 check "same band, other event, still silent" "$(run Stop s1 "$FX" | wc -c | tr -d ' ')" "0"
@@ -37,6 +39,7 @@ o=$(run PostToolUse s3 "$FX")
 check "PostToolUse: hookEventName" "$(sm "$o" '.hookSpecificOutput.hookEventName')" "PostToolUse"
 check "PostToolUse: systemMessage present" "$(sm "$o" '.systemMessage | length > 0')" "true"
 check "PostToolUse: teammate sentence" "$(sm "$o" '.hookSpecificOutput.additionalContext' | grep -c 'If you are a teammate, tell the lead in your next message.')" "1"
+check "PostToolUse: lead told to hand off itself" "$(sm "$o" '.hookSpecificOutput.additionalContext' | grep -c 'run the agent-board:handoff skill yourself')" "1"
 
 o=$(CLAUDE_CONTEXT_WARN_TOKENS=900000 run UserPromptSubmit s4 "$FX")
 check "threshold above tokens -> silent" "$(printf '%s' "$o" | wc -c | tr -d ' ')" "0"

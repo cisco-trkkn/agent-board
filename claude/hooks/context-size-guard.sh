@@ -43,8 +43,8 @@ if [ -n "$sid" ]; then
 fi
 
 k=$((tokens / 1000))
-msg="🛑 CONTEXT AT ${k}K TOKENS (limit ${THRESHOLD}). Run /handoff: it checkpoints the team, writes a handoff doc and asks before switching this window to a fresh orchestrator. Or /compact to stay here."
-ctx="IMPORTANT: This session's context is ${k}K tokens, past the user's ${THRESHOLD}-token budget. Begin your reply with one short, prominent line strongly recommending the user run /handoff (it checkpoints the team, writes the doc, and asks before relaying to a fresh orchestrator in this window). Suggest a one-line /handoff argument describing what the next session should focus on. Then answer their message normally."
+msg="🛑 CONTEXT AT ${k}K TOKENS (limit ${THRESHOLD}). Run /handoff: it checkpoints the team, writes a handoff doc and asks before switching this window to a fresh orchestrator. Or /compact to stay here. (The lead may hand off on its own.)"
+ctx="IMPORTANT: This session's context is ${k}K tokens, past the user's ${THRESHOLD}-token budget. If you are the agent-board lead (the orchestrator in a tmux dev session's claude window), run the agent-board:handoff skill yourself at the next safe point, with a one-line argument naming the next session's focus. Otherwise begin your reply with one short, prominent line strongly recommending the user run /handoff (it checkpoints the team, writes the doc, and asks before relaying to a fresh orchestrator in this window). Suggest a one-line /handoff argument describing what the next session should focus on. Then answer their message normally."
 if [ "$event" != "UserPromptSubmit" ]; then
   msg="$msg If you are a teammate, tell the lead in your next message."
   ctx="$ctx If you are a teammate, tell the lead in your next message."
