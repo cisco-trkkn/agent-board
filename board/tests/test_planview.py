@@ -217,6 +217,62 @@ class TestPlanview(Base):
 EMPTY_VIEW = {"name": "", "active": False, "tasks": []}
 
 
+class TestTeamAndWorktree(Base):
+    def team(self, name="session-aaaaaaaa", lead_sid="aaaaaaaa-0000-0000-0000-000000000000", pid=1001, n=3):
+        d = self.home / "teams" / name
+        d.mkdir(parents=True)
+        (d / "config.json").write_text(json.dumps({"name": name, "leadSessionId": lead_sid, "leadProcess": {"pid": pid}}))
+        td = self.home / "tasks" / name
+        td.mkdir(parents=True)
+        for i in range(1, n + 1):
+            (td / f"{i}.json").write_text(json.dumps({"id": str(i), "subject": f"team{i}", "status": "completed"}))
+
+    def test_team_list_when_own_dir_is_empty_matched_by_lead_pid(self):
+        self.clear_tasks("11111111")
+        self.team()
+        v = self.view()
+        self.assertEqual([t["subject"] for t in v["tasks"]], ["team1", "team2", "team3"])
+        self.assertTrue(v["active"])
+        self.assertEqual(sorted(v), ["active", "name", "tasks"])
+
+    def test_team_list_when_own_dir_is_missing_matched_by_lead_session_id(self):
+        shutil.rmtree(self.home / "tasks" / "session-11111111")
+        self.team(pid=9999, lead_sid=SID1)
+        self.assertEqual([t["subject"] for t in self.view()["tasks"]], ["team1", "team2", "team3"])
+
+    def test_own_list_wins_over_a_team_list(self):
+        self.team()
+        self.assertEqual(self.view()["tasks"][0]["subject"], "Task 1: x")
+
+    def test_other_leads_team_is_ignored(self):
+        self.clear_tasks("11111111")
+        self.team(pid=4242)
+        self.assertFalse(self.view()["active"])
+
+    def test_newest_manifest_line_wins_even_with_blank_session_id(self):
+        # tmux-ctl artifact records the worktree copy with session_id "": it must still beat the older main-checkout line
+        self.clear_tasks("11111111")
+        wt = self.root / "wt" / "2026-01-01-demo.md"
+        wt.parent.mkdir(parents=True)
+        Path(str(wt) + ".tasks.json").write_text(json.dumps({"tasks": [{"id": "1", "subject": "wt", "status": "completed"}]}))
+        base = {"kind": "plan"}
+        self.write_manifest([
+            dict(base, ts=1, session_id=SID1, path="/proj/docs/superpowers/plans/2026-01-01-demo.md"),
+            dict(base, ts=2, session_id="", path=str(wt)),
+            dict(base, ts=3, session_id="", path="/other/unrelated.md"),
+        ])
+        v = self.view()
+        self.assertEqual([t["subject"] for t in v["tasks"]], ["wt"])
+
+    def test_blank_session_line_before_the_sessions_own_line_loses(self):
+        base = {"kind": "plan"}
+        self.write_manifest([
+            dict(base, ts=1, session_id="", path="/early/2026-01-01-demo.md"),
+            dict(base, ts=2, session_id=SID1, path="/proj/docs/superpowers/plans/2026-01-01-demo.md"),
+        ])
+        self.assertEqual(str(planview.plan_entry(self.state, "proj", SID1)), "/proj/docs/superpowers/plans/2026-01-01-demo.md")
+
+
 class TestCli(unittest.TestCase):
     def run_cli(self, *args):
         with tempfile.TemporaryDirectory() as tmp:

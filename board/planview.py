@@ -3,7 +3,7 @@
 
 view(session, root, home, state_dir, tmux) -> {"name", "active", "tasks": [{"id","subject","status","owner","state","tier","blockedBy"}]}
 `home` is the Claude config dir (~/.claude): it holds sessions/ and tasks/.
-Reads the lead's live task list (<home>/tasks/session-<id8>/), falls back to the plan's .md.tasks.json.
+Reads the lead's live task list (<home>/tasks/session-<id8>/, else its team's <home>/tasks/<team>/), falls back to the plan's .md.tasks.json.
 Never raises: missing files, bad JSON and a failing tmux give an empty or partial view.
 """
 import argparse
@@ -28,23 +28,28 @@ def _id_key(i):
 
 def lead_session(session, home, tmux):
     """sessionId of the claude in `=<session>:claude`: the sessions entry whose tmux ends with <window_id>.<pane_id>."""
+    return lead_entry(session, home, tmux)[0]
+
+
+def lead_entry(session, home, tmux):
+    """(sessionId, pid) of that sessions entry; ("", 0) when there is none."""
     try:
         pane = tmux("display", "-p", "-t", f"={session}:claude", "#{window_id}.#{pane_id}").strip()
     except ERRORS:
-        return ""
+        return "", 0
     if not pane:
-        return ""
-    best = (-1, "")
+        return "", 0
+    best = (-1, "", 0)
     for f in sorted((Path(home) / "sessions").glob("*.json")):
         try:
             e = json.loads(f.read_text())
             if str(e.get("tmux", "")).endswith(pane) and e.get("sessionId"):
                 upd = e.get("updatedAt") or 0
                 if upd > best[0]:
-                    best = (upd, str(e["sessionId"]))
+                    best = (upd, str(e["sessionId"]), e.get("pid") if isinstance(e.get("pid"), int) else 0)
         except (ERRORS + (AttributeError, TypeError)):
             continue
-    return best[1]
+    return best[1], best[2]
 
 
 _FENCE = re.compile(r"```json:metadata\s*\n(.*?)\n```", re.S)
@@ -84,35 +89,66 @@ def _finish(tasks):
     return out
 
 
-def live_tasks(home, sid):
+def team_name(home, sid, pid):
+    """Name of the agent team this lead leads: the teams/*/config.json whose leadSessionId is `sid` or whose
+    leadProcess.pid is `pid` (the team keeps the session id it was created under, the pid survives a new session)."""
+    for f in sorted((Path(home) / "teams").glob("*/config.json")):
+        try:
+            c = json.loads(f.read_text())
+            lp = c.get("leadProcess")
+            if (sid and c.get("leadSessionId") == sid) or (pid and isinstance(lp, dict) and lp.get("pid") == pid):
+                return str(c.get("name") or f.parent.name)
+        except (ERRORS + (AttributeError, TypeError)):
+            continue
+    return ""
+
+
+def live_tasks(home, sid, pid=0):
+    """The lead's own tasks/session-<id8>/ list; when that is empty and the lead leads a team, tasks/<team>/."""
     if not sid:
         return []
+    tasks = _read_dir(Path(home) / "tasks" / f"session-{sid[:8]}")
+    if not tasks:
+        team = team_name(home, sid, pid)
+        if team:
+            tasks = _read_dir(Path(home) / "tasks" / team)
+    return _finish(tasks)
+
+
+def _read_dir(d):
     tasks = []
-    for f in (Path(home) / "tasks" / f"session-{sid[:8]}").glob("*.json"):
+    for f in d.glob("*.json"):
         try:
             d = json.loads(f.read_text())
             if isinstance(d, dict):
                 tasks.append(_norm(d))
         except (ERRORS + (AttributeError, TypeError)):
             continue
-    return _finish(tasks)
+    return tasks
 
 
 def plan_entry(state_dir, project, sid):
-    """Path of the newest `kind == "plan"` manifest line of this session, or None."""
-    best = None
+    """Path of the newest `kind == "plan"` manifest line of this session, or None. A line with a blank session_id
+    (`tmux-ctl artifact` of a worktree copy) counts when it names a file this session registered itself."""
     try:
         lines = (Path(state_dir) / f"artifacts-{project}.jsonl").read_text().splitlines()
     except ERRORS:
         return None
+    plans = []
     for l in lines:
         try:
             m = json.loads(l)
-            if m.get("kind") == "plan" and sid and m.get("session_id") == sid and m.get("path"):
-                if best is None or (m.get("ts") or 0) >= best[0]:
-                    best = (m.get("ts") or 0, m["path"])
+            if m.get("kind") == "plan" and m.get("path"):
+                plans.append((m.get("ts") or 0, m.get("session_id") or "", str(m["path"])))
         except (ERRORS + (AttributeError, TypeError)):
             continue
+    if not sid:
+        return None
+    mine = {Path(p).name for _, s, p in plans if s == sid}
+    best = None
+    for ts, s, p in plans:
+        if (s == sid or (not s and Path(p).name in mine)) and (best is None or ts >= best[0]):
+            best = (ts, p)
     return Path(best[1]) if best else None
 
 
@@ -201,9 +237,9 @@ def _plan_name(plan):
 
 
 def view(session, root, home, state_dir, tmux):
-    sid = lead_session(session, home, tmux)
+    sid, pid = lead_entry(session, home, tmux)
     plan = plan_entry(state_dir, project_of(session, tmux), sid)
-    tasks = live_tasks(home, sid)
+    tasks = live_tasks(home, sid, pid)
     if tasks:
         return {"name": _plan_name(plan), "active": True, "tasks": owner_states(session, tasks, tmux)}
     return _idle_view(root, plan, tmux, session)
