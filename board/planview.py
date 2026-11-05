@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """planview: the active plan's tasks with their owners' pane state, for board consumers (`view()`).
 
-view(session, root, home, state_dir, tmux) -> {"name", "active", "tasks": [{"id","subject","status","owner","state"}]}
+view(session, root, home, state_dir, tmux) -> {"name", "active", "tasks": [{"id","subject","status","owner","state","tier","blockedBy"}]}
 `home` is the Claude config dir (~/.claude): it holds sessions/ and tasks/.
 Reads the lead's live task list (<home>/tasks/session-<id8>/), falls back to the plan's .md.tasks.json.
 Never raises: missing files, bad JSON and a failing tmux give an empty or partial view.
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,9 +47,28 @@ def lead_session(session, home, tmux):
     return best[1]
 
 
+_FENCE = re.compile(r"```json:metadata\s*\n(.*?)\n```", re.S)
+
+
+def _tier(t):
+    """modelTier from the task's metadata dict, else from its description's json:metadata fence, else ''."""
+    meta = t.get("metadata")
+    if isinstance(meta, dict) and isinstance(meta.get("modelTier"), str):
+        return meta["modelTier"]
+    m = _FENCE.search(str(t.get("description") or ""))
+    if not m:
+        return ""
+    try:
+        v = json.loads(m.group(1))
+    except ValueError:
+        return ""
+    return v.get("modelTier", "") if isinstance(v, dict) and isinstance(v.get("modelTier", ""), str) else ""
+
+
 def _norm(t):
     return {"id": str(t.get("id", "")), "subject": str(t.get("subject", "")), "status": str(t.get("status", "pending")),
-            "owner": str(t.get("owner") or ""), "blockedBy": [str(b) for b in (t.get("blockedBy") or [])]}
+            "owner": str(t.get("owner") or ""), "blockedBy": [str(b) for b in (t.get("blockedBy") or [])],
+            "tier": _tier(t)}
 
 
 def _finish(tasks):
@@ -59,7 +79,8 @@ def _finish(tasks):
         st = t["status"] if t["status"] in STATUSES else "pending"
         if st == "pending" and any(b not in done for b in t["blockedBy"]):
             st = "blocked"
-        out.append({"id": t["id"], "subject": t["subject"], "status": st, "owner": t["owner"], "state": ""})
+        out.append({"id": t["id"], "subject": t["subject"], "status": st, "owner": t["owner"], "state": "",
+                    "tier": t["tier"], "blockedBy": t["blockedBy"]})
     return out
 
 

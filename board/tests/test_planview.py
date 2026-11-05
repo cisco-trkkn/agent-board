@@ -284,5 +284,29 @@ class TestPaneState(unittest.TestCase):
             self.assertEqual(planview.pane_state(None, "%1"), "ready")
 
 
+class TierAndBlockersTest(unittest.TestCase):
+    def test_tier_from_description_fence(self):
+        d = {"id": "1", "subject": "s", "status": "pending",
+             "description": "**Goal:** x\n\n```json:metadata\n{\"modelTier\": \"mechanical\"}\n```"}
+        self.assertEqual(planview._finish([planview._norm(d)])[0]["tier"], "mechanical")
+
+    def test_tier_from_metadata_wins(self):
+        d = {"id": "1", "subject": "s", "status": "pending", "metadata": {"modelTier": "frontier"},
+             "description": "```json:metadata\n{\"modelTier\": \"mechanical\"}\n```"}
+        self.assertEqual(planview._finish([planview._norm(d)])[0]["tier"], "frontier")
+
+    def test_tier_missing_or_malformed_is_empty(self):
+        for desc in ("", "no fence", "```json:metadata\n{not json\n```", "```json:metadata\n[1]\n```"):
+            d = {"id": "1", "subject": "s", "status": "pending", "description": desc}
+            self.assertEqual(planview._finish([planview._norm(d)])[0]["tier"], "", desc)
+
+    def test_blocked_by_passes_through(self):
+        a = {"id": "1", "subject": "a", "status": "pending"}
+        b = {"id": "2", "subject": "b", "status": "pending", "blockedBy": ["1"]}
+        out = planview._finish([planview._norm(a), planview._norm(b)])
+        self.assertEqual([t["blockedBy"] for t in out], [[], ["1"]])
+        self.assertEqual(out[1]["status"], "blocked")
+
+
 if __name__ == "__main__":
     unittest.main()
