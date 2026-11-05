@@ -16,24 +16,22 @@ export const lineageDir = (tcLineage, xdgStateHome, home) =>
 // the file whose existence tells the shell script <hook> that its mod is live for session <sid>
 export const markerPath = (stateDirPath, sid, hook) => stateDirPath + '/mods-active/' + sid + '.' + hook
 
-const get = async ($, name) => {
-  try { return (await name) || '' } catch (x) { return '' }
-}
-
-// The environment the hooks need. uid (`id -u`) is looked up only when TC_STATE is unset, the one case that needs it.
+// The environment the hooks need; an unreadable variable is ''. uid (`id -u`) is looked up only when TC_STATE is
+// unset, the one case that needs it. (`claude plugin validate` accepts $ only as an argument to a function
+// declaration and wants each $.env.get name literal, so each variable is read inline.)
 export async function readEnv($) {
-  const tcState = await get($, $.env.get('TC_STATE'))
-  const tmpdir = await get($, $.env.get('TMPDIR'))
-  const tcLineage = await get($, $.env.get('TC_LINEAGE'))
-  const xdgStateHome = await get($, $.env.get('XDG_STATE_HOME'))
-  const home = await get($, $.env.get('HOME'))
-  const tmux = await get($, $.env.get('TMUX'))
-  const tmuxPane = await get($, $.env.get('TMUX_PANE'))
-  let uid = ''
-  if (!tcState) {
-    try { uid = ((await $.process.run(['id', '-u'])).stdout || '').trim() } catch (x) { /* uid stays '' */ }
+  const r = { tcState: '', tmpdir: '', tcLineage: '', xdgStateHome: '', home: '', tmux: '', tmuxPane: '', uid: '' }
+  try { r.tcState = (await $.env.get('TC_STATE')) || '' } catch (x) { /* '' */ }
+  try { r.tmpdir = (await $.env.get('TMPDIR')) || '' } catch (x) { /* '' */ }
+  try { r.tcLineage = (await $.env.get('TC_LINEAGE')) || '' } catch (x) { /* '' */ }
+  try { r.xdgStateHome = (await $.env.get('XDG_STATE_HOME')) || '' } catch (x) { /* '' */ }
+  try { r.home = (await $.env.get('HOME')) || '' } catch (x) { /* '' */ }
+  try { r.tmux = (await $.env.get('TMUX')) || '' } catch (x) { /* '' */ }
+  try { r.tmuxPane = (await $.env.get('TMUX_PANE')) || '' } catch (x) { /* '' */ }
+  if (!r.tcState) {
+    try { r.uid = ((await $.process.run(['id', '-u'])).stdout || '').trim() } catch (x) { /* uid stays '' */ }
   }
-  return { tcState, tmpdir, tcLineage, xdgStateHome, home, tmux, tmuxPane, uid }
+  return r
 }
 
 // Content is the session id and a newline; only the file's existence is read. $.fs.write makes the parent dirs.
