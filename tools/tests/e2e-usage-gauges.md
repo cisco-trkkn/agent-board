@@ -265,7 +265,7 @@ of the own `5h 32%` line is 1.
 Stale: the own file's `received_at` is rewritten to now − 400 (the session is idle, so the tap does not rewrite it;
 each `show.py` below proves `received_at` unchanged at every capture). Captures at +4, +8 and +12 s: at +4 s (1793901138)
 the old line is still there (the poll runs every 10 s), at +8 s (1793901142) the row is cleared.
-**`$.ui.status('')` leaves an empty `⚠ agent-board:` prefix row on screen** (count of `agent-board:` stays 1, count of
+**`$.ui.status('')` leaves an empty `⚠ agent-board:` prefix row on screen** (found in this first run; the sections after Cleanup probe the alternatives and rerun this step with the fix) (count of `agent-board:` stays 1, count of
 `5h .*7d ` is 0). The line text is gone, the prefix remains: this is the concern to report.
 
     $ date +%s
@@ -513,3 +513,704 @@ was removed (the foreign copy with it).
     s4.zsh
     s5.zsh
     show.py
+
+## Clearing the status line
+
+The first run showed that `$.ui.status('')` leaves an empty `⚠ agent-board:` row. The docs list no clear call, so a
+throwaway probe mod (a scratch plugin dir under a mktemp dir, never in the repo; plugin name `agent-board` so the prefix
+reads the same) alternates every 6 s between showing a text and applying the next variant: `undefined`, `null`, no
+argument, `' '`, `''`. Each call is wrapped in try/catch and its outcome is written with `$.ui.log` (the `⏺ agent-board:
+probe step N` rows in the transcript; a `THREW` entry would show an error, there is none). The row count uses
+`grep -c '⚠ agent-board:'`, with the `⚠`, because the `$.ui.log` transcript rows also contain `agent-board:`.
+Same scratch-server rules; one full capture at the start and one at the end, and between them a `grep -n` / `grep -c` of
+the status row every 3 s.
+
+Reading the log: texts 0 to 7 are shown at the odd/even steps. After `status(undefined)`, `status(null)` and
+`status()` the row count is 0 (no row at all); after `status(' ')` and `status('')` the row is still there, empty
+(`⚠ agent-board:`), count 1. None throws. The usage-gauges mod therefore clears with `$.ui.status(undefined)`.
+
+    $ print "PROBE=$PROBE"; cat $PROBE/mods/probe.js
+    PROBE=/var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.7Wu9ZWRd2o/probe
+    // scratch probe: every 6 s alternates between showing a text and applying the next clear variant
+    let step = 0
+    export function register(on) {
+      on('session.start', async ($, e, next) => {
+        $.clock.every(6000, async () => {
+          const n = step++
+          const k = Math.floor(n / 2)
+          if (n % 2 === 0) {
+            await $.ui.status('PROBE text ' + k)
+            await $.ui.log('probe step ' + n + ': showed text ' + k)
+            return
+          }
+          const names = ['undefined', 'null', 'no argument', 'single space', 'empty string']
+          try {
+            if (k === 0) await $.ui.status(undefined)
+            else if (k === 1) await $.ui.status(null)
+            else if (k === 2) await $.ui.status()
+            else if (k === 3) await $.ui.status(' ')
+            else await $.ui.status('')
+            await $.ui.log('probe step ' + n + ': status(' + names[k] + ') returned without throwing')
+          } catch (x) {
+            await $.ui.log('probe step ' + n + ': status(' + names[k] + ') THREW ' + String(x && x.message ? x.message : x))
+          }
+        })
+        return next(e)
+      })
+    }
+
+    $ claude --version
+    2.1.318 (Claude Code)
+
+    $ T new-session -d -s e2e -n claude -x 200 -y 50 && T set-environment -g TC_STATE $TMP
+
+    $ T send-keys -t %0 "TC_STATE=$TMP claude --model haiku --settings $WT/claude/session-settings.json --plugin-dir $PROBE"; sleep 1; T send-keys -t %0 Enter
+
+    $ sleep 20
+
+    $ T capture-pane -p -t %0
+    
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-usage-gauges
+    
+    
+    ⏺ agent-board: probe step 0: showed text 0
+    
+    ⏺ agent-board: probe step 1: status(undefined) returned without throwing
+    
+    ⏺ agent-board: probe step 2: showed text 1
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+                                                                                                      tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯ Try "fix lint errors"
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      ⚠ agent-board: PROBE text 1
+      Haiku 5.5 · ctx –
+      ⏵⏵ auto mode on (shift+tab to cycle)
+
+    $ sleep 3
+
+    $ date +%s
+    1793901488
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 1
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901491
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    0
+
+    $ sleep 3
+
+    $ date +%s
+    1793901494
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    0
+
+    $ sleep 3
+
+    $ date +%s
+    1793901497
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 2
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901500
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 2
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901503
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    0
+
+    $ sleep 3
+
+    $ date +%s
+    1793901506
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    0
+
+    $ sleep 3
+
+    $ date +%s
+    1793901510
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 3
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901513
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 3
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901516
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board:
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901519
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board:
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901522
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 4
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901525
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 4
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901528
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board:
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901531
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 5
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901535
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 5
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901538
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board:
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901541
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board:
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901544
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 6
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901547
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 6
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901550
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board:
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901553
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board:
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901557
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 7
+    1
+
+    $ sleep 3
+
+    $ date +%s
+    1793901560
+
+    $ T capture-pane -p -t %0 | grep -n '⚠ agent-board:'; T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    48:  ⚠ agent-board: PROBE text 7
+    1
+
+    $ T capture-pane -p -t %0
+    
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-usage-gauges
+    
+    
+    ⏺ agent-board: probe step 0: showed text 0
+    
+    ⏺ agent-board: probe step 1: status(undefined) returned without throwing
+    
+    ⏺ agent-board: probe step 2: showed text 1
+    
+    ⏺ agent-board: probe step 3: status(null) returned without throwing
+    
+    ⏺ agent-board: probe step 4: showed text 2
+    
+    ⏺ agent-board: probe step 5: status(no argument) returned without throwing
+    
+    ⏺ agent-board: probe step 6: showed text 3
+    
+    ⏺ agent-board: probe step 7: status(single space) returned without throwing
+    
+    ⏺ agent-board: probe step 8: showed text 4
+    
+    ⏺ agent-board: probe step 9: status(empty string) returned without throwing
+    
+    ⏺ agent-board: probe step 10: showed text 5
+    
+    ⏺ agent-board: probe step 11: status(undefined) returned without throwing
+    
+    ⏺ agent-board: probe step 12: showed text 6
+    
+    ⏺ agent-board: probe step 13: status(undefined) returned without throwing
+    
+    ⏺ agent-board: probe step 14: showed text 7
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯ Try "fix lint errors"
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      ⚠ agent-board: PROBE text 7
+      Haiku 5.5 · ctx –
+      ⏵⏵ auto mode on (shift+tab to cycle)
+
+    $ T kill-server; sleep 1; T list-sessions
+    no server running on /private/tmp/tmux-503/usage-gauges-e2e
+
+## Stale file, with the fixed mod
+
+The fix (`$.ui.status(text === '' ? undefined : text)` in `usage-gauges.js`, line 49 below) was in the worktree when this
+run started (`git status` shows it modified, not yet committed). Same steps as the stale part above: one turn, then
+`received_at` is rewritten to now − 400 (the idle tap does not rewrite it; `show.py` shows `received_at` unchanged at
+every capture). At +4 s (1793901758) the line is still there (count of `⚠ agent-board:` 1, of `5h .*7d ` 1). At +8 s
+(1793901762) and +12 s (1793901766) both counts are 0: the row is gone, not empty. The `ps` count of 1 right after the
+kill below was a transient (the processes were exiting); the re-check after the log shows 0 for the socket and 0 for
+scratch claudes, and no server.
+
+    $ git log --oneline -1; git status --short claude/plugin/mods/usage-gauges.js
+    597f7aa test(plugin): usage-gauges real run
+     M claude/plugin/mods/usage-gauges.js
+
+    $ grep -n "ui.status" claude/plugin/mods/usage-gauges.js
+    1:// usage-gauges: shows `5h <n>% · 7d <n>% · ctx <n>% · $<x.xx>` under the prompt ($.ui.status) from this session's own
+    49:  await $.ui.status(text === '' ? undefined : text)
+
+    $ T new-session -d -s e2e -n claude -x 200 -y 50 && T set-environment -g TC_STATE $TMP
+
+    $ T send-keys -t %0 "TC_STATE=$TMP claude --model haiku --settings $WT/claude/session-settings.json --plugin-dir $WT/claude/plugin"; sleep 1; T send-keys -t %0 Enter
+
+    $ sleep 15
+
+    $ T send-keys -t %0 "Reply with the single word: pong"; sleep 1; T send-keys -t %0 Enter
+
+    $ sleep 30
+
+    $ ls -l $TMP/statusline/
+    total 8
+    -rw-------  1 francisco.ruiz  staff  2072 Nov  5 13:02 bdfbe4ae-e20e-4620-8187-aa4dbd37bebc.json
+
+    $ python3 -I $S/show.py $OWN
+    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901726.4823081
+
+    $ T capture-pane -p -t %0
+    
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-usage-gauges
+    
+    
+    ❯ Reply with the single word: pong
+    
+    ⏺ pong
+    
+    ✻ Brewed for 2s · done 1:02 PM
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      ⚠ agent-board: 5h 35% · 7d 92% · ctx 4% · $0.00
+      Haiku 5.5 · ctx 4% · 5h 35%
+      ⏵⏵ auto mode on (shift+tab to cycle)
+
+    $ T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    1
+
+    $ date +%s
+    1793901753
+
+    $ python3 -I $S/rewrite.py $OWN 400
+    received_at set to now - 400 = 1793901353.9915981
+
+    $ sleep 4
+
+    $ date +%s
+    1793901758
+
+    $ python3 -I $S/show.py $OWN
+    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901353.9915981
+
+    $ T capture-pane -p -t %0
+    
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-usage-gauges
+    
+    
+    ❯ Reply with the single word: pong
+    
+    ⏺ pong
+    
+    ✻ Brewed for 2s · done 1:02 PM
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      ⚠ agent-board: 5h 35% · 7d 92% · ctx 4% · $0.00
+      Haiku 5.5 · ctx 4% · 5h 35%
+      ⏵⏵ auto mode on (shift+tab to cycle)
+
+    $ T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    1
+
+    $ T capture-pane -p -t %0 | grep -c '5h .*7d '
+    1
+
+    $ sleep 4
+
+    $ date +%s
+    1793901762
+
+    $ python3 -I $S/show.py $OWN
+    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901353.9915981
+
+    $ T capture-pane -p -t %0
+    
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-usage-gauges
+    
+    
+    ❯ Reply with the single word: pong
+    
+    ⏺ pong
+    
+    ✻ Brewed for 2s · done 1:02 PM
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      Haiku 5.5 · ctx 4% · 5h 35%
+      ⏵⏵ auto mode on (shift+tab to cycle)
+
+    $ T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    0
+
+    $ T capture-pane -p -t %0 | grep -c '5h .*7d '
+    0
+
+    $ sleep 4
+
+    $ date +%s
+    1793901766
+
+    $ python3 -I $S/show.py $OWN
+    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901353.9915981
+
+    $ T capture-pane -p -t %0
+    
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Max
+     ▝▝   ▝▝   ~/agent-board/.claude/worktrees/mod-usage-gauges
+    
+    
+    ❯ Reply with the single word: pong
+    
+    ⏺ pong
+    
+    ✻ Brewed for 2s · done 1:02 PM
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    ❯
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      Haiku 5.5 · ctx 4% · 5h 35%
+      ⏵⏵ auto mode on (shift+tab to cycle)
+
+    $ T capture-pane -p -t %0 | grep -c '⚠ agent-board:'
+    0
+
+    $ T capture-pane -p -t %0 | grep -c '5h .*7d '
+    0
+
+    $ T send-keys -t %0 /exit; sleep 1; T send-keys -t %0 Enter; sleep 3
+
+    $ T kill-server; sleep 1; T list-sessions
+    no server running on /private/tmp/tmux-503/usage-gauges-e2e
+
+    $ ps -axo pid,command | grep -c "[u]sage-gauges-e2e"
+    1
+
+    $ ps -axo pid,command | grep "[p]lugin-dir .*mod-usage-gauges" | grep -c -v grep
+    0
+
+    $ sleep 2; ps -axo pid,command | grep -c "[u]sage-gauges-e2e"
+    0
+
+    $ ps -axo pid,command | grep "[p]lugin-dir .*mod-usage-gauges" | grep -c -v grep
+    0
+
+    $ T list-sessions
+    no server running on /private/tmp/tmux-503/usage-gauges-e2e
+
+    $ sleep 2; ps -axo pid,command | grep -c "[u]sage-gauges-e2e"
+    0
+
+    $ ps -axo pid,command | grep "[p]lugin-dir .*mod-usage-gauges" | grep -c -v grep
+    0
+
+    $ T list-sessions
+    no server running on /private/tmp/tmux-503/usage-gauges-e2e
+

@@ -45,7 +45,8 @@ async function poll($, rec) {
   const text = await textFor($, rec)
   if (rec.ended || text === rec.shown) return
   rec.shown = text
-  await $.ui.status(text)
+  // '' would leave an empty `⚠ agent-board:` row; undefined removes the row (real run: tools/tests/e2e-usage-gauges.md)
+  await $.ui.status(text === '' ? undefined : text)
 }
 
 // Called by index.js, the plugin's only session.start / session.end hook.

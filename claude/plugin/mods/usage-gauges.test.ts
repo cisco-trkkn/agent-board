@@ -89,7 +89,7 @@ const tap = {
   "received_at": 1793900709.308106
 }
 
-type World = { files: Map<string, string>; statuses: string[]; sid: string; denyRead: boolean; reads: string[] }
+type World = { files: Map<string, string>; statuses: (string | undefined)[]; sid: string; denyRead: boolean; reads: string[] }
 
 const FILE = '/s/statusline/sid1.json'
 const T0 = Math.floor(tap.received_at) // epoch s of the fixture's tap
@@ -184,6 +184,8 @@ test('gaugeLine: percentages use Math.round', () => {
   expect(gaugeLine({ context_window: { used_percentage: 61.4 } })).toBe('ctx 61%')
 })
 
+// The clear is $.ui.status(undefined): a real run showed that '' (and ' ') leaves an empty `⚠ agent-board:` row, while
+// undefined, null and no argument remove the row (tools/tests/e2e-usage-gauges.md, 'Clearing the status line').
 // ---- timer ------------------------------------------------------------------------------------------------------
 
 test('a status with the line after the first 10 s poll, none before', async ($, on) => {
@@ -226,7 +228,7 @@ test('a missing file clears the line', async ($, on) => {
   await clock.advance(10000)
   w.files.delete(FILE)
   await clock.advance(10000)
-  expect(w.statuses).toEqual([LINE, ''])
+  expect(w.statuses).toEqual([LINE, undefined])
 })
 
 // mutation: drop the age check (secs(now) - p.received_at > STALE_S) -> this fails
@@ -237,7 +239,7 @@ test('a file older than 300 s clears the line', async ($, on) => {
   await clock.advance(10000)
   expect(w.statuses).toEqual([LINE])
   await clock.advance(300000) // the last poll runs at T0 + 311 s
-  expect(w.statuses).toEqual([LINE, ''])
+  expect(w.statuses).toEqual([LINE, undefined])
 })
 
 // mutation: drop the session_id check -> this fails
@@ -248,7 +250,7 @@ test("another session's file clears the line", async ($, on) => {
   await clock.advance(10000)
   putTap(w, { received_at: T0 + 100, session_id: 'other' })
   await clock.advance(10000)
-  expect(w.statuses).toEqual([LINE, ''])
+  expect(w.statuses).toEqual([LINE, undefined])
 })
 
 // mutation: drop the JSON.parse try/catch -> the poll throws and the line stays -> this fails
@@ -259,7 +261,7 @@ test('a file that does not parse clears the line', async ($, on) => {
   await clock.advance(10000)
   w.files.set(FILE, '{not json')
   await clock.advance(10000)
-  expect(w.statuses).toEqual([LINE, ''])
+  expect(w.statuses).toEqual([LINE, undefined])
 })
 
 // mutation: read the id once at start instead of each poll -> this fails
@@ -283,7 +285,7 @@ test('fs.read denied: no throw and the line is cleared', async ($, on) => {
   await clock.advance(10000)
   w.denyRead = true
   await clock.advance(10000)
-  expect(w.statuses).toEqual([LINE, ''])
+  expect(w.statuses).toEqual([LINE, undefined])
 })
 
 test('TC_STATE unset: the file is read under TMPDIR/tmux-ctl-<uid>', async ($, on) => {
@@ -302,7 +304,7 @@ test('session.end (other) stops polling; clear and resume keep it', async ($, on
   await $.session.end({ reason: 'clear', sessionId: 'sid1', resume: {} } as any)
   w.files.delete(FILE)
   await clock.advance(10000)
-  expect(w.statuses).toEqual([LINE, ''])
+  expect(w.statuses).toEqual([LINE, undefined])
   await $.session.end({ reason: 'other', sessionId: 'sid1', resume: {} } as any)
   putTap(w, { received_at: T0 + 100 })
   const before = w.reads.length
