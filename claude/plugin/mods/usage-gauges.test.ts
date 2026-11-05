@@ -184,9 +184,9 @@ test('gaugeLine: percentages use Math.round', () => {
   expect(gaugeLine({ context_window: { used_percentage: 61.4 } })).toBe('ctx 61%')
 })
 
+// ---- timer ------------------------------------------------------------------------------------------------------
 // The clear is $.ui.status(undefined): a real run showed that '' (and ' ') leaves an empty `⚠ agent-board:` row, while
 // undefined, null and no argument remove the row (tools/tests/e2e-usage-gauges.md, 'Clearing the status line').
-// ---- timer ------------------------------------------------------------------------------------------------------
 
 test('a status with the line after the first 10 s poll, none before', async ($, on) => {
   const { w, clock } = world(on)

@@ -17,8 +17,8 @@ Preconditions: `WT=$(git rev-parse --show-toplevel)`; `T` uses any tmux 3.x. `cl
 state dir `$TMP` is empty; the foreign file comes later from the real live dir (`wc -l` below shows its size only).
 
     $ print "S=$S"; print "TMP=$TMP"
-    S=/var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.TP1Ak4oa7D
-    TMP=/var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.TP1Ak4oa7D/state
+    S=$S
+    TMP=$TMP
 
     $ claude --version
     2.1.318 (Claude Code)
@@ -29,10 +29,10 @@ state dir `$TMP` is empty; the foreign file comes later from the real live dir (
     $ T new-session -d -s e2e -n claude -x 200 -y 50 && T set-environment -g TC_STATE $TMP
 
     $ T show-environment -g TC_STATE
-    TC_STATE=/var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.TP1Ak4oa7D/state
+    TC_STATE=$TMP
 
     $ WT=$(git rev-parse --show-toplevel); print $WT
-    /Users/francisco.ruiz/agent-board/.claude/worktrees/mod-usage-gauges
+    /Users/<user>/agent-board/.claude/worktrees/mod-usage-gauges
 
     $ T send-keys -t %0 "TC_STATE=$TMP claude --model haiku --settings $WT/claude/session-settings.json --plugin-dir $WT/claude/plugin"; sleep 1; T send-keys -t %0 Enter
 
@@ -93,6 +93,23 @@ state dir `$TMP` is empty; the foreign file comes later from the real live dir (
 `ls $TMP/statusline/` (first command of the next section) shows the tap created exactly one file, named by the session's own id.
 The first capture (before any turn) already shows `⚠ agent-board: $0.00`: the first tap payload holds only the cost.
 
+Redactions, applied by script after the runs (the script is in the task-3 report): the real foreign tap file's session id is `<foreign-session-id>` and its `received_at` is dropped (only its rate_limits, context_window and cost fields are shown); the scratch sessions' own ids are `<sid-1>` (first run) and `<sid-2>` (the run in the last section); the temp dirs under the system temp dir are `$TMP` (the state dir), `$S` (the driver dir) and `$PROBE_DIR` (the probe plugin dir); the account name is `<user>`. Nothing else was edited.
+
+Helper scripts the driver calls (`$S/show.py` prints the fields the mod reads; `$S/rewrite.py` sets `received_at`):
+
+    $ cat $S/show.py
+    import json, sys
+    p = json.load(open(sys.argv[1]))
+    print("session_id", p["session_id"])
+    print("five_hour", p["rate_limits"]["five_hour"]["used_percentage"], "seven_day", p["rate_limits"]["seven_day"]["used_percentage"], "ctx", p["context_window"]["used_percentage"], "cost", p["cost"]["total_cost_usd"], "received_at", p["received_at"])
+
+    $ cat $S/rewrite.py
+    import json, sys, time
+    path, age = sys.argv[1], int(sys.argv[2])
+    p = json.load(open(path)); p["received_at"] = time.time() - age
+    json.dump(p, open(path, "w"))
+    print("received_at set to now -", age, "=", p["received_at"])
+
 ## Gauge line
 
 After one short turn (no tools) the capture shows `⚠ agent-board: 5h 32% · 7d 92% · ctx 4% · $0.01`; the tap file's
@@ -100,7 +117,7 @@ fields (printed with a python3 one-liner, only the fields the mod reads) are 5h 
 (`$0.01`), and `grep -c "agent-board: 5h "` is 1.
 
     $ ls $TMP/statusline/
-    2ded8cca-858b-444f-8bac-464d69b5ab92.json
+    <sid-1>.json
 
     $ T send-keys -t %0 "Reply with the single word: pong"; sleep 1; T send-keys -t %0 Enter
 
@@ -108,7 +125,7 @@ fields (printed with a python3 one-liner, only the fields the mod reads) are 5h 
 
     $ ls -l $TMP/statusline/
     total 8
-    -rw-------  1 francisco.ruiz  staff  2039 Nov  5 12:51 2ded8cca-858b-444f-8bac-464d69b5ab92.json
+    -rw-------  1 <user>  staff  2039 Nov  5 12:51 <sid-1>.json
 
     $ T capture-pane -p -t %0 | grep -v "^ *$"
      ▐▛███▛█   Claude Code v2.1.318
@@ -177,7 +194,7 @@ fields (printed with a python3 one-liner, only the fields the mod reads) are 5h 
       ⏵⏵ auto mode on (shift+tab to cycle)
 
     $ python3 -I $S/show.py $OWN
-    session_id 2ded8cca-858b-444f-8bac-464d69b5ab92
+    session_id <sid-1>
     five_hour 32 seven_day 92 ctx 4 cost 0.00888 received_at 1793901065.979667
 
     $ T capture-pane -p -t %0 | grep -c "agent-board: 5h "
@@ -192,18 +209,18 @@ sessions share the plan). After 22 s (two polls) the capture still shows the own
 of the own `5h 32%` line is 1.
 
     $ basename $FOREIGN_SRC
-    8be10495-6764-4145-abc1-b3e46006143a.json
+    <foreign-session-id>.json
 
     $ cp $FOREIGN_SRC $TMP/statusline/
 
     $ ls -l $TMP/statusline/
     total 16
-    -rw-------  1 francisco.ruiz  staff  2039 Nov  5 12:51 2ded8cca-858b-444f-8bac-464d69b5ab92.json
-    -rw-------  1 francisco.ruiz  staff  1984 Nov  5 12:51 8be10495-6764-4145-abc1-b3e46006143a.json
+    -rw-------  1 <user>  staff  2039 Nov  5 12:51 <sid-1>.json
+    -rw-------  1 <user>  staff  1984 Nov  5 12:51 <foreign-session-id>.json
 
     $ python3 -I $S/show.py $TMP/statusline/$(basename $FOREIGN_SRC)
-    session_id 8be10495-6764-4145-abc1-b3e46006143a
-    five_hour 32 seven_day 92 ctx 27 cost 8.014046300000002 received_at 1793901022.772365
+    session_id <foreign-session-id>
+    five_hour 32 seven_day 92 ctx 27 cost 8.014046300000002
 
     $ sleep 22
 
@@ -283,7 +300,7 @@ the old line is still there (the poll runs every 10 s), at +8 s (1793901142) the
     1793901138
 
     $ python3 -I $S/show.py $OWN
-    session_id 2ded8cca-858b-444f-8bac-464d69b5ab92
+    session_id <sid-1>
     five_hour 32 seven_day 92 ctx 4 cost 0.00888 received_at 1793900734.4258828
 
     $ T capture-pane -p -t %0
@@ -350,7 +367,7 @@ the old line is still there (the poll runs every 10 s), at +8 s (1793901142) the
     1793901142
 
     $ python3 -I $S/show.py $OWN
-    session_id 2ded8cca-858b-444f-8bac-464d69b5ab92
+    session_id <sid-1>
     five_hour 32 seven_day 92 ctx 4 cost 0.00888 received_at 1793900734.4258828
 
     $ T capture-pane -p -t %0
@@ -417,7 +434,7 @@ the old line is still there (the poll runs every 10 s), at +8 s (1793901142) the
     1793901147
 
     $ python3 -I $S/show.py $OWN
-    session_id 2ded8cca-858b-444f-8bac-464d69b5ab92
+    session_id <sid-1>
     five_hour 32 seven_day 92 ctx 4 cost 0.00888 received_at 1793900734.4258828
 
     $ T capture-pane -p -t %0
@@ -503,7 +520,7 @@ was removed (the foreign copy with it).
     0
 
     $ ls -d $S; rm -rf $S/state; ls $S
-    /var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.TP1Ak4oa7D
+    $S
     lib.zsh
     log
     rewrite.py
@@ -530,7 +547,7 @@ Reading the log: texts 0 to 7 are shown at the odd/even steps. After `status(und
 (`⚠ agent-board:`), count 1. None throws. The usage-gauges mod therefore clears with `$.ui.status(undefined)`.
 
     $ print "PROBE=$PROBE"; cat $PROBE/mods/probe.js
-    PROBE=/var/folders/2p/brsv4hcx1wx5rv2_086ljvww0000gq/T/tmp.7Wu9ZWRd2o/probe
+    PROBE=$PROBE_DIR/probe
     // scratch probe: every 6 s alternates between showing a text and applying the next clear variant
     let step = 0
     export function register(on) {
@@ -917,10 +934,10 @@ scratch claudes, and no server.
 
     $ ls -l $TMP/statusline/
     total 8
-    -rw-------  1 francisco.ruiz  staff  2072 Nov  5 13:02 bdfbe4ae-e20e-4620-8187-aa4dbd37bebc.json
+    -rw-------  1 <user>  staff  2072 Nov  5 13:02 <sid-2>.json
 
     $ python3 -I $S/show.py $OWN
-    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    session_id <sid-2>
     five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901726.4823081
 
     $ T capture-pane -p -t %0
@@ -990,7 +1007,7 @@ scratch claudes, and no server.
     1793901758
 
     $ python3 -I $S/show.py $OWN
-    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    session_id <sid-2>
     five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901353.9915981
 
     $ T capture-pane -p -t %0
@@ -1057,7 +1074,7 @@ scratch claudes, and no server.
     1793901762
 
     $ python3 -I $S/show.py $OWN
-    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    session_id <sid-2>
     five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901353.9915981
 
     $ T capture-pane -p -t %0
@@ -1124,7 +1141,7 @@ scratch claudes, and no server.
     1793901766
 
     $ python3 -I $S/show.py $OWN
-    session_id bdfbe4ae-e20e-4620-8187-aa4dbd37bebc
+    session_id <sid-2>
     five_hour 35 seven_day 92 ctx 4 cost 0.003877190000000001 received_at 1793901353.9915981
 
     $ T capture-pane -p -t %0
