@@ -45,7 +45,7 @@ A handoff's Team section describes how the past session worked; it is not a mode
 You may run the `agent-board:handoff` skill yourself; the user need not type `/handoff`.
 
 - **Your own session:** on your judgment: when the context guard warns, or when context is heavy at a natural boundary (a task's review passed, between plan tasks, after a merge). A handoff you start yourself relays without asking.
-- **Not now:** while an AskUserQuestion answer is pending, in the middle of a merge, rebase or other git operation, or between a teammate's dispatch and its brief.
+- **Not now:** while an AskUserQuestion answer is pending, in the middle of a merge, rebase or other git operation, between a teammate's dispatch and its brief, or after the user answered Not yet to a handoff this session (recommend that the user run /handoff instead).
 - **Once per session:** after `tmux-ctl relay` is scheduled, do nothing else in the turn.
 - **A teammate:** when it reports the context guard, or you judge its context heavy, run the skill with `teammate <name>`. The new teammate gets its task `owner` only after its brief.
 - **Lead only:** the relay and the teammate mode stay yours. A teammate never runs either (`worker.md`: it reports to you).

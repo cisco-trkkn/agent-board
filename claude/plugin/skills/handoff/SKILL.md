@@ -4,6 +4,8 @@ description: "Two uses. (1) The lead hands its session to a fresh orchestrator: 
 argument-hint: "What will the next session be used for? Or: teammate <name>"
 ---
 
+Lead only. A teammate or worker never runs this skill in either mode: tell the lead.
+
 Hand the work in this session to a fresh orchestrator. If the user passed arguments, they describe what the next session should focus on; tailor the doc to that.
 
 ## Teammate mode
@@ -65,7 +67,7 @@ Send each teammate a `shutdown_request`. End its `reason` with: "To approve: fir
 
 ## 4. Ask before switching
 
-**Self-started** means the user did not type `/handoff` in the message that started this turn (you chose to hand off, for example after a context-guard warning). Self-started: skip the question, print `Handing off to a fresh orchestrator: <doc>` and take step 5's **On Yes** path.
+**Self-started** means the user did not type `/handoff` in the message that started this turn (you chose to hand off, for example after a context-guard warning). Self-started: skip the question, print `Handing off to a fresh orchestrator: <doc>` and take step 5's **On Yes** path. A Not yet earlier in this session makes every later handoff user-started: ask.
 
 **User-started:** ask with AskUserQuestion: "Switch to a fresh orchestrator now?"
 
