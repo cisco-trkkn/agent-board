@@ -47,4 +47,15 @@ done
 for c in 'ls -la' 'git status' "git commit -m 'fix; make it'" 'echo "pytest"'; do
   check "shell: $c" test "$(classify "$c")" = shell
 done
+# mods-active marker: the bash-mirror mod is live for this session, so the script defers (no feed entry)
+mkdir -p "$TC_STATE/mods-active"; rm -f "$tlog" "$slog"
+: > "$TC_STATE/mods-active/s.bash-mirror"
+run_hook "$F/ok.json"
+check "marker for this session: no feed entry" test ! -e "$tlog" -a ! -e "$slog"
+rm -f "$TC_STATE/mods-active/s.bash-mirror"; : > "$TC_STATE/mods-active/other.bash-mirror"
+run_hook "$F/ok.json"
+check "marker for another session: entry written" test -s "$tlog"
+rm -f "$tlog" "$TC_STATE/mods-active/other.bash-mirror"; : > "$TC_STATE/mods-active/.bash-mirror"
+sed 's|"session_id": "s"|"session_id": ""|' "$F/ok.json" | sed "s|__HOME__|$HOME|" | "$H"
+check "empty session_id never matches a marker" test -s "$tlog"
 tt_done

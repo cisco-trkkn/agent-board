@@ -102,4 +102,17 @@ print 'garbage{' > "$m"
 hook "$(<"$FX/update.json")"; rc=$?
 check "update, manifest garbled" test $rc -eq 0 -a "$(wc -l < "$m")" -eq 1
 mv "$m.keep" "$m"
+# mods-active marker: the artifact-register mod is live for this session, so the hook defers; manual mode ignores markers
+mkdir -p "$TC_STATE/mods-active"; : > "$TC_STATE/mods-active/S1.artifact-register"
+n0=$(wc -l < "$m")
+hook "{\"tool_name\":\"Write\",\"session_id\":\"S1\",\"tool_input\":{\"file_path\":\"$plan\"}}"
+check "marker for this session: nothing recorded" test "$(wc -l < "$m")" -eq "$n0"
+hook "{\"tool_name\":\"Write\",\"session_id\":\"S2\",\"tool_input\":{\"file_path\":\"$plan\"}}"
+check "marker for another session: recorded"      test "$(wc -l < "$m")" -eq $(( n0 + 1 ))
+rm -f "$TC_STATE/mods-active/S1.artifact-register"; : > "$TC_STATE/mods-active/.artifact-register"
+hook "{\"tool_name\":\"Write\",\"session_id\":\"\",\"tool_input\":{\"file_path\":\"$plan\"}}"
+check "empty session_id never matches a marker"   test "$(wc -l < "$m")" -eq $(( n0 + 2 ))
+: > "$TC_STATE/mods-active/S1.artifact-register"
+( unset TMUX TMUX_PANE; "$H" --path "$other" --kind other --agent you --project tt --session S1 )
+check "manual mode ignores markers"               test "$(wc -l < "$m")" -eq $(( n0 + 3 ))
 tt_done

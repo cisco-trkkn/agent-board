@@ -56,4 +56,13 @@ check "non-Bash tool ignored"                   allowed "pkill -f GUARDPAT-$$" E
 echo 'not json' | "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?
 silent0() { [[ $rc == 0 && ! -s "$tmp/o" && ! -s "$tmp/e" ]] }
 check "malformed json silent exit 0"            silent0
+# mods-active marker: the kill-guard mod is live for this session, so the script defers (exit 0, silent)
+mkstate="$tmp/mstate"; mkdir -p "$mkstate/mods-active"
+jsid() { python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[2],"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1" "$2"; }
+run_sid() { jsid "pkill -f 'GUARDPAT-$$'" "$1" | TC_STATE="$mkstate" "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?; err="$(<$tmp/e)"; }
+: > "$mkstate/mods-active/S1.kill-guard"
+run_sid S1;   check "marker for this session: silent exit 0" test $rc -eq 0 -a -z "$err"
+run_sid S2;   check "marker for another session: still blocks" test $rc -eq 2 -a -n "$err"
+: > "$mkstate/mods-active/.kill-guard"
+run_sid "";   check "empty session_id never matches a marker" test $rc -eq 2 -a -n "$err"
 tt_done
