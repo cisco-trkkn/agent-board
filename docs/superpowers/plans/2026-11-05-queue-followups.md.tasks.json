@@ -1,0 +1,12 @@
+{
+  "planPath": "docs/superpowers/plans/2026-11-05-queue-followups.md",
+  "tasks": [
+    {
+      "id": 7,
+      "subject": "Task 1: Queue follow-ups rule text and checks",
+      "status": "pending",
+      "description": "**Goal:** `claude/orchestrator.md` marks ideas at queue time and lists `Running plan: <title>` first in the exceptions multiSelect with the full `metadata.queue.current` shape; the overnight-queue spec says the same; three new `test_plugin.zsh` checks pass.\n\n**Files:**\n- Modify: `claude/orchestrator.md` (Next steps round step 3, line 69; Queue mode step 1, line 72)\n- Modify: `docs/superpowers/specs/2026-11-05-overnight-queue-design.md` (the \"When a plan is still running\" paragraph, lines 66-70)\n- Test: `tools/tests/test_plugin.zsh` (append before `tt_done`)\n\n**Acceptance Criteria:**\n- [ ] Three new checks fail before the rule edit (RED output captured) and pass after.\n- [ ] `zsh tools/tests/test_plugin.zsh; echo rc=$?` prints `ALL PASS` and `rc=0`; `grep -c FAIL` on its output is 0.\n- [ ] The Queue mode step 1 line is \u2264 1743 bytes.\n- [ ] The spec paragraph no longer contains `counted in call 1's question cap` and contains `\"plan\": \"<plan path>\"`.\n\n**Verify:** `zsh tools/tests/test_plugin.zsh; echo rc=$?` \u2192 `ALL PASS`, `rc=0`\n\nFull steps: docs/superpowers/plans/2026-11-05-queue-followups.md Task 1.\n\n```json:metadata\n{\"files\": [\"claude/orchestrator.md\", \"docs/superpowers/specs/2026-11-05-overnight-queue-design.md\", \"tools/tests/test_plugin.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_plugin.zsh; echo rc=$?\", \"acceptanceCriteria\": [\"three new checks RED then GREEN\", \"test_plugin ALL PASS rc=0, 0 FAIL lines\", \"Queue mode step 1 line <= 1743 bytes\", \"spec paragraph drops 'counted in call 1's question cap' and has the plan key\"], \"modelTier\": \"mechanical\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-11-05T06:08:57.463117Z"
+}
