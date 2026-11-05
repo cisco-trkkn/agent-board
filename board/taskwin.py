@@ -529,7 +529,9 @@ def _draw_edges(cv, cols, cw, pos, card_h=CARD_H):
 
     Each distinct blocker feeding a gutter gets its own vertical lane (xs+1, xs+2, ...; the last lane is shared
     by the rest), and every edge ends in ▸ just left of its dependent."""
-    off = 1 if card_h == CARD_H else 0  # edges leave and enter on a card's subject row, or its top row when compact
+    # full cards: edges leave on the subject row (+1) and enter on the badge row (+2), so one blocker's exit never
+    # shares a row with another's entry; compact cards use the top row (+0) for both
+    off_out, off_in = (1, 2) if card_h == CARD_H else (0, 0)
     edges = []  # (blocker, (a, ra), (c, rb), dependent)
     users = {}  # gutter -> blockers using it vertically
     for c, col in enumerate(cols):
@@ -547,8 +549,8 @@ def _draw_edges(cv, cols, cw, pos, card_h=CARD_H):
             lane[(g, b)] = g * (cw + GUTTER) + cw + min(k, GUTTER - 2)
     bits, arrows = {}, set()
     for b, (a, ra), (_, rb), c in edges:
-        xs, ys = a * (cw + GUTTER) + cw - 1, ra * (card_h + GAP) + off
-        xd, yd = c * (cw + GUTTER), rb * (card_h + GAP) + off
+        xs, ys = a * (cw + GUTTER) + cw - 1, ra * (card_h + GAP) + off_out
+        xd, yd = c * (cw + GUTTER), rb * (card_h + GAP) + off_in
         bus_a, bus_b = lane[(a, b)], lane.get((c - 1, b))
         if c == a + 1:
             pts = [(xs, ys), (bus_a, ys), (bus_a, yd), (xd - 1, yd)]
