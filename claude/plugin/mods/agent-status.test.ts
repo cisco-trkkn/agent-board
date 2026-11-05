@@ -2,14 +2,17 @@
 // answered from memory: nothing here touches the real state dir.
 import { expect, test, mock } from 'claude-code/testing'
 
-type World = { files: Map<string, string>; runs: string[][]; failWrite: boolean; failMv: boolean; sid: string }
+type World = { files: Map<string, string>; runs: string[][]; failWrite: boolean; failMv: boolean; sid: string; gate: Promise<void> | null }
 
 // Registers the stubs; call before the first `$` call. Returns the in-memory file system.
 function world(on: any, env: Record<string, string>, under: { call?: any; check?: any } = {}, now = 1_000_000): { w: World; clock: any } {
-  const w: World = { files: new Map(), runs: [], failWrite: false, failMv: false, sid: 'sid1' }
+  const w: World = { files: new Map(), runs: [], failWrite: false, failMv: false, sid: 'sid1', gate: null }
   mock.env(on, env)
   const clock = mock.clock(on, { now })
-  on('session.id', () => ({ value: w.sid }))
+  on('session.id', async () => {
+    if (w.gate) await w.gate
+    return { value: w.sid }
+  })
   on('fs.write', ($: any, e: any) => {
     if (w.failWrite) throw new Error('disk full')
     w.files.set(e.path, e.text)
@@ -232,4 +235,29 @@ test('after a clear the heartbeat writes a ready file for the new id', async ($,
   await clock.advance(15000)
   expect(read(w, '/s/agent-status/sid2.json')).toMatchObject({ session_id: 'sid2', state: 'ready' })
   expect(w.files.has(FILE)).toBe(false)
+})
+
+test('a write waiting on session.id when session.end (other) runs leaves no file behind', async ($, on) => {
+  const { w, clock } = world(on, { TC_STATE: '/s' })
+  await $.session.start(START)
+  let open: () => void = () => {}
+  w.gate = new Promise<void>((r) => (open = r))
+  const p = $.turn.start({ text: 'a', turnId: 't1' })
+  await clock.settle()
+  await $.session.end({ reason: 'other', sessionId: 'sid1', resume: {} } as any)
+  expect(w.files.has(FILE)).toBe(false)
+  w.gate = null
+  open()
+  await p
+  await clock.advance(15000)
+  expect([...w.files.keys()]).toEqual([])
+})
+
+test('an id change without session.end moves the file: old gone, new present', async ($, on) => {
+  const { w } = world(on, { TC_STATE: '/s' })
+  await $.session.start(START)
+  w.sid = 'sid2'
+  await $.turn.start({ text: 'a', turnId: 't1' })
+  expect(w.files.has(FILE)).toBe(false)
+  expect(read(w, '/s/agent-status/sid2.json')).toMatchObject({ session_id: 'sid2', state: 'busy' })
 })

@@ -34,8 +34,11 @@ const render = () =>
 // Writes st to <file>.tmp then mv (direct write if mv fails). The session id is read here, so after a /clear or a
 // resume the next write goes to the new id's file and the old one is removed. Writes of the session run in a chain.
 async function flush($) {
-  try {
-    const sid = await $.session.id()
+  let sid = st.sid
+  try { sid = await $.session.id() } catch (x) { /* keep the current file */ }
+  if (st.ended) return
+  st.q = st.q.then(async () => {
+    if (st.ended) return
     if (sid !== st.sid) {
       const old = st.file
       st.sid = sid
@@ -43,9 +46,6 @@ async function flush($) {
       st.tmp = st.file + '.tmp'
       if (old) await $.process.run(['rm', '-f', old])
     }
-  } catch (x) { /* keep the current file */ }
-  st.q = st.q.then(async () => {
-    if (!st.file) return
     const body = render()
     try {
       await $.fs.write(st.tmp, body)
