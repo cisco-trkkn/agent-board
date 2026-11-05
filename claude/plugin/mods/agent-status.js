@@ -82,33 +82,33 @@ async function flush($) {
   await st.q
 }
 
-export function register(on) {
-  on('session.start', async ($, e, next) => {
+// Called by index.js, the plugin's only session.start / session.end hook.
+export async function start($, e) {
+  try {
+    const sid = await $.session.id()
+    const pane = (await $.env.get('TMUX_PANE')) || null
+    const tcState = await $.env.get('TC_STATE')
+    const tmpdir = await $.env.get('TMPDIR')
+    let uid = ''
+    if (!tcState) uid = (await $.process.run(['id', '-u'])).stdout.trim()
+    const dir = stateDir(tcState, tmpdir, uid)
+    let mode = 'default'
     try {
-      const sid = await $.session.id()
-      const pane = (await $.env.get('TMUX_PANE')) || null
-      const tcState = await $.env.get('TC_STATE')
-      const tmpdir = await $.env.get('TMPDIR')
-      let uid = ''
-      if (!tcState) uid = (await $.process.run(['id', '-u'])).stdout.trim()
-      const dir = stateDir(tcState, tmpdir, uid)
-      let mode = 'default'
+      const all = await $.settings.read()
+      if (all && all.permissions && all.permissions.defaultMode) mode = all.permissions.defaultMode
+    } catch (x) { /* unknown mode prompts */ }
+    const now = await $.clock.now()
+    st = { sid, pane, dir, file: dir + '/' + sid + '.json', tmp: dir + '/' + sid + '.json.tmp', state: 'ready', since: secs(now), updatedAt: secs(now), askId: null, asks: [], mode, ended: false, q: Promise.resolve(), tick: null }
+    await flush($)
+    st.tick = $.clock.every(HEARTBEAT_MS, async () => {
       try {
-        const all = await $.settings.read()
-        if (all && all.permissions && all.permissions.defaultMode) mode = all.permissions.defaultMode
-      } catch (x) { /* unknown mode prompts */ }
-      const now = await $.clock.now()
-      st = { sid, pane, dir, file: dir + '/' + sid + '.json', tmp: dir + '/' + sid + '.json.tmp', state: 'ready', since: secs(now), updatedAt: secs(now), askId: null, asks: [], mode, ended: false, q: Promise.resolve(), tick: null }
-      await flush($)
-      st.tick = $.clock.every(HEARTBEAT_MS, async () => {
-        try {
-          if (setState(st.state, await $.clock.now())) await flush($)
-        } catch (x) { /* a heartbeat never throws */ }
-      })
-    } catch (x) { /* never block the session */ }
-    return next(e)
-  })
+        if (setState(st.state, await $.clock.now())) await flush($)
+      } catch (x) { /* a heartbeat never throws */ }
+    })
+  } catch (x) { /* never block the session */ }
+}
 
+export function register(on) {
   on('turn.start', async ($, e, next) => {
     if (e && e.agentId) return next(e)
     try {
@@ -182,28 +182,27 @@ export function register(on) {
   // before every tool.check
   on('classic.SessionStart', async ($, e, next) => { classicLive = true; return next(e) })
   on('classic.PreToolUse', async ($, e, next) => { classicLive = true; return next(e) })
+}
 
-  // session.end also fires on /clear, /resume and /branch (reason `resume`) with no new session.start: the process
-  // goes on, possibly under another session id. Drop the old file, reset to ready, keep the heartbeat; the next write
-  // goes under the id then current. Any other reason ends the mod's work for good.
-  on('session.end', async ($, e, next) => {
-    try {
-      if (st && !st.ended) {
-        const goesOn = e && (e.reason === 'clear' || e.reason === 'resume')
-        await st.q
-        if (goesOn) {
-          const old = st.file
-          const now = await $.clock.now()
-          st.state = 'ready'; st.since = secs(now); st.updatedAt = secs(now); st.askId = null; st.asks = []
-          st.sid = null; st.file = null; st.tmp = null
-          if (old) await $.process.run(['rm', '-f', old])
-        } else {
-          st.ended = true
-          if (st.tick) st.tick.cancel()
-          if (st.file) await $.process.run(['rm', '-f', st.file])
-        }
+// session.end also fires on /clear, /resume and /branch (reason `resume`) with no new session.start: the process
+// goes on, possibly under another session id. Drop the old file, reset to ready, keep the heartbeat; the next write
+// goes under the id then current. Any other reason ends the mod's work for good.
+export async function end($, e) {
+  try {
+    if (st && !st.ended) {
+      const goesOn = e && (e.reason === 'clear' || e.reason === 'resume')
+      await st.q
+      if (goesOn) {
+        const old = st.file
+        const now = await $.clock.now()
+        st.state = 'ready'; st.since = secs(now); st.updatedAt = secs(now); st.askId = null; st.asks = []
+        st.sid = null; st.file = null; st.tmp = null
+        if (old) await $.process.run(['rm', '-f', old])
+      } else {
+        st.ended = true
+        if (st.tick) st.tick.cancel()
+        if (st.file) await $.process.run(['rm', '-f', st.file])
       }
-    } catch (x) { /* ignore */ }
-    return next(e)
-  })
+    }
+  } catch (x) { /* ignore */ }
 }

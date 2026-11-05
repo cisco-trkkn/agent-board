@@ -81,48 +81,47 @@ async function poll($, rec) {
   await $.ui.invalidate('ui.render')
 }
 
-export function register(on) {
-  on('session.start', { surface: /.*/ }, async ($, e, next) => {
-    try {
-      stop()
-      const pane = await $.env.get('TMUX_PANE')
-      const tcState = await $.env.get('TC_STATE')
-      const tmpdir = await $.env.get('TMPDIR')
-      if (pane) {
-        const d = await $.process.run(['tmux', 'display', '-p', '-t', pane, '#{window_name}\t#{session_name}'])
-        const [window, session] = d.stdout.replace(/\n$/, '').split('\t')
-        if (d.exitCode === 0 && window === 'claude' && session) {
-          let uid = ''
-          if (!tcState) uid = (await $.process.run(['id', '-u'])).stdout.trim()
-          const rec = { own: pane, session, dir: stateDir(tcState, tmpdir, uid), panes: new Map(), line: '', ended: false, paneTick: null, pollTick: null }
-          tb = rec
-          try { rec.panes = (await loadPanes($, pane)) || rec.panes } catch (x) { /* retried by the timer */ }
-          try { await poll($, rec) } catch (x) { /* first poll failed: no band yet */ }
-          if (tb === rec) {
-            rec.paneTick = $.clock.every(PANES_MS, async () => {
-              try {
-                const p = await loadPanes($, pane)
-                if (p && !rec.ended) rec.panes = p
-              } catch (x) { /* keep the last list */ }
-            })
-            rec.pollTick = $.clock.every(POLL_MS, async () => {
-              try { await poll($, rec) } catch (x) { /* keep the last line */ }
-            })
-          }
+// Called by index.js, the plugin's only session.start / session.end hook.
+export async function start($, e) {
+  try {
+    stop()
+    const pane = await $.env.get('TMUX_PANE')
+    const tcState = await $.env.get('TC_STATE')
+    const tmpdir = await $.env.get('TMPDIR')
+    if (pane) {
+      const d = await $.process.run(['tmux', 'display', '-p', '-t', pane, '#{window_name}\t#{session_name}'])
+      const [window, session] = d.stdout.replace(/\n$/, '').split('\t')
+      if (d.exitCode === 0 && window === 'claude' && session) {
+        let uid = ''
+        if (!tcState) uid = (await $.process.run(['id', '-u'])).stdout.trim()
+        const rec = { own: pane, session, dir: stateDir(tcState, tmpdir, uid), panes: new Map(), line: '', ended: false, paneTick: null, pollTick: null }
+        tb = rec
+        try { rec.panes = (await loadPanes($, pane)) || rec.panes } catch (x) { /* retried by the timer */ }
+        try { await poll($, rec) } catch (x) { /* first poll failed: no band yet */ }
+        if (tb === rec) {
+          rec.paneTick = $.clock.every(PANES_MS, async () => {
+            try {
+              const p = await loadPanes($, pane)
+              if (p && !rec.ended) rec.panes = p
+            } catch (x) { /* keep the last list */ }
+          })
+          rec.pollTick = $.clock.every(POLL_MS, async () => {
+            try { await poll($, rec) } catch (x) { /* keep the last line */ }
+          })
         }
       }
-    } catch (x) { /* never block the session */ }
-    return next(e)
-  })
+    }
+  } catch (x) { /* never block the session */ }
+}
 
-  // /clear, /resume and /branch end the session without a new session.start: the process goes on, so the timers stay
-  on('session.end', { reason: /.*/ }, async ($, e, next) => {
-    try {
-      if (!(e && (e.reason === 'clear' || e.reason === 'resume'))) stop()
-    } catch (x) { /* ignore */ }
-    return next(e)
-  })
+// /clear, /resume and /branch end the session without a new session.start: the process goes on, so the timers stay
+export async function end($, e) {
+  try {
+    if (!(e && (e.reason === 'clear' || e.reason === 'resume'))) stop()
+  } catch (x) { /* ignore */ }
+}
 
+export function register(on) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const line = tb && !tb.ended ? tb.line : ''
     if (!line) return next(e)
