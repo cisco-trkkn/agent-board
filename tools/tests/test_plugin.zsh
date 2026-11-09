@@ -49,6 +49,19 @@ d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
 hit = [(e["matcher"], h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/sdd-call-guard.sh\" --scoped")]
 assert len(hit) == 1 and hit[0][0] == "Agent" and hit[0][1]["timeout"] == 10, hit
 PY
+check "hooks.json registers agent-name-guard on PreToolUse Agent after sdd-call-guard, --scoped, timeout 10" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+assert len([h for e in d for h in e["hooks"] if "agent-name-guard" in h["command"]]) == 1
+ent = [e for e in d if e["matcher"] == "Agent"]
+assert len(ent) == 1, ent
+hs = ent[0]["hooks"]; cmds = [h["command"] for h in hs]
+i = [k for k, c in enumerate(cmds) if c.endswith("/scripts/agent-name-guard.sh\" --scoped")]
+j = [k for k, c in enumerate(cmds) if c.endswith("/scripts/sdd-call-guard.sh\" --scoped")]
+assert len(i) == 1 and len(j) == 1 and i[0] > j[0] and hs[i[0]]["timeout"] == 10, cmds
+PY
+check "agent-name-guard.sh is executable" test -x "$P/scripts/agent-name-guard.sh"
+check "plugin.json description names agent-name-guard" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF "plan-handoff-guard, sdd-call-guard, agent-name-guard and context-inject hooks"' _ "$P/.claude-plugin/plugin.json"
 check "hooks.json registers context-inject on SessionStart (no matcher: every source), --scoped, timeout 5" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["SessionStart"]
@@ -148,6 +161,9 @@ check "lead rules: queue starts at two or more Plan & run tasks" grep -qF 'two o
 check "lead rules: morning report path" grep -qF 'docs/superpowers/reports/YYYY-MM-DD-queue.md' "$O"
 check "lead rules: finishing row points at Queue mode" zsh -c 'grep "^| Finishing a branch" "$1" | grep -qF "Queue mode"' _ "$O"
 check "lead rules: queue asks nothing after the batch" grep -qF 'asks the user nothing until the morning report' "$O"
+check "lead rules: every agent gets a name" grep -qF 'Every agent you start gets a `name`' "$O"
+check "lead rules: name rule enforced by agent-name-guard" grep -qF 'The `agent-name-guard` hook enforces this.' "$O"
+check "lead rules: spawn failure retries once, never unnamed" grep -qF 'Never fall back to an unnamed background agent.' "$O"
 check "handoff doc records Queue mode: on" grep -qF 'Queue mode: on' "$P/skills/handoff/SKILL.md"
 check "lead rules: running plan's integration stored as metadata.queue.current" grep -qF 'metadata.queue.current' "$O"
 check "handoff doc carries each queued spec's metadata.queue" grep -qF 'metadata.queue' "$P/skills/handoff/SKILL.md"

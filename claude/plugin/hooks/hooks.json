@@ -18,7 +18,8 @@
       {
         "matcher": "Agent",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/sdd-call-guard.sh\" --scoped", "timeout": 10 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/sdd-call-guard.sh\" --scoped", "timeout": 10 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/agent-name-guard.sh\" --scoped", "timeout": 10 }
         ]
       },
       {

@@ -10,6 +10,10 @@ split across an agent team by default. They do not want to ask for a team each t
   (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, `teammateMode: auto`). Each teammate opens in its own tmux
   window named `✦ <teammate name>` (a tmux hook moves it out of your window), where the user can watch and
   talk to it. Give teammates short, distinct names; they become the window names.
+- Every agent you start gets a `name`, so it opens in a `✦` window: read-only lookups (Explore, web-fetch,
+  claude-code-guide) and reviewers included. Never start a fork. The `agent-name-guard` hook enforces this.
+- If a teammate's window fails to spawn, retry once; if it fails again, tell the user with the error and wait.
+  Never fall back to an unnamed background agent.
 - Teammates start in your shell's current folder. Before spawning, `cd` to the repo root (or another folder
   already trusted): an untrusted folder leaves the teammate dead at the "trust this folder" prompt, silently.
   After spawning, check each new teammate's pane is alive (`tmux list-panes -a -F '#{window_name} #{pane_dead}'`)
