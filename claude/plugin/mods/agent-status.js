@@ -29,12 +29,30 @@ const stateDir = (tcState, tmpdir, uid) =>
 
 const secs = (ms) => Math.floor(ms / 1000)
 
+const ARG_MAX = 80
+// the short argument shown beside a tool's name; `a` is the call's arguments (flat on tool.call, e.input on tool.check)
+const argOf = (tool, a) => {
+  a = a || {}
+  let s = ''
+  if (tool === 'Bash') s = String(a.command || '').split('\n')[0]
+  else if (['Edit', 'Write', 'Read', 'MultiEdit'].includes(tool)) s = String(a.file_path || '')
+  else if (tool === 'Agent') s = String(a.description || '')
+  return s.slice(0, ARG_MAX)
+}
+const questionDetail = (a) => {
+  const q = (a && Array.isArray(a.questions) && a.questions[0]) || {}
+  return String(q.header || q.question || '').slice(0, ARG_MAX)
+}
+const permissionWaiting = (tool, args) => ({ kind: 'permission', detail: (tool + ': ' + argOf(tool, args)).slice(0, ARG_MAX) })
+// AskUserQuestion is itself a tool that asks, so both permission paths see it: its dialog is the question, never the permission form
+const dialogWaiting = (tool, args) => (tool === 'AskUserQuestion' ? { kind: 'question', detail: questionDetail(args) } : permissionWaiting(tool, args))
+
 // moves st to `state` at `ms`; `since` changes only with the state
 const setState = (state, ms) => {
   if (!st || st.ended) return false
   if (st.state !== state) { st.state = state; st.since = secs(ms) }
   st.updatedAt = secs(ms)
-  if (state !== 'needs-you') st.askId = null
+  if (state !== 'needs-you') { st.askId = null; st.waiting = null }
   return true
 }
 
@@ -46,15 +64,17 @@ const askFor = (tool, input) => {
 }
 
 // needs-you for the dialog of ask `a`
-const dialogOpen = async ($, a) => {
+const dialogOpen = async ($, a, waiting) => {
   if (setState('needs-you', await $.clock.now())) {
     st.askId = a.id
+    // keep a question already set from the call's own questions when this one could not read any
+    if (!(waiting.kind === 'question' && !waiting.detail && st.waiting && st.waiting.kind === 'question')) st.waiting = waiting
     await flush($)
   }
 }
 
 const render = () =>
-  JSON.stringify({ session_id: st.sid, pane: st.pane, state: st.state, since: st.since, updatedAt: st.updatedAt })
+  JSON.stringify({ session_id: st.sid, pane: st.pane, state: st.state, since: st.since, updatedAt: st.updatedAt, tool: st.tool, turnStartedAt: st.turnStartedAt, waiting: st.waiting, failStreak: st.failStreak, lastToolAt: st.lastToolAt })
 
 // Writes st to <file>.tmp then mv (direct write if mv fails). The session id is read here, so after a /clear or a
 // resume the next write goes to the new id's file and the old one is removed. Writes of the session run in a chain.
@@ -98,7 +118,7 @@ export async function start($, e) {
       if (all && all.permissions && all.permissions.defaultMode) mode = all.permissions.defaultMode
     } catch (x) { /* unknown mode prompts */ }
     const now = await $.clock.now()
-    st = { sid, pane, dir, file: dir + '/' + sid + '.json', tmp: dir + '/' + sid + '.json.tmp', state: 'ready', since: secs(now), updatedAt: secs(now), askId: null, asks: [], mode, ended: false, q: Promise.resolve(), tick: null }
+    st = { sid, pane, dir, file: dir + '/' + sid + '.json', tmp: dir + '/' + sid + '.json.tmp', state: 'ready', since: secs(now), updatedAt: secs(now), askId: null, asks: [], tool: null, toolId: null, turnStartedAt: null, waiting: null, failStreak: 0, lastToolAt: null, mode, ended: false, q: Promise.resolve(), tick: null }
     await flush($)
     st.tick = $.clock.every(HEARTBEAT_MS, async () => {
       try {
@@ -113,7 +133,8 @@ export function register(on) {
     if (e && e.agentId) return next(e)
     try {
       if (st) st.asks = []
-      if (setState('busy', await $.clock.now())) await flush($)
+      const now = await $.clock.now()
+      if (setState('busy', now)) { st.turnStartedAt = secs(now); await flush($) }
     } catch (x) { /* ignore */ }
     return next(e)
   })
@@ -123,7 +144,7 @@ export function register(on) {
     if (e && e.agentId) return out
     try {
       if (st) st.asks = []
-      if (setState('ready', await $.clock.now())) await flush($)
+      if (setState('ready', await $.clock.now())) { st.turnStartedAt = null; await flush($) }
     } catch (x) { /* ignore */ }
     return out
   })
@@ -133,12 +154,31 @@ export function register(on) {
     if (e && e.agentId) return next(e)
     const ask = e && e.tool === 'AskUserQuestion'
     try {
-      if (ask) await dialogOpen($, { id: (e && e.tool_use_id) || null })
+      if (ask) await dialogOpen($, { id: (e && e.tool_use_id) || null }, { kind: 'question', detail: questionDetail(e) })
+    } catch (x) { /* ignore */ }
+    try {
+      if (st && !st.ended) {
+        const now = await $.clock.now()
+        st.tool = { name: e && e.tool, arg: argOf(e && e.tool, e), startedAt: secs(now) }
+        st.toolId = (e && e.tool_use_id) || null
+        st.updatedAt = secs(now)
+        await flush($)
+      }
     } catch (x) { /* ignore */ }
     let out
+    let failed = true
     try {
       out = await next(e)
+      failed = !!(out && out.isError)
     } finally {
+      try {
+        if (st && !st.ended) {
+          st.lastToolAt = secs(await $.clock.now())
+          st.failStreak = failed ? st.failStreak + 1 : 0
+          if (st.toolId === ((e && e.tool_use_id) || null)) { st.tool = null; st.toolId = null }
+          await flush($)
+        }
+      } catch (x) { /* ignore */ }
       // also when next() rejects (an interrupt): a stale ask would pair with a retry's dialog
       const id = e && e.tool_use_id
       if (st) st.asks = st.asks.filter((a) => a.id !== id)
@@ -158,9 +198,9 @@ export function register(on) {
     if (e && e.agentId) return out
     try {
       if (st && out && out.decision === 'ask') {
-        const a = { id: (e && e.tool_use_id) || null, tool: e && e.tool, input: JSON.stringify(e && e.input) }
+        const a = { id: (e && e.tool_use_id) || null, tool: e && e.tool, input: JSON.stringify(e && e.input), args: (e && e.input) || {} }
         st.asks.push(a)
-        if (!classicLive && !NO_PROMPT_MODES.includes(st.mode)) await dialogOpen($, a)
+        if (!classicLive && !NO_PROMPT_MODES.includes(st.mode)) await dialogOpen($, a, dialogWaiting(a.tool, a.args))
       }
     } catch (x) { /* ignore */ }
     return out
@@ -173,7 +213,7 @@ export function register(on) {
     if (e && (e.agent_id || e.agentId)) return next(e)
     try {
       const a = st && e ? askFor(e.tool_name, e.tool_input) : null
-      if (a) await dialogOpen($, a)
+      if (a) await dialogOpen($, a, dialogWaiting(e.tool_name, e.tool_input))
     } catch (x) { /* ignore */ }
     return next(e)
   })
@@ -196,6 +236,7 @@ export async function end($, e) {
         const old = st.file
         const now = await $.clock.now()
         st.state = 'ready'; st.since = secs(now); st.updatedAt = secs(now); st.askId = null; st.asks = []
+        st.turnStartedAt = null; st.tool = null; st.toolId = null; st.waiting = null
         st.sid = null; st.file = null; st.tmp = null
         if (old) await $.process.run(['rm', '-f', old])
       } else {

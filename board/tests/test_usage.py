@@ -286,6 +286,14 @@ class ThresholdsTest(unittest.TestCase):
             self.assertTrue(warn and "\n" not in warn)
 
 
+    def test_overview_thresholds_default_and_override(self):
+        self.assertEqual({k: usage.DEFAULT_ALERTS[k] for k in ("failing_streak", "stuck_turn_s", "stuck_quiet_s")},
+                         {"failing_streak": 3, "stuck_turn_s": 1200, "stuck_quiet_s": 600})
+        self.p.write_text(json.dumps({"failing_streak": 5, "stuck_turn_s": 900, "stuck_quiet_s": 300}))
+        th, warn = usage.thresholds(self.p)
+        self.assertEqual((th["failing_streak"], th["stuck_turn_s"], th["stuck_quiet_s"]), (5, 900, 300))
+        self.assertIsNone(warn)
+
     def test_thresholds_bad_values_fall_back_per_key(self):
         bad = {"burn_window_s": 0, "live_s": "1800", "context_pct": -5, "session_total": True,
                "mismatch_models": "opus", "mismatch_efforts": [1], "burn_per_hour": None}

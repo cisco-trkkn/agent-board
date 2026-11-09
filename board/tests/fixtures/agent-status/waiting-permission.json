@@ -1,0 +1,1 @@
+{"session_id":"fixture-sess-1","pane":"%82","state":"needs-you","since":1794250131,"updatedAt":1794250172,"tool":{"name":"Bash","arg":"zsh tools/tests/run-all.zsh","startedAt":1794250169},"turnStartedAt":1794250131,"waiting":{"kind":"permission","detail":"Bash: rm x"},"failStreak":0,"lastToolAt":1794250133}

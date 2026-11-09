@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not 
 import activity as activity_mod  # noqa: E402
 import artifacts, planview, usage  # noqa: E402
 
-RECORD_KEYS = ("project", "path", "attached", "plan", "needs_you", "last_run", "lead", "artifacts", "epoch", "alerts", "spend_today")
+RECORD_KEYS = ("project", "path", "attached", "plan", "needs_you", "last_run", "lead", "artifacts", "epoch", "alerts", "spend_today", "agents")
 ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError)
 
 
@@ -37,12 +37,43 @@ def plan_digest(view):
                             for t in tasks if t.get("status") == "in_progress"]}
 
 
-def needs_you(s):
-    return [{"window": w["name"], "pane": p["id"], "kind": p["kind"]}
+def _secs(now, t):
+    return int(max(0, now - t)) if isinstance(t, (int, float)) and not isinstance(t, bool) else None
+
+
+def _tool_text(rec):
+    t = (rec or {}).get("tool")
+    return (f"{t['name']}: {t['arg']}" if t.get("arg") else t.get("name")) if isinstance(t, dict) and t.get("name") else None
+
+
+def agents(s, mods, now):
+    """One entry per claude pane in window order; state_s / turn_s / tool come from the pane's fresh agent-status record, else None."""
+    out = []
+    for w in s.get("windows") or []:
+        for p in w.get("panes") or []:
+            if p.get("kind") != "claude":
+                continue
+            rec = (mods or {}).get(p["id"])
+            tool = _tool_text(rec)
+            out.append({"window": w["name"], "pane": p["id"], "state": p.get("status"),
+                        "state_s": _secs(now, rec.get("since")) if rec else None,
+                        "turn_s": _secs(now, rec.get("turnStartedAt")) if rec else None, "tool": tool})
+    return out
+
+
+def _reason(rec):
+    w = (rec or {}).get("waiting")
+    if isinstance(w, dict) and w.get("kind") in ("question", "permission") and w.get("detail"):
+        return f"{w['kind']}: {w['detail']}"
+    return None
+
+
+def needs_you(s, mods=None):
+    return [{"window": w["name"], "pane": p["id"], "kind": p["kind"], "reason": _reason((mods or {}).get(p["id"]))}
             for w in s.get("windows") or [] for p in w.get("panes") or [] if p.get("status") == "waiting"]
 
 
-def lead_state(s, win_activity, now):
+def lead_state(s, win_activity, now, mods=None):
     """status working|waiting|ready from the claude window's first pane, missing without one; last_active from tmux.
     A lead at its prompt counts as working while any other claude pane of the project is working (teammates running)."""
     w = next((w for w in s.get("windows") or [] if w.get("name") == "claude" and w.get("panes")), None)
@@ -54,7 +85,11 @@ def lead_state(s, win_activity, now):
                                  for x in s.get("windows") or [] for q in x.get("panes") or [] if q is not p):
         status = "working"
     last = (win_activity or {}).get("claude")
-    return {"status": status or "missing", "last_active": last, "idle_s": int(max(0, now - last)) if last else None}
+    idle = int(max(0, now - last)) if last else None
+    rec = (mods or {}).get(p["id"])
+    if rec and rec.get("state") == "ready" and _secs(now, rec.get("since")) is not None:   # the mod's own clock beats window activity
+        idle = _secs(now, rec["since"])
+    return {"status": status or "missing", "last_active": last, "idle_s": idle}
 
 
 def run_label(cmd):
@@ -122,7 +157,33 @@ def project_alerts(s, live, spend, th):
     return out
 
 
-def record(s, live, now, *, home, state_dir, tmux, th, spend, activity):
+def agent_alerts(s, mods, now, th):
+    """failing (a streak of failed tool calls) and stuck (a long turn in which no tool call has finished for a while) per agent with a fresh file."""
+    out = []
+    for w in s.get("windows") or []:
+        for p in w.get("panes") or []:
+            rec = (mods or {}).get(p["id"]) if p.get("kind") == "claude" else None
+            if not rec:
+                continue
+            fs = rec.get("failStreak")
+            if isinstance(fs, int) and not isinstance(fs, bool) and fs >= th["failing_streak"]:
+                out.append({"kind": "failing", "label": f"failing ×{fs}", "session": w["name"], "fail_streak": fs, "context_pct": None,
+                            "detail": f"{w['name']} has had {fs} tool calls fail in a row (alert at {th['failing_streak']})."})
+            turn = _secs(now, rec.get("turnStartedAt"))
+            if rec.get("state") != "busy" or turn is None or turn < th["stuck_turn_s"]:
+                continue
+            last, began = rec.get("lastToolAt"), rec["turnStartedAt"]
+            since = last if isinstance(last, (int, float)) and last >= began else began
+            if now - since >= th["stuck_quiet_s"]:
+                quiet, tool = int(now - since), _tool_text(rec)   # a tool may be running: it has not finished, so it is not a "tool call" yet
+                out.append({"kind": "stuck", "label": f"stuck {turn // 60}m", "session": w["name"], "turn_s": turn, "quiet_s": quiet, "tool": tool,
+                            "context_pct": None,
+                            "detail": f"{w['name']} has been on one turn for {turn // 60} min and no tool call has finished for {quiet // 60} min"
+                                      + (f" (running {tool})." if tool else ".")})
+    return out
+
+
+def record(s, live, now, *, home, state_dir, tmux, th, spend, activity, mods=None):
     name = s["name"]
     root = s.get("path")
     try:
@@ -135,14 +196,15 @@ def record(s, live, now, *, home, state_dir, tmux, th, spend, activity):
         spent = None
     arts, epoch = recent_artifacts(name)
     return {"project": name, "path": s.get("path"), "attached": bool(s.get("attached")),
-            "plan": plan_digest(view), "needs_you": needs_you(s), "last_run": last_run(name, now),
-            "lead": lead_state(s, (activity or {}).get(name), now), "artifacts": arts, "epoch": epoch,
-            "alerts": project_alerts(s, live, spent, th), "spend_today": spent}
+            "plan": plan_digest(view), "needs_you": needs_you(s, mods), "last_run": last_run(name, now),
+            "lead": lead_state(s, (activity or {}).get(name), now, mods), "artifacts": arts, "epoch": epoch,
+            "alerts": project_alerts(s, live, spent, th) + agent_alerts(s, mods, now, th), "spend_today": spent,
+            "agents": agents(s, mods, now)}
 
 
-def build(sessions, live, now, *, home, state_dir, tmux, th=None, spend=None, activity=None):
+def build(sessions, live, now, *, home, state_dir, tmux, th=None, spend=None, activity=None, mods=None):
     th = th if th is not None else usage.DEFAULT_ALERTS
-    projects = [record(s, live or [], now, home=home, state_dir=state_dir, tmux=tmux, th=th, spend=spend, activity=activity)
+    projects = [record(s, live or [], now, home=home, state_dir=state_dir, tmux=tmux, th=th, spend=spend, activity=activity, mods=mods)
                 for s in sessions if not s["name"].startswith("_web-") and s["name"] != "overseer"]
     return {"generated": now, "projects": projects}
 

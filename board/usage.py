@@ -13,7 +13,8 @@ from artifacts import state_dir
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_ALERTS = {"context_pct": 80, "burn_per_hour": 15, "burn_window_s": 900, "session_total": 25,
-                  "mismatch_efforts": ["low", "medium"], "mismatch_models": ["opus", "fable"], "live_s": 1800}
+                  "mismatch_efforts": ["low", "medium"], "mismatch_models": ["opus", "fable"], "live_s": 1800,
+                  "failing_streak": 3, "stuck_turn_s": 1200, "stuck_quiet_s": 600}
 OPTIONAL_ALERTS = ("day_total",)   # accepted when present, no default: absent means off (th.get("day_total") is None)
 ALERTS_PATH = None   # tests may point this at a file; None = alerts_path()
 
