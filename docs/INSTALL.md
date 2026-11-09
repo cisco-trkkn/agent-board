@@ -186,7 +186,7 @@ State you may want to delete: `~/.local/state/agent-board/` (ideas and handoffs:
 
 Reach a dev lead from your phone through a Telegram bot. One bot per project; only leads started by `claude-orchestrator` get the channel.
 
-**Once.** Install Bun (`~/.bun/bin/bun`) and the plugin: `claude plugin install telegram@claude-plugins-official`. Check both with `tmux-ctl telegram status` (`plugin: ok`, `bun: ok`).
+**Once.** Install Bun (`curl -fsSL https://bun.sh/install | bash`, which puts it at `~/.bun/bin/bun`) and the plugin: `claude plugin install telegram@claude-plugins-official`. Check both with `tmux-ctl telegram status` (`plugin: ok`, `bun: ok`).
 
 **Per project.**
 
@@ -198,7 +198,7 @@ Reach a dev lead from your phone through a Telegram bot. One bot per project; on
    print -r -- "<token>" | tmux-ctl telegram token --project <name>   # outside tmux
    ```
 
-   It is stored as `~/.local/state/agent-board/telegram/<project>/.env` (mode 600).
+   It is stored as `~/.local/state/agent-board/telegram/<project>/.env` (mode 600). A project name must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`: a tmux session whose name starts with `_` or holds a space, `:` or non-ASCII characters never opts in (`tmux-ctl telegram` refuses it).
 3. Restart the lead (`claude-orchestrator --continue`). A lead with a token starts with `--channels plugin:telegram@claude-plugins-official`; the board shows `tg` on it.
 4. DM the bot; it answers with a pairing code. In that lead run `/telegram:access pair <code>`, then `/telegram:access policy allowlist`.
 5. `tmux-ctl telegram status` shows `token: set`, `paired: <n> allowlisted`, `policy: allowlist`, `poller: running (pid N)`, `plugin: ok`, `bun: ok`. It never shows the token.
