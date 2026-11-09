@@ -1,0 +1,184 @@
+--- a/board/relay.py
++++ b/board/relay.py
+@@ -113,21 +113,62 @@
+     return str(Path(repo) / "bin" / "claude-orchestrator")
+ 
+ 
++START_CAP = 30.0   # seconds a relayed lead has to start before the attempt counts as failed
++
++
++def launch_line(root, prompt=None):
++    """The line typed into the fresh shell: cd to root first, then the launcher. The cd repairs a shell left in a
++    gone directory (Claude Code refuses to start there) and fails loudly when root itself is gone."""
++    cmd = shlex.quote(orchestrator()) + (f" {shlex.quote(prompt)}" if prompt else "")
++    return f"cd -- {shlex.quote(root)} && {cmd}"
++
++
+ def respawn(tmux, pane, root, prompt=None):
+     """Replace whatever runs in pane with a fresh shell in root, then start claude-orchestrator [prompt]."""
+     tmux("respawn-pane", "-k", "-t", pane, "-c", root, check=True)  # no command: fresh default shell
+-    cmd = shlex.quote(orchestrator()) + (f" {shlex.quote(prompt)}" if prompt else "")
+-    tmux("send-keys", "-t", pane, "-l", "--", cmd, check=True)
++    tmux("send-keys", "-t", pane, "-l", "--", launch_line(root, prompt), check=True)
+     tmux("send-keys", "-t", pane, "Enter", check=True)
+ 
+ 
+-def relay(tmux, sess, doc, state_dir, old_session_id="", **wait):
++def wait_started(tmux, pane, poll=2.0, cap=START_CAP, sleep=time.sleep, clock=time.monotonic):
++    """True once the pane's foreground is not a shell on two polls in a row; False when cap passes first.
++    "Not a shell", not "is claude": tmux names a running claude by its version binary, and a claude that dies at
++    startup leaves the shell in front."""
++    deadline = clock() + cap
++    streak = 0
++    while True:
++        sleep(poll)
++        kind, _ = paneclass.pane_status(tmux, pane)
++        streak = streak + 1 if kind != "shell" else 0
++        if streak >= 2:
++            return True
++        if clock() >= deadline:
++            return False
++
++
++def pane_tail(tmux, pane, n=12):
++    """The pane's last n non-blank lines, each prefixed '| ' (the log's manual: line stays the only unprefixed one)."""
++    rows = [r.rstrip() for r in tmux("capture-pane", "-p", "-J", "-t", pane, "-S", "-60").splitlines()]
++    return "\n".join("| " + r for r in [r for r in rows if r.strip()][-n:])
++
++
++def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=START_CAP, **wait):
+     pane = claude_pane(tmux, sess)
+     if pane is None:
+         raise RuntimeError(f"no claude window in {sess}")
+     if not wait_turn_end(tmux, pane, **wait):
+         raise RuntimeError("the lead is still busy after the wait; not switching. Run tmux-ctl relay again when it is idle")
+-    respawn(tmux, pane, session_root(tmux, sess), prompt_for(doc))
++    root = session_root(tmux, sess)
++    timing = {k: wait[k] for k in ("sleep", "clock") if k in wait}
++    shown = ""
++    for n in range(1, attempts + 1):
++        respawn(tmux, pane, root, prompt_for(doc))
++        if wait_started(tmux, pane, cap=start_cap, **timing):
++            break
++        shown = pane_tail(tmux, pane)
++        print(f"relay: attempt {n}: the new lead did not start in {root}; the pane shows:\n{shown}", file=sys.stderr)
++    else:
++        raise RuntimeError(f"the new lead did not start in {root} after {attempts} attempts; the pane shows:\n{shown}")
+     lin = tc_env.lineage_dir()   # persistent state; state_dir no longer decides the path
+     lin.mkdir(parents=True, exist_ok=True)
+     with open(lin / f"{sess}.jsonl", "a") as f:
+@@ -146,14 +187,19 @@
+     ap.add_argument("--old-session", default="")
+     ap.add_argument("--state", default=default_state())
+     ap.add_argument("--socket", default="")
++    ap.add_argument("--start-cap", type=float, default=START_CAP, help=argparse.SUPPRESS)   # test knob
+     a = ap.parse_args(argv)
+     tmux = paneclass.tmux_runner(["-S", a.socket] if a.socket else [])
+     try:
+-        print(relay(tmux, a.session, a.doc, a.state, a.old_session))
++        print(relay(tmux, a.session, a.doc, a.state, a.old_session, start_cap=a.start_cap))
+         return 0
+     except Exception as e:
+-        print(f"relay failed: {e}\nThe old session is untouched. Start the new lead by hand in the claude window:\n"
+-              f"  {shlex.quote(orchestrator())} {shlex.quote(prompt_for(a.doc))}", file=sys.stderr)
++        try:
++            root = session_root(tmux, a.session)
++        except Exception:
++            root = None
++        manual = launch_line(root, prompt_for(a.doc)) if root else f"{shlex.quote(orchestrator())} {shlex.quote(prompt_for(a.doc))}"
++        print(f"relay failed: {e}\nStart the new lead by hand in the claude window:\nmanual: {manual}", file=sys.stderr)
+         return 1
+ 
+ 
+--- a/board/tests/test_relay.py
++++ b/board/tests/test_relay.py
+@@ -1,4 +1,5 @@
+ import io
++import itertools
+ import os
+ import shlex
+ import shutil
+@@ -33,6 +34,8 @@
+             return "%5\n"
+         if a[0] == "display":
+             return self.root + "\n"
++        if a[0] == "capture-pane":
++            return "% claude-orchestrator 'Read /d.md'\nThe current directory no longer exists (it was deleted or moved).\n\n"
+         return ""
+ 
+     def names(self):
+@@ -178,7 +181,7 @@
+ class RelayTest(unittest.TestCase):
+     def test_relay_respawns_and_writes_lineage(self):
+         fake = FakeTmux()
+-        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, statuses("idle", "idle"), \
++        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, statuses("idle", "idle", "ready", "ready"), \
+                 mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
+             msg = relay.relay(fake, "proj", "/d.md", d, "OLD1", sleep=lambda s: None)
+             lines = (Path(ld) / "proj.jsonl").read_text().splitlines()
+@@ -191,11 +194,12 @@
+         sk = [c for c in fake.calls if c[0] == "send-keys"]
+         self.assertEqual(rp[0], ("respawn-pane", "-k", "-t", "%5", "-c", fake.root))
+         self.assertEqual(sk[0], ("send-keys", "-t", "%5", "-l", "--",
+-                                 shlex.quote(relay.orchestrator()) + " 'Read /d.md and continue from where the previous session left off.'"))
++                                 f"cd -- {shlex.quote(fake.root)} && " + shlex.quote(relay.orchestrator())
++                                 + " 'Read /d.md and continue from where the previous session left off.'"))
+         self.assertEqual(sk[1], ("send-keys", "-t", "%5", "Enter"))
+         # the session flags come from claude-orchestrator itself, never from the typed text
+         self.assertNotIn("--settings", sk[0][-1])
+-        self.assertTrue(sk[0][-1].startswith(shlex.quote(relay.orchestrator()) + " "))
++        self.assertIn(" && " + shlex.quote(relay.orchestrator()) + " ", sk[0][-1])
+         self.assertLess(fake.names().index("respawn-pane"), fake.names().index("send-keys"))
+ 
+     def test_busy_leaves_pane_alone(self):
+@@ -208,6 +212,50 @@
+             self.assertFalse((Path(ld) / "proj.jsonl").exists())
+         self.assertNotIn("respawn-pane", fake.names())
+ 
++    def test_failed_start_retries_once_then_raises(self):
++        fake = FakeTmux()
++        seq = [("claude", "idle"), ("claude", "idle")] + [("shell", "idle")] * 100
++        clock = itertools.count(0, 2)
++        err = io.StringIO()
++        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, redirect_stderr(err), \
++                mock.patch.object(paneclass, "pane_status", side_effect=seq), mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
++            with self.assertRaises(RuntimeError) as cm:
++                relay.relay(fake, "proj", "/d.md", d, "OLD1", start_cap=4, sleep=lambda s: None, clock=lambda: next(clock))
++            self.assertFalse((Path(ld) / "proj.jsonl").exists())   # no lineage for a lead that never started
++        self.assertEqual(fake.names().count("respawn-pane"), 2)
++        self.assertIn("did not start", str(cm.exception))
++        self.assertIn("| The current directory no longer exists", str(cm.exception))
++        self.assertIn("attempt 1", err.getvalue())
++
++    def test_failed_start_recovers_on_retry(self):
++        fake = FakeTmux()
++        seq = [("claude", "idle"), ("claude", "idle"), ("shell", "idle"), ("shell", "idle"), ("claude", "ready"), ("claude", "ready")]
++        clock = itertools.count(0, 2)
++        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, redirect_stderr(io.StringIO()), \
++                mock.patch.object(paneclass, "pane_status", side_effect=seq), mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
++            msg = relay.relay(fake, "proj", "/d.md", d, "OLD1", start_cap=4, sleep=lambda s: None, clock=lambda: next(clock))
++            lines = (Path(ld) / "proj.jsonl").read_text().splitlines()
++        self.assertIn("relayed", msg)
++        self.assertEqual(len(lines), 1)
++        self.assertEqual(fake.names().count("respawn-pane"), 2)
++
++    def test_wait_started_needs_two_non_shell_polls(self):
++        seq = [("shell", "idle"), ("claude", "ready"), ("shell", "idle"), ("program", "running"), ("claude", "ready")]
++        with mock.patch.object(paneclass, "pane_status", side_effect=seq) as ps:
++            self.assertTrue(relay.wait_started(None, "%5", sleep=lambda s: None, clock=itertools.count(0, 0).__next__))
++        self.assertEqual(ps.call_count, 5)
++
++    def test_launch_line_cds_to_root_first(self):
++        self.assertEqual(relay.launch_line("/a b", "go"), "cd -- '/a b' && " + shlex.quote(relay.orchestrator()) + " go")
++
++    def test_main_failure_manual_line_cds_to_root(self):
++        err = io.StringIO()
++        with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), \
++                mock.patch.object(relay, "session_root", return_value="/r"), redirect_stderr(err):
++            rc = relay.main(["--session", "proj", "--doc", "/d.md", "--state", "/tmp"])
++        self.assertEqual(rc, 1)
++        self.assertIn("\nmanual: cd -- /r && " + shlex.quote(relay.orchestrator()) + " 'Read /d.md", err.getvalue())
++
+     def test_main_failure_prints_manual_command(self):
+         err = io.StringIO()
+         with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), redirect_stderr(err):
