@@ -1,0 +1,84 @@
+// Shared by the shell-hook mods: the state and lineage directory rules, the mods-active marker path, and the helpers
+// that read the environment and write or remove a marker. The rules match tc-env.zsh / tc_env.py.
+//
+// `claude plugin validate` forces literal $.env.get names, and accepts $ only as an argument to a named module-level
+// function, so every helper that needs $ takes it as a parameter. Every $-taking helper swallows its errors: a hook
+// never fails a tool call.
+
+// <state dir>: $TC_STATE, else ($TMPDIR minus a trailing "/", default /tmp) + /tmux-ctl-<uid>
+export const stateDir = (tcState, tmpdir, uid) =>
+  tcState || (tmpdir || '/tmp').replace(/\/+$/, '') + '/tmux-ctl-' + uid
+
+// <lineage dir>: $TC_LINEAGE, else ($XDG_STATE_HOME, default $HOME/.local/state) + /agent-board/lineage
+export const lineageDir = (tcLineage, xdgStateHome, home) =>
+  tcLineage || (xdgStateHome || home + '/.local/state') + '/agent-board/lineage'
+
+// the file whose existence tells the shell script <hook> that its mod is live for session <sid>
+export const markerPath = (stateDirPath, sid, hook) => stateDirPath + '/mods-active/' + sid + '.' + hook
+
+// The environment the hooks need; an unreadable variable is ''. uid (`id -u`) is looked up only when TC_STATE is
+// unset, the one case that needs it. (`claude plugin validate` accepts $ only as an argument to a function
+// declaration and wants each $.env.get name literal, so each variable is read inline.)
+export async function readEnv($) {
+  const r = { tcState: '', tmpdir: '', tcLineage: '', xdgStateHome: '', home: '', tmux: '', tmuxPane: '', tcTmux: '', uid: '' }
+  try { r.tcState = (await $.env.get('TC_STATE')) || '' } catch (x) { /* '' */ }
+  try { r.tmpdir = (await $.env.get('TMPDIR')) || '' } catch (x) { /* '' */ }
+  try { r.tcLineage = (await $.env.get('TC_LINEAGE')) || '' } catch (x) { /* '' */ }
+  try { r.xdgStateHome = (await $.env.get('XDG_STATE_HOME')) || '' } catch (x) { /* '' */ }
+  try { r.home = (await $.env.get('HOME')) || '' } catch (x) { /* '' */ }
+  try { r.tmux = (await $.env.get('TMUX')) || '' } catch (x) { /* '' */ }
+  try { r.tmuxPane = (await $.env.get('TMUX_PANE')) || '' } catch (x) { /* '' */ }
+  try { r.tcTmux = (await $.env.get('TC_TMUX')) || '' } catch (x) { /* '' */ }
+  if (!r.tcState) {
+    try { r.uid = ((await $.process.run(['id', '-u'])).stdout || '').trim() } catch (x) { /* uid stays '' */ }
+  }
+  return r
+}
+
+// Content is the session id and a newline; only the file's existence is read. $.fs.write makes the parent dirs.
+export async function writeMarker($, path, sid) {
+  try { await $.fs.write(path, (sid || '') + '\n') } catch (x) { /* never fails the session */ }
+}
+
+export async function removeMarker($, path) {
+  try { await $.process.run(['rm', '-f', path]) } catch (x) { /* never fails the session */ }
+}
+
+// Keeps a mod's marker on the current session id. session.start does not fire after /clear, /resume or /branch, so a
+// tool hook calls this first: when the id read now differs from m.sid (m = { dir, sid, marker }, kept by the mod), the old
+// marker is removed and one for the new id is written. end() sets m.sid and m.marker to null for clear/resume, so the next
+// call writes the marker; a session that really ends makes no more tool calls. Same pattern as agent-status.js flush.
+export async function rekeyMarker($, m, hook) {
+  try {
+    if (!m || !m.dir) return
+    const sid = await $.session.id()
+    if (!sid || sid === m.sid) return
+    if (m.marker) await removeMarker($, m.marker)
+    m.sid = sid
+    m.marker = markerPath(m.dir, sid, hook)
+    await writeMarker($, m.marker, sid)
+  } catch (x) { /* never fails the call */ }
+}
+
+// Appends text to a file with ONE process: O_APPEND, so another session's writer is never overwritten. The text and the
+// path are argv ($1, $2), never part of the shell script. Throws when the append fails (the callers swallow).
+export async function appendText($, path, text) {
+  const r = await $.process.run(['sh', '-c', 'printf %s "$1" >> "$2"', 'sh', text, path])
+  if (r.exitCode !== 0) throw new Error('append failed')
+}
+
+// The tmux binary: $TC_TMUX, else $HOME/.local/bin/tmux when it exists, else `tmux` on PATH. (The shell hooks source
+// bin/_tc_bins.zsh when it is present; the mods use only this chain.)
+export async function tmuxBin($, tcTmux, home) {
+  if (tcTmux) return tcTmux
+  const mine = home + '/.local/bin/tmux'
+  try { if (home && (await $.fs.exists(mine))) return mine } catch (x) { /* fall through */ }
+  return 'tmux'
+}
+
+// runs `tmux -S ${TMUX%%,*} <args>`; throws when tmux exits non-zero
+export async function tmuxRun($, tcTmux, home, tmuxEnv, args) {
+  const r = await $.process.run([await tmuxBin($, tcTmux, home), '-S', tmuxEnv.split(',')[0], ...args])
+  if (r.exitCode !== 0) throw new Error('tmux ' + args[0] + ' failed')
+  return r.stdout
+}

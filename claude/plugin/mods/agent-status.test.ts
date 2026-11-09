@@ -83,7 +83,7 @@ test('state dir: TC_STATE wins; else TMPDIR minus trailing slash + /tmux-ctl-<ui
   const { w } = world(on, { TMPDIR: '/x/' })
   await $.session.start(START)
   expect(read(w, '/x/tmux-ctl-503/agent-status/sid1.json').state).toBe('ready')
-  expect([...w.files.keys()]).toEqual(['/x/tmux-ctl-503/agent-status/sid1.json'])
+  expect([...w.files.keys()].filter((k) => !k.includes('/mods-active/'))).toEqual(['/x/tmux-ctl-503/agent-status/sid1.json'])
 })
 
 test('state dir falls back to /tmp when TMPDIR is unset', async ($, on) => {
@@ -429,7 +429,7 @@ test('a write waiting on session.id when session.end (other) runs leaves no file
   open()
   await p
   await clock.advance(15000)
-  expect([...w.files.keys()]).toEqual([])
+  expect([...w.files.keys()].filter((k) => !k.includes('/mods-active/'))).toEqual([])
 })
 
 test('an id change without session.end moves the file: old gone, new present', async ($, on) => {
@@ -449,6 +449,6 @@ test('after a clear, a failing session.id writes nothing (no file named null)', 
   w.sid = 'THROW'
   await $.turn.start({ text: 'a', turnId: 't1' })
   await clock.advance(15000)
-  expect([...w.files.keys()]).toEqual([])
+  expect([...w.files.keys()].filter((k) => !k.includes('/mods-active/'))).toEqual([])
   expect(w.runs.slice(before)).toEqual([])
 })

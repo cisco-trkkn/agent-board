@@ -49,7 +49,7 @@ else TMUX_BIN=("${TC_TMUX:-$([[ -x $HOME/.local/bin/tmux ]] && print -r -- $HOME
   (( has_msid )) || msid="${CLAUDE_CODE_SESSION_ID-}"
   line="$(print -r -- "$payload" | python3 -I -c '
 import hashlib, json, os, re, sys, time
-manual, path, kind, agent, epoch, home, tmp, manifest, msid = sys.argv[1:10]
+manual, path, kind, agent, epoch, home, tmp, manifest, msid, state = sys.argv[1:11]
 manual = manual == "1"
 url = sid = title = slug = ""
 if manual:
@@ -62,6 +62,10 @@ if not manual:
     tool = d.get("tool_name") or ""
     ti = d.get("tool_input") or {}
     sid = d.get("session_id") or ""
+    # the artifact-register mod is live for this session: it records Write/Edit/MultiEdit, so this hook defers for those
+    # (Artifact and Claude Docs calls stay with this script; manual mode never gets here)
+    if tool in ("Write", "Edit", "MultiEdit") and isinstance(sid, str) and sid and os.path.exists("%s/mods-active/%s.artifact-register" % (state, sid)):
+        sys.exit(0)
     if tool == "Artifact":
         m = re.search(r"https://claude\.ai/[\w/.-]+", json.dumps(d.get("tool_response") or ""))
         if not m:
@@ -139,7 +143,7 @@ if not url:
         digest = hashlib.sha256(f.read()).hexdigest()
 print(json.dumps({"ts": time.time(), "path": path, "kind": kind, "agent": agent, "hash": digest,
                   "url": url, "title": title, "slug": slug, "session_id": sid, "epoch": int(epoch)}))
-' "$manual" "$apath" "$kind" "$agent" "$epoch" "$HOME" "${TMPDIR:-/tmp}" "$STATE/artifacts-$project.jsonl" "$msid")"
+' "$manual" "$apath" "$kind" "$agent" "$epoch" "$HOME" "${TMPDIR:-/tmp}" "$STATE/artifacts-$project.jsonl" "$msid" "$STATE")"
   [[ -n "$line" ]] && print -r -- "$line" >> "$STATE/artifacts-$project.jsonl"
 } >/dev/null 2>&1
 exit 0

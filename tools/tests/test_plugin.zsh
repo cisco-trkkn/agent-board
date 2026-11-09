@@ -27,19 +27,22 @@ for c in cmds:
         if "/" + n + ".sh" in c: want[n] += 1
 assert all(want.values()), want
 PY
-check "hooks.json registers the one entry module, which registers agent-status, team-band and usage-gauges" python3 - "$P/hooks/hooks.json" "$P" <<'PY'
+check "hooks.json registers the one entry module, which registers agent-status, team-band, usage-gauges, kill-guard, bash-mirror and artifact-register" python3 - "$P/hooks/hooks.json" "$P" <<'PY'
 import json, os, sys
 d = json.load(open(sys.argv[1]))
 assert d["modules"] == ["../mods/index.js"], d.get("modules")
 mods = os.path.join(os.path.dirname(sys.argv[1]), "..", "mods")
-for m in ("index.js", "agent-status.js", "team-band.js", "usage-gauges.js"):
+for m in ("index.js", "agent-status.js", "team-band.js", "usage-gauges.js", "kill-guard.js", "bash-mirror.js", "artifact-register.js", "lib/env.js"):
     assert os.path.isfile(os.path.join(mods, m)), m
 idx = open(os.path.join(mods, "index.js")).read()
 assert "./agent-status.js" in idx and "./team-band.js" in idx and "./usage-gauges.js" in idx
+for m in ("kill-guard", "bash-mirror", "artifact-register"):
+    assert "from './%s.js'" % m in idx, m
 PY
 check "plugin.json description names agent-status" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF agent-status' _ "$P/.claude-plugin/plugin.json"
 check "plugin.json description names team-band" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF team-band' _ "$P/.claude-plugin/plugin.json"
 check "plugin.json description names usage-gauges" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF usage-gauges' _ "$P/.claude-plugin/plugin.json"
+check "plugin.json description names the kill-guard, bash-mirror and artifact-register mods" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF "kill-guard, bash-mirror and artifact-register mods"' _ "$P/.claude-plugin/plugin.json"
 check "hooks.json registers sdd-call-guard on PreToolUse Agent, --scoped, timeout 10" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]

@@ -22,6 +22,9 @@ try:
 except Exception:
     sys.exit(1)
 if d.get("tool_name") != "Bash": sys.exit(1)
+# the bash-mirror mod is live for this session: it writes the entry, so this script defers
+sid = d.get("session_id")
+if isinstance(sid, str) and sid and os.path.exists("%s/mods-active/%s.bash-mirror" % (sys.argv[1], sid)): sys.exit(1)
 cmd = (d.get("tool_input") or {}).get("command") or ""
 c = cmd.lstrip()
 if re.match(r"(~/\.local/bin/|\S*/)?tmux-ctl(\s|$)", c): sys.exit(1)
@@ -58,7 +61,7 @@ cwd = d.get("cwd") or ""
 home = os.path.expanduser("~")
 if cwd == home or cwd.startswith(home + "/"): cwd = "~" + cwd[len(home):]
 sys.stdout.write("\0".join([kind, first, cwd, str(code), tail]))
-')" || exit 0
+' "$TC_STATE_DIR")" || exit 0
   parts=("${(@0)fields}")
   kind=$parts[1] first=$parts[2] cwd=$parts[3] code=$parts[4] tail=$parts[5]
   [[ -n "$kind" ]] || exit 0
