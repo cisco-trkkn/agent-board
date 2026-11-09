@@ -35,7 +35,7 @@ Prompt: "Run this exact Bash command and report its output: sleep 20; echo done"
 
 Page route: no jsdom, playwright or puppeteer is installed here (`node -e "require('jsdom')"` fails), so the page was rendered
 by loading the real `ovRow` and its helper functions out of `board/index.html` into node with a minimal DOM shim
-(`render-ovrow.js`, createElement/append/className/textContent only) and feeding it the `/api/overview` JSON captured above.
+(`tools/tests/e2e-mod-overview/render-ovrow.js <board/index.html> <overview.json>`, createElement/append/className/textContent only) and feeding it the `/api/overview` JSON captured above.
 It prints the node tree:
 
 PROJECT e2e
@@ -85,7 +85,7 @@ After one `Enter` (option 1) the status file went back to
 
 A board of this branch on :7711 (`TMUX_DASH_TOKEN=x TC_OVERSEER=0 TC_NOTIFY=0 TMUX_DASH_STATE=<temp dir>`, `TC_STATE` unset,
 the same tmux server the live board reads), and the live board on :7700 (token from `~/.local/state/tmux-dash/token`). Nothing
-was sent to or started in the user's tmux sessions. `diffpaths.py` lists every JSON key path (arrays as `[]`) with its type:
+was sent to or started in the user's tmux sessions. `tools/tests/e2e-mod-overview/diffpaths.py <live.json> <new.json>` lists every JSON key path (arrays as `[]`) with its type:
 
 live paths: 53 new paths: 53
 live paths missing in new: ['.events[]', '.events[].id', '.events[].ts', '.events[].project', '.events[].kind', '.events[].key', '.events[].title', '.events[].text']

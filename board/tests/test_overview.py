@@ -321,6 +321,18 @@ class AgentsTest(Base):
         r = self.build(mods=self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 400, lastToolAt=NOW - 100)), th=th)["projects"][0]
         self.assertEqual([a for a in r["alerts"] if a["kind"] == "stuck"], [])
 
+    def test_stuck_detail_says_no_tool_call_has_finished_and_names_the_running_tool(self):   # mutation: revert to "made no tool call" -> fails
+        # a Bash call running for 23 min inside a 25 min turn: the badge must not claim that no tool is running
+        r = rec("busy-tool.json", turnStartedAt=NOW - 1500, lastToolAt=NOW - 1400, tool={"name": "Bash", "arg": "zsh tools/tests/run-all.zsh", "startedAt": NOW - 1390})
+        a = self.alerts(self.mods(lead=r))[0]
+        self.assertEqual(a["detail"], "claude has been on one turn for 25 min and no tool call has finished for 23 min (running Bash: zsh tools/tests/run-all.zsh).")
+        self.assertEqual((a["quiet_s"], a["tool"]), (1400, "Bash: zsh tools/tests/run-all.zsh"))
+        self.assertNotIn("made no tool call", a["detail"])
+        r["tool"] = None
+        a = self.alerts(self.mods(lead=r))[0]
+        self.assertEqual(a["detail"], "claude has been on one turn for 25 min and no tool call has finished for 23 min.")
+        self.assertIsNone(a["tool"])
+
     def test_quiet_with_no_last_tool_uses_the_whole_turn(self):
         a = self.alerts(self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 1300, lastToolAt=None)))
         self.assertEqual([x["kind"] for x in a], ["stuck"])

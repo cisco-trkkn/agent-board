@@ -41,6 +41,11 @@ def _secs(now, t):
     return int(max(0, now - t)) if isinstance(t, (int, float)) and not isinstance(t, bool) else None
 
 
+def _tool_text(rec):
+    t = (rec or {}).get("tool")
+    return (f"{t['name']}: {t['arg']}" if t.get("arg") else t.get("name")) if isinstance(t, dict) and t.get("name") else None
+
+
 def agents(s, mods, now):
     """One entry per claude pane in window order; state_s / turn_s / tool come from the pane's fresh agent-status record, else None."""
     out = []
@@ -49,8 +54,7 @@ def agents(s, mods, now):
             if p.get("kind") != "claude":
                 continue
             rec = (mods or {}).get(p["id"])
-            t = (rec or {}).get("tool")
-            tool = (f"{t['name']}: {t['arg']}" if t.get("arg") else t.get("name")) if isinstance(t, dict) and t.get("name") else None
+            tool = _tool_text(rec)
             out.append({"window": w["name"], "pane": p["id"], "state": p.get("status"),
                         "state_s": _secs(now, rec.get("since")) if rec else None,
                         "turn_s": _secs(now, rec.get("turnStartedAt")) if rec else None, "tool": tool})
@@ -154,7 +158,7 @@ def project_alerts(s, live, spend, th):
 
 
 def agent_alerts(s, mods, now, th):
-    """failing (a streak of failed tool calls) and stuck (a long turn with no tool call for a while) per agent with a fresh file."""
+    """failing (a streak of failed tool calls) and stuck (a long turn in which no tool call has finished for a while) per agent with a fresh file."""
     out = []
     for w in s.get("windows") or []:
         for p in w.get("panes") or []:
@@ -171,8 +175,11 @@ def agent_alerts(s, mods, now, th):
             last, began = rec.get("lastToolAt"), rec["turnStartedAt"]
             since = last if isinstance(last, (int, float)) and last >= began else began
             if now - since >= th["stuck_quiet_s"]:
-                out.append({"kind": "stuck", "label": f"stuck {turn // 60}m", "session": w["name"], "turn_s": turn, "context_pct": None,
-                            "detail": f"{w['name']} has been on one turn for {turn // 60} min and made no tool call for {int(now - since) // 60} min."})
+                quiet, tool = int(now - since), _tool_text(rec)   # a tool may be running: it has not finished, so it is not a "tool call" yet
+                out.append({"kind": "stuck", "label": f"stuck {turn // 60}m", "session": w["name"], "turn_s": turn, "quiet_s": quiet, "tool": tool,
+                            "context_pct": None,
+                            "detail": f"{w['name']} has been on one turn for {turn // 60} min and no tool call has finished for {quiet // 60} min"
+                                      + (f" (running {tool})." if tool else ".")})
     return out
 
 

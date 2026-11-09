@@ -90,10 +90,16 @@ class NotifierTest(unittest.TestCase):
         self.assertEqual(ev[0]["text"], "✦ parse failed 3 tool calls in a row")
 
     def test_stuck_agent_names_window_and_minutes(self):   # mutation: omit stuck from conditions() -> no event
-        ev = self.fire(alerts=[{"kind": "stuck", "label": "stuck 25m", "detail": "", "session": "claude", "turn_s": 1530, "context_pct": None}])
+        al = {"kind": "stuck", "label": "stuck 25m", "detail": "", "session": "claude", "turn_s": 1530, "quiet_s": 1400, "tool": None, "context_pct": None}
+        ev = self.fire(alerts=[al])
         self.assertEqual([(e["kind"], e["key"]) for e in ev], [("stuck", "claude")])
         self.assertEqual(ev[0]["title"], "p: agent stuck")
-        self.assertEqual(ev[0]["text"], "claude has been on one turn for 25 min with no tool call")
+        self.assertEqual(ev[0]["text"], "claude has been on one turn for 25 min and no tool call has finished for 23 min")
+        self.clock.t += 1000
+        self.fire(alerts=[])
+        self.clock.t += 301
+        ev = self.fire(alerts=[dict(al, tool="Bash: zsh tools/tests/run-all.zsh")])   # mutation: revert to "with no tool call" -> fails
+        self.assertEqual(ev[0]["text"], "claude has been on one turn for 25 min and no tool call has finished for 23 min (running Bash: zsh tools/tests/run-all.zsh)")
 
     def test_failing_and_stuck_latch_once_per_onset(self):
         al = [{"kind": "failing", "label": "failing ×3", "detail": "", "session": "claude", "fail_streak": 3, "context_pct": None}]

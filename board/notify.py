@@ -46,7 +46,9 @@ def conditions(ov):
             elif a.get("kind") == "failing":
                 add(name, "failing", who, f"{name}: agent failing", f"{who} failed {a.get('fail_streak')} tool calls in a row")
             elif a.get("kind") == "stuck":
-                add(name, "stuck", who, f"{name}: agent stuck", f"{who} has been on one turn for {(a.get('turn_s') or 0) // 60} min with no tool call")
+                run = f" (running {a['tool']})" if a.get("tool") else ""
+                add(name, "stuck", who, f"{name}: agent stuck",
+                    f"{who} has been on one turn for {(a.get('turn_s') or 0) // 60} min and no tool call has finished for {(a.get('quiet_s') or 0) // 60} min{run}")
             elif a.get("kind") in USAGE_KINDS:
                 add(name, "usage", f"{a['kind']}:{who}", f"{name}: high usage", f"{who} {a.get('label', '')}".strip())
     return out
