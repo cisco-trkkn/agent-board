@@ -215,3 +215,34 @@ End the message with the attribution trailer your harness specifies.
 ## Order
 
 Task 1 is independent of Tasks 2–3 and can run beside them. Task 3 is blocked by Task 2 (its `bad` case exercises relay.py's retry). Task 4 is blocked by Tasks 2 and 3 and the merge; the lead runs it.
+
+### Task 5: start the tmux server from $HOME; tmux-ctl agent launch line cds (added by the lead from Task 1's root cause)
+
+**Goal:** A tmux server that agent-board starts never keeps a directory that can be removed, and a `tmux-ctl agent` worker starts in its repo root even on a server whose cwd is already gone.
+
+Root cause (Task 1, `docs/superpowers/notes/2026-11-09-relay-gone-cwd.md`): a tmux server keeps the directory it was started in for life; once that directory is removed, tmux 3.8 starts every new pane there and ignores `-c`. Every agent-board call that can start the server goes through `tc_tmux new-session` (`bin/dev`, `bin/tmux-overseer`, `bin/tmux-dev-layout`, `bin/tmux-ctl` ensure_bg; checked by grep: the only other `new-session` is `bin/tmux-web-attach`'s grouped `-t` session, which needs a running server).
+
+**Files:**
+- Modify: `bin/_tc_bins.zsh` (`tc_tmux`: `new-session` runs in a subshell cd'd to `$HOME`, `/` as fallback)
+- Modify: `bin/tmux-ctl` (`agent)`: `root=` moves above `line=`; the launch line starts `cd -- ${(q)root} && `)
+- Create: `tools/tests/test_tc_tmux_cwd.zsh`
+- Modify: `tools/tests/test_prompt_argv.zsh` (one check on the DRYRUN line)
+
+**Acceptance Criteria:**
+- [ ] A server started through `tc_tmux new-session` from a directory has cwd `$HOME` (`lsof -d cwd` on `#{pid}`), and after that directory is removed a `new-window -c <target>` pane's `#{pane_current_path}` is `<target>`.
+- [ ] A second `tc_tmux new-session` of the same name still exits non-zero (the atomic gate of dev and tmux-overseer).
+- [ ] `TC_AGENT_DRYRUN=1 tmux-ctl agent …` prints `DRYRUN line: cd -- <repo root> && CLAUDE_MD_REVISE_HOOK=0 …`.
+- [ ] Mutations: drop the `builtin cd … ;` in `tc_tmux` → the two cwd checks fail; drop `cd -- ${(q)root} && ` from `line=` → `agent line cds to the repo root first` fails (both run by the plan author).
+
+**Verify:** `zsh tools/tests/test_tc_tmux_cwd.zsh; echo rc=$?` → `ALL PASS`, `rc=0`
+
+**Steps:**
+
+- [ ] **Step 1: RED.** Copy only the two test files from the patch first: `patch -p1 --dry-run < docs/superpowers/plans/2026-11-09-relay-launch-check/task5.diff`, then apply the whole patch, save the patched `bin/_tc_bins.zsh` and `bin/tmux-ctl` to your scratchpad, and overwrite both from HEAD (`git show HEAD:<path> > <path>`). Run `zsh tools/tests/test_tc_tmux_cwd.zsh` → `FAIL - server cwd is $HOME…` and `FAIL - new pane after the caller's directory is gone…`. Run `test_prompt_argv.zsh` → `FAIL - agent line cds to the repo root first`. Copy the two patched files back; `git diff --stat` shows all four files.
+- [ ] **Step 2: GREEN.** `zsh tools/tests/test_tc_tmux_cwd.zsh; echo rc=$?` → ALL PASS, rc=0. `zsh tools/tests/test_prompt_argv.zsh` → its only FAILs may be the 3 pre-existing PATH checks that fail when `~/agent-board/bin` is already on PATH (`orchestrator puts <repo>/bin first`, `set-environment PATH has <repo>/bin`, `agent line has PATH=<repo>/bin:`); run it once more with that entry removed from PATH (`PATH=$(print -r -- "$PATH" | tr ':' '\n' | grep -vx "$HOME/agent-board/bin" | paste -sd: -) /bin/zsh tools/tests/test_prompt_argv.zsh`) → ALL PASS.
+- [ ] **Step 3: Mutations** as in the Acceptance Criteria, on scratch copies; report the FAIL lines.
+- [ ] **Step 4: Commit** `git add bin/_tc_bins.zsh bin/tmux-ctl tools/tests/test_tc_tmux_cwd.zsh tools/tests/test_prompt_argv.zsh`, message `fix(tmux): start the server from $HOME; worker launch line cds to the repo root`, ending with the attribution trailer your harness specifies.
+
+```json:metadata
+{"files": ["bin/_tc_bins.zsh", "bin/tmux-ctl", "tools/tests/test_tc_tmux_cwd.zsh", "tools/tests/test_prompt_argv.zsh"], "verifyCommand": "zsh tools/tests/test_tc_tmux_cwd.zsh; echo rc=$?", "acceptanceCriteria": ["server started via tc_tmux new-session has cwd $HOME; pane after start dir removed lands in -c target", "second new-session of same name still fails", "DRYRUN line starts cd -- <root> && CLAUDE_MD_REVISE_HOOK=0", "both mutations fail their checks"], "modelTier": "mechanical"}
+```
