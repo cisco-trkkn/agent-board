@@ -20,6 +20,8 @@ check "lead, name blank: denied"                      denied Agent '{"descriptio
 check "lead, name not a string: denied"               denied Agent '{"description":"x","prompt":"y","name":7}'
 check "lead, name null: denied"                       denied Agent '{"description":"x","prompt":"y","name":null}'
 check "lead, named fork: denied"                      denied Agent '{"description":"x","prompt":"y","subagent_type":"fork","name":"f"}'
+check "lead, named remote isolation: denied"          denied Agent '{"description":"x","prompt":"y","name":"r","isolation":"remote"}'
+check "lead, named worktree isolation: allowed"       allowed Agent '{"description":"x","prompt":"y","name":"w","isolation":"worktree"}'
 check "lead, non-Agent tool without name: allowed"    allowed Bash '{"command":"ls"}'
 check "lead, tool_input not an object: allowed"       allowed Agent '"oops"'
 print -r -- 'not json' | AGENT_BOARD_LEAD=1 "$H" >"$tmp/o" 2>"$tmp/e"; rc=$?

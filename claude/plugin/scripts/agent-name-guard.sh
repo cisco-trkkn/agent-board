@@ -14,10 +14,10 @@ try:
         print("allow")
     else:
         n = ti.get("name")
-        bad = not isinstance(n, str) or not n.strip() or ti.get("subagent_type") == "fork"
+        bad = not isinstance(n, str) or not n.strip() or ti.get("subagent_type") == "fork" or ti.get("isolation") == "remote"
         print("deny" if bad else "allow")
 except Exception:
     print("allow")' 2>/dev/null) || exit 0
 [[ "$verdict" == deny ]] || exit 0
-printf '%s\n' "Give this agent a name (the Agent tool's name parameter) so it opens in its own ✦ window where the user can watch it. Dev leads never run agents hidden in the background: read-only lookups (Explore, web-fetch, claude-code-guide) and reviewers included. A fork (subagent_type \"fork\") is never allowed, named or not, because it never opens a window. If the teammate's window fails to spawn, retry once, then tell the user the error and wait; never fall back to an unnamed agent. (Kill switch for the user: AGENT_NAME_GUARD=0.)" >&2
+printf '%s\n' "Give this agent a name (the Agent tool's name parameter) so it opens in its own ✦ window where the user can watch it. Dev leads never run agents hidden in the background: read-only lookups (Explore, web-fetch, claude-code-guide) and reviewers included. A fork (subagent_type \"fork\") or a remote agent (isolation \"remote\") is never allowed, named or not, because neither opens a window. If the teammate's window fails to spawn, retry once, then tell the user the error and wait; never fall back to an unnamed agent. (Kill switch for the user: AGENT_NAME_GUARD=0.)" >&2
 exit 2
