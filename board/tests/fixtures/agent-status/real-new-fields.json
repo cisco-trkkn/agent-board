@@ -1,0 +1,1 @@
+{"session_id":"fixture-sess-real","pane":"%82","state":"busy","since":1794250710,"updatedAt":1794250720,"tool":{"name":"Bash","arg":"sleep 20; echo done","startedAt":1794250712},"turnStartedAt":1794250710,"waiting":null,"failStreak":0,"lastToolAt":null}

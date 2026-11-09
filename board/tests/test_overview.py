@@ -237,6 +237,15 @@ class AgentsTest(Base):
                                 "tool": "Bash: zsh tools/tests/run-all.zsh"})
         self.assertEqual((a[1]["state_s"], a[1]["turn_s"], a[1]["tool"]), (None, None, None))   # no file for the teammate
 
+    def test_a_status_file_captured_from_a_real_run_with_the_new_mod(self):
+        # real-new-fields.json: the file the mod wrote during a real `sleep 20; echo done` Bash call (e2e-mod-overview.md), ids replaced
+        r = json.loads((AS / "real-new-fields.json").read_text())
+        now = r["updatedAt"] + 1
+        p = self.build(mods={"%82": r}, now=now)["projects"][0]
+        self.assertEqual(p["agents"][0], {"window": "claude", "pane": "%82", "state": "working", "state_s": 11, "turn_s": 11,
+                                          "tool": "Bash: sleep 20; echo done"})
+        self.assertEqual([a for a in p["alerts"] if a["kind"] in ("failing", "stuck")], [])
+
     def test_a_tool_with_no_arg_is_just_its_name(self):
         a = self.agents(mods=self.mods(lead=rec("busy-tool.json", tool={"name": "Grep", "arg": "", "startedAt": NOW - 1})))
         self.assertEqual(a[0]["tool"], "Grep")
