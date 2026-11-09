@@ -627,3 +627,52 @@ for (const reason of ['clear', 'resume']) {
     expect(read(w, '/s/agent-status/sid2.json')).toMatchObject({ turnStartedAt: null, tool: null, waiting: null, failStreak: 1, lastToolAt: 1000 })
   })
 }
+
+// Fix round 1: a real AskUserQuestion also raises classic.PermissionRequest (the tool asks); that must not turn its
+// `question` waiting into the permission form. mutation: remove the AskUserQuestion guard in the permission paths.
+test('AskUserQuestion whose dialog also fires PermissionRequest keeps waiting = question "Color"', async ($, on) => {
+  const d = gatedDialog()
+  const { w, clock } = world(on, { TC_STATE: '/s' }, {
+    call: () => ({ result: 'answered' }),
+    check: () => ({ decision: 'ask', reason: 'Answer questions?' }),
+    dialog: d.dialog,
+  })
+  await $.session.start(START)
+  await $.turn.start({ text: 'q', turnId: 't1' })
+  const p = $.tool.call({ tool: 'AskUserQuestion', questions: [{ header: 'Color', question: 'Pick?' }], tool_use_id: 'q1' } as any)
+  await d.opened
+  await clock.settle()
+  expect(read(w)).toMatchObject({ state: 'needs-you', waiting: { kind: 'question', detail: 'Color' } })
+  d.answer()
+  await p
+  expect(read(w).waiting).toBeNull()
+})
+
+test('AskUserQuestion: PermissionRequest before the question form is set -> waiting = question from the tool input', async ($, on) => {
+  const { w } = world(on, { TC_STATE: '/s' }, { check: () => ({ decision: 'ask', reason: 'r' }) })
+  w.perms = { defaultMode: 'auto' }   // tool.check ask opens no dialog in this mode: only the PermissionRequest does
+  await $.session.start(START)
+  await $.turn.start({ text: 'q', turnId: 't1' })
+  const input = { questions: [{ header: 'Color', question: 'Pick?' }] }
+  await $.tool.check({ tool: 'AskUserQuestion', input, tool_use_id: 'q1' } as any)
+  await ($ as any).classic.PermissionRequest({ tool_name: 'AskUserQuestion', tool_input: input })
+  expect(read(w)).toMatchObject({ state: 'needs-you', waiting: { kind: 'question', detail: 'Color' } })
+})
+
+test('guarded session (tool.check ask, no classic hooks): AskUserQuestion waiting is the question, not the permission form', async ($, on) => {
+  const g = gatedCall()
+  const { w, clock } = world(on, { TC_STATE: '/s' }, {
+    call: g.call,
+    check: (_$: any, e: any) => (e.input.real ? { decision: 'ask', reason: 'r' } : { decision: 'allow' }),
+  })
+  await $.session.start(START)
+  await $.turn.start({ text: 'q', turnId: 't1' })
+  await $.tool.check({ tool: 'AskUserQuestion', input: { real: true, questions: [{ header: 'Color' }] }, tool_use_id: 'q1' } as any)
+  expect(read(w)).toMatchObject({ state: 'needs-you', waiting: { kind: 'question', detail: 'Color' } })
+  const p = $.tool.call({ tool: 'AskUserQuestion', questions: [{ header: 'Color' }], tool_use_id: 'q1' } as any)
+  await g.started
+  await clock.settle()
+  expect(read(w).waiting).toEqual({ kind: 'question', detail: 'Color' })
+  g.release()
+  await p
+})

@@ -44,6 +44,8 @@ const questionDetail = (a) => {
   return String(q.header || q.question || '').slice(0, ARG_MAX)
 }
 const permissionWaiting = (tool, args) => ({ kind: 'permission', detail: (tool + ': ' + argOf(tool, args)).slice(0, ARG_MAX) })
+// AskUserQuestion is itself a tool that asks, so both permission paths see it: its dialog is the question, never the permission form
+const dialogWaiting = (tool, args) => (tool === 'AskUserQuestion' ? { kind: 'question', detail: questionDetail(args) } : permissionWaiting(tool, args))
 
 // moves st to `state` at `ms`; `since` changes only with the state
 const setState = (state, ms) => {
@@ -65,7 +67,8 @@ const askFor = (tool, input) => {
 const dialogOpen = async ($, a, waiting) => {
   if (setState('needs-you', await $.clock.now())) {
     st.askId = a.id
-    st.waiting = waiting
+    // keep a question already set from the call's own questions when this one could not read any
+    if (!(waiting.kind === 'question' && !waiting.detail && st.waiting && st.waiting.kind === 'question')) st.waiting = waiting
     await flush($)
   }
 }
@@ -197,7 +200,7 @@ export function register(on) {
       if (st && out && out.decision === 'ask') {
         const a = { id: (e && e.tool_use_id) || null, tool: e && e.tool, input: JSON.stringify(e && e.input), args: (e && e.input) || {} }
         st.asks.push(a)
-        if (!classicLive && !NO_PROMPT_MODES.includes(st.mode)) await dialogOpen($, a, permissionWaiting(a.tool, a.args))
+        if (!classicLive && !NO_PROMPT_MODES.includes(st.mode)) await dialogOpen($, a, dialogWaiting(a.tool, a.args))
       }
     } catch (x) { /* ignore */ }
     return out
@@ -210,7 +213,7 @@ export function register(on) {
     if (e && (e.agent_id || e.agentId)) return next(e)
     try {
       const a = st && e ? askFor(e.tool_name, e.tool_input) : null
-      if (a) await dialogOpen($, a, permissionWaiting(e.tool_name, e.tool_input))
+      if (a) await dialogOpen($, a, dialogWaiting(e.tool_name, e.tool_input))
     } catch (x) { /* ignore */ }
     return next(e)
   })
