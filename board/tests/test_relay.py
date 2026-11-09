@@ -258,7 +258,9 @@ class RelayTest(unittest.TestCase):
 
     def test_main_failure_prints_manual_command(self):
         err = io.StringIO()
-        with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), redirect_stderr(err):
+        # session_root is mocked: unmocked it would call the real tmux on the default socket
+        with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), \
+                mock.patch.object(relay, "session_root", side_effect=RuntimeError("no session")), redirect_stderr(err):
             rc = relay.main(["--session", "proj", "--doc", "/d.md", "--state", "/tmp"])
         self.assertEqual(rc, 1)
         self.assertIn(shlex.quote(relay.orchestrator()) + " 'Read /d.md", err.getvalue())

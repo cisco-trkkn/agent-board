@@ -341,7 +341,9 @@ case "$cmd" in
     exit "$rc" ;;
 
   _relay_failed)   # detached relay failed: tell the user, keep the doc
-    first="$(grep -m1 . "$1" 2>/dev/null)"; first="${first#relay failed: }"
+    reason="$(grep -m1 '^relay failed: ' "$1" 2>/dev/null)"   # relay.py's own failure line; its 'relay: attempt N' lines come first
+    [[ -n "$reason" ]] || reason="$(grep -m1 . "$1" 2>/dev/null)"
+    first="${reason#relay failed: }"
     manual="$(grep -m1 '^manual: ' "$1" 2>/dev/null)"; manual="${manual#manual: }"   # relay.py's line: cd -- <root> && <launcher> '<prompt>'
     [[ -n "$manual" ]] || manual="${(q)TC_REPO}/bin/claude-orchestrator 'Read $2 and continue from where the previous session left off.'"
     msg="relay failed: ${first:-no output} — doc kept at $2; manual: $manual (log: $1)"

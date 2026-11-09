@@ -194,6 +194,7 @@ def main(argv=None):
         print(relay(tmux, a.session, a.doc, a.state, a.old_session, start_cap=a.start_cap))
         return 0
     except Exception as e:
+        # last resort: the root is unknown, so the manual line cannot cd to it
         try:
             root = session_root(tmux, a.session)
         except Exception:

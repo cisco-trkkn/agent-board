@@ -70,6 +70,11 @@ check "dead lead retried once"        test "$(wc -l < "$BAD_COUNT" | tr -d ' ')"
 check "log carries the pane text"     grep -qF '| The current directory no longer exists' "$blog"
 check "log manual cds to the root"    grep -qF "manual: cd -- " "$blog"
 check "no lineage for a dead lead"    test ! -e "$TC_LINEAGE/bad.jsonl"
+# the notice is built from relay.py's 'relay failed:' line, not its per-attempt 'relay: attempt' line
+$C _relay_failed "$blog" "$doc" bad
+check "notice reads the relay failed line" grep -q '^relay failed: the new lead did not start' "$TC_STATE/relay-failed-bad.txt"
+check "notice has no attempt line"         sh -c "! grep -q 'relay: attempt' '$TC_STATE/relay-failed-bad.txt'"
+check "notice manual cds to the root (bad)" grep -qF "manual: cd -- " "$TC_STATE/relay-failed-bad.txt"
 # '#' in the doc path must survive tmux format expansion (relay from the lead; the lineage records the doc as relay.py received it)
 hd="$TT_DIR/h#H.md"; print x > "$hd"
 $C relay "$hd" >/dev/null
