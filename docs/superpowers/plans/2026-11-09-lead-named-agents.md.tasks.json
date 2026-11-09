@@ -1,0 +1,48 @@
+{
+  "planPath": "docs/superpowers/plans/2026-11-09-lead-named-agents.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: agent-name-guard hook script with unit tests",
+      "status": "pending",
+      "description": "**Goal:** `claude/plugin/scripts/agent-name-guard.sh` denies unnamed and fork Agent calls in a dev lead and allows everything else, with a zsh unit test.\n\n**Files:**\n- Create: `claude/plugin/scripts/agent-name-guard.sh` (mode 755)\n- Create: `tools/tests/test_agent_name_guard.zsh`\n\n**Acceptance Criteria:**\n- [ ] With `AGENT_BOARD_LEAD=1`: name missing, `\"\"`, `\"  \"`, `7`, `null` \u2192 exit 2 with the reason on stderr and empty stdout; a named `subagent_type: \"fork\"` \u2192 exit 2.\n- [ ] Named Explore call, non-Agent tool, non-object `tool_input`, malformed JSON \u2192 exit 0, no output.\n- [ ] Marker unset or `0`, or `AGENT_NAME_GUARD=0` \u2192 unnamed call allowed silently.\n- [ ] Mutations fail the stated checks (Step 2).\n\n**Verify:** `zsh tools/tests/test_agent_name_guard.zsh` \u2192 last line `ALL PASS`\n\nFull steps (with the exact code): docs/superpowers/plans/2026-11-09-lead-named-agents.md \u00a7 Task 1.\n\n```json:metadata\n{\"files\": [\"claude/plugin/scripts/agent-name-guard.sh\", \"tools/tests/test_agent_name_guard.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_agent_name_guard.zsh\", \"acceptanceCriteria\": [\"lead marker set: missing/empty/blank/non-string/null name and named fork denied with exit 2 and the reason\", \"named call, non-Agent tool, non-object tool_input, malformed JSON allowed silently\", \"marker unset/0 and AGENT_NAME_GUARD=0 allow\", \"the four named mutations fail their checks\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: register the hook and document it",
+      "status": "pending",
+      "description": "**Goal:** The plugin runs `agent-name-guard.sh` on every Agent call after `sdd-call-guard.sh`, and the plugin description and docs name it.\n\n**Files:**\n- Modify: `claude/plugin/hooks/hooks.json` (the `\"matcher\": \"Agent\"` entry, line ~21)\n- Modify: `claude/plugin/.claude-plugin/plugin.json` (`description`)\n- Modify: `tools/tests/test_plugin.zsh` (after the sdd-call-guard registration check, line ~51)\n- Modify: `docs/INSTALL.md:23`, `docs/ARCHITECTURE.md:151`\n\n**Acceptance Criteria:**\n- [ ] hooks.json has exactly one agent-name-guard registration: in the Agent entry, after sdd-call-guard, `--scoped`, timeout 10.\n- [ ] plugin.json description contains `plan-handoff-guard, sdd-call-guard, agent-name-guard and context-inject hooks`.\n- [ ] INSTALL.md names `agent-name-guard` and `AGENT_NAME_GUARD=0`; ARCHITECTURE.md lists it among the exit-2 hooks.\n- [ ] `claude plugin validate claude/plugin` passes.\n\n**Verify:** `zsh tools/tests/test_plugin.zsh` \u2192 last line `ALL PASS`\n\nFull steps (with the exact code): docs/superpowers/plans/2026-11-09-lead-named-agents.md \u00a7 Task 2.\n\n```json:metadata\n{\"files\": [\"claude/plugin/hooks/hooks.json\", \"claude/plugin/.claude-plugin/plugin.json\", \"tools/tests/test_plugin.zsh\", \"docs/INSTALL.md\", \"docs/ARCHITECTURE.md\"], \"verifyCommand\": \"zsh tools/tests/test_plugin.zsh\", \"acceptanceCriteria\": [\"one agent-name-guard registration in the Agent entry after sdd-call-guard, --scoped, timeout 10\", \"plugin.json description names agent-name-guard\", \"INSTALL.md and ARCHITECTURE.md name it\", \"claude plugin validate passes\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: lead marker in claude-orchestrator",
+      "status": "pending",
+      "description": "**Goal:** The lead's claude process gets `AGENT_BOARD_LEAD=1`; the tmux session environment does not.\n\n**Files:**\n- Modify: `bin/claude-orchestrator` (after the `export PATH=\u2026 AGENT_BOARD_REPO=\u2026` line)\n- Modify: `tools/tests/test_prompt_argv.zsh` (stub and checks near line 8 and line 24)\n\n**Acceptance Criteria:**\n- [ ] The exec'd claude (stub) sees `AGENT_BOARD_LEAD=1`.\n- [ ] `show-environment` of the scratch session holds `AGENT_BOARD_REPO` and no `AGENT_BOARD_LEAD` line.\n- [ ] Mutations fail the stated checks (Step 3).\n\n**Verify:** `zsh tools/tests/test_prompt_argv.zsh` \u2192 last line `ALL PASS`\n\nFull steps (with the exact code): docs/superpowers/plans/2026-11-09-lead-named-agents.md \u00a7 Task 3.\n\n```json:metadata\n{\"files\": [\"bin/claude-orchestrator\", \"tools/tests/test_prompt_argv.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_prompt_argv.zsh\", \"acceptanceCriteria\": [\"stub claude sees AGENT_BOARD_LEAD=1\", \"scratch session env has AGENT_BOARD_REPO and no AGENT_BOARD_LEAD\", \"both mutations fail their checks\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: lead rules bullets",
+      "status": "pending",
+      "description": "**Goal:** `claude/orchestrator.md` tells the lead that every agent gets a name (no forks) and what to do when a teammate window fails to spawn.\n\n**Files:**\n- Modify: `claude/orchestrator.md` (\"Default: use an agent team\", after the bullet ending `they become the window names.`)\n- Modify: `tools/tests/test_plugin.zsh` (lead-rules checks block, after `check \"lead rules: queue asks nothing after the batch\" \u2026`)\n\n**Acceptance Criteria:**\n- [ ] The two bullets below appear verbatim, directly after the \"Give teammates short, distinct names\" bullet.\n- [ ] The orchestrator.md skill-name check in test_plugin.zsh still passes.\n\n**Verify:** `zsh tools/tests/test_plugin.zsh` \u2192 last line `ALL PASS`\n\nFull steps (with the exact code): docs/superpowers/plans/2026-11-09-lead-named-agents.md \u00a7 Task 4.\n\n```json:metadata\n{\"files\": [\"claude/orchestrator.md\", \"tools/tests/test_plugin.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_plugin.zsh\", \"acceptanceCriteria\": [\"both bullets verbatim after the window-names bullet\", \"skill-name resolution check still passes\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        3
+      ]
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: real run and real-state check",
+      "status": "pending",
+      "description": "**Goal:** Show on a real lead that an unnamed Agent call is denied and a named one opens a `\u2726` window whose teammate lacks `AGENT_BOARD_LEAD`, and that the guard's verdicts on the user's real past Agent calls match an independent count; record both in `tools/tests/e2e-lead-named-agents.md`.\n\n**Files:**\n- Create: `tools/tests/e2e-lead-named-agents.md`\n\n**Constraints:** scratch tmux only (`~/.local/bin/tmux -L <sock> -f /dev/null`, temp `TC_STATE`), lead started through this worktree's `bin/claude-orchestrator` (so this worktree's plugin loads); never touch the live `dev` session or the live checkout; kill the scratch server afterwards and show with `ps` that no scratch claude is left. Prompt sending: `send-keys \"text\"`, wait 1 s, separate `send-keys Enter`. Read-only on `~/.claude/projects`.\n\n**Acceptance Criteria:**\n- [ ] Unnamed Agent call by the scratch lead \u2192 the pane shows the deny reason (quote the captured pane lines).\n- [ ] Named Agent call \u2192 a `\u2726 <name>` window exists (`list-windows` output quoted); the teammate's process env (`ps eww <pid>` or the teammate running `env`) and `show-environment` both lack `AGENT_BOARD_LEAD`, and the lead's process env has it.\n- [ ] Real-state: every Agent `tool_use` input in `~/.claude/projects/*/*.jsonl` (uncapped; print the total count and the number of files scanned) is fed to the guard with `AGENT_BOARD_LEAD=1`; deny count equals an independently computed count of inputs with no/blank/non-string `name` or `subagent_type == \"fork\"`; zero mismatches, printed.\n- [ ] The doc records commands, outputs, date and the plugin path used.\n\n**Verify:** `grep -c '^## ' tools/tests/e2e-lead-named-agents.md` \u2192 `3` (sections: `## Denied unnamed call`, `## Named call opens a window`, `## Real transcripts`)\n\nFull steps (with the exact code): docs/superpowers/plans/2026-11-09-lead-named-agents.md \u00a7 Task 5.\n\n```json:metadata\n{\"files\": [\"tools/tests/e2e-lead-named-agents.md\"], \"verifyCommand\": \"grep -c '^## ' tools/tests/e2e-lead-named-agents.md\", \"acceptanceCriteria\": [\"unnamed call denied in a real scratch lead, pane quoted\", \"named call opens a \u2726 window; teammate env and session env lack AGENT_BOARD_LEAD, lead env has it\", \"guard verdicts on every real Agent call in ~/.claude/projects match an independent count, totals printed, zero mismatches\", \"doc records commands, outputs, date, plugin path\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        4
+      ]
+    }
+  ],
+  "lastUpdated": "2026-11-09T20:10:09Z"
+}
