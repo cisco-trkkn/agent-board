@@ -30,7 +30,7 @@
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
 #   tmux-ctl awake on [--pid N] [--lid]|off|status|sleeps <since>|lid-setup
 #                                          hold the Mac awake (caffeinate) while the queue runs; sleeps lists Sleep/Wake lines since a time
-#   tmux-ctl approve <win> once|deny [--expect <text>]  answer the permission prompt showing in a window: the one-time Yes, or No
+#   tmux-ctl approve <win> once|deny --expect <text>  answer the permission prompt showing in a window: the one-time Yes, or No
 #                                          (never an always/auto-mode row; refuses when there is no prompt or it changed)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)

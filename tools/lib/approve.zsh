@@ -1,5 +1,5 @@
-# approve.zsh — sourced by tmux-ctl for `tmux-ctl approve <win> once|deny [--expect <text>]` (spec 2026-11-09-remote-access §5).
-# Presses the one-time Yes or the No of the permission prompt showing in <win>'s main pane, by its digit alone (claude 2.1.321:
+# approve.zsh — sourced by tmux-ctl for `tmux-ctl approve <win> once|deny --expect <text>` (spec 2026-11-09-remote-access §5).
+# --expect is required: the prompt block (preview + question + option rows) must contain it. Presses the one-time Yes or the No of the permission prompt showing in <win>'s main pane, by its digit alone (claude 2.1.321:
 # a digit answers a permission prompt, no Enter; tools/tests/fixtures/approve/README.md). Only an option labelled exactly `Yes`
 # (once) or `No` (deny) is ever chosen: "Yes, and don’t ask again…", "Yes, and switch to auto mode…" rows are never pressed.
 # Uses tmux-ctl's t, use_win, exists, target. TC_APPROVE_BEFORE_SEND (tests): a command run between the capture and the re-capture.
@@ -29,6 +29,7 @@ _ap_prompt() {
         q = i; e = j - 1
       }
       if (!q) exit
+      for (i = e + 1; i <= NR; i++) if (l[i] !~ /^[ \t]*Esc to cancel/) exit   # only the footer may follow the options
       s = q
       for (i = q; i >= 1; i--) if (index(l[i], "──────────") == 1) { s = i; break }
       for (i = s; i <= e; i++) print "B:" l[i]
@@ -37,7 +38,7 @@ _ap_prompt() {
 }
 
 approve_cmd() {
-  local win="$1" act="$2" expect="" have_expect=0 pane block again line digit want text="" u="usage: tmux-ctl approve <win> once|deny [--expect <text>]"
+  local win="$1" act="$2" expect="" have_expect=0 pane block again line digit want text="" u="usage: tmux-ctl approve <win> once|deny --expect <text>"
   shift 2 2>/dev/null
   while (( $# )); do
     case "$1" in
@@ -46,13 +47,14 @@ approve_cmd() {
     esac
   done
   [[ -n "$win" && ( "$act" == once || "$act" == deny ) ]] || die "$u"
-  (( have_expect )) && [[ -z "$expect" ]] && die "--expect needs the exact command or path text, not an empty value ($u)"
+  (( have_expect )) || die "--expect <text> is required: the exact command or path text of the prompt ($u)"
+  [[ -n "$expect" ]] || die "--expect needs the exact command or path text, not an empty value ($u)"
   use_win "$win"; exists "$win"
   pane="$(target "$win")"
   block="$(_ap_screen "$pane" | _ap_prompt)"
   [[ -n "$block" ]] || { print -u2 "approve: no permission prompt in $win"; return 1 }
   while IFS= read -r line; do [[ "$line" == B:* ]] && text+="${line#B:}"$'\n'; done <<< "$block"
-  if (( have_expect )) && [[ "$text" != *"$expect"* ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
+  if [[ "$text" != *"$expect"* ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
   [[ "$act" == once ]] && want=Yes || want=No
   while IFS= read -r line; do
     [[ "$line" == O:*:"$want" ]] && { digit="${${line#O:}%%:*}"; break }

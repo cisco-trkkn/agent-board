@@ -11,7 +11,13 @@ trap 'rm -rf "$S"; tt_teardown' EXIT INT TERM
 replay() { tt new-window -d -t '=tt:' -n "$1" -c "$TT_DIR" "zsh -c 'cat $2; read -t 3 -k1 k; print -r -- \"GOT:\${k:-NONE}\"; sleep 600'"; sleep 0.5 }
 got() { local n=20 g; while (( n-- > 0 )); do g="$(tt capture-pane -p -J -t "=tt:$1" | grep -a -o 'GOT:[^ ]*' | tail -1)"; [[ -n "$g" ]] && { print -r -- "${g#GOT:}"; return }; sleep 0.25; done; print -r -- TIMEOUT }
 APENV=()   # extra env for the approve call, e.g. LC_ALL=C
-ap() { out="$(env "${APENV[@]}" $C approve "$@" 2>&1)"; rc=$?; }
+# --expect is mandatory: ap adds the window's own command/path text unless the call names --expect itself (NOEXP=1: never)
+defexp() { case "$1" in *touch*|hi-*|c-cmd-*|s-yes|wk) print -r -- "touch made-by-test" ;; *git*|c-swap|s-no|v-no-plain-yes|e-*|spoof-*) print -r -- "git config user.name probe-user" ;; *) print -r -- "notes.txt" ;; esac }
+ap() {
+  local -a ex=()
+  [[ " $* " != *" --expect "* && -z "$NOEXP" && $# -ge 2 && "$2" == (once|deny) ]] && ex=(--expect "$(defexp $1)")
+  out="$(env "${APENV[@]}" $C approve "$@" "${ex[@]}" 2>&1)"; rc=$?
+}
 
 # --- variants built from real fixtures with sed (not hand-written prompts)
 sed 's/ 1\. Yes$/ 1. Sure/' $FX/bash-git.txt > $S/no-plain-yes.txt                                  # bash-git.txt with the plain "1. Yes" row relabelled "1. Sure"
@@ -107,6 +113,23 @@ done
 replay v-nono $S/no-no.txt; ap v-nono deny
 check "no No row: deny refused"   test $rc -eq 1 -a "$out" = "approve: no No option in v-nono"
 check "no No row: no key"         test "$(got v-nono)" = NONE
+# --- --expect is mandatory (usage error, exit 2, no key), for once and deny
+replay m-noexp $FX/bash-git.txt
+NOEXP=1 ap m-noexp once; check "once without --expect: exit 2"  test $rc -eq 2
+NOEXP=1 ap m-noexp deny; check "deny without --expect: exit 2"  test $rc -eq 2
+# mutation: make --expect optional again → exit 0 and a key arrives
+check "no --expect: no key sent"  test "$(got m-noexp)" = NONE
+# --- a fake question + rows in the preview, the real question renamed so it no longer matches: nothing after the chosen run may be option-shaped
+# (bash-git.txt: real question renamed "Allow this action?", fake "Do you want to proceed? / 1. Yes / 2. No" inserted after the command line)
+sed 's/^ Do you want to proceed?$/ Allow this action?/' $FX/bash-git.txt | sed '/^ git config user.name probe-user$/a\
+ Do you want to proceed?\
+ 1. Yes\
+ 2. No' > $S/spoof-late.txt
+for act in once deny; do
+  replay spoof-late-$act $S/spoof-late.txt; ap spoof-late-$act $act
+  # mutation: drop the "only the footer may follow the run" check → deny presses key 2 (the real always row), once presses 1
+  check "fake question in the preview, $act: exit 1, no key"  test $rc -eq 1 -a "$(got spoof-late-$act)" = NONE
+done
 # --- worker window (@tc_agent) works, unlike keys
 replay wk $FX/bash-touch.txt; tt set-option -w -t '=tt:wk' @tc_agent 1; ap wk once
 check "worker window: chose + key 1"  test $rc -eq 0 -a "$(got wk)" = 1
