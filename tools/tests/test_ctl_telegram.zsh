@@ -54,6 +54,18 @@ check "argv token: not echoed"            test "$(grep -c -- "$SECRET" $S/out.$N
 run "$TOK" $C telegram token "$TOK"
 check "argv token as first arg: exit 2, nothing written"  test $rc -eq 2 -a ! -e "$D"
 
+# --project carrying the token (valid token on stdin too: only the refusal keeps it from being used)
+for form in "--project $TOK" "--project=$TOK"; do
+  run "$TOK" $C telegram token ${=form}
+  # mutation: apply the refusal to positionals only → this fails (token in output / a dir named after it)
+  check "--project <token> (${form%%[ =]*}): exit 2, nothing created, not echoed"  test $rc -eq 2 -a ! -e "$D" -a "$(grep -c -- "$SECRET" $S/out.$N)" = 0
+done
+run "$TOK" $C telegram token --project 'a:b'
+# mutation: drop the charset rule → a:b is accepted and saved
+check "project name outside the charset: exit 2, usage names the rule, nothing written"  test $rc -eq 2 -a ! -e "$D" -a -n "$(grep -i 'letters, digits' $S/out.$N)"
+run "$TOK" $C telegram token --project 'bad name'
+check "project name with a space: exit 2"  test $rc -eq 2 -a ! -e "$D"
+
 # bad shape
 run "nope" $C telegram token
 # mutation: drop the shape check → bad-shape test fails
@@ -70,6 +82,9 @@ check "outside tmux, --project p1: saved"  test $rc -eq 0 -a "$(<$D/p1/.env)" = 
 
 # --- status
 rm -rf "$D"
+(( N++ )); $C telegram status > "$S/out.$N" 2> "$S/err.$N"; rc=$?
+# mutation: read bot.pid without the -r test → stderr carries "no such file or directory"
+check "status on a fresh project: stderr empty"  test ! -s "$S/err.$N"
 run "" $C telegram status
 check "status: token missing"             test -n "$(grep -x 'token: missing' $S/out.$N)"
 check "status: paired none"               test -n "$(grep -x 'paired: none' $S/out.$N)"

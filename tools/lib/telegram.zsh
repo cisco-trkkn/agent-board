@@ -23,7 +23,10 @@ telegram_cmd() {
     fi
   done
   [[ -n "$project" ]] || project="${pos[1]:-$FEEDKEY}"
-  [[ -n "$project" && "$project" != */* && "$project" != .* ]] || { _tg_usage; return 2 }
+  [[ -n "$project" ]] || { _tg_usage; return 2 }
+  if ! [[ "$project" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]]; then   # never echo the value: it may be a token
+    print -u2 "telegram: a project name uses letters, digits, '.', '_' and '-' and starts with a letter or digit"; return 2
+  fi
   local dir="$(_tg_root)/$project"
   case "$sub" in
     token)  _tg_token "$project" "$dir" ;;
@@ -51,7 +54,7 @@ _tg_status() {
   if [[ "${n:-0}" -gt 0 ]]; then print -r -- "paired: $n allowlisted"; else print -r -- "paired: none"; fi
   pol="$(jq -r '.dmPolicy // "pairing"' "$dir/access.json" 2>/dev/null)"
   print -r -- "policy: ${pol:-pairing}"
-  pid="$(<"$dir/bot.pid" 2>/dev/null)"; pid="${pid//[^0-9]/}"
+  [[ -r "$dir/bot.pid" ]] && pid="$(<"$dir/bot.pid")"; pid="${pid//[^0-9]/}"
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && [[ "$(ps -o args= -p "$pid" 2>/dev/null)" == *server.ts* ]]; then
     print -r -- "poller: running (pid $pid)"
   else
