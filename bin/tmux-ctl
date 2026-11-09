@@ -28,6 +28,8 @@
 #   tmux-ctl idea  <text>                  file an idea for after the plan (never act on it now)
 #   tmux-ctl context show|path|add <section> "<entry>"
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
+#   tmux-ctl awake on [--pid N] [--lid]|off|status|sleeps <since>|lid-setup
+#                                          hold the Mac awake (caffeinate) while the queue runs; sleeps lists Sleep/Wake lines since a time
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)
 #   tmux-ctl overview [project] [--json]   the overseer digest: one line per open project (plan, in-progress
@@ -488,6 +490,10 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
       *) die 'usage: tmux-ctl context show | path | add <section> "<entry>"' ;;
     esac ;;
 
+  awake)
+    source "${0:A:h:h}/tools/lib/awake.zsh"
+    awake_cmd "$@"; exit $? ;;
+
   relay)
     [[ -n "$1" ]] || die "usage: tmux-ctl relay <handoff-doc> [--old-session <id>]"
     doc="${1:A}"; shift; old=""
@@ -521,7 +527,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/overview.py" "${popt[@]}" "${jflag[@]}" ;;
 
   ""|-h|--help|help)
-    sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

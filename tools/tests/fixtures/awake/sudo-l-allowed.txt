@@ -1,0 +1,1 @@
+/usr/bin/pmset -a disablesleep 1
