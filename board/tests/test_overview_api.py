@@ -104,6 +104,15 @@ class OverviewApiTest(unittest.TestCase):
         self.assertEqual([a["label"] for a in ov["projects"][0]["alerts"] if a["kind"] == "context"], ["ctx 90%"])   # the agent under the pane path is not this project's
         self.assertEqual(ov["projects"][0]["path"], "/proj-root")
 
+    def test_build_overview_passes_the_fresh_agent_status_records(self):   # mutation: build_overview without mods= -> agents has null extras
+        d = Path(os.environ["TC_STATE"]) / "agent-status"; d.mkdir()
+        rec = json.loads((Path(__file__).resolve().parent / "fixtures" / "agent-status" / "busy-tool.json").read_text())
+        rec.update(pane="%1", since=998, updatedAt=999, turnStartedAt=990)
+        (d / "s.json").write_text(json.dumps(rec))
+        ov = server.build_overview(1000.0)
+        self.assertEqual(ov["projects"][0]["agents"], [{"window": "claude", "pane": "%1", "state": "working", "state_s": 2, "turn_s": 10,
+                                                        "tool": "Bash: zsh tools/tests/run-all.zsh"}])
+
     def test_tc_overseer_off_never_spawns(self):
         server._last["windows"] = {"proj": {"claude": 1}}     # no overseer running, a project with a claude window
         server.ensure_overseer()

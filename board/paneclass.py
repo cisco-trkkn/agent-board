@@ -39,8 +39,8 @@ def status_dir():
     return tc_env.state_dir() / "agent-status"
 
 
-def mod_states(now=None, d=None):
-    """pane id -> board status from fresh agent-status files: one directory listing per call."""
+def mod_records(now=None, d=None):
+    """pane id -> the parsed agent-status file (a dict), fresh files only, the newest per pane: one directory listing per call."""
     now = time.time() if now is None else now
     d = status_dir() if d is None else Path(d)
     best = {}
@@ -59,8 +59,13 @@ def mod_states(now=None, d=None):
         if not isinstance(pane, str) or state not in MOD_STATES or not -5 < now - upd < STATUS_TTL:
             continue
         if pane not in best or upd > best[pane][1]:
-            best[pane] = (MOD_STATES[state], upd)
-    return {p: s for p, (s, _) in best.items()}
+            best[pane] = (rec, upd)
+    return {p: r for p, (r, _) in best.items()}
+
+
+def mod_states(now=None, d=None):
+    """pane id -> board status from fresh agent-status files."""
+    return {p: MOD_STATES[r["state"]] for p, r in mod_records(now, d).items()}
 
 
 def input_has_text(rows):

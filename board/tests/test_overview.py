@@ -67,9 +67,9 @@ class Base(unittest.TestCase):
         os.environ["TC_LINEAGE"] = str(self.lin); self.addCleanup(os.environ.pop, "TC_LINEAGE", None)
         p = mock.patch("planview.pane_state", return_value="working"); p.start(); self.addCleanup(p.stop)
 
-    def build(self, sessions=None, live=(), th=None, spend=None, activity=None, now=NOW):
+    def build(self, sessions=None, live=(), th=None, spend=None, activity=None, now=NOW, mods=None):
         return overview.build(sessions if sessions is not None else [card()], list(live), now, home=self.home, state_dir=self.state,
-                              tmux=fake_tmux(), th=th, spend=spend, activity=activity)
+                              tmux=fake_tmux(), th=th, spend=spend, activity=activity, **({} if mods is None else {"mods": mods}))
 
 
 class BuildTest(Base):
@@ -81,7 +81,7 @@ class BuildTest(Base):
 
     def test_needs_you_lists_waiting_panes(self):
         r = self.build([card(waiting=("✦ parse",))])["projects"][0]
-        self.assertEqual(r["needs_you"], [{"window": "✦ parse", "pane": "%90", "kind": "claude"}])
+        self.assertEqual(r["needs_you"], [{"window": "✦ parse", "pane": "%90", "kind": "claude", "reason": None}])
         self.assertEqual(self.build()["projects"][0]["needs_you"], [])
 
     def test_last_run_and_age(self):
@@ -194,6 +194,137 @@ class BuildTest(Base):
         ov = overview.build([card()], [], NOW, home=self.home, state_dir=self.state, tmux=bad_tmux, spend=boom)
         self.assertIsNone(ov["projects"][0]["spend_today"])
         self.assertEqual(ov["projects"][0]["plan"]["total"], 0)
+
+
+AS = Path(__file__).resolve().parent / "fixtures" / "agent-status"
+
+
+def rec(name, **over):
+    """An agent-status fixture with its times moved to NOW: since 10 min ago, turn started 10 min ago, last tool 1 min ago."""
+    r = json.loads((AS / name).read_text())
+    if "turnStartedAt" in r:
+        r.update(turnStartedAt=NOW - 600, lastToolAt=NOW - 60)
+        if r.get("tool"):
+            r["tool"] = dict(r["tool"], startedAt=NOW - 60)
+    r.update(since=NOW - 600, updatedAt=NOW - 2)
+    r.update(over)
+    return r
+
+
+class AgentsTest(Base):
+    def mods(self, lead=None, mate=None):
+        return {k: v for k, v in (("%82", lead), ("%90", mate)) if v is not None}
+
+    def agents(self, **kw):
+        return self.build(mods=kw.pop("mods", None), **kw)["projects"][0]["agents"]
+
+    def alerts(self, mods, kinds=("failing", "stuck")):
+        return [a for a in self.build(mods=mods)["projects"][0]["alerts"] if a["kind"] in kinds]
+
+    def test_record_keys_end_with_agents(self):
+        self.assertEqual(overview.RECORD_KEYS[-1], "agents")
+        self.assertEqual(tuple(self.build()["projects"][0]), overview.RECORD_KEYS)
+
+    def test_without_mods_every_agent_has_null_extras_and_no_new_alerts(self):
+        self.assertEqual(self.agents(), [
+            {"window": "claude", "pane": "%82", "state": "working", "state_s": None, "turn_s": None, "tool": None},
+            {"window": "✦ parse", "pane": "%90", "state": "working", "state_s": None, "turn_s": None, "tool": None}])
+        self.assertEqual(self.alerts(None), [])
+
+    def test_fresh_file_gives_durations_and_tool(self):
+        a = self.agents(mods=self.mods(lead=rec("busy-tool.json")))
+        self.assertEqual(a[0], {"window": "claude", "pane": "%82", "state": "working", "state_s": 600, "turn_s": 600,
+                                "tool": "Bash: zsh tools/tests/run-all.zsh"})
+        self.assertEqual((a[1]["state_s"], a[1]["turn_s"], a[1]["tool"]), (None, None, None))   # no file for the teammate
+
+    def test_a_tool_with_no_arg_is_just_its_name(self):
+        a = self.agents(mods=self.mods(lead=rec("busy-tool.json", tool={"name": "Grep", "arg": "", "startedAt": NOW - 1})))
+        self.assertEqual(a[0]["tool"], "Grep")
+
+    def test_an_old_file_without_the_new_fields_reads_as_null(self):
+        a = self.agents(mods=self.mods(lead=rec("old.json")))
+        self.assertEqual((a[0]["state_s"], a[0]["turn_s"], a[0]["tool"]), (600, None, None))
+        self.assertEqual(self.alerts(self.mods(lead=rec("old.json"))), [])
+
+    def test_non_claude_panes_are_not_agents(self):
+        s = card()
+        s["windows"].append({"index": 3, "name": "shell", "bell": False, "worker": False, "teammate": False, "active": False,
+                             "panes": [{"id": "%95", "index": 0, "title": "", "command": "zsh", "path": "/proj", "active": False,
+                                        "kind": "shell", "status": "idle", "preview": []}]})
+        self.assertEqual([a["pane"] for a in self.build(sessions=[s])["projects"][0]["agents"]], ["%82", "%90"])
+
+    def test_needs_you_reason_from_waiting(self):
+        r = self.build(sessions=[card(waiting=("claude", "✦ parse"))],
+                       mods=self.mods(lead=rec("waiting-question.json"), mate=rec("waiting-permission.json")))["projects"][0]
+        self.assertEqual([n["reason"] for n in r["needs_you"]], ["question: Scope", "permission: Bash: rm x"])
+
+    def test_needs_you_reason_is_none_without_a_fresh_file(self):
+        r = self.build(sessions=[card(waiting=("claude",))], mods={})["projects"][0]
+        self.assertEqual([n["reason"] for n in r["needs_you"]], [None])
+        r = self.build(sessions=[card(waiting=("claude",))], mods=self.mods(lead=rec("old.json", state="needs-you")))["projects"][0]
+        self.assertEqual([n["reason"] for n in r["needs_you"]], [None])
+
+    def test_lead_idle_s_is_now_minus_since_when_the_file_is_ready(self):
+        act = {"proj": {"claude": NOW - 5}}
+        lead = lambda **kw: self.build(sessions=[card(lead_status="ready")], activity=act, **kw)["projects"][0]["lead"]
+        self.assertEqual(lead(mods=self.mods(lead=rec("old.json", state="ready")))["idle_s"], 600)
+        self.assertEqual(lead(mods=None)["idle_s"], 5)   # no mods: today's window-activity value
+        self.assertEqual(lead(mods=self.mods(lead=rec("busy-tool.json")))["idle_s"], 5)   # busy file: window activity
+
+    def test_failing_alert_at_the_threshold_not_below(self):
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", failStreak=2))), [])
+        a = self.alerts(self.mods(lead=rec("busy-tool.json", failStreak=3)))
+        self.assertEqual([(x["kind"], x["session"], x["fail_streak"], x["context_pct"]) for x in a], [("failing", "claude", 3, None)])
+        self.assertEqual(a[0]["label"], "failing ×3")
+        self.assertIn("claude", a[0]["detail"])
+
+    def test_failing_threshold_comes_from_th(self):
+        th = dict(overview.usage.DEFAULT_ALERTS, failing_streak=5)
+        r = self.build(mods=self.mods(lead=rec("busy-tool.json", failStreak=4)), th=th)["projects"][0]
+        self.assertEqual([a for a in r["alerts"] if a["kind"] == "failing"], [])
+
+    def test_stuck_alert_at_the_turn_threshold_not_below(self):   # mutation: `>` instead of `>=` on turn_s fails the at-threshold case
+        quiet = dict(lastToolAt=NOW - 700)
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 1199, **quiet))), [])
+        a = self.alerts(self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 1200, **quiet)))
+        self.assertEqual([(x["kind"], x["session"], x["turn_s"], x["context_pct"]) for x in a], [("stuck", "claude", 1200, None)])
+        self.assertEqual(a[0]["label"], "stuck 20m")
+        self.assertIn("claude", a[0]["detail"])
+
+    def test_stuck_alert_at_the_quiet_threshold_not_below(self):
+        turn = dict(turnStartedAt=NOW - 1300)
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", lastToolAt=NOW - 599, **turn))), [])
+        self.assertEqual([a["kind"] for a in self.alerts(self.mods(lead=rec("busy-tool.json", lastToolAt=NOW - 600, **turn)))], ["stuck"])
+
+    def test_quiet_uses_the_whole_turn_when_the_last_tool_predates_it(self):   # mutation: always use lastToolAt
+        old_tool = dict(turnStartedAt=NOW - 1300, lastToolAt=NOW - 5000)
+        self.assertEqual([a["kind"] for a in self.alerts(self.mods(lead=rec("busy-tool.json", **old_tool)))], ["stuck"])
+        # last tool after the turn start and recent: not quiet
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 1300, lastToolAt=NOW - 30))), [])
+        # a predating tool and a turn only 700 s old: quiet is 700 (>= 600) but the turn is under 1200
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 700, lastToolAt=NOW - 5000))), [])
+
+    def test_a_tool_that_predates_the_turn_does_not_count_as_quiet_time(self):   # mutation: always use lastToolAt -> alerts here
+        # stuck_turn_s below stuck_quiet_s (an alerts-file override): a 400 s turn is 400 s quiet, not the 5000 s since a tool of the last turn
+        th = dict(overview.usage.DEFAULT_ALERTS, stuck_turn_s=300)
+        r = self.build(mods=self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 400, lastToolAt=NOW - 5000)), th=th)["projects"][0]
+        self.assertEqual([a for a in r["alerts"] if a["kind"] == "stuck"], [])
+        r = self.build(mods=self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 400, lastToolAt=NOW - 100)), th=th)["projects"][0]
+        self.assertEqual([a for a in r["alerts"] if a["kind"] == "stuck"], [])
+
+    def test_quiet_with_no_last_tool_uses_the_whole_turn(self):
+        a = self.alerts(self.mods(lead=rec("busy-tool.json", turnStartedAt=NOW - 1300, lastToolAt=None)))
+        self.assertEqual([x["kind"] for x in a], ["stuck"])
+
+    def test_stuck_needs_a_busy_state_and_a_turn(self):
+        long_turn = dict(turnStartedAt=NOW - 5000, lastToolAt=None)
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", state="ready", **long_turn))), [])
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", state="needs-you", **long_turn))), [])
+        self.assertEqual(self.alerts(self.mods(lead=rec("busy-tool.json", turnStartedAt=None, lastToolAt=None))), [])
+
+    def test_agent_alerts_follow_project_alerts(self):
+        r = self.build(live=[LIVE], mods=self.mods(lead=rec("busy-tool.json", failStreak=4)))["projects"][0]
+        self.assertEqual([a["kind"] for a in r["alerts"]], ["context", "failing"])
 
 
 class LineTest(unittest.TestCase):

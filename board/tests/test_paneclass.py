@@ -222,6 +222,29 @@ class ModStatesTest(unittest.TestCase):
         self.dir.rmdir()
         self.assertEqual(paneclass.mod_states(now=self.now), {})
 
+    def test_records_are_the_parsed_files_of_fresh_panes(self):
+        self.put("s1.json", session_id="s1", pane="%1", state="busy", since=self.now - 5, updatedAt=self.now - 10, failStreak=2)
+        r = paneclass.mod_records(now=self.now)
+        self.assertEqual(list(r), ["%1"])
+        self.assertEqual((r["%1"]["failStreak"], r["%1"]["state"]), (2, "busy"))
+
+    def test_records_skip_a_stale_file(self):  # mutation: skip the freshness check in mod_records -> fails
+        self.put("s1.json", session_id="s1", pane="%1", state="busy", since=self.now, updatedAt=self.now - 45)
+        self.assertEqual(paneclass.mod_records(now=self.now), {})
+
+    def test_records_newest_file_wins_for_one_pane(self):
+        self.put("old.json", session_id="old", pane="%1", state="busy", since=self.now, updatedAt=self.now - 20)
+        self.put("new.json", session_id="new", pane="%1", state="ready", since=self.now, updatedAt=self.now - 1)
+        self.assertEqual(paneclass.mod_records(now=self.now)["%1"]["session_id"], "new")
+
+    def test_the_fixtures_read_as_records(self):
+        fx = Path(__file__).resolve().parent / "fixtures" / "agent-status"
+        for f in sorted(fx.glob("*.json")):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / f.name).write_bytes(f.read_bytes())
+                want = json.loads(f.read_text())
+                self.assertEqual(paneclass.mod_records(now=want["updatedAt"], d=d), {"%82": want}, f.name)
+
     def test_classify_prefers_mod_state_for_claude_only(self):  # mutation: ignore mod -> first assert fails
         self.assertEqual(paneclass.classify("2.1.318", ["> "], False, "working"), ("claude", "working"))
         self.assertEqual(paneclass.classify("2.1.318", ["> "], False, None), ("claude", "ready"))
