@@ -148,7 +148,7 @@ The hooks ship in the agent-board plugin (`claude/plugin/hooks/hooks.json`, scri
 | SessionStart (no matcher: startup, resume, clear and compact) | `context-inject.sh` | nothing; prints `hookSpecificOutput.additionalContext` | Injects `${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md` (`<project>` is the ideas key, `-bg` stripped) under the preface "Shared project context, curated by the lead; propose additions as 'Context learned' in your report." Over 8 KB it keeps the last whole entry that fits and appends `… truncated, full file at <path>`. No file, an empty one, no tmux pane or any error: silent exit 0. `TC_CONTEXT=0` disables it. See [Shared project context](#shared-project-context). |
 | Stop / PostToolUse `TaskUpdate` (optional, not registered by agent-board; `claude/hooks/`) | `superpowers-hook.sh <name>` | — | Finds the superpowers-extended-cc plugin wherever it is installed and runs its example hook; silent no-op without the plugin. |
 
-All hooks are silent and exit 0, except the deliberate blocks of `kill-guard`, `plan-handoff-guard` and `sdd-call-guard` (exit 2) and `context-inject`'s `additionalContext` output.
+All hooks are silent and exit 0, except the deliberate blocks of `kill-guard`, `plan-handoff-guard`, `sdd-call-guard` and `agent-name-guard` (exit 2) and `context-inject`'s `additionalContext` output.
 
 ## The Agent Board
 
