@@ -77,4 +77,13 @@ run "$TT_DIR/repo2/bin/claude-orchestrator" --continue
 check "no prompt file: one --channels"  test "$(nch)" = 1
 check "no prompt file: no --append-system-prompt-file" not grep -q -- '--append-system-prompt-file' $S/argv
 
+# --channels is variadic: the element after its value must be a flag, or a positional prompt is swallowed as a channel
+after_ch() { grep -A2 -x -- '--channels' $S/argv | sed -n 3p }
+run "$L" "Read the doc"
+check "prompt file present: flag after channel value" test "$(after_ch)" = --settings
+check "prompt file present: positional prompt kept" grep -qx 'Read the doc' $S/argv
+run "$TT_DIR/repo2/bin/claude-orchestrator" "Read the doc"
+check "no prompt file: flag after channel value"      test "$(after_ch)" = --settings
+check "no prompt file: positional prompt kept"        grep -qx 'Read the doc' $S/argv
+
 tt_done
