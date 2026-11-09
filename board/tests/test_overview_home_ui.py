@@ -17,10 +17,12 @@ def grab(html, pattern, what):
 
 @unittest.skipUnless(shutil.which("node"), "node needed to run the page's overview functions")
 class OverviewHomeUiTest(unittest.TestCase):
-    def run_page(self, scenario):
+    def run_page(self, scenario, extra=()):
         html = (BOARD / "index.html").read_text()
         fns = "\n".join(grab(html, rf"^function {n}\([^)]*\) \{{[^\n]*\}}\n|^function {n}\([^)]*\) \{{\n.*?^\}}\n", n)
                         for n in ("homeView", "hashProject", "notifyNew", "unreadEvents", "renderBadge", "fmtAge", "ovName", "ovGroup", "ovSorted", "ovStatus", "ovRun", "ovPlanText", "ovMoreTasks"))
+        for pat, what in extra:
+            fns += "\n" + grab(html, pat, what)
         js = """
 const mk = () => ({textContent: "", dataset: {}});
 const nodes = {};
@@ -41,8 +43,8 @@ const fail = (m) => { console.log("FAIL", m); process.exit(1); };
 """ % (fns, scenario)
         return subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=20)
 
-    def check(self, scenario):
-        r = self.run_page(scenario)
+    def check(self, scenario, extra=()):
+        r = self.run_page(scenario, extra)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_home_view_and_hash_project(self):
@@ -152,6 +154,40 @@ const t = (n) => ({subject: "T" + n, owner: "o", state: "working"});
 const two = ovMoreTasks([t(1), t(2)]); if (two.shown.length !== 2 || two.more !== 0) fail("two");
 const four = ovMoreTasks([t(1), t(2), t(3), t(4)]); if (four.shown.length !== 2 || four.more !== 2) fail("four");
 """)
+
+    def test_agent_line_window_state_word_duration_and_tool(self):
+        # mutation: show the board state ("working") instead of the word -> the first assert fails
+        self.check("""
+const L = (o) => ovAgentLine(Object.assign({window: "qrev", state: "working", state_s: 720, turn_s: 720, tool: "Bash: zsh tools/tests/run-all.zsh"}, o));
+if (L({}) !== "qrev · busy 12m · Bash: zsh tools/tests/run-all.zsh") fail(L({}));
+if (L({state: "waiting", state_s: 45, tool: null}) !== "qrev · needs you 45s") fail(L({state: "waiting", state_s: 45, tool: null}));
+if (L({state: "ready", state_s: 3700, tool: null}) !== "qrev · idle 1h") fail(L({state: "ready", state_s: 3700, tool: null}));
+if (L({state_s: null, tool: null}) !== "qrev · busy") fail("no duration: " + L({state_s: null, tool: null}));
+if (L({state_s: null}) !== "qrev · busy · Bash: zsh tools/tests/run-all.zsh") fail("no duration, tool: " + L({state_s: null}));
+if (L({state: "idle", state_s: null, tool: null}) !== "qrev · idle") fail("unknown state passes through: " + L({state: "idle", state_s: null, tool: null}));
+""", extra=[(r"^function ovAgentLine\([^)]*\) \{\n.*?^\}\n", "ovAgentLine"), (r"^const OV_WORD = [^\n]*\n", "OV_WORD")])
+
+    def test_ovrow_renders_an_agents_entry_per_line_and_none_without_agents(self):
+        html = (BOARD / "index.html").read_text()
+        row = grab(html, r"^function ovRow\(p\) \{\n.*?^\}\n", "ovRow")
+        self.assertIn("ovAgentLine(a)", row)
+        self.assertRegex(row, r"for \(const a of p\.agents \|\| \[\]\)")   # a record without agents renders as today
+        self.assertIn("ovNeedsText(n)", row)
+
+    def test_needs_you_line_carries_the_reason(self):
+        # mutation: drop the reason suffix -> the first assert fails
+        self.check("""
+if (ovNeedsText({window: "✦ parse", reason: "permission: Bash: rm x"}) !== "✦ parse needs you — permission: Bash: rm x") fail(ovNeedsText({window: "✦ parse", reason: "permission: Bash: rm x"}));
+if (ovNeedsText({window: "✦ parse", reason: null}) !== "✦ parse needs you") fail("null reason");
+if (ovNeedsText({window: "✦ parse"}) !== "✦ parse needs you") fail("no reason key");
+""", extra=[(r"^function ovNeedsText\([^\n]*\n", "ovNeedsText")])
+
+    def test_failing_and_stuck_badges_are_amber(self):
+        # mutation: leave them out of alertColor -> red
+        self.check("""
+for (const k of ["context", "burn", "failing", "stuck"]) if (alertColor(k) !== "amber") fail(k + " " + alertColor(k));
+for (const k of ["total", "day_total", "model_mismatch"]) if (alertColor(k) !== "red") fail(k + " " + alertColor(k));
+""", extra=[(r"^const alertColor = [^\n]*\n", "alertColor")])
 
     def test_page_markup_rules(self):
         # truncation, hidden epoch/artifacts, one column when the overseer is off, narrow-screen stack, muted contrast

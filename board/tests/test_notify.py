@@ -83,6 +83,36 @@ class NotifierTest(unittest.TestCase):
                                {"kind": "day_total", "label": "$40 today", "detail": "", "session": None}])
         self.assertEqual([e["text"] for e in ev], ["p $40 today"])
 
+    def test_failing_agent_names_window_and_count(self):   # mutation: omit failing from conditions() -> no event
+        ev = self.fire(alerts=[{"kind": "failing", "label": "failing ×3", "detail": "", "session": "✦ parse", "fail_streak": 3, "context_pct": None}])
+        self.assertEqual([(e["kind"], e["key"]) for e in ev], [("failing", "✦ parse")])
+        self.assertEqual(ev[0]["title"], "p: agent failing")
+        self.assertEqual(ev[0]["text"], "✦ parse failed 3 tool calls in a row")
+
+    def test_stuck_agent_names_window_and_minutes(self):   # mutation: omit stuck from conditions() -> no event
+        ev = self.fire(alerts=[{"kind": "stuck", "label": "stuck 25m", "detail": "", "session": "claude", "turn_s": 1530, "context_pct": None}])
+        self.assertEqual([(e["kind"], e["key"]) for e in ev], [("stuck", "claude")])
+        self.assertEqual(ev[0]["title"], "p: agent stuck")
+        self.assertEqual(ev[0]["text"], "claude has been on one turn for 25 min with no tool call")
+
+    def test_failing_and_stuck_latch_once_per_onset(self):
+        al = [{"kind": "failing", "label": "failing ×3", "detail": "", "session": "claude", "fail_streak": 3, "context_pct": None}]
+        self.assertEqual(len(self.fire(alerts=al)), 1)
+        self.clock.t += 1000
+        self.assertEqual(self.fire(alerts=al), [])                      # held: no repeat
+        self.assertEqual(self.fire(alerts=[]), [])                      # cleared
+        self.clock.t += 301
+        self.assertEqual(len(self.fire(alerts=al)), 1)                  # back: fires again
+        st = [{"kind": "stuck", "label": "stuck 20m", "detail": "", "session": "claude", "turn_s": 1200, "context_pct": None}]
+        self.clock.t += 301
+        self.assertEqual([e["kind"] for e in self.fire(alerts=st)], ["stuck"])
+        self.clock.t += 1000
+        self.assertEqual(self.fire(alerts=st), [])
+
+    def test_kinds_list_has_failing_and_stuck(self):
+        self.assertIn("failing", notify.KINDS)
+        self.assertIn("stuck", notify.KINDS)
+
     # once per appearance
     def test_no_refire_while_condition_holds(self):
         ny = [{"window": "✦ parse", "pane": "%9", "kind": "claude"}]

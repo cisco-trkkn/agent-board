@@ -552,7 +552,7 @@ function role(s, w, p) {
   return s.windows.some((x) => x.teammate) ? "lead" : "claude";
 }
 
-const alertColor = (kind) => (kind === "context" || kind === "burn" ? "amber" : "red");
+const alertColor = (kind) => (["context", "burn", "failing", "stuck"].includes(kind) ? "amber" : "red");
 function card(s, w, p) {
   const key = `${s.name}:${w.index}`;
   const r = role(s, w, p);
@@ -1663,6 +1663,14 @@ function ovRun(p) {
 }
 function ovPlanText(p) { return p.plan.active && p.plan.total ? `${p.plan.done}/${p.plan.total}` : ""; }
 function ovMoreTasks(ts) { return { shown: ts.slice(0, 2), more: Math.max(0, ts.length - 2) }; }
+const OV_WORD = { working: "busy", waiting: "needs you", ready: "idle" };
+function ovAgentLine(a) {
+  // `<window> · <state word> <how long> · <tool>`; the duration and the tool are left out when unknown
+  const parts = [a.window, [OV_WORD[a.state] || a.state || "", a.state_s != null ? fmtAge(a.state_s) : ""].filter(Boolean).join(" ")];
+  if (a.tool) parts.push(a.tool);
+  return parts.join(" · ");
+}
+function ovNeedsText(n) { return `${n.window} needs you${n.reason ? ` — ${n.reason}` : ""}`; }
 function ovRow(p) {
   const st = ovStatus(p), row = el("div", "ov-row" + (st.cls === "needs" ? " needs" : ""));
   const top = el("div", "ov-top"), name = p.project;
@@ -1676,7 +1684,8 @@ function ovRow(p) {
   const sub = el("div", "ov-sub"), t = ovMoreTasks(p.plan.active ? p.plan.in_progress : []);
   for (const x of t.shown) sub.append(el("div", null, `▶ ${x.subject}${x.owner ? ` → ${x.owner}` : ""}`));
   if (t.more) sub.append(el("div", "ov-muted", `+${t.more} more`));
-  for (const n of p.needs_you) sub.append(el("div", "ov-needs", `${n.window} needs you`));
+  for (const n of p.needs_you) sub.append(el("div", "ov-needs", ovNeedsText(n)));
+  for (const a of p.agents || []) sub.append(el("div", "ov-agent ov-muted", ovAgentLine(a)));
   const run = ovRun(p);
   if (run) { const d = el("div", run.failed ? "ov-bad" : "ov-muted", run.text); d.title = p.last_run.cmd || ""; sub.append(d); }
   if (sub.children.length) row.append(sub);

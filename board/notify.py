@@ -11,7 +11,7 @@ import sys
 import time
 from collections import deque
 
-KINDS = ("needs_you", "plan_done", "test_failed", "lead_idle", "context", "usage")
+KINDS = ("needs_you", "plan_done", "test_failed", "lead_idle", "context", "usage", "failing", "stuck")
 RATE_S = 300      # at most one event of a kind per project in this window
 IDLE_S = 900      # a lead idle this long with open tasks is event 4
 USAGE_KINDS = ("burn", "total", "day_total")
@@ -43,6 +43,10 @@ def conditions(ov):
             who = a.get("session") or name
             if a.get("kind") == "context":
                 add(name, "context", who, f"{name}: high context", f"{who} context at {a.get('context_pct')}%")
+            elif a.get("kind") == "failing":
+                add(name, "failing", who, f"{name}: agent failing", f"{who} failed {a.get('fail_streak')} tool calls in a row")
+            elif a.get("kind") == "stuck":
+                add(name, "stuck", who, f"{name}: agent stuck", f"{who} has been on one turn for {(a.get('turn_s') or 0) // 60} min with no tool call")
             elif a.get("kind") in USAGE_KINDS:
                 add(name, "usage", f"{a['kind']}:{who}", f"{name}: high usage", f"{who} {a.get('label', '')}".strip())
     return out
