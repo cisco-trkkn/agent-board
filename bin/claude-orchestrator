@@ -4,6 +4,9 @@
 # Extra arguments pass through to claude (e.g. claude-orchestrator --continue).
 source "${0:A:h}/_ab_claude.zsh"
 export PATH="$(ab_path)" AGENT_BOARD_REPO="$AB_REPO"
+# the dev-lead marker read by the agent-name-guard hook: this process only, never the tmux session environment, so
+# teammates, tmux-ctl agent workers and the overseer do not inherit it
+export AGENT_BOARD_LEAD=1
 # teammates inherit the tmux session environment, not this shell's exports (see the teammate-config-inheritance spec)
 if [[ -n "$TMUX" ]]; then
   source "${0:A:h}/_tc_bins.zsh"

@@ -4,7 +4,8 @@ tt_setup
 stub="$(mktemp -d)"; trap 'rm -rf "$stub"; tt_teardown' EXIT INT TERM
 print -r -- '#!/bin/sh
 for a in "$@"; do printf "%s\n" "$a"; done
-printf "PATH=%s\n" "$PATH"' > "$stub/claude"; chmod +x "$stub/claude"
+printf "PATH=%s\n" "$PATH"
+printf "AGENT_BOARD_LEAD=%s\n" "$AGENT_BOARD_LEAD"' > "$stub/claude"; chmod +x "$stub/claude"
 cfg="$(mktemp -d)"   # a HOME with no user override: the repo rules apply
 out="$(HOME="$cfg" TC_TMUX="$TT_BIN" PATH="$stub:$PATH" $R/bin/claude-orchestrator)"; rm -rf "$cfg"
 check "orchestrator uses -file flag"  grep -qxF -- '--append-system-prompt-file' <<< "$out"
@@ -22,6 +23,10 @@ check "orchestrator passes --settings"      grep -qxF -- '--settings' <<< "$out"
 check "orchestrator settings path"          grep -qxF -- "$R/claude/session-settings.json" <<< "$out"
 check "orchestrator puts <repo>/bin first"  grep -qE "^PATH=${R}/bin:" <<< "$out"
 check "set-environment AGENT_BOARD_REPO"    test "$(tt show-environment -t '=tt:' AGENT_BOARD_REPO 2>&1)" = "AGENT_BOARD_REPO=$R"
+check "lead marker exported to claude"       grep -qxF 'AGENT_BOARD_LEAD=1' <<< "$out"
+sessenv="$(tt show-environment -t '=tt:' 2>&1)"
+check "session env was read (has AGENT_BOARD_REPO)" grep -q '^AGENT_BOARD_REPO=' <<< "$sessenv"
+check "lead marker not in the tmux session env"     test -z "$(grep '^-*AGENT_BOARD_LEAD' <<< "$sessenv")"
 check "set-environment PATH has <repo>/bin" grep -qE "^PATH=${R}/bin:" <<< "$(tt show-environment -t '=tt:' PATH 2>&1)"
 out2="$(TC_TMUX=/nonexistent PATH="$stub:$PATH" $R/bin/claude-orchestrator 2>&1)"
 check "failing set-environment does not stop the launch" grep -qxF -- '--settings' <<< "$out2"
