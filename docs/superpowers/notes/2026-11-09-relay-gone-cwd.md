@@ -165,8 +165,8 @@ Extra changes for the lead to queue:
 
 1. **Start the tmux server from a directory that is never removed.** Every place that may start the dedicated server
    should do it from `$HOME` (or `/`) and pass the wanted directory with `-c`: `bin/dev:20`, `bin/tmux-overseer:46`, any
-   other caller that can be the first to reach the dedicated server (not audited here), and the user's `~/.zshrc` auto-open line (`( cd ~ && tmux -L agent-board … new-session -A -s
-   main -c "$PWD" )`, or simply `cd ~` first). This is the fix for the cause.
+   other caller that can be the first to reach the dedicated server (not audited here), and the user's `~/.zshrc` auto-open line (`( d=$PWD; cd ~ && tmux -L agent-board … new-session -A -s
+   main -c "$d" )`, or simply `cd ~` first). This is the fix for the cause.
 2. **`tmux-ctl agent` launch file cds.** Write `cd -- <root> && …` in the launch file (`bin/tmux-ctl`, the `line=`
    assignment in `agent)`), the same repair as Task 2, so a worker does not die at startup or get restarted from `~`
    and create its worktree in the home repo.
