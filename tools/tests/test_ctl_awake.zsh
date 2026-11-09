@@ -41,6 +41,7 @@ if [ "\$1 \$2" = "-n -l" ]; then
   sed "s/disablesleep 1\\$/disablesleep \$last/" "\$f"; exit 0
 fi
 [ "\$*" = "-n /usr/bin/pmset -a disablesleep 1" ] && { : > "$S/sleepdisabled"; exit 0; }
+[ "\$*" = "-n /usr/bin/pmset -a disablesleep 0" ] && [ -f "$S/sudo.fail0" ] && exit 1
 [ "\$*" = "-n /usr/bin/pmset -a disablesleep 0" ] && { rm -f "$S/sleepdisabled"; exit 0; }
 exit 1
 STUB
@@ -239,6 +240,36 @@ check "watchdog (battery): watchdog exited"     waitfor '! kill -0 '$wd3' 2>/dev
 check "watchdog (battery): plain hold stays"    test "$(nstub)" = 1
 $C awake off >/dev/null
 rm -f "$S/batt.cur"
+
+# release fails (sudo refuses disablesleep 0): the record stays, the failure is said, never a silent "off"
+RF="awake: lid hold release failed (run: sudo pmset -a disablesleep 0)"
+allow; $C awake on --lid --pid $W >/dev/null; wd4="$(lidfile .watchdogPid)"; WDS+=($wd4); : > "$S/sudo.fail0"
+err="$($C awake off 2>&1 >/dev/null)"; rc=$?
+check "off, release fails: stderr message"     test "$err" = "$RF"
+check "off, release fails: exit 1"             test $rc -eq 1
+check "off, release fails: lid fields kept"    test "$(lidfile .lid)" = true -a "$(lidfile .watchdogPid)" = "$wd4"
+check "off, release fails: SleepDisabled still set"  test -e "$S/sleepdisabled"
+check "off, release fails: caffeinate stopped" test "$(nstub)" = 0
+check "off, release fails: watchdog kept for the retry"  wdalive "$wd4"
+out="$($C awake status)"
+check "status after failed off: lid on, no stale warning"  zsh -c '[[ $1 == *"lid: on"* && $1 != *"stale lid hold"* ]]' _ "$out"
+rm -f "$S/sudo.fail0"
+out="$($C awake off 2>&1)"; rc=$?
+check "off retry: succeeds"                    test "$out" = "awake: off" -a $rc -eq 0
+check "off retry: released and record gone"    test ! -e "$S/sleepdisabled" -a ! -e "$AF"
+check "off retry: watchdog killed"             waitfor '! kill -0 '$wd4' 2>/dev/null'
+# the watchdog path: lead dies while sudo refuses, then sudo recovers on a later tick
+sleep 300 & lead=$!
+$C awake on --lid --pid $lead >/dev/null; wd5="$(lidfile .watchdogPid)"; WDS+=($wd5); : > "$S/sudo.fail0"; rm -f "$TC_STATE/awake.log"
+kill $lead
+check "watchdog, release fails: logs it"       waitfor 'grep -qxF "$RF" "$TC_STATE/awake.log"'
+check "watchdog, release fails: keeps lid fields and keeps running"  test "$(lidfile .lid)" = true -a "$(lidfile .watchdogPid)" = "$wd5" && wdalive "$wd5"
+check "watchdog, release fails: SleepDisabled still set"  test -e "$S/sleepdisabled"
+rm -f "$S/sudo.fail0"
+check "watchdog: retries and releases on a later tick"  waitfor '[[ ! -e "$S/sleepdisabled" ]]'
+check "watchdog: lid fields removed after the retry"    waitfor 'test "$(lidfile "[has(\"lid\"),has(\"watchdogPid\")]|any")" = false'
+$C awake off >/dev/null
+deny
 
 # stale: SleepDisabled 1 with no lid record
 deny; : > "$S/sleepdisabled"; rm -f "$S/sudo.args"

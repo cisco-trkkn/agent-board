@@ -13,7 +13,8 @@ _aw_sleepdisabled() { [[ "$(pmset -g 2>/dev/null)" =~ 'SleepDisabled[[:space:]]+
 _aw_ctl() { print -r -- "${TC_SELF:-${${(%):-%x}:A:h:h:h}/bin/tmux-ctl}" }
 # Is the sudoers rule for `pmset -a disablesleep <$1>` present? Reads STDOUT for the exact line: Privilege Manager exits 0 without a rule.
 _aw_rule() { local o; o="$(sudo -n -l /usr/bin/pmset -a disablesleep "$1" 2>/dev/null)"; [[ $'\n'"$o"$'\n' == *$'\n'"/usr/bin/pmset -a disablesleep $1"$'\n'* ]] }
-_aw_release() { sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 }
+_aw_release() { sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 }   # returns sudo's status: callers must not drop the record on failure
+_AW_RELFAIL="awake: lid hold release failed (run: sudo pmset -a disablesleep 0)"
 _aw_edit() {   # _aw_edit <jq filter>: rewrite awake.json in place (no-op when absent)
   local f="$(_aw_file)"; [[ -f "$f" ]] || return 0
   jq "$1" "$f" > "$f.$$" 2>/dev/null && mv "$f.$$" "$f" || rm -f "$f.$$"
@@ -45,7 +46,8 @@ _aw_current() {
     jq -r '[.caffeinatePid, .pid, .since] | @tsv' "$f"
     return 0
   fi
-  rm -f "$f"; return 1
+  _aw_lid_recorded || rm -f "$f"   # a recorded lid hold outlives caffeinate until it is released
+  return 1
 }
 
 _aw_claude_pid() {   # nearest ancestor of this shell whose command name contains claude
@@ -100,10 +102,12 @@ awake_cmd() {
         wd="$(jq -r '.watchdogPid // empty' "$f" 2>/dev/null)"
         _aw_lid_recorded && lidwas=1
         [[ -n "$cp" ]] && _aw_alive "$cp" caffeinate && kill "$cp" 2>/dev/null
-        _aw_is_watchdog "$wd" && kill "$wd" 2>/dev/null
-        rm -f "$f"
+        if (( lidwas )); then
+          if _aw_release; then _aw_is_watchdog "$wd" && kill "$wd" 2>/dev/null; rm -f "$f"
+          else print -u2 -r -- "$_AW_RELFAIL"; return 1; fi   # keep the record and the watchdog: status shows it, the watchdog retries
+        else rm -f "$f"; fi
       fi
-      if (( lidwas )); then _aw_release
+      if (( lidwas )); then :
       elif _aw_sleepdisabled; then   # a stale hold with no record: clear it when the rule allows
         if _aw_rule 0; then _aw_release
         else print -r -- "awake: lid hold still on: install the rule (tmux-ctl awake lid-setup) or run: sudo pmset -a disablesleep 0"; fi
@@ -131,12 +135,16 @@ awake_cmd() {
           wp="$(jq -r '.watchdogPid // empty' "$f" 2>/dev/null)"
           [[ -n "$wp" && "$wp" != "$$" ]] && return 0
         fi
-        if ! kill -0 "$lead" 2>/dev/null; then _aw_release; _aw_edit 'del(.lid, .watchdogPid)'; return 0; fi
+        if ! kill -0 "$lead" 2>/dev/null; then
+          if _aw_release; then _aw_edit 'del(.lid, .watchdogPid)'; return 0; fi
+          print -r -- "$_AW_RELFAIL" >> "$TC_STATE_DIR/awake.log"; continue   # keep the record, retry next tick
+        fi
         if _aw_on_battery; then
           pct="$(_aw_pct)"
           if [[ -n "$pct" ]] && (( pct < 15 )); then
             print -r -- "awake: lid hold released: battery $pct%" >> "$TC_STATE_DIR/awake.log"
-            _aw_release; _aw_edit 'del(.lid, .watchdogPid)'; return 0
+            if _aw_release; then _aw_edit 'del(.lid, .watchdogPid)'; return 0; fi
+            print -r -- "$_AW_RELFAIL" >> "$TC_STATE_DIR/awake.log"
           fi
         fi
       done ;;
