@@ -1,0 +1,77 @@
+diff -ruN ./bin/_tc_bins.zsh ../b/bin/_tc_bins.zsh
+--- a/bin/_tc_bins.zsh	2026-11-09 16:00:50
++++ b/bin/_tc_bins.zsh	2026-11-09 16:00:50
+@@ -58,6 +58,13 @@
+   elif (( $+commands[$1] )); then print -r -- "$commands[$1]"
+   else print -r -- "$HOME/.local/bin/$1"; fi
+ }
+-tc_tmux() { "${TC_TMUX_CMD[@]}" "$@" }
++# new-session is the call that can start the server, and a tmux server keeps the directory it started in for life. Once that
++# directory is removed (a merged worktree), tmux 3.8 starts every new pane there and ignores -c
++# (docs/superpowers/notes/2026-11-09-relay-gone-cwd.md). So new-session always runs from $HOME (/ if that fails); every
++# caller passes -c with an absolute path.
++tc_tmux() {
++  if [[ "$1" == new-session ]]; then ( builtin cd -q -- "$HOME" 2>/dev/null || builtin cd -q /; "${TC_TMUX_CMD[@]}" "$@" )
++  else "${TC_TMUX_CMD[@]}" "$@"; fi
++}
+ tc_tmux_args_str() { print -r -- "${(j: :)${(q)TC_TMUX_ARGS[@]}}" }
+ tc_tmux_resolve
+diff -ruN ./bin/tmux-ctl ../b/bin/tmux-ctl
+--- a/bin/tmux-ctl	2026-11-09 16:00:50
++++ b/bin/tmux-ctl	2026-11-09 16:00:50
+@@ -425,14 +425,17 @@
+     rules=""; wr="$HOME/.config/agent-board/worker.md"; [[ -r "$wr" ]] || wr="$AB_REPO/claude/worker.md"   # a user override wins
+     [[ -r "$wr" ]] && rules=" --append-system-prompt-file ${(q)wr}"
+     # workers never see the end-of-session CLAUDE.md nudge (it asks an absent user a question)
+-    line="CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude --model $model --effort $effort -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
++    root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
++    # cd first: a pane can start somewhere other than its -c directory (a tmux server whose own cwd was removed starts
++    # every pane there, docs/superpowers/notes/2026-11-09-relay-gone-cwd.md); claude then exits at startup or makes its
++    # worktree in the wrong repo
++    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude --model $model --effort $effort -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
+     # the line is long (task, PATH): typed into a shell that has not started ZLE it overflows the tty's 1024-byte typeahead, so it goes in a file and only `. file` is typed
+     launchf="$STATE/agents/${SESSION//[^A-Za-z0-9._-]/_}-$name.zsh"   # a tmux session name can hold other characters
+     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; print -r -- "DRYRUN launch: $launchf"; exit 0 }   # test seam: stop before any window is created
+     t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"   # before the write: a refused re-launch must not overwrite a running worker's file
+     # write the launch file before any window exists: a failed write must not leave an idle window behind
+     ( umask 077; mkdir -p "${launchf:h}" && print -r -- "$line" > "$launchf" && chmod 700 "${launchf:h}" && chmod 600 "$launchf" ) || die "cannot write launch file $launchf"
+-    root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
+     t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
+     t set-option -w -t "$(target "$name")" @tc_agent 1
+     t set-option -w -t "$(target "$name")" automatic-rename off
+diff -ruN ./tools/tests/test_prompt_argv.zsh ../b/tools/tests/test_prompt_argv.zsh
+--- a/tools/tests/test_prompt_argv.zsh	2026-11-09 16:00:50
++++ b/tools/tests/test_prompt_argv.zsh	2026-11-09 16:00:50
+@@ -40,6 +40,7 @@
+ rm -rf "${sp:h}"
+ 
+ dry="$(TC_AGENT_DRYRUN=1 $R/bin/tmux-ctl agent w --force "a b" 2>&1)"
++check "agent line cds to the repo root first" grep -qF "DRYRUN line: cd -- ${(q)R} && CLAUDE_MD_REVISE_HOOK=0" <<< "$dry"
+ check "agent dry run keeps DRYRUN task"     grep -qF 'DRYRUN task: a b' <<< "$dry"
+ check "agent line has --settings"           grep -qF -- "--settings $R/claude/session-settings.json" <<< "$dry"
+ check "agent line has PATH=<repo>/bin:"     grep -qF -- "PATH=$R/bin:" <<< "$dry"
+diff -ruN ./tools/tests/test_tc_tmux_cwd.zsh ../b/tools/tests/test_tc_tmux_cwd.zsh
+--- a/tools/tests/test_tc_tmux_cwd.zsh	1969-12-31 19:00:00
++++ b/tools/tests/test_tc_tmux_cwd.zsh	2026-11-09 16:00:50
+@@ -0,0 +1,21 @@
++source "${0:A:h}/lib.zsh"
++# tc_tmux starts the tmux server from $HOME. A tmux server keeps the directory it was started in for life; once that
++# directory is removed, tmux 3.8 starts every new pane there and ignores -c (docs/superpowers/notes/2026-11-09-relay-gone-cwd.md).
++R="${0:A:h:h:h}"
++tmp="$(mktemp -d "${TMPDIR:-/tmp}/tccwd.XXXXXX")"; tmp="${tmp:A}"
++sock="tccwd$$"
++TB="${TC_TMUX:-$HOME/.local/bin/tmux}"; [[ -x "$TB" ]] || TB="$(command -v tmux)"
++trap '"$TB" -L "$sock" kill-server 2>/dev/null; rm -rf "$tmp"' EXIT INT TERM
++mkdir -p "$tmp/home" "$tmp/start" "$tmp/target"
++# start the server through tc_tmux from a directory that is then removed (as a merged worktree is)
++( cd "$tmp/start" && HOME="$tmp/home" TC_TMUX="$TB" TMUX_DASH_TMUX_ARGS="-L $sock -f /dev/null" zsh -c 'unset TMUX; source "$1/bin/_tc_bins.zsh"; tc_tmux new-session -d -s s -c "$2"' _ "$R" "$tmp/target" )
++srvpid="$("$TB" -L "$sock" display -p '#{pid}')"
++check "server cwd is \$HOME, not the caller's directory" test "$(lsof -a -p "$srvpid" -d cwd -Fn | sed -n 's/^n//p')" = "$tmp/home"
++rmdir "$tmp/start"
++"$TB" -L "$sock" new-window -d -t "=s:" -n w -c "$tmp/target"
++sleep 1
++check "new pane after the caller's directory is gone starts in its -c directory" test "$("$TB" -L "$sock" list-panes -t "=s:w" -F '#{pane_current_path}')" = "$tmp/target"
++# the new-session exit status still reaches the caller: dev and tmux-overseer use it as the atomic gate
++( cd "$tmp/target" && HOME="$tmp/home" TC_TMUX="$TB" TMUX_DASH_TMUX_ARGS="-L $sock -f /dev/null" zsh -c 'unset TMUX; source "$1/bin/_tc_bins.zsh"; tc_tmux new-session -d -s s -c "$2"' _ "$R" "$tmp/target" ) 2>/dev/null; rc=$?
++check "a second new-session of the same name still fails (gate kept)" test "$rc" -ne 0
++tt_done

@@ -113,21 +113,62 @@ def orchestrator():
     return str(Path(repo) / "bin" / "claude-orchestrator")
 
 
+START_CAP = 30.0   # seconds a relayed lead has to start before the attempt counts as failed
+
+
+def launch_line(root, prompt=None):
+    """The line typed into the fresh shell: cd to root first, then the launcher. The cd repairs a shell left in a
+    gone directory (Claude Code refuses to start there) and fails loudly when root itself is gone."""
+    cmd = shlex.quote(orchestrator()) + (f" {shlex.quote(prompt)}" if prompt else "")
+    return f"cd -- {shlex.quote(root)} && {cmd}"
+
+
 def respawn(tmux, pane, root, prompt=None):
     """Replace whatever runs in pane with a fresh shell in root, then start claude-orchestrator [prompt]."""
     tmux("respawn-pane", "-k", "-t", pane, "-c", root, check=True)  # no command: fresh default shell
-    cmd = shlex.quote(orchestrator()) + (f" {shlex.quote(prompt)}" if prompt else "")
-    tmux("send-keys", "-t", pane, "-l", "--", cmd, check=True)
+    tmux("send-keys", "-t", pane, "-l", "--", launch_line(root, prompt), check=True)
     tmux("send-keys", "-t", pane, "Enter", check=True)
 
 
-def relay(tmux, sess, doc, state_dir, old_session_id="", **wait):
+def wait_started(tmux, pane, poll=2.0, cap=START_CAP, sleep=time.sleep, clock=time.monotonic):
+    """True once the pane's foreground is not a shell on two polls in a row; False when cap passes first.
+    "Not a shell", not "is claude": tmux names a running claude by its version binary, and a claude that dies at
+    startup leaves the shell in front."""
+    deadline = clock() + cap
+    streak = 0
+    while True:
+        sleep(poll)
+        kind, _ = paneclass.pane_status(tmux, pane)
+        streak = streak + 1 if kind != "shell" else 0
+        if streak >= 2:
+            return True
+        if clock() >= deadline:
+            return False
+
+
+def pane_tail(tmux, pane, n=12):
+    """The pane's last n non-blank lines, each prefixed '| ' (the log's manual: line stays the only unprefixed one)."""
+    rows = [r.rstrip() for r in tmux("capture-pane", "-p", "-J", "-t", pane, "-S", "-60").splitlines()]
+    return "\n".join("| " + r for r in [r for r in rows if r.strip()][-n:])
+
+
+def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=START_CAP, **wait):
     pane = claude_pane(tmux, sess)
     if pane is None:
         raise RuntimeError(f"no claude window in {sess}")
     if not wait_turn_end(tmux, pane, **wait):
         raise RuntimeError("the lead is still busy after the wait; not switching. Run tmux-ctl relay again when it is idle")
-    respawn(tmux, pane, session_root(tmux, sess), prompt_for(doc))
+    root = session_root(tmux, sess)
+    timing = {k: wait[k] for k in ("sleep", "clock") if k in wait}
+    shown = ""
+    for n in range(1, attempts + 1):
+        respawn(tmux, pane, root, prompt_for(doc))
+        if wait_started(tmux, pane, cap=start_cap, **timing):
+            break
+        shown = pane_tail(tmux, pane)
+        print(f"relay: attempt {n}: the new lead did not start in {root}; the pane shows:\n{shown}", file=sys.stderr)
+    else:
+        raise RuntimeError(f"the new lead did not start in {root} after {attempts} attempts; the pane shows:\n{shown}")
     lin = tc_env.lineage_dir()   # persistent state; state_dir no longer decides the path
     lin.mkdir(parents=True, exist_ok=True)
     with open(lin / f"{sess}.jsonl", "a") as f:
@@ -146,14 +187,20 @@ def main(argv=None):
     ap.add_argument("--old-session", default="")
     ap.add_argument("--state", default=default_state())
     ap.add_argument("--socket", default="")
+    ap.add_argument("--start-cap", type=float, default=START_CAP, help=argparse.SUPPRESS)   # test knob
     a = ap.parse_args(argv)
     tmux = paneclass.tmux_runner(["-S", a.socket] if a.socket else [])
     try:
-        print(relay(tmux, a.session, a.doc, a.state, a.old_session))
+        print(relay(tmux, a.session, a.doc, a.state, a.old_session, start_cap=a.start_cap))
         return 0
     except Exception as e:
-        print(f"relay failed: {e}\nThe old session is untouched. Start the new lead by hand in the claude window:\n"
-              f"  {shlex.quote(orchestrator())} {shlex.quote(prompt_for(a.doc))}", file=sys.stderr)
+        # last resort: the root is unknown, so the manual line cannot cd to it
+        try:
+            root = session_root(tmux, a.session)
+        except Exception:
+            root = None
+        manual = launch_line(root, prompt_for(a.doc)) if root else f"{shlex.quote(orchestrator())} {shlex.quote(prompt_for(a.doc))}"
+        print(f"relay failed: {e}\nStart the new lead by hand in the claude window:\nmanual: {manual}", file=sys.stderr)
         return 1
 
 

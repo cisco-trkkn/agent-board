@@ -1,4 +1,5 @@
 import io
+import itertools
 import os
 import shlex
 import shutil
@@ -33,6 +34,8 @@ class FakeTmux:
             return "%5\n"
         if a[0] == "display":
             return self.root + "\n"
+        if a[0] == "capture-pane":
+            return "% claude-orchestrator 'Read /d.md'\nThe current directory no longer exists (it was deleted or moved).\n\n"
         return ""
 
     def names(self):
@@ -178,7 +181,7 @@ class RealTmuxSessionRootTest(unittest.TestCase):
 class RelayTest(unittest.TestCase):
     def test_relay_respawns_and_writes_lineage(self):
         fake = FakeTmux()
-        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, statuses("idle", "idle"), \
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, statuses("idle", "idle", "ready", "ready"), \
                 mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
             msg = relay.relay(fake, "proj", "/d.md", d, "OLD1", sleep=lambda s: None)
             lines = (Path(ld) / "proj.jsonl").read_text().splitlines()
@@ -191,11 +194,12 @@ class RelayTest(unittest.TestCase):
         sk = [c for c in fake.calls if c[0] == "send-keys"]
         self.assertEqual(rp[0], ("respawn-pane", "-k", "-t", "%5", "-c", fake.root))
         self.assertEqual(sk[0], ("send-keys", "-t", "%5", "-l", "--",
-                                 shlex.quote(relay.orchestrator()) + " 'Read /d.md and continue from where the previous session left off.'"))
+                                 f"cd -- {shlex.quote(fake.root)} && " + shlex.quote(relay.orchestrator())
+                                 + " 'Read /d.md and continue from where the previous session left off.'"))
         self.assertEqual(sk[1], ("send-keys", "-t", "%5", "Enter"))
         # the session flags come from claude-orchestrator itself, never from the typed text
         self.assertNotIn("--settings", sk[0][-1])
-        self.assertTrue(sk[0][-1].startswith(shlex.quote(relay.orchestrator()) + " "))
+        self.assertIn(" && " + shlex.quote(relay.orchestrator()) + " ", sk[0][-1])
         self.assertLess(fake.names().index("respawn-pane"), fake.names().index("send-keys"))
 
     def test_busy_leaves_pane_alone(self):
@@ -208,9 +212,55 @@ class RelayTest(unittest.TestCase):
             self.assertFalse((Path(ld) / "proj.jsonl").exists())
         self.assertNotIn("respawn-pane", fake.names())
 
+    def test_failed_start_retries_once_then_raises(self):
+        fake = FakeTmux()
+        seq = [("claude", "idle"), ("claude", "idle")] + [("shell", "idle")] * 100
+        clock = itertools.count(0, 2)
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, redirect_stderr(err), \
+                mock.patch.object(paneclass, "pane_status", side_effect=seq), mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
+            with self.assertRaises(RuntimeError) as cm:
+                relay.relay(fake, "proj", "/d.md", d, "OLD1", start_cap=4, sleep=lambda s: None, clock=lambda: next(clock))
+            self.assertFalse((Path(ld) / "proj.jsonl").exists())   # no lineage for a lead that never started
+        self.assertEqual(fake.names().count("respawn-pane"), 2)
+        self.assertIn("did not start", str(cm.exception))
+        self.assertIn("| The current directory no longer exists", str(cm.exception))
+        self.assertIn("attempt 1", err.getvalue())
+
+    def test_failed_start_recovers_on_retry(self):
+        fake = FakeTmux()
+        seq = [("claude", "idle"), ("claude", "idle"), ("shell", "idle"), ("shell", "idle"), ("claude", "ready"), ("claude", "ready")]
+        clock = itertools.count(0, 2)
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ld, redirect_stderr(io.StringIO()), \
+                mock.patch.object(paneclass, "pane_status", side_effect=seq), mock.patch.dict(os.environ, {"TC_LINEAGE": ld}):
+            msg = relay.relay(fake, "proj", "/d.md", d, "OLD1", start_cap=4, sleep=lambda s: None, clock=lambda: next(clock))
+            lines = (Path(ld) / "proj.jsonl").read_text().splitlines()
+        self.assertIn("relayed", msg)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(fake.names().count("respawn-pane"), 2)
+
+    def test_wait_started_needs_two_non_shell_polls(self):
+        seq = [("shell", "idle"), ("claude", "ready"), ("shell", "idle"), ("program", "running"), ("claude", "ready")]
+        with mock.patch.object(paneclass, "pane_status", side_effect=seq) as ps:
+            self.assertTrue(relay.wait_started(None, "%5", sleep=lambda s: None, clock=itertools.count(0, 0).__next__))
+        self.assertEqual(ps.call_count, 5)
+
+    def test_launch_line_cds_to_root_first(self):
+        self.assertEqual(relay.launch_line("/a b", "go"), "cd -- '/a b' && " + shlex.quote(relay.orchestrator()) + " go")
+
+    def test_main_failure_manual_line_cds_to_root(self):
+        err = io.StringIO()
+        with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), \
+                mock.patch.object(relay, "session_root", return_value="/r"), redirect_stderr(err):
+            rc = relay.main(["--session", "proj", "--doc", "/d.md", "--state", "/tmp"])
+        self.assertEqual(rc, 1)
+        self.assertIn("\nmanual: cd -- /r && " + shlex.quote(relay.orchestrator()) + " 'Read /d.md", err.getvalue())
+
     def test_main_failure_prints_manual_command(self):
         err = io.StringIO()
-        with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), redirect_stderr(err):
+        # session_root is mocked: unmocked it would call the real tmux on the default socket
+        with mock.patch.object(relay, "relay", side_effect=RuntimeError("boom")), \
+                mock.patch.object(relay, "session_root", side_effect=RuntimeError("no session")), redirect_stderr(err):
             rc = relay.main(["--session", "proj", "--doc", "/d.md", "--state", "/tmp"])
         self.assertEqual(rc, 1)
         self.assertIn(shlex.quote(relay.orchestrator()) + " 'Read /d.md", err.getvalue())

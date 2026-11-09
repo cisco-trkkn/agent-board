@@ -51,6 +51,30 @@ check "relay.py fails without a claude window" test $? -eq 1
 $C _relay_failed "$flog" "$doc" nc
 check "failed relay reported" grep -q 'relay failed' "$TC_STATE/relay-failed-nc.txt"
 check "notice prefix not doubled" test "$(grep -o 'relay failed:' $TC_STATE/relay-failed-nc.txt | wc -l | tr -d ' ')" = 1
+check "notice manual cds to the root" grep -qF "manual: cd -- " "$TC_STATE/relay-failed-nc.txt"
+# a lead that dies at startup (Claude Code in a gone cwd) is retried once, then reported with the pane text; no lineage
+mkdir -p "$STUB/bad/bin"
+cat > "$STUB/bad/bin/claude-orchestrator" <<'EOS'
+#!/bin/sh
+echo started >> "$BAD_COUNT"
+echo 'The current directory no longer exists (it was deleted or moved). Start Claude Code from an existing directory.'
+exit 1
+EOS
+chmod +x "$STUB/bad/bin/claude-orchestrator"
+export BAD_COUNT="$STUB/bad-count"; tt set-environment -g BAD_COUNT "$BAD_COUNT"
+tt new-session -d -s bad -n claude -c "$TT_DIR"
+blog="$TT_DIR/bad.log"
+AGENT_BOARD_REPO="$STUB/bad" python3 -I "$TT_REPO/board/relay.py" --session bad --doc "$doc" --state "$TC_STATE" --socket "$(tt display -p '#{socket_path}')" --start-cap 4 > "$blog" 2>&1
+check "dead lead fails the relay"     test $? -eq 1
+check "dead lead retried once"        test "$(wc -l < "$BAD_COUNT" | tr -d ' ')" = 2
+check "log carries the pane text"     grep -qF '| The current directory no longer exists' "$blog"
+check "log manual cds to the root"    grep -qF "manual: cd -- " "$blog"
+check "no lineage for a dead lead"    test ! -e "$TC_LINEAGE/bad.jsonl"
+# the notice is built from relay.py's 'relay failed:' line, not its per-attempt 'relay: attempt' line
+$C _relay_failed "$blog" "$doc" bad
+check "notice reads the relay failed line" grep -q '^relay failed: the new lead did not start' "$TC_STATE/relay-failed-bad.txt"
+check "notice has no attempt line"         sh -c "! grep -q 'relay: attempt' '$TC_STATE/relay-failed-bad.txt'"
+check "notice manual cds to the root (bad)" grep -qF "manual: cd -- " "$TC_STATE/relay-failed-bad.txt"
 # '#' in the doc path must survive tmux format expansion (relay from the lead; the lineage records the doc as relay.py received it)
 hd="$TT_DIR/h#H.md"; print x > "$hd"
 $C relay "$hd" >/dev/null

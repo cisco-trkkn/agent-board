@@ -341,8 +341,12 @@ case "$cmd" in
     exit "$rc" ;;
 
   _relay_failed)   # detached relay failed: tell the user, keep the doc
-    first="$(grep -m1 . "$1" 2>/dev/null)"; first="${first#relay failed: }"
-    msg="relay failed: ${first:-no output} — doc kept at $2; manual: ${(q)TC_REPO}/bin/claude-orchestrator 'Read $2 and continue from where the previous session left off.' (log: $1)"
+    reason="$(grep -m1 '^relay failed: ' "$1" 2>/dev/null)"   # relay.py's own failure line; its 'relay: attempt N' lines come first
+    [[ -n "$reason" ]] || reason="$(grep -m1 . "$1" 2>/dev/null)"
+    first="${reason#relay failed: }"
+    manual="$(grep -m1 '^manual: ' "$1" 2>/dev/null)"; manual="${manual#manual: }"   # relay.py's line: cd -- <root> && <launcher> '<prompt>'
+    [[ -n "$manual" ]] || manual="${(q)TC_REPO}/bin/claude-orchestrator 'Read $2 and continue from where the previous session left off.'"
+    msg="relay failed: ${first:-no output} — doc kept at $2; manual: $manual (log: $1)"
     print -r -- "$msg" > "$STATE/relay-failed-${3:-$FEEDKEY}.txt"
     for c in ${(f)"$(t list-clients -F '#{client_name}' 2>/dev/null)"}; do t display-message -c "$c" -d 0 -- "${${msg//\#/##}//\%/%%}"; done ;;
 
@@ -421,14 +425,17 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     rules=""; wr="$HOME/.config/agent-board/worker.md"; [[ -r "$wr" ]] || wr="$AB_REPO/claude/worker.md"   # a user override wins
     [[ -r "$wr" ]] && rules=" --append-system-prompt-file ${(q)wr}"
     # workers never see the end-of-session CLAUDE.md nudge (it asks an absent user a question)
-    line="CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude --model $model --effort $effort -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
+    root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
+    # cd first: a pane can start somewhere other than its -c directory (a tmux server whose own cwd was removed starts
+    # every pane there, docs/superpowers/notes/2026-11-09-relay-gone-cwd.md); claude then exits at startup or makes its
+    # worktree in the wrong repo
+    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude --model $model --effort $effort -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
     # the line is long (task, PATH): typed into a shell that has not started ZLE it overflows the tty's 1024-byte typeahead, so it goes in a file and only `. file` is typed
     launchf="$STATE/agents/${SESSION//[^A-Za-z0-9._-]/_}-$name.zsh"   # a tmux session name can hold other characters
     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; print -r -- "DRYRUN launch: $launchf"; exit 0 }   # test seam: stop before any window is created
     t list-windows -t "=$SESSION" -F '#{window_name}' | grep -qxF -- "$name" && die "window '$name' already exists"   # before the write: a refused re-launch must not overwrite a running worker's file
     # write the launch file before any window exists: a failed write must not leave an idle window behind
     ( umask 077; mkdir -p "${launchf:h}" && print -r -- "$line" > "$launchf" && chmod 700 "${launchf:h}" && chmod 600 "$launchf" ) || die "cannot write launch file $launchf"
-    root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
     t new-window -d -t "=$SESSION:" -n "$name" -c "$root"
     t set-option -w -t "$(target "$name")" @tc_agent 1
     t set-option -w -t "$(target "$name")" automatic-rename off
