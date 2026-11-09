@@ -4,44 +4,58 @@
 # (once) or `No` (deny) is ever chosen: "Yes, and don’t ask again…", "Yes, and switch to auto mode…" rows are never pressed.
 # Uses tmux-ctl's t, use_win, exists, target. TC_APPROVE_BEFORE_SEND (tests): a command run between the capture and the re-capture.
 
-_ap_screen() { t capture-pane -p -J -t "$1" 2>/dev/null | tail -40 | sed -e 's/[[:space:]]*$//' | grep -v '^$' }
+# the whole visible pane (a dialog can sit anywhere on it), trailing blanks dropped
+_ap_screen() { t capture-pane -p -J -t "$1" 2>/dev/null | sed -e 's/[[:space:]]*$//' | grep -v '^$' }
 
-# _ap_prompt: stdin = the screen; prints the prompt block (from the last divider above the last "Do you want…" line, else from that line)
-# or nothing when no numbered options follow such a line.
+# _ap_prompt: stdin = the screen. Prints nothing when no prompt shows. Otherwise prints `B:<line>` for each line of the prompt block
+# (from the solid divider above the command preview, through the last option) and `O:<n>:<label>` for each option.
+# The options are only the contiguous run `1.` `2.` … right after the last "Do you want…"/"Would you like…" line, so option-shaped
+# text inside the command preview is never one. Byte-literal divider and cursor (no {n}, no multibyte class): same result in any locale.
 _ap_prompt() {
   awk '
-    { l[NR]=$0 }
+    function optnum(x,   t) {   # the number of an option row, else 0
+      t = x; sub(/^[ \t]*(❯)?[ \t]*/, "", t)
+      if (t ~ /^[0-9]+\.[ \t]+/) { sub(/\..*/, "", t); return t + 0 }
+      return 0
+    }
+    function optlabel(x,   t) { t = x; sub(/^[ \t]*(❯)?[ \t]*[0-9]+\.[ \t]+/, "", t); sub(/[ \t]+$/, "", t); return t }
+    { l[NR] = $0 }
     END {
-      q=0; for (i=1;i<=NR;i++) if (l[i] ~ /(Do you want|Would you like)/) q=i
+      q = 0; e = 0
+      for (i = 1; i < NR; i++) {
+        if (l[i] !~ /(Do you want|Would you like)/ || optnum(l[i+1]) != 1) continue
+        j = i + 1; n = 1
+        while (j <= NR && optnum(l[j]) == n) { j++; n++ }
+        q = i; e = j - 1
+      }
       if (!q) exit
-      n=0; for (i=q+1;i<=NR;i++) if (l[i] ~ /^[[:space:]]*(❯)?[[:space:]]*[0-9]+\.[[:space:]]+/) n++
-      if (!n) exit
-      s=q; for (i=q;i>=1;i--) if (l[i] ~ /^─{10}/) { s=i; break }
-      for (i=s;i<=NR;i++) print l[i]
+      s = q
+      for (i = q; i >= 1; i--) if (index(l[i], "──────────") == 1) { s = i; break }
+      for (i = s; i <= e; i++) print "B:" l[i]
+      for (i = q + 1; i <= e; i++) print "O:" optnum(l[i]) ":" optlabel(l[i])
     }'
 }
 
 approve_cmd() {
-  local win="$1" act="$2" expect="" pane block again line label digit want
+  local win="$1" act="$2" expect="" have_expect=0 pane block again line digit want text="" u="usage: tmux-ctl approve <win> once|deny [--expect <text>]"
   shift 2 2>/dev/null
   while (( $# )); do
     case "$1" in
-      --expect) expect="$2"; shift 2 2>/dev/null || die "usage: tmux-ctl approve <win> once|deny [--expect <text>]" ;;
-      *) die "usage: tmux-ctl approve <win> once|deny [--expect <text>]" ;;
+      --expect) (( $# >= 2 )) || die "$u"; expect="$2"; have_expect=1; shift 2 ;;
+      *) die "$u" ;;
     esac
   done
-  [[ -n "$win" && ( "$act" == once || "$act" == deny ) ]] || die "usage: tmux-ctl approve <win> once|deny [--expect <text>]"
+  [[ -n "$win" && ( "$act" == once || "$act" == deny ) ]] || die "$u"
+  (( have_expect )) && [[ -z "$expect" ]] && die "--expect needs the exact command or path text, not an empty value ($u)"
   use_win "$win"; exists "$win"
   pane="$(target "$win")"
   block="$(_ap_screen "$pane" | _ap_prompt)"
   [[ -n "$block" ]] || { print -u2 "approve: no permission prompt in $win"; return 1 }
-  if [[ -n "$expect" && "$block" != *"$expect"* ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
+  while IFS= read -r line; do [[ "$line" == B:* ]] && text+="${line#B:}"$'\n'; done <<< "$block"
+  if (( have_expect )) && [[ "$text" != *"$expect"* ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
   [[ "$act" == once ]] && want=Yes || want=No
   while IFS= read -r line; do
-    if [[ "$line" =~ '^[[:space:]]*(❯)?[[:space:]]*([0-9]+)\.[[:space:]]+(.*)$' ]]; then
-      label="${match[3]}"; label="${label%"${label##*[![:space:]]}"}"
-      [[ "$label" == "$want" ]] && { digit="${match[2]}"; break }
-    fi
+    [[ "$line" == O:*:"$want" ]] && { digit="${${line#O:}%%:*}"; break }
   done <<< "$block"
   if [[ -z "$digit" ]]; then
     [[ "$act" == once ]] && print -u2 "approve: no one-time Yes in $win" || print -u2 "approve: no No option in $win"

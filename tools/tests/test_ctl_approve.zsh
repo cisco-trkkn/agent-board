@@ -10,10 +10,11 @@ trap 'rm -rf "$S"; tt_teardown' EXIT INT TERM
 # replay <win> <file>: a window showing the fixture, then waiting for one key
 replay() { tt new-window -d -t '=tt:' -n "$1" -c "$TT_DIR" "zsh -c 'cat $2; read -t 3 -k1 k; print -r -- \"GOT:\${k:-NONE}\"; sleep 600'"; sleep 0.5 }
 got() { local n=20 g; while (( n-- > 0 )); do g="$(tt capture-pane -p -J -t "=tt:$1" | grep -a -o 'GOT:[^ ]*' | tail -1)"; [[ -n "$g" ]] && { print -r -- "${g#GOT:}"; return }; sleep 0.25; done; print -r -- TIMEOUT }
-ap() { out="$($C approve "$@" 2>&1)"; rc=$?; }
+APENV=()   # extra env for the approve call, e.g. LC_ALL=C
+ap() { out="$(env "${APENV[@]}" $C approve "$@" 2>&1)"; rc=$?; }
 
 # --- variants built from real fixtures with sed (not hand-written prompts)
-sed '/ 1\. Yes$/d' $FX/bash-git.txt > $S/no-plain-yes.txt                                      # bash-git.txt with the plain "1. Yes" row deleted
+sed 's/ 1\. Yes$/ 1. Sure/' $FX/bash-git.txt > $S/no-plain-yes.txt                                  # bash-git.txt with the plain "1. Yes" row relabelled "1. Sure"
 sed 's/ 1\. Yes$/ 1. Yes, and switch to accept edits/' $FX/write.txt > $S/only-yes-and.txt     # write.txt whose plain Yes row is a "Yes, and ..." row
 sed '/ 3\. No$/d' $FX/write.txt > $S/no-no.txt                                                 # write.txt with the No row deleted
 
@@ -47,17 +48,55 @@ replay e-bad $FX/bash-git.txt; ap e-bad once --expect "rm -rf /"
 # mutation: drop the --expect check → changed-prompt test sends a key
 check "expect mismatch: exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in e-bad changed"
 check "expect mismatch: no key"   test "$(got e-bad)" = NONE
-# prompt swapped between the capture and the send (seam TC_APPROVE_BEFORE_SEND runs after the first capture)
-replay c-swap $FX/bash-git.txt
-cat > $S/swap.zsh <<SW
-$TT_BIN respawn-pane -k -t '=tt:c-swap' "cat $FX/write.txt; read -t 3 -k1 k; print -r -- GOT:\\\${k:-NONE}; sleep 600"
+# swap_case <win> <shown fixture> <replacement fixture>: the prompt is replaced between approve's capture and its send
+# (seam TC_APPROVE_BEFORE_SEND runs after the first capture); approve must refuse and no key may arrive
+swap_case() {
+  replay $1 $2
+  cat > $S/swap-$1.zsh <<SW
+$TT_BIN respawn-pane -k -t '=tt:$1' "cat $3; read -t 3 -k1 k; print -r -- GOT:\\\${k:-NONE}; sleep 600"
 sleep 0.5
 SW
-export TC_APPROVE_BEFORE_SEND="zsh $S/swap.zsh"
-ap c-swap once; unset TC_APPROVE_BEFORE_SEND
+  export TC_APPROVE_BEFORE_SEND="zsh $S/swap-$1.zsh"
+  ap $1 once; unset TC_APPROVE_BEFORE_SEND
+}
+swap_case c-swap $FX/bash-git.txt $FX/write.txt
 # mutation: skip the re-capture compare → a key is sent to the new prompt
 check "swap between capture and send: exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in c-swap changed"
 check "swap: no key sent"         test "$(got c-swap)" = NONE
+# same question and options, only the command differs; dialog drawn at the top of the 50-row pane (bash-touch.txt minus its first 9 rows)
+{ sed -n '10,$p' $FX/bash-touch.txt; repeat 9 print; } > $S/hi.txt
+sed 's/made-by-test/evil-test/g' $S/hi.txt > $S/hi-swapped.txt
+for loc in default C; do
+  [[ $loc == C ]] && APENV=(LC_ALL=C) || APENV=()
+  swap_case c-cmd-$loc $S/hi.txt $S/hi-swapped.txt
+  # mutation: capture only the last 40 rows / build the block from the question line / match the divider with a locale-dependent regex → the command is not compared and a key is sent
+  check "swapped command, dialog at the top ($loc locale): exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in c-cmd-$loc changed"
+  check "swapped command ($loc locale): no key sent"  test "$(got c-cmd-$loc)" = NONE
+done
+APENV=()
+# the unswapped top-of-pane prompt still works in both locales (the guard above is not a blanket refusal)
+for loc in default C; do
+  [[ $loc == C ]] && APENV=(LC_ALL=C) || APENV=()
+  replay hi-$loc $S/hi.txt; ap hi-$loc once --expect "touch made-by-test"
+  check "dialog at the top ($loc locale): chose Yes, key 1"  test $rc -eq 0 -a "$(got hi-$loc)" = 1
+done
+APENV=()
+# --- option-looking text inside the command preview is never an option (variants of real fixtures, one inserted preview line)
+# the dialog is drawn 12 rows lower than captured (12 blank rows in front, the last 12 blank rows cut)
+lower() { { repeat 12 print; head -38 "$1" } }
+sed '/^ touch made-by-test$/a\
+ 2. Yes' <(lower $FX/bash-touch.txt) > $S/spoof-yes.txt     # bash-touch.txt + a preview line " 2. Yes" (the real row 2 is the "always allow" row)
+sed '/^ git config user.name probe-user$/a\
+ 3. No' $FX/bash-git.txt > $S/spoof-no.txt          # bash-git.txt + a preview line " 3. No" (the real row 3 is "switch to auto mode")
+replay s-yes $S/spoof-yes.txt; ap s-yes once
+# mutation: search the option rows in the whole block (from the divider) instead of after the question → key 2 (always allow) arrives
+check "spoofed ' 2. Yes' in the preview: key 1 (the real Yes)"  test $rc -eq 0 -a "$(got s-yes)" = 1
+replay s-no $S/spoof-no.txt; ap s-no deny
+check "spoofed ' 3. No' in the preview: key 4 (the real No)"  test $rc -eq 0 -a "$(got s-no)" = 4
+# --- an empty --expect is refused, not skipped
+replay e-empty $FX/bash-git.txt; ap e-empty once --expect ""
+# mutation: skip an empty --expect (the old [[ -n "$expect" ]] guard) → exit 0 and a key is sent
+check "empty --expect: exit 2, no key"  test $rc -eq 2 -a "$(got e-empty)" = NONE
 # --- never a "Yes, and ..." row
 for v in no-plain-yes only-yes-and; do
   replay v-$v $S/$v.txt; ap v-$v once
