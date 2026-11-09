@@ -836,7 +836,7 @@ class UsageApiTest(unittest.TestCase):
         src.write_text(recent_line("a", inp=1_000_000, out=0, cwd=str(repo)) + recent_line("b", inp=1_000_000, out=0, cwd=str(self.tmp / "home")))
         conn = usage.connect(usage.db_path()); usage.ingest(conn, src); conn.close()
         S = self.server.SEP
-        row = S.join(["p", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", str(self.tmp / "home"), "1", "1", "", "", str(repo)])
+        row = S.join(["p", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", str(self.tmp / "home"), "1", "1", "", "", str(repo), "999"])
         with mock.patch.object(self.server, "tmux", return_value=row), mock.patch.object(self.server, "pane_text", return_value=[]), \
              mock.patch.object(self.server, "cached_worktrees", return_value=[]):
             code, body = self.get("api/usage?session=p")
@@ -875,7 +875,7 @@ class UsageApiTest(unittest.TestCase):
         fake = mock.Mock(); fake.snapshot.return_value = [{"session_id": "x", "name": "n", "agent_name": None, "cwd": "/r",
                                                              "alerts": [{"kind": "context", "label": "l", "detail": "d"}]}]
         S = self.server.SEP
-        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r"])
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r", "999"])
         with mock.patch.object(self.server, "INDEXER", fake), mock.patch.object(self.server, "tmux", return_value=row), \
              mock.patch.object(self.server, "pane_text", return_value=[]), mock.patch.object(self.server, "cached_worktrees", return_value=[]), \
              mock.patch.object(usage, "connect", side_effect=AssertionError("sqlite on the state path")):
@@ -924,7 +924,7 @@ class UsageApiTest(unittest.TestCase):
     def test_build_state_carries_usage_labels(self):
         fake = mock.Mock(); fake.snapshot.return_value = [dict(self.LEAD)]
         S = self.server.SEP
-        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r"])
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r", "999"])
         with mock.patch.object(self.server, "INDEXER", fake), mock.patch.object(self.server, "tmux", return_value=row), \
              mock.patch.object(self.server, "pane_text", return_value=[]), mock.patch.object(self.server, "cached_worktrees", return_value=[]):
             s = self.server.build_state()["sessions"][0]

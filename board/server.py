@@ -285,15 +285,53 @@ def last_sweep(max_bytes=65536):
             "stale": sum(1 for r in run if r[1] == "stale")}
 
 
+TG_FLAG = "--channels plugin:telegram"
+
+
+def proc_table():
+    """{pid: (ppid, args)} for every process, from one `ps -A -o pid=,ppid=,args=`; {} when ps fails."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,args="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    table = {}
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit():
+            table[int(f[0])] = (int(f[1]), f[2] if len(f) > 2 else "")
+    return table
+
+
+def telegram_leads(leads):
+    """Set of pane ids, from [(pane id, pane_pid)], whose process tree runs claude with the Telegram channel flag."""
+    table = proc_table()
+    kids = {}
+    for pid, (ppid, _) in table.items():
+        kids.setdefault(ppid, []).append(pid)
+    on = set()
+    for pane_id, root in leads:
+        todo, seen = [root], set()
+        while todo:
+            pid = todo.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            if TG_FLAG in table.get(pid, (0, ""))[1]:
+                on.add(pane_id)
+                break
+            todo.extend(kids.get(pid, ()))
+    return on
+
+
 def build_state():
     fmt = SEP.join([
         "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}",
         "#{window_bell_flag}", "#{@tc_agent}", "#{pane_index}", "#{pane_id}", "#{pane_title}",
         "#{pane_current_command}", "#{pane_current_path}", "#{pane_active}", "#{window_active}",
-        "#{@tc_teammate}", "#{@tc_bg}", "#{session_path}",
+        "#{@tc_teammate}", "#{@tc_bg}", "#{session_path}", "#{pane_pid}",
     ])
     listing, _, captured = tmux("list-panes", "-a", "-F", fmt, *_capture_cmd(_last["panes"])).partition(MARK)
-    every = [f for f in (l.split(SEP) for l in listing.splitlines()) if len(f) == 16]
+    every = [f for f in (l.split(SEP) for l in listing.splitlines()) if len(f) == 17]
     windows = {}
     for f in every:
         windows.setdefault(f[0], {})[f[3]] = int(f[2])
@@ -309,6 +347,7 @@ def build_state():
     _last["panes"] = ids
     mods = mod_states()   # one listing per poll
     sessions = {}
+    leads = []   # (pane id, pane_pid): kind claude in the session's `claude` window, as index.html orchestrator() picks it
     for f in panes:
         sess, attached, widx, wname, bell, agent, pidx, pid, title, cmd, path, pact, wact, mate = f[:14]
         rows = rows_by[pid]
@@ -320,8 +359,16 @@ def build_state():
         kind, status = classify(cmd, rows, bell == "1", mods.get(pid))
         w["panes"].append({
             "id": pid, "index": int(pidx), "title": title, "command": cmd, "path": path,
-            "active": pact == "1", "kind": kind, "status": status, "preview": preview(rows),
+            "active": pact == "1", "kind": kind, "status": status, "preview": preview(rows), "telegram": False,
         })
+        if wname == "claude" and kind == "claude" and mate != "1" and f[16].isdigit():
+            leads.append((pid, int(f[16])))
+    if leads:   # one ps per build, never per pane
+        on = telegram_leads(leads)
+        for s in sessions.values():
+            for w in s["windows"].values():
+                for p in w["panes"]:
+                    p["telegram"] = p["id"] in on
     out = list(sessions.values())
     for s in out:  # not on POOL: worktrees() itself waits on POOL jobs
         s["windows"] = sorted(s["windows"].values(), key=lambda w: w["index"])

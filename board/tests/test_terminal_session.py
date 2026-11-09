@@ -11,8 +11,8 @@ SEP = server.SEP
 
 
 def row(sess, cmd, pid, widx="0", teammate="0", bg="0"):
-    f = [sess, "1", widx, "w", "0", "0", "0", pid, "", cmd, "/r", "1", "1", teammate, bg, "/r"]
-    assert len(f) == 16   # build_state's fmt has 16 fields
+    f = [sess, "1", widx, "w", "0", "0", "0", pid, "", cmd, "/r", "1", "1", teammate, bg, "/r", "999"]
+    assert len(f) == 17   # build_state's fmt has 17 fields
     return SEP.join(f)
 
 
@@ -54,11 +54,11 @@ class TerminalSessionTest(unittest.TestCase):
         with mock.patch.object(server, "TERMINAL_SESSION", ""):
             self.assertEqual(self.names(), ["main"])
 
-    def test_fmt_has_sixteen_fields(self):
+    def test_fmt_has_seventeen_fields(self):
         self.layout = []
         with mock.patch.object(server, "tmux", return_value="") as t:
             server.build_state()
-        self.assertEqual(t.call_args.args[3].count(SEP) + 1, 16)
+        self.assertEqual(t.call_args.args[3].count(SEP) + 1, 17)
 
     def test_claude_in_the_second_window_shows_main(self):
         self.layout = [row("main", "zsh", "%1", widx="0"), row("main", "claude", "%2", widx="1")]
