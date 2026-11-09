@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: Reproduce the real relay failure and name its root c",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A notes file that says why the respawned shell in the lead's claude window sat in a gone directory after the 14:24 and 15:05 relays of 2026-11-09, reproduced on a scratch tmux server.\n\n**Files:**\n- Create: `docs/superpowers/notes/2026-11-09-relay-gone-cwd.md`\n\n**Constraints:**\n- Scratch tmux server only (`~/.local/bin/tmux -L <sock> -f /dev/null`). Never touch the live `agent-board` session or its pane `%8`. Never edit `~/.claude.json`: copy it into a scratch `CLAUDE_CONFIG_DIR` if the repro needs it.\n- Reproduce through the real path: a lead pane running `claude-orchestrator` (a cheap model is fine) whose Bash has cd'd into a linked worktree; that worktree removed (`git worktree remove`) during the turn; then `tmux-ctl relay <doc>` through `run-shell -b`. Include the stale `activeWorktreeSession` state seen in `~/.claude.json` (agent-board entry: worktreePath `.claude/worktrees/spikeworker`, originalCwd `.claude/worktrees/mod-agent-status`, both gone).\n- Evidence already gathered is in the spec's Evidence section; do not redo it.\n\n**Acceptance Criteria:**\n- [ ] The notes file has exactly these `## ` sections: `Evidence`, `Reproduction`, `Root cause`, `Covered by this plan?`.\n- [ ] `Reproduction` lists the exact commands run and the captured pane text, including Claude Code's \"The current directory no longer exists\" line, or states that the failure did not reproduce and lists every variant tried.\n- [ ] `Root cause` names the component and line (file:line or Claude Code behaviour with the probe that shows it), or says \"not found\" with the variants ruled out.\n- [ ] `Covered by this plan?` says yes/no for Tasks 2\u20133. If no, it names the extra change the lead should queue.\n\n**Verify:** `grep -c '^## ' docs/superpowers/notes/2026-11-09-relay-gone-cwd.md` \u2192 `4`\n\nFull steps: see the plan section of the same name.\n\n```json:metadata\n{\"files\": [\"docs/superpowers/notes/2026-11-09-relay-gone-cwd.md\"], \"verifyCommand\": \"grep -c '^## ' docs/superpowers/notes/2026-11-09-relay-gone-cwd.md\", \"acceptanceCriteria\": [\"notes has sections Evidence, Reproduction, Root cause, Covered by this plan?\", \"Reproduction lists commands and captured pane text, or every variant tried\", \"Root cause names component and line, or not found with variants ruled out\", \"Covered by this plan? answers for Tasks 2-3 and names any extra change\"], \"modelTier\": \"frontier\"}\n```"
     },
     {
@@ -35,7 +35,7 @@
     {
       "id": 5,
       "subject": "Task 5: tmux server from $HOME; agent launch line cds",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         3
@@ -43,5 +43,5 @@
       "description": "**Goal:** A tmux server that agent-board starts never keeps a directory that can be removed, and a `tmux-ctl agent` worker starts in its repo root even on a server whose cwd is already gone.\n\n**Files:**\n- Modify: `bin/_tc_bins.zsh` (`tc_tmux`: `new-session` runs in a subshell cd'd to `$HOME`, `/` as fallback)\n- Modify: `bin/tmux-ctl` (`agent)`: `root=` moves above `line=`; the launch line starts `cd -- ${(q)root} && `)\n- Create: `tools/tests/test_tc_tmux_cwd.zsh`\n- Modify: `tools/tests/test_prompt_argv.zsh` (one check on the DRYRUN line)\n\n**Acceptance Criteria:**\n- [ ] A server started through `tc_tmux new-session` from a directory has cwd `$HOME` (`lsof -d cwd` on `#{pid}`), and after that directory is removed a `new-window -c <target>` pane's `#{pane_current_path}` is `<target>`.\n- [ ] A second `tc_tmux new-session` of the same name still exits non-zero (the atomic gate of dev and tmux-overseer).\n- [ ] `TC_AGENT_DRYRUN=1 tmux-ctl agent \u2026` prints `DRYRUN line: cd -- <repo root> && CLAUDE_MD_REVISE_HOOK=0 \u2026`.\n- [ ] Mutations: drop the `builtin cd \u2026 ;` in `tc_tmux` \u2192 the two cwd checks fail; drop `cd -- ${(q)root} && ` from `line=` \u2192 `agent line cds to the repo root first` fails (both run by the plan author).\n\n**Verify:** `zsh tools/tests/test_tc_tmux_cwd.zsh; echo rc=$?` \u2192 `ALL PASS`, `rc=0`\n\nFull steps: plan \u00a7 Task 5 (applies task5.diff).\n\n```json:metadata\n{\"files\": [\"bin/_tc_bins.zsh\", \"bin/tmux-ctl\", \"tools/tests/test_tc_tmux_cwd.zsh\", \"tools/tests/test_prompt_argv.zsh\"], \"verifyCommand\": \"zsh tools/tests/test_tc_tmux_cwd.zsh; echo rc=$?\", \"acceptanceCriteria\": [\"server started via tc_tmux new-session has cwd $HOME; pane after start dir removed lands in -c target\", \"second new-session of same name still fails\", \"DRYRUN line starts cd -- <root> && CLAUDE_MD_REVISE_HOOK=0\", \"both mutations fail their checks\"], \"modelTier\": \"mechanical\"}\n```"
     }
   ],
-  "lastUpdated": "2026-11-09T21:01:26Z"
+  "lastUpdated": "2026-11-09T21:10:47Z"
 }
