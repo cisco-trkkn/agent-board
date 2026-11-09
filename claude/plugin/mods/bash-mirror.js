@@ -11,7 +11,7 @@
 // session's shell or mod writing the same log at the same moment could still lose an entry, the same race the two
 // shell hooks had.
 // The mod writes <state dir>/mods-active/<session_id>.bash-mirror at session start so the shell script defers.
-import { stateDir, markerPath, readEnv, writeMarker, removeMarker, tmuxRun } from './lib/env.js'
+import { stateDir, markerPath, readEnv, writeMarker, removeMarker, rekeyMarker, tmuxRun } from './lib/env.js'
 
 const MAX_BYTES = 2097152
 const KEEP_BYTES = 1048576
@@ -75,7 +75,7 @@ export function outcome(out, failed, err) {
   return [0, typeof r === 'string' ? r : String(out.text || '')]
 }
 
-let ctx = null // { dir, tmux, pane, tcTmux, home, marker } read at session.start
+let ctx = null // { dir, tmux, pane, tcTmux, home, sid, marker } read at session.start
 let q = Promise.resolve() // the session's writes, one after another
 let startCwd = ''
 
@@ -85,18 +85,18 @@ export async function start($, e) {
     const sid = await $.session.id()
     startCwd = (e && e.cwd) || ''
     const dir = stateDir(env.tcState, env.tmpdir, env.uid)
-    ctx = { dir, tmux: env.tmux, pane: env.tmuxPane, tcTmux: env.tcTmux, home: env.home, marker: markerPath(dir, sid, 'bash-mirror') }
+    ctx = { dir, tmux: env.tmux, pane: env.tmuxPane, tcTmux: env.tcTmux, home: env.home, sid, marker: markerPath(dir, sid, 'bash-mirror') }
     await writeMarker($, ctx.marker, sid)
   } catch (x) { /* never block the session */ }
 }
 
+// /clear and /resume go on under another session id and session.start does not fire again: drop the marker and forget the
+// id, and the next Bash call writes the new one (rekeyMarker). Other reasons: the session is over.
 export async function end($, e) {
   try {
-    const goesOn = e && (e.reason === 'clear' || e.reason === 'resume')
     await q
     if (ctx && ctx.marker) await removeMarker($, ctx.marker)
-    if (ctx) ctx.marker = null
-    if (goesOn) await start($, e)
+    if (ctx) { ctx.marker = null; ctx.sid = null }
   } catch (x) { /* never block the session */ }
 }
 
@@ -144,6 +144,7 @@ function record($, e, out, failed, err) {
 
 export function register(on) {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    await rekeyMarker($, ctx, 'bash-mirror')
     let out
     let failed = false
     let err

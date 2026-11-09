@@ -13,6 +13,7 @@ type World = {
   failWrite: boolean
   failRead: boolean
   gate: Promise<void> | null
+  sid: string
 }
 
 const SOCK = '/tmp/sock'
@@ -21,10 +22,10 @@ const HOME = '/home/me'
 const HEADER = /^── \d{2}:\d{2}:\d{2} · (.*?) · (.*?) · exit (\d+) · @(\d+)$/
 
 function world(on: any, env: Record<string, string> = {}, init: Partial<World> = {}): World {
-  const w: World = { files: new Map(), runs: [], cwd: HOME + '/proj', windows: ['claude', 'shell', 'tests'], hasBg: false, caller: 'claude', failWrite: false, failRead: false, gate: null, ...init }
+  const w: World = { files: new Map(), runs: [], cwd: HOME + '/proj', windows: ['claude', 'shell', 'tests'], hasBg: false, caller: 'claude', failWrite: false, failRead: false, gate: null, sid: 'sid1', ...init }
   mock.env(on, { TC_STATE: '/s', HOME, TMUX: SOCK + ',123,0', TMUX_PANE: '%3', TC_TMUX: '/fake/tmux', ...env })
   mock.clock(on, { now: 1_000_000 })
-  on('session.id', () => ({ value: 'sid1' }))
+  on('session.id', () => ({ value: w.sid }))
   on('session.cwd', () => ({ value: w.cwd }))
   on('settings.read', () => ({ value: { permissions: {} } }))
   on('fs.exists', ($: any, e: any) => ({ value: w.files.has(e.path) }))
@@ -365,4 +366,15 @@ test('a log that exists but cannot be read is not replaced by a one-entry log', 
   await $.session.start(START)
   await bash($, 'ls')
   expect(w.files.get(LOG('shell'))).toBe('old entries\n')
+})
+
+test('after a clear the next Bash call re-keys the marker: the old one is removed, one for the new id is written', async ($, on) => {
+  const w = world(on)
+  on('tool.call', () => okResult('x'))
+  await $.session.start(START)
+  await $.session.end({ sessionId: 'sid1', reason: 'clear' } as any)
+  w.sid = 'sid2'
+  await bash($, 'ls')
+  expect([...w.files.keys()].filter((k) => k.endsWith('.bash-mirror')).sort()).toEqual(['/s/mods-active/sid2.bash-mirror'])
+  expect(w.files.has(LOG('shell'))).toBe(true)
 })

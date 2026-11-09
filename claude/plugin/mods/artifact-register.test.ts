@@ -286,3 +286,14 @@ test('no hash tool works: nothing is recorded', async ($, on) => {
   await write($, PLAN)
   expect(lines(w).length).toBe(0)
 })
+
+test('after a clear the next file tool call re-keys the marker: the old one is removed, one for the new id is written', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await $.session.end({ sessionId: 'S1', reason: 'clear' } as any)
+  w.sid = 'S2'
+  await write($, PLAN)
+  expect([...w.files.keys()].filter((k) => k.endsWith('.artifact-register')).sort()).toEqual(['/s/mods-active/S2.artifact-register'])
+  expect(last(w).session_id).toBe('S2')
+})

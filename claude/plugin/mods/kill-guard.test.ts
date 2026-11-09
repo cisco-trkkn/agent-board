@@ -3,7 +3,7 @@
 import { expect, test, mock } from 'claude-code/testing'
 
 type Proc = { pid: number; comm: string; args: string; exe?: string }
-type World = { files: Map<string, string>; runs: string[][]; procs: Proc[]; throwRun: boolean }
+type World = { files: Map<string, string>; runs: string[][]; procs: Proc[]; throwRun: boolean; sid: string }
 
 const P = 4242 // stands in for $$ of the zsh test: a unique suffix in every pattern
 const CLAUDE: Proc = { pid: 100, comm: '/x/claude/versions/9.9.9', args: `/x/claude/versions/9.9.9 -c sleep 300; : GUARDPAT-${P}` }
@@ -12,10 +12,10 @@ const DECOY: Proc = { pid: 101, comm: '/bin/sh', args: `/bin/sh -c sleep 300 DEC
 const NPM: Proc = { pid: 102, comm: '/x/npm/node', args: `claude -c sleep 300; : NPMPAT-${P}`, exe: '/usr/bin/node' }
 
 function world(on: any, procs: Proc[], env: Record<string, string> = { TC_STATE: '/s' }): World {
-  const w: World = { files: new Map(), runs: [], procs, throwRun: false }
+  const w: World = { files: new Map(), runs: [], procs, throwRun: false, sid: 'sid1' }
   mock.env(on, env)
   mock.clock(on, { now: 1_000_000 })
-  on('session.id', () => ({ value: 'sid1' }))
+  on('session.id', () => ({ value: w.sid }))
   on('settings.read', () => ({ value: { permissions: {} } }))
   on('fs.write', ($: any, e: any) => { w.files.set(e.path, e.text); return { value: undefined } })
   on('process.run', ($: any, e: any) => {
@@ -173,4 +173,15 @@ test('an empty TMPDIR writes the marker under /tmp', async ($, on) => {
   const w = world(on, base, { TMPDIR: '' })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   expect(w.files.get('/tmp/tmux-ctl-503/mods-active/sid1.kill-guard')).toBe('sid1\n')
+})
+
+test('after a clear the next Bash check re-keys the marker: the old one is removed, one for the new id is written', async ($, on) => {
+  const w = world(on, base)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await $.session.end({ sessionId: 'sid1', reason: 'clear' } as any)
+  w.sid = 'sid2'
+  await decide($, 'ls')
+  expect([...w.files.keys()].filter((k) => k.includes('/mods-active/') && k.endsWith('.kill-guard')).sort()).toEqual(['/s/mods-active/sid2.kill-guard'])
+  await decide($, 'ls') // a second call does not write again
+  expect(w.files.get('/s/mods-active/sid2.kill-guard')).toBe('sid2\n')
 })

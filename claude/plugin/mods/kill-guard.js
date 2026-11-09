@@ -6,7 +6,7 @@
 // valid in one and not the other (an invalid JS regex) is matched as a plain substring, like Python's re.error case.
 // Fails open: any error in this mod's own work lets the call through. Calls with e.agentId (a subagent's) are guarded.
 // The mod writes <state dir>/mods-active/<session_id>.kill-guard at session start so the shell script defers.
-import { stateDir, markerPath, readEnv, writeMarker, removeMarker } from './lib/env.js'
+import { stateDir, markerPath, readEnv, writeMarker, removeMarker, rekeyMarker } from './lib/env.js'
 
 const TOOLS = ['pkill', 'killall']
 const PUNCT = '();&|<>'
@@ -164,30 +164,33 @@ async function verdict($, cmd) {
   return null
 }
 
-let marker = null
+const mk = { dir: '', sid: null, marker: null } // the marker written for the session id mk.sid
 
 // Called by index.js, the plugin's only session.start / session.end hook.
 export async function start($, e) {
   try {
     const sid = await $.session.id()
     const env = await readEnv($)
-    marker = markerPath(stateDir(env.tcState, env.tmpdir, env.uid), sid, 'kill-guard')
-    await writeMarker($, marker, sid)
+    mk.dir = stateDir(env.tcState, env.tmpdir, env.uid)
+    mk.sid = sid
+    mk.marker = markerPath(mk.dir, sid, 'kill-guard')
+    await writeMarker($, mk.marker, sid)
   } catch (x) { /* never block the session */ }
 }
 
+// /clear and /resume go on under another session id and session.start does not fire again: drop the marker and forget
+// the id, and the next Bash check writes the new one (rekeyMarker). Other reasons: the session is over.
 export async function end($, e) {
   try {
-    const goesOn = e && (e.reason === 'clear' || e.reason === 'resume')
-    // /clear and /resume go on under another session id: drop the old marker, write the new one
-    if (marker) await removeMarker($, marker)
-    marker = null
-    if (goesOn) await start($, e)
+    if (mk.marker) await removeMarker($, mk.marker)
+    mk.marker = null
+    mk.sid = null
   } catch (x) { /* never block the session */ }
 }
 
 export function register(on) {
   on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
+    await rekeyMarker($, mk, 'kill-guard')
     const reason = await verdict($, (e && e.input && e.input.command) || '')
     if (reason) return { decision: 'deny', reason }
     return next(e)

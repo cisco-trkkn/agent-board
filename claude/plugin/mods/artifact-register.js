@@ -16,9 +16,9 @@
 // exists but cannot be read is left alone rather than overwritten. The tmux binary comes from lib/env.js tmuxBin
 // (the shell sources bin/_tc_bins.zsh when present; the mod does not).
 // The mod writes <state dir>/mods-active/<session_id>.artifact-register at session start so the shell script defers.
-import { stateDir, lineageDir, markerPath, readEnv, writeMarker, removeMarker, tmuxRun } from './lib/env.js'
+import { stateDir, lineageDir, markerPath, readEnv, writeMarker, removeMarker, rekeyMarker, tmuxRun } from './lib/env.js'
 
-let ctx = null // { dir, lineage, home, tmpdir, tmux, pane, tcTmux, marker }
+let ctx = null // { dir, lineage, home, tmpdir, tmux, pane, tcTmux, sid, marker }
 let q = Promise.resolve()
 
 export async function start($, e) {
@@ -28,19 +28,19 @@ export async function start($, e) {
     const dir = stateDir(env.tcState, env.tmpdir, env.uid)
     ctx = {
       dir, lineage: lineageDir(env.tcLineage, env.xdgStateHome, env.home), home: env.home, tmpdir: env.tmpdir || '/tmp',
-      tmux: env.tmux, pane: env.tmuxPane, tcTmux: env.tcTmux, marker: markerPath(dir, sid, 'artifact-register'),
+      tmux: env.tmux, pane: env.tmuxPane, tcTmux: env.tcTmux, sid, marker: markerPath(dir, sid, 'artifact-register'),
     }
     await writeMarker($, ctx.marker, sid)
   } catch (x) { /* never block the session */ }
 }
 
+// /clear and /resume go on under another session id and session.start does not fire again: drop the marker and forget the
+// id, and the next file tool call writes the new one (rekeyMarker). Other reasons: the session is over.
 export async function end($, e) {
   try {
-    const goesOn = e && (e.reason === 'clear' || e.reason === 'resume')
     await q
     if (ctx && ctx.marker) await removeMarker($, ctx.marker)
-    if (ctx) ctx.marker = null
-    if (goesOn) await start($, e)
+    if (ctx) { ctx.marker = null; ctx.sid = null }
   } catch (x) { /* never block the session */ }
 }
 
@@ -119,6 +119,7 @@ async function record($, e) {
 
 export function register(on) {
   on('tool.call', { tool: ['Write', 'Edit', 'MultiEdit'] }, async ($, e, next) => {
+    await rekeyMarker($, ctx, 'artifact-register')
     const out = await next(e) // a rejection propagates: nothing is recorded
     if (out && !out.deny && !out.isError) {
       try { await record($, e) } catch (x) { /* never fails the call */ }

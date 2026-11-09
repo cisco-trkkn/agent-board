@@ -44,6 +44,22 @@ export async function removeMarker($, path) {
   try { await $.process.run(['rm', '-f', path]) } catch (x) { /* never fails the session */ }
 }
 
+// Keeps a mod's marker on the current session id. session.start does not fire after /clear, /resume or /branch, so a
+// tool hook calls this first: when the id read now differs from m.sid (m = { dir, sid, marker }, kept by the mod), the old
+// marker is removed and one for the new id is written. end() sets m.sid and m.marker to null for clear/resume, so the next
+// call writes the marker; a session that really ends makes no more tool calls. Same pattern as agent-status.js flush.
+export async function rekeyMarker($, m, hook) {
+  try {
+    if (!m || !m.dir) return
+    const sid = await $.session.id()
+    if (!sid || sid === m.sid) return
+    if (m.marker) await removeMarker($, m.marker)
+    m.sid = sid
+    m.marker = markerPath(m.dir, sid, hook)
+    await writeMarker($, m.marker, sid)
+  } catch (x) { /* never fails the call */ }
+}
+
 // The tmux binary: $TC_TMUX, else $HOME/.local/bin/tmux when it exists, else `tmux` on PATH. (The shell hooks source
 // bin/_tc_bins.zsh when it is present; the mods use only this chain.)
 export async function tmuxBin($, tcTmux, home) {
