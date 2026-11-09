@@ -182,6 +182,42 @@ agent-board dash stop
 
 State you may want to delete: `~/.local/state/agent-board/` (ideas and handoffs: keep it if you want them), `~/.local/state/tmux-dash/` (board token, pids, logs) and `${TMPDIR:-/tmp}/tmux-ctl-$UID/` (runtime state).
 
+## Remote access
+
+Reach a dev lead from your phone through a Telegram bot. One bot per project; only leads started by `claude-orchestrator` get the channel.
+
+**Once.** Install Bun (`~/.bun/bin/bun`) and the plugin: `claude plugin install telegram@claude-plugins-official`. Check both with `tmux-ctl telegram status` (`plugin: ok`, `bun: ok`).
+
+**Per project.**
+
+1. Create a bot with BotFather and copy its token.
+2. In the project's tmux session, pipe the token in; it is read from stdin, never from an argument, and never printed:
+
+   ```zsh
+   print -r -- "<token>" | tmux-ctl telegram token          # inside the project's session
+   print -r -- "<token>" | tmux-ctl telegram token --project <name>   # outside tmux
+   ```
+
+   It is stored as `~/.local/state/agent-board/telegram/<project>/.env` (mode 600).
+3. Restart the lead (`claude-orchestrator --continue`). A lead with a token starts with `--channels plugin:telegram@claude-plugins-official`; the board shows `tg` on it.
+4. DM the bot; it answers with a pairing code. In that lead run `/telegram:access pair <code>`, then `/telegram:access policy allowlist`.
+5. `tmux-ctl telegram status` shows `token: set`, `paired: <n> allowlisted`, `policy: allowlist`, `poller: running (pid N)`, `plugin: ok`, `bun: ok`. It never shows the token.
+
+`tmux-ctl telegram forget` removes the project's token (the pairing in `access.json` stays). `TC_TELEGRAM=0` in the environment of `claude-orchestrator` turns the channel off.
+
+**Rules.**
+
+- Never run `/telegram:configure` and never put a token in `~/.claude/channels/telegram/.env`: every session would then poll that bot. `tmux-ctl telegram status` warns when that file exists; delete it.
+- One live lead per project. A second lead for the same bot stops the first one's poller, and the first stops receiving.
+- Sessions without a token print `plugin:telegram:telegram … Connection closed`. That is expected: the plugin's server exits at once without a token.
+- The lead's own permission prompts reach the phone as buttons; the first answer, phone or terminal, wins.
+- AskUserQuestion is not relayed: while you are remote, the lead asks as a numbered list in Telegram.
+- A teammate's or worker's prompt is approved only on your Telegram reply `approve n` / `deny n`, through `tmux-ctl approve` (the one-time `Yes` or `No` only). Peer sessions are not covered.
+
+**At the office.** Keep the lid open and the Mac on mains power, and run `tmux-ctl awake on`.
+
+**Remote Control** (Claude Code's own phone link) is not an alternative here for now: it is blocked until IT exempts `api.anthropic.com/v1/code/sessions/*` and `bridge.claudeusercontent.com` from the proxy.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
