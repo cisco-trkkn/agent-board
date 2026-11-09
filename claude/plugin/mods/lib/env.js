@@ -60,6 +60,13 @@ export async function rekeyMarker($, m, hook) {
   } catch (x) { /* never fails the call */ }
 }
 
+// Appends text to a file with ONE process: O_APPEND, so another session's writer is never overwritten. The text and the
+// path are argv ($1, $2), never part of the shell script. Throws when the append fails (the callers swallow).
+export async function appendText($, path, text) {
+  const r = await $.process.run(['sh', '-c', 'printf %s "$1" >> "$2"', 'sh', text, path])
+  if (r.exitCode !== 0) throw new Error('append failed')
+}
+
 // The tmux binary: $TC_TMUX, else $HOME/.local/bin/tmux when it exists, else `tmux` on PATH. (The shell hooks source
 // bin/_tc_bins.zsh when it is present; the mods use only this chain.)
 export async function tmuxBin($, tcTmux, home) {

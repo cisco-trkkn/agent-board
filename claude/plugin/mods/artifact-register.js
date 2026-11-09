@@ -12,11 +12,11 @@
 // realpath and sha256 go through $.process.run (`realpath`, `shasum -a 256`, else `sha256sum`): $.fs has no realpath or
 // hash, and a non-zero exit of realpath means the shell's isfile check failed, so the file is skipped. The path and kind
 // are decided first, so a source-file edit with no kind costs no tmux call, lineage read or session lookup.
-// The manifest is appended with read-modify-write through $.fs (no append API), chained per session; a manifest that
-// exists but cannot be read is left alone rather than overwritten. The tmux binary comes from lib/env.js tmuxBin
-// (the shell sources bin/_tc_bins.zsh when present; the mod does not).
+// The manifest is appended with one `sh -c 'printf %s "$1" >> "$2"'` (record and path as argv; O_APPEND, so another
+// writer's lines are never overwritten), chained per session; it is never read. The tmux binary comes from lib/env.js
+// tmuxBin (the shell sources bin/_tc_bins.zsh when present; the mod does not).
 // The mod writes <state dir>/mods-active/<session_id>.artifact-register at session start so the shell script defers.
-import { stateDir, lineageDir, markerPath, readEnv, writeMarker, removeMarker, rekeyMarker, tmuxRun } from './lib/env.js'
+import { stateDir, lineageDir, markerPath, readEnv, writeMarker, removeMarker, rekeyMarker, appendText, tmuxRun } from './lib/env.js'
 
 let ctx = null // { dir, lineage, home, tmpdir, tmux, pane, tcTmux, sid, marker }
 let q = Promise.resolve()
@@ -107,9 +107,8 @@ async function append($, e) {
   const epoch = (String(lin).match(/\n/g) || []).length
   const sid = (await $.session.id()) || ''
   const rec = { ts: (await $.clock.now()) / 1000, path, kind, agent, hash, url: '', title: '', slug: '', session_id: sid, epoch }
-  let cur = ''
-  if (await $.fs.exists(manifest)) cur = await $.fs.read(manifest) // unreadable: throws, the manifest is left alone
-  await $.fs.write(manifest, String(cur) + JSON.stringify(rec) + '\n')
+  if (!ctx.made) { await $.process.run(['mkdir', '-p', ctx.dir]); ctx.made = true }
+  await appendText($, manifest, JSON.stringify(rec) + '\n')
 }
 
 async function record($, e) {

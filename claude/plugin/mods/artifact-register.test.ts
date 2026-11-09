@@ -16,6 +16,7 @@ type World = {
   noSha256sum: boolean
 }
 
+const APPEND = 'printf %s "$1" >> "$2"'
 const HOME = '/home/me'
 const MANIFEST = '/s/artifacts-tt.jsonl'
 const HASH = 'ab'.repeat(32)
@@ -33,7 +34,6 @@ function world(on: any, env: Record<string, string> = {}, init: Partial<World> =
     return { value: w.files.get(e.path) }
   })
   on('fs.write', ($: any, e: any) => {
-    if (w.failWrite && e.path.includes('artifacts-')) throw new Error('disk full')
     w.files.set(e.path, e.text)
     return { value: undefined }
   })
@@ -46,6 +46,13 @@ function world(on: any, env: Record<string, string> = {}, init: Partial<World> =
     if (a[0] === 'shasum') return w.noShasum || !w.files.has(a[3]) ? out('', 1) : out(`${HASH}  ${a[3]}\n`)
     if (a[0] === 'sha256sum') return w.noSha256sum || !w.files.has(a[1]) ? out('', 1) : out(`${HASH}  ${a[1]}\n`)
     if (a[0] === 'rm') { w.files.delete(a[2]); return out('') }
+    if (a[0] === 'mkdir') return out('')
+    // the manifest is appended by `sh -c` (the stub does what the script does)
+    if (a[0] === 'sh' && a[2] === APPEND) {
+      if (w.failWrite) return out('', 1)
+      w.files.set(a[5], (w.files.get(a[5]) || '') + a[4])
+      return out('')
+    }
     return out('503\n')
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -148,7 +155,7 @@ test('file lines carry a title key', async ($, on) => {
   expect('title' in last(w)).toBe(true)
 })
 
-test('a manifest that cannot be read is never overwritten by a record', async ($, on) => {
+test('the manifest is never read: one that cannot be read keeps its lines and gets the record appended', async ($, on) => {
   const w = world(on)
   w.files.set(PLAN, '# P')
   w.files.set(MANIFEST, '{"old":1}\n')
@@ -156,7 +163,24 @@ test('a manifest that cannot be read is never overwritten by a record', async ($
   w.failRead = true
   await write($, PLAN)
   w.failRead = false
-  expect(w.files.get(MANIFEST)).toBe('{"old":1}\n')
+  const ls = (w.files.get(MANIFEST) as string).split('\n')
+  expect(ls[0]).toBe('{"old":1}')
+  expect(JSON.parse(ls[1]).kind).toBe('plan')
+})
+
+test('the record is appended with one sh -c printf >> call: the JSON line and the manifest as argv', async ($, on) => {
+  const w = world(on)
+  w.files.set(PLAN, '# P')
+  await $.session.start(START)
+  await write($, PLAN)
+  const calls = w.runs.filter((r) => r[0] === 'sh')
+  expect(calls.length).toBe(1)
+  expect(calls[0].slice(0, 3)).toEqual(['sh', '-c', APPEND])
+  expect(calls[0].length).toBe(6)
+  expect(calls[0][3]).toBe('sh')
+  expect(calls[0][4]).toBe(JSON.stringify(last(w)) + '\n')
+  expect(calls[0][5]).toBe(MANIFEST)
+  expect(w.runs).toContainEqual(['mkdir', '-p', '/s'])
 })
 
 test('records append to the existing manifest in order', async ($, on) => {

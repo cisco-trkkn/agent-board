@@ -19,6 +19,8 @@ type World = {
 const SOCK = '/tmp/sock'
 const LOG = (kind: string) => `/s/feed-tt-${kind}.log`
 const HOME = '/home/me'
+const APPEND = 'printf %s "$1" >> "$2"'
+const TRIM = 'tail -c 1048576 "$1" > "$1.tmp.$$" && mv "$1.tmp.$$" "$1"'
 const HEADER = /^── \d{2}:\d{2}:\d{2} · (.*?) · (.*?) · exit (\d+) · @(\d+)$/
 
 function world(on: any, env: Record<string, string> = {}, init: Partial<World> = {}): World {
@@ -34,16 +36,27 @@ function world(on: any, env: Record<string, string> = {}, init: Partial<World> =
     if (!w.files.has(e.path)) throw new Error('ENOENT')
     return { value: w.files.get(e.path) }
   })
-  on('fs.write', async ($: any, e: any) => {
-    if (w.gate && e.path.includes('/feed-')) await w.gate
-    if (w.failWrite && e.path.includes('/feed-')) throw new Error('disk full')
+  on('fs.stat', ($: any, e: any) => {
+    if (!w.files.has(e.path)) throw new Error('ENOENT')
+    return { value: { size: (w.files.get(e.path) as string).length } }
+  })
+  on('fs.write', ($: any, e: any) => {
     w.files.set(e.path, e.text)
     return { value: undefined }
   })
-  on('process.run', ($: any, e: any) => {
+  on('process.run', async ($: any, e: any) => {
     w.runs.push([...e.argv])
     const a: string[] = e.argv
     const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '' } })
+    // the feed is appended and trimmed by `sh -c` (the stub does what the script does)
+    if (a[0] === 'sh' && a[2] === APPEND) {
+      if (w.gate) await w.gate
+      if (w.failWrite) return out('', 1)
+      w.files.set(a[5], (w.files.get(a[5]) || '') + a[4])
+      return out('')
+    }
+    if (a[0] === 'sh' && a[2] === TRIM) { w.files.set(a[4], (w.files.get(a[4]) as string).slice(-1048576)); return out('') }
+    if (a[0] === 'mkdir') return out('')
     if (a.includes('display')) return out(`tt\t${w.caller}\ttt\n`)
     if (a.includes('list-windows')) return out(w.windows.join('\n') + '\n')
     if (a.includes('has-session')) return out('', w.hasBg ? 0 : 1)
@@ -359,22 +372,46 @@ test('the tool result does not wait for the feed write', async ($, on) => {
   expect(w.files.has(LOG('shell'))).toBe(true)
 })
 
-test('a log that exists but cannot be read is not replaced by a one-entry log', async ($, on) => {
+test('the log is never read: one that cannot be read (over the $.fs limit) still gets the entry appended', async ($, on) => {
   const w = world(on, {}, { failRead: true })
   w.files.set(LOG('shell'), 'old entries\n')
   on('tool.call', () => okResult('x'))
   await $.session.start(START)
   await bash($, 'ls')
-  expect(w.files.get(LOG('shell'))).toBe('old entries\n')
+  expect(w.files.get(LOG('shell'))).toMatch(/^old entries\n── .*\n\$ ls\nx\n\n$/)
 })
 
-test('after a clear the next Bash call re-keys the marker: the old one is removed, one for the new id is written', async ($, on) => {
+test('the entry is appended with one sh -c printf >> call, the entry and the log as argv (no shell interpolation)', async ($, on) => {
   const w = world(on)
+  on('tool.call', () => okResult('a $HOME `x` "q" 100%\nb'))
+  await $.session.start(START)
+  await bash($, 'ls')
+  const calls = w.runs.filter((r) => r[0] === 'sh')
+  expect(calls.length).toBe(1)
+  expect(calls[0].slice(0, 3)).toEqual(['sh', '-c', APPEND])
+  expect(calls[0].length).toBe(6)
+  expect(calls[0][3]).toBe('sh')
+  expect(calls[0][4]).toBe(w.files.get(LOG('shell')))
+  expect(calls[0][4]).toContain('a $HOME `x` "q" 100%\nb')
+  expect(calls[0][5]).toBe(LOG('shell'))
+  expect(w.runs).toContainEqual(['mkdir', '-p', '/s'])
+})
+
+test('a log over 2097152 bytes is trimmed with the exact tail -c argv, before the append', async ($, on) => {
+  const w = world(on)
+  w.files.set(LOG('tests'), 'x'.repeat(2_097_153))
   on('tool.call', () => okResult('x'))
   await $.session.start(START)
-  await $.session.end({ sessionId: 'sid1', reason: 'clear' } as any)
-  w.sid = 'sid2'
-  await bash($, 'ls')
-  expect([...w.files.keys()].filter((k) => k.endsWith('.bash-mirror')).sort()).toEqual(['/s/mods-active/sid2.bash-mirror'])
-  expect(w.files.has(LOG('shell'))).toBe(true)
+  await bash($, 'pytest -q')
+  const sh = w.runs.filter((r) => r[0] === 'sh')
+  expect(sh).toEqual([['sh', '-c', TRIM, 'sh', LOG('tests')], expect.arrayContaining(['sh', '-c', APPEND])])
+})
+
+test('a log of exactly 2097152 bytes is not trimmed', async ($, on) => {
+  const w = world(on)
+  w.files.set(LOG('tests'), 'x'.repeat(2_097_152))
+  on('tool.call', () => okResult('x'))
+  await $.session.start(START)
+  await bash($, 'pytest -q')
+  expect(w.runs.filter((r) => r[0] === 'sh' && r[2] === TRIM)).toEqual([])
 })

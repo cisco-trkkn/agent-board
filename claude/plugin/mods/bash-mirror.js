@@ -3,15 +3,15 @@
 //   `── HH:MM:SS · <caller> · <cwd> · exit N · @<epoch>` / `$ <first line>` / last 12 lines of output / blank line.
 // Differences from the shell: it does not source bin/_tc_bins.zsh; the tmux binary is chosen by lib/env.js tmuxBin
 // ($TC_TMUX, else $HOME/.local/bin/tmux when it exists, else `tmux`), always with `-S ${TMUX%%,*}`. The cwd is read from the
-// session after the call (the shell hook was handed it in the payload). A call refused by a guard is not mirrored.
+// session after the call; $.session.cwd() lags one call behind a `cd` (e2e record), where the shell used the payload's cwd.
+// A call refused by a guard is not mirrored.
 //
-// Appending: there is no $.fs append, so each entry is read-modify-write through $.fs (read the log, trim it when it is
-// over the limit, write it back with the entry). Spawning `tee -a`/`sh -c` would need a shell per call, which is what
-// the mod replaces. The writes of one session are chained (q), so two calls of this session never interleave; another
-// session's shell or mod writing the same log at the same moment could still lose an entry, the same race the two
-// shell hooks had.
+// Appending: there is no $.fs append, so each entry is one `sh -c 'printf %s "$1" >> "$2"'` (entry and path as argv), the
+// shell's O_APPEND, so another session's or script's write to the same log is never overwritten. The log is trimmed (last
+// 1048576 bytes, as the shell does) only when $.fs.stat says it is over 2097152 bytes; it is never read. The writes of one
+// session are chained (q).
 // The mod writes <state dir>/mods-active/<session_id>.bash-mirror at session start so the shell script defers.
-import { stateDir, markerPath, readEnv, writeMarker, removeMarker, rekeyMarker, tmuxRun } from './lib/env.js'
+import { stateDir, markerPath, readEnv, writeMarker, removeMarker, rekeyMarker, appendText, tmuxRun } from './lib/env.js'
 
 const MAX_BYTES = 2097152
 const KEEP_BYTES = 1048576
@@ -35,14 +35,6 @@ export function classify(c) {
 }
 
 const pad = (n) => String(n).padStart(2, '0')
-const bytes = (s) => (typeof TextEncoder === 'function' ? new TextEncoder().encode(s).length : s.length)
-
-// the last KEEP_BYTES bytes of s (a log over MAX_BYTES), like `tail -c`
-function trimmed(s) {
-  if (bytes(s) <= MAX_BYTES) return s
-  if (typeof TextEncoder !== 'function' || typeof TextDecoder !== 'function') return s.slice(-KEEP_BYTES)
-  return new TextDecoder().decode(new TextEncoder().encode(s).slice(-KEEP_BYTES))
-}
 
 // the entry text (header, command, tail, trailing newline) plus the blank line `print -r --` adds
 export function entryText(first, tail, caller, cwd, code, ms) {
@@ -131,10 +123,11 @@ async function mirror($, e, out, failed, err) {
   const log = ctx.dir + '/feed-' + canon + '-' + kind + '.log'
   const ms = await $.clock.now()
   const entry = entryText(first, tail, caller, cwd, code, ms)
-  let cur = ''
-  // a log that exists but cannot be read (e.g. over the $.fs size limit) is not replaced by one holding a single entry
-  if (await $.fs.exists(log)) cur = await $.fs.read(log)
-  await $.fs.write(log, trimmed(typeof cur === 'string' ? cur : '') + entry)
+  if (!ctx.made) { await $.process.run(['mkdir', '-p', ctx.dir]); ctx.made = true }
+  let size = 0
+  try { size = (await $.fs.stat(log)).size || 0 } catch (x) { /* no log yet */ }
+  if (size > MAX_BYTES) await $.process.run(['sh', '-c', 'tail -c ' + KEEP_BYTES + ' "$1" > "$1.tmp.$$" && mv "$1.tmp.$$" "$1"', 'sh', log])
+  await appendText($, log, entry)
 }
 
 // starts the chained write; the tool never waits for it
