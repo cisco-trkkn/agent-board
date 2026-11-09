@@ -28,7 +28,7 @@
 #   tmux-ctl idea  <text>                  file an idea for after the plan (never act on it now)
 #   tmux-ctl context show|path|add <section> "<entry>"
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
-#   tmux-ctl awake on [--pid N]|off|status|sleeps <since>
+#   tmux-ctl awake on [--pid N] [--lid]|off|status|sleeps <since>|lid-setup
 #                                          hold the Mac awake (caffeinate) while the queue runs; sleeps lists Sleep/Wake lines since a time
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)

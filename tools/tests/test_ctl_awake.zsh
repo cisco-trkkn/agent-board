@@ -14,19 +14,43 @@ cat > "$S/bin/caffeinate" <<STUB
 echo "\$*" >> "$S/caffeinate.args"
 exec "$S/real/caffeinate" 600
 STUB
-cat > "$S/bin/pmset" <<STUB
 #!/bin/sh
 case "\$*" in
   "-g batt") cat "\${AWAKE_FIXTURE_BATT:-$FX/batt-ac.txt}" ;;
   "-g log")  cat "$FX/log-sleeps.txt" ;;
 esac
 STUB
-chmod +x "$S/bin/caffeinate" "$S/bin/pmset"
-export PATH="$S/bin:$PATH" TZ=America/New_York
+# pmset: $S/batt.cur (a fixture path) overrides the battery capture at call time (a running watchdog sees changes);
+# $S/sleepdisabled present = `pmset -g` carries a SleepDisabled line (absent when 0, as on the real Mac).
+cat > "$S/bin/pmset" <<STUB
+#!/bin/sh
+case "\$*" in
+  "-g batt") if [ -f "$S/batt.cur" ]; then cat "\$(cat "$S/batt.cur")"; else cat "\${AWAKE_FIXTURE_BATT:-$FX/batt-ac.txt}"; fi ;;
+  "-g log")  cat "$FX/log-sleeps.txt" ;;
+  "-g")      printf 'System-wide power settings:\nCurrent Power Settings:\n standby 1\n'; [ -f "$S/sleepdisabled" ] && printf ' SleepDisabled\t\t1\n' ;;
+esac
+STUB
+# sudo: logs argv; `-n -l <cmd>` answers from the fixture named in $S/sudo.mode (default: the Privilege Manager capture, exit 0);
+# `-n /usr/bin/pmset -a disablesleep 1|0` sets or clears $S/sleepdisabled. Never the real sudo.
+cat > "$S/bin/sudo" <<STUB
+#!/bin/sh
+echo "\$*" >> "$S/sudo.args"
+if [ "\$1 \$2" = "-n -l" ]; then
+  f="\$(cat "$S/sudo.mode" 2>/dev/null || echo "$FX/sudo-l-privmgr.txt")"
+  for a; do last="\$a"; done
+  sed "s/disablesleep 1\\$/disablesleep \$last/" "\$f"; exit 0
+fi
+[ "\$*" = "-n /usr/bin/pmset -a disablesleep 1" ] && { : > "$S/sleepdisabled"; exit 0; }
+[ "\$*" = "-n /usr/bin/pmset -a disablesleep 0" ] && { rm -f "$S/sleepdisabled"; exit 0; }
+exit 1
+STUB
+chmod +x "$S/bin/caffeinate" "$S/bin/pmset" "$S/bin/sudo"
+export PATH="$S/bin:$PATH" TZ=America/New_York TC_AWAKE_TICK=1
 AF="$TC_STATE/awake.json"
 stubpids() { pgrep -f "$S/real/caffeinate" }
 nstub() { stubpids | wc -l | tr -d ' ' }
-cleanup() { local p; for p in ${(f)"$(pgrep -f "$S/real/" 2>/dev/null)"}; do kill $p 2>/dev/null; done; rm -rf "$S" }
+WDS=()   # watchdog pids seen, killed at exit
+cleanup() { local p; for p in $WDS; do kill $p 2>/dev/null; done; for p in ${(f)"$(pgrep -f "$S/real/" 2>/dev/null)"}; do kill $p 2>/dev/null; done; rm -rf "$S" }
 trap 'cleanup; tt_teardown' EXIT INT TERM
 W=$$   # a live pid to watch
 
@@ -119,6 +143,120 @@ check "sleeps: line count = fixture minus Wake Requests"  test "$(print -r -- "$
 out="$($C awake sleeps '2099-01-01 00:00')"; rc=$?
 check "sleeps: none prints nothing, exit 0"    test -z "$out" -a $rc -eq 0
 
+# --- lid mode (sudo and pmset are stubs; TC_AWAKE_TICK=1 makes the watchdog tick every second)
+waitfor() { local i; for i in {1..60}; do eval "$1" && return 0; sleep 0.1; done; return 1 }
+ndis() { grep -c "^-n /usr/bin/pmset -a disablesleep $1\$" "$S/sudo.args" 2>/dev/null }   # grep -c prints 0 itself
+wdalive() { [[ "$(ps -o args= -p "$1" 2>/dev/null)" == *"tmux-ctl awake _watchdog"* ]] }
+allow() { print -r -- "$FX/sudo-l-allowed.txt" > "$S/sudo.mode" }
+deny() { rm -f "$S/sudo.mode" }
+lidfile() { jq -r "$1" "$AF" 2>/dev/null }
+$C awake off >/dev/null; rm -f "$S/sudo.args" "$S/sleepdisabled" "$S/batt.cur" "$TC_STATE/awake.log"
+
+out="$($C awake lid-setup)"; rc=$?
+check "lid-setup: sudoers line"                zsh -c '[[ $1 == *"$2 ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"* ]]' _ "$out" "$(id -un)"
+check "lid-setup: visudo command"              zsh -c '[[ $1 == *"sudo visudo -f /etc/sudoers.d/agent-board-awake"* ]]' _ "$out"
+check "lid-setup: exit 0"                      test $rc -eq 0
+check "lid-setup: installs and runs nothing"   test ! -e "$S/sudo.args" -a ! -e "$AF" -a "$(nstub)" = 0
+
+# rule absent: the real Privilege Manager capture exits 0 and lists no command
+out="$($C awake on --lid --pid $W)"; rc=$?
+check "no rule (Privilege Manager rc 0): unavailable message"  zsh -c '[[ $1 == *"awake: lid hold unavailable (run tmux-ctl awake lid-setup)"* ]]' _ "$out"
+check "no rule: exit 0"                        test $rc -eq 0
+check "no rule: plain hold kept"               test "$(nstub)" = 1 -a "$(lidfile .pid)" = "$W"
+check "no rule: no lid fields"                 test "$(lidfile '[has("lid"),has("watchdogPid")]|any')" = false
+check "no rule: disablesleep never called"     test "$(ndis 1)" = 0 -a ! -e "$S/sleepdisabled"
+check "no rule: the rule was asked with sudo -n -l"  grep -qx -- '-n -l /usr/bin/pmset -a disablesleep 1' "$S/sudo.args"
+$C awake off >/dev/null
+
+# rule present
+allow; rm -f "$S/sudo.args"
+out="$($C awake on --lid --pid $W)"; rc=$?
+wd1="$(lidfile .watchdogPid)"; WDS+=($wd1)
+check "lid on: ventilation message"            zsh -c '[[ $1 == *"awake: lid hold on: the Mac stays awake with the lid shut; keep it ventilated (not in a closed bag on battery for long)"* ]]' _ "$out"
+check "lid on: exit 0"                         test $rc -eq 0
+check "lid on: disablesleep 1 called once"     test "$(ndis 1)" = 1
+check "lid on: awake.json lid true"            test "$(lidfile .lid)" = true
+check "lid on: awake.json watchdogPid is a watchdog"  wdalive "$wd1"
+check "lid on: file keeps the base fields"     test "$(lidfile '[.pid,.caffeinatePid,.since]|map(type)|join(",")')" = "number,number,string"
+check "lid on: SleepDisabled set"              test -e "$S/sleepdisabled"
+out="$($C awake on --lid --pid $W)"
+check "lid on twice: already on"               zsh -c '[[ $1 == "awake: already on"* ]]' _ "$out"
+check "lid on twice: disablesleep 1 still once"  test "$(ndis 1)" = 1
+check "lid on twice: same watchdog"            test "$(lidfile .watchdogPid)" = "$wd1"
+out="$($C awake status)"
+check "status: lid on"                         zsh -c '[[ $1 == *"lid: on"* ]]' _ "$out"
+check "status: no stale warning when owned"    zsh -c '[[ $1 != *"stale lid hold"* ]]' _ "$out"
+
+# off releases and kills only the recorded watchdog
+sleep 300 & bystander=$!
+$C awake off >/dev/null
+check "off: disablesleep 0 called once"        test "$(ndis 0)" = 1
+check "off: SleepDisabled cleared"             test ! -e "$S/sleepdisabled"
+check "off: watchdog killed"                   waitfor '! kill -0 '$wd1' 2>/dev/null'
+check "off: file removed"                      test ! -e "$AF"
+out="$($C awake status)"
+check "status after off: lid off"              zsh -c '[[ $1 == *"lid: off"* ]]' _ "$out"
+print -r -- "{\"pid\": $W, \"caffeinatePid\": $bystander, \"since\": \"2020-01-01T00:00:00Z\", \"lid\": true, \"watchdogPid\": $bystander}" > "$AF"
+$C awake off >/dev/null
+check "off: a recorded pid that is not the watchdog is left alone"  kill -0 $bystander
+kill $bystander
+rm -f "$S/sudo.args"
+
+# battery 25%: no lid hold
+print -r -- "$FX/batt-battery-25.txt" > "$S/batt.cur"
+out="$($C awake on --lid --pid $W)"; rc=$?
+check "battery 25%: message"                   zsh -c '[[ $1 == *"awake: battery 25%: no lid hold below 30%"* ]]' _ "$out"
+check "battery 25%: exit 0, plain hold, no lid"  test $rc -eq 0 -a "$(nstub)" = 1 -a "$(lidfile 'has("lid")')" = false
+check "battery 25%: disablesleep 1 not called"   test "$(ndis 1)" = 0
+$C awake off >/dev/null
+print -r -- "$FX/batt-battery.txt" > "$S/batt.cur"
+out="$($C awake on --lid --pid $W)"; WDS+=("$(lidfile .watchdogPid)")
+check "battery 80%: lid hold on"               zsh -c '[[ $1 == *"lid hold on"* ]]' _ "$out"
+$C awake off >/dev/null
+rm -f "$S/batt.cur"
+
+# watchdog: the lead dies
+sleep 300 & lead=$!
+$C awake on --lid --pid $lead >/dev/null; wd2="$(lidfile .watchdogPid)"; WDS+=($wd2); rm -f "$S/sudo.args"
+check "watchdog (lead): running"               wdalive "$wd2"
+kill $lead
+check "watchdog (lead): releases within a few ticks"  waitfor '[[ ! -e "$S/sleepdisabled" ]]'
+check "watchdog (lead): disablesleep 0 called"  test "$(ndis 0)" -ge 1
+check "watchdog (lead): lid fields removed"     waitfor 'test "$(lidfile "[has(\"lid\"),has(\"watchdogPid\")]|any")" = false'
+check "watchdog (lead): watchdog exited"        waitfor '! kill -0 '$wd2' 2>/dev/null'
+$C awake off >/dev/null
+
+# watchdog: battery below 15% on battery
+$C awake on --lid --pid $W >/dev/null; wd3="$(lidfile .watchdogPid)"; WDS+=($wd3)
+print -r -- "$FX/batt-ac-10.txt" > "$S/batt.cur"
+sleep 2.5
+check "watchdog: 10% on AC does not release"    test -e "$S/sleepdisabled" -a "$(lidfile .lid)" = true
+print -r -- "$FX/batt-battery-10.txt" > "$S/batt.cur"
+check "watchdog (battery): releases within a few ticks"  waitfor '[[ ! -e "$S/sleepdisabled" ]]'
+check "watchdog (battery): lid fields removed"  waitfor 'test "$(lidfile "[has(\"lid\"),has(\"watchdogPid\")]|any")" = false'
+check "watchdog (battery): logged"              grep -qx 'awake: lid hold released: battery 10%' "$TC_STATE/awake.log"
+check "watchdog (battery): watchdog exited"     waitfor '! kill -0 '$wd3' 2>/dev/null'
+check "watchdog (battery): plain hold stays"    test "$(nstub)" = 1
+$C awake off >/dev/null
+rm -f "$S/batt.cur"
+
+# stale: SleepDisabled 1 with no lid record
+deny; : > "$S/sleepdisabled"; rm -f "$S/sudo.args"
+STALE="awake: stale lid hold: SleepDisabled is 1 with no owner; run tmux-ctl awake off"
+out="$($C awake status)"
+check "stale: status warns"                    zsh -c '[[ $1 == *"$2"* ]]' _ "$out" "$STALE"
+out="$($C awake on --pid $W)"
+check "stale: on warns"                        zsh -c '[[ $1 == *"$2"* ]]' _ "$out" "$STALE"
+$C awake off >/dev/null
+check "stale, no rule: off leaves it and says so"  test -e "$S/sleepdisabled"
+allow
+$C awake off >/dev/null
+check "stale, rule present: off clears it"     test ! -e "$S/sleepdisabled"
+check "stale: off called disablesleep 0"       test "$(ndis 0)" -ge 1
+out="$($C awake status)"
+check "stale cleared: no warning"              zsh -c '[[ $1 != *"stale lid hold"* ]]' _ "$out"
+deny
+
 # --- unsupported: a PATH without caffeinate (resp. pmset)
 mkdir -p "$S/nocaff" "$S/nopm"
 for tool in zsh sh env jq tmux python3 git ps date sed awk grep cat kill mkdir rm dirname basename xargs tr sort head tail wc sleep readlink uname id ls; do
@@ -139,4 +277,5 @@ check "help still ends at the blank line"      test "$($C help | tail -1)" = ""
 # --- leak check
 $C awake off >/dev/null
 check "leak: no stub process left"             test "$(nstub)" = 0
+check "leak: no watchdog left"                 test "$(pgrep -f "tmux-ctl awake _watchdog" | wc -l | tr -d " ")" = 0
 tt_done
