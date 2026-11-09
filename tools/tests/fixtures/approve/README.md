@@ -4,6 +4,8 @@ Captured 2026-11-09 from `claude --version` = **2.1.321 (Claude Code)** (Opus 5.
 `tmux capture-pane -p -J -t ap` (the full 200x50 pane, trailing blank lines included) on a scratch tmux
 server in a scratch git dir.
 
+These screens come from a plain `claude` session, not a teammate's or a subagent's.
+
 ## Commands used
 
     S=$(mktemp -d); git -C $S init -q
