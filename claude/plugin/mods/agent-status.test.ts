@@ -70,13 +70,13 @@ const START = { surface: 'terminal', isInteractive: true, cwd: '/work' } as cons
 test('session.start writes a ready file with all five keys and the pane', async ($, on) => {
   const { w } = world(on, { TC_STATE: '/s', TMUX_PANE: '%3' })
   await $.session.start(START)
-  expect(read(w)).toEqual({ session_id: 'sid1', pane: '%3', state: 'ready', since: 1000, updatedAt: 1000 })
+  expect(read(w)).toEqual({ session_id: 'sid1', pane: '%3', state: 'ready', since: 1000, updatedAt: 1000, tool: null, turnStartedAt: null, waiting: null, failStreak: 0, lastToolAt: null })
 })
 
 test('pane is null when TMUX_PANE is unset', async ($, on) => {
   const { w } = world(on, { TC_STATE: '/s' })
   await $.session.start(START)
-  expect(read(w)).toEqual({ session_id: 'sid1', pane: null, state: 'ready', since: 1000, updatedAt: 1000 })
+  expect(read(w)).toEqual({ session_id: 'sid1', pane: null, state: 'ready', since: 1000, updatedAt: 1000, tool: null, turnStartedAt: null, waiting: null, failStreak: 0, lastToolAt: null })
 })
 
 test('state dir: TC_STATE wins; else TMPDIR minus trailing slash + /tmux-ctl-<uid>', async ($, on) => {
@@ -452,3 +452,178 @@ test('after a clear, a failing session.id writes nothing (no file named null)', 
   expect([...w.files.keys()].filter((k) => !k.includes('/mods-active/'))).toEqual([])
   expect(w.runs.slice(before)).toEqual([])
 })
+
+// ---- overview fields: tool, turnStartedAt, waiting, failStreak, lastToolAt ----
+const FAIL = { result: 'Error: Exit code 1', text: 'Exit code 1', isError: true }
+// a tool.call the test releases: `running` resolves once the call is inside next()
+function gatedCall(out: any = { result: 'ok' }) {
+  let release: () => void = () => {}
+  let running: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  const started = new Promise<void>((r) => (running = r))
+  return { call: async () => { running(); await gate; if (out === 'THROW') throw new Error('interrupted'); return out }, started, release }
+}
+
+test('a fresh session: tool null, turnStartedAt null, waiting null, failStreak 0, lastToolAt null', async ($, on) => {
+  const { w } = world(on, { TC_STATE: '/s' })
+  await $.session.start(START)
+  const f = read(w)
+  expect(f.tool).toBeNull()
+  expect(f.turnStartedAt).toBeNull()
+  expect(f.waiting).toBeNull()
+  expect(f.failStreak).toBe(0)   // mutation: drop failStreak from render()
+  expect(f.lastToolAt).toBeNull()
+})
+
+test('a Bash call: tool is set while it runs (arg = first line), cleared after, lastToolAt set', async ($, on) => {
+  const g = gatedCall()
+  const { w, clock } = world(on, { TC_STATE: '/s' }, { call: g.call })
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await clock.advance(2000)
+  const p = $.tool.call({ tool: 'Bash', command: 'echo a\necho b', tool_use_id: 'a1' } as any)
+  await g.started
+  await clock.settle()
+  expect(read(w).tool).toEqual({ name: 'Bash', arg: 'echo a', startedAt: 1002 })
+  await clock.advance(1000)
+  g.release()
+  await p
+  expect(read(w).tool).toBeNull()   // mutation: remove the clear after next()
+  expect(read(w).lastToolAt).toBe(1003)
+})
+
+test('arg is cut to 80 characters', async ($, on) => {
+  const g = gatedCall()
+  const { w, clock } = world(on, { TC_STATE: '/s' }, { call: g.call })
+  await $.session.start(START)
+  const p = $.tool.call({ tool: 'Bash', command: 'x'.repeat(200), tool_use_id: 'a1' } as any)
+  await g.started
+  await clock.settle()
+  expect(read(w).tool.arg.length).toBe(80)   // mutation: drop the .slice(0, ARG_MAX)
+  g.release()
+  await p
+})
+
+for (const [tool, args, arg] of [
+  ['Read', { file_path: '/r.txt' }, '/r.txt'],
+  ['Edit', { file_path: '/e.txt' }, '/e.txt'],
+  ['Agent', { description: 'dig' }, 'dig'],
+  ['Grep', { pattern: 'x' }, ''],
+] as any[]) {
+  test(`arg of a ${tool} call is ${JSON.stringify(arg)}`, async ($, on) => {
+    const g = gatedCall()
+    const { w, clock } = world(on, { TC_STATE: '/s' }, { call: g.call })
+    await $.session.start(START)
+    const p = $.tool.call({ tool, ...args, tool_use_id: 'a1' } as any)
+    await g.started
+    await clock.settle()
+    expect(read(w).tool).toMatchObject({ name: tool, arg })   // mutation: argOf returns '' for every tool
+    g.release()
+    await p
+  })
+}
+
+test('turnStartedAt is set at turn.start and null at turn.complete', async ($, on) => {
+  const { w, clock } = world(on, { TC_STATE: '/s' })
+  await $.session.start(START)
+  await clock.advance(4000)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  expect(read(w).turnStartedAt).toBe(1004)
+  await clock.advance(1000)
+  await $.turn.complete(ANSWER)
+  expect(read(w).turnStartedAt).toBeNull()   // mutation: do not null it at turn.complete
+})
+
+for (const [q, detail] of [[{ header: 'Scope', question: 'Which?' }, 'Scope'], [{ question: 'Which?' }, 'Which?']] as any[]) {
+  test(`AskUserQuestion: waiting is ${JSON.stringify(detail)}; null after the answer`, async ($, on) => {
+    const g = gatedCall({ result: 'answered' })
+    const { w, clock } = world(on, { TC_STATE: '/s' }, { call: g.call })
+    await $.session.start(START)
+    await $.turn.start({ text: 'q', turnId: 't1' })
+    const p = $.tool.call({ tool: 'AskUserQuestion', questions: [q], tool_use_id: 'q1' } as any)
+    await g.started
+    await clock.settle()
+    expect(read(w).waiting).toEqual({ kind: 'question', detail })
+    g.release()
+    await p
+    expect(read(w).waiting).toBeNull()   // mutation: do not clear waiting in setState
+  })
+}
+
+test('a permission dialog (classic.PermissionRequest): waiting is permission "Bash: rm x"; null after the answer', async ($, on) => {
+  const d = gatedDialog()
+  const { w, clock } = world(on, { TC_STATE: '/s' }, {
+    call: () => ({ result: 'ran' }),
+    check: () => ({ decision: 'ask', reason: 'r' }),
+    dialog: d.dialog,
+  })
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const p = $.tool.call({ tool: 'Bash', command: 'rm x', tool_use_id: 'a1' } as any)
+  await d.opened
+  await clock.settle()
+  expect(read(w).waiting).toEqual({ kind: 'permission', detail: 'Bash: rm x' })
+  d.answer()
+  await p
+  expect(read(w).waiting).toBeNull()
+})
+
+test('a permission ask without classic hooks (tool.check): waiting is permission "Bash: touch /x"', async ($, on) => {
+  const g = gatedCall()
+  const { w, clock } = world(on, { TC_STATE: '/s' }, {
+    call: g.call,
+    check: (_$: any, e: any) => (e.input.real ? { decision: 'ask', reason: 'r' } : { decision: 'allow' }),
+  })
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.check({ tool: 'Bash', input: { command: 'touch /x', real: true }, tool_use_id: 'a1' } as any)
+  expect(read(w).waiting).toEqual({ kind: 'permission', detail: 'Bash: touch /x' })
+  const p = $.tool.call({ tool: 'Bash', command: 'touch /x', tool_use_id: 'a1' } as any)
+  await g.started
+  g.release()
+  await p
+  expect(read(w).waiting).toBeNull()
+})
+
+test('failStreak counts isError results and throws, and a success resets it', async ($, on) => {
+  let n = 0
+  const outs: any[] = [FAIL, FAIL, 'THROW', { result: 'ok' }, FAIL]
+  const { w } = world(on, { TC_STATE: '/s' }, { call: () => { const o = outs[n++]; if (o === 'THROW') throw new Error('interrupted'); return o } })
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 'a1' } as any)
+  expect(read(w).failStreak).toBe(1)
+  await $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 'a2' } as any)
+  expect(read(w).failStreak).toBe(2)
+  await $.tool.call({ tool: 'Bash', command: 'sleep', tool_use_id: 'a3' } as any).catch(() => {})
+  expect(read(w).failStreak).toBe(3)
+  expect(read(w).tool).toBeNull()
+  await $.tool.call({ tool: 'Bash', command: 'true', tool_use_id: 'a4' } as any)
+  expect(read(w).failStreak).toBe(0)   // mutation: reset failStreak on every call
+  await $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 'a5' } as any)
+  expect(read(w).failStreak).toBe(1)
+})
+
+test('a tool.call carrying agentId leaves tool, failStreak and lastToolAt unchanged', async ($, on) => {
+  const { w, clock } = world(on, { TC_STATE: '/s' }, { call: () => FAIL })
+  await $.session.start(START)
+  await clock.advance(1000)
+  await $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 's1', agentId: 'mate' } as any)
+  expect(read(w)).toMatchObject({ tool: null, failStreak: 0, lastToolAt: null })   // mutation: drop the agentId early return
+})
+
+for (const reason of ['clear', 'resume']) {
+  test(`session.end (${reason}) clears turnStartedAt, tool and waiting but keeps failStreak and lastToolAt`, async ($, on) => {
+    const g = gatedCall(FAIL)
+    const { w, clock } = world(on, { TC_STATE: '/s' }, { call: g.call })
+    await $.session.start(START)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    const p = $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 'a1' } as any)
+    await g.started
+    g.release()
+    await p
+    await $.session.end({ reason, sessionId: 'sid1', resume: {} } as any)
+    w.sid = 'sid2'
+    await clock.advance(16000)
+    expect(read(w, '/s/agent-status/sid2.json')).toMatchObject({ turnStartedAt: null, tool: null, waiting: null, failStreak: 1, lastToolAt: 1000 })
+  })
+}

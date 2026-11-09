@@ -288,9 +288,11 @@ test('an edit with no kind costs only the realpath: no tmux, shasum, lineage rea
   w.runs.length = 0
   await write($, '/work/r/src.ts', 'Edit')
   await write($, '/work/r/notes.md', 'Edit')
-  expect(w.runs.length).toBeGreaterThan(0)
-  expect(w.runs.every((a) => a[0] === 'realpath')).toBe(true)
-  expect(w.runs.some((a) => a[0] === '/fake/tmux' || a[0] === 'shasum' || a[0] === 'sha256sum')).toBe(false)
+  // agent-status (same plugin, same world) writes its status file with `mv` on every tool call: not this mod's cost
+  const runs = w.runs.filter((a) => !(a[0] === 'mv' && a[1].includes('/agent-status/')))
+  expect(runs.length).toBeGreaterThan(0)
+  expect(runs.every((a) => a[0] === 'realpath')).toBe(true)
+  expect(runs.some((a) => a[0] === '/fake/tmux' || a[0] === 'shasum' || a[0] === 'sha256sum')).toBe(false)
   expect(w.files.has(MANIFEST)).toBe(false)
 })
 
