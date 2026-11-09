@@ -4,7 +4,8 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/context-inject.sh\" --scoped", "timeout": 5 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/context-inject.sh\" --scoped", "timeout": 5 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/telegram-env-scrub.sh\" --scoped", "timeout": 5 }
         ]
       }
     ],
