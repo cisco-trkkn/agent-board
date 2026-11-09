@@ -58,6 +58,13 @@ tc_bin() {
   elif (( $+commands[$1] )); then print -r -- "$commands[$1]"
   else print -r -- "$HOME/.local/bin/$1"; fi
 }
-tc_tmux() { "${TC_TMUX_CMD[@]}" "$@" }
+# new-session is the call that can start the server, and a tmux server keeps the directory it started in for life. Once that
+# directory is removed (a merged worktree), tmux 3.8 starts every new pane there and ignores -c
+# (docs/superpowers/notes/2026-11-09-relay-gone-cwd.md). So new-session always runs from $HOME (/ if that fails); every
+# caller passes -c with an absolute path.
+tc_tmux() {
+  if [[ "$1" == new-session ]]; then ( builtin cd -q -- "$HOME" 2>/dev/null || builtin cd -q /; "${TC_TMUX_CMD[@]}" "$@" )
+  else "${TC_TMUX_CMD[@]}" "$@"; fi
+}
 tc_tmux_args_str() { print -r -- "${(j: :)${(q)TC_TMUX_ARGS[@]}}" }
 tc_tmux_resolve

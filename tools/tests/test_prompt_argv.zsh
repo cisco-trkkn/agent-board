@@ -40,6 +40,7 @@ check "spaced repo: no backslash in any argument"         test -z "$(grep -F -e 
 rm -rf "${sp:h}"
 
 dry="$(TC_AGENT_DRYRUN=1 $R/bin/tmux-ctl agent w --force "a b" 2>&1)"
+check "agent line cds to the repo root first" grep -qF "DRYRUN line: cd -- ${(q)R} && CLAUDE_MD_REVISE_HOOK=0" <<< "$dry"
 check "agent dry run keeps DRYRUN task"     grep -qF 'DRYRUN task: a b' <<< "$dry"
 check "agent line has --settings"           grep -qF -- "--settings $R/claude/session-settings.json" <<< "$dry"
 check "agent line has PATH=<repo>/bin:"     grep -qF -- "PATH=$R/bin:" <<< "$dry"
