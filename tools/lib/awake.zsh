@@ -5,6 +5,12 @@
 
 _aw_file() { print -r -- "$TC_STATE_DIR/awake.json" }
 _aw_comm() { local c; c="$(ps -o comm= -p "$1" 2>/dev/null)"; print -r -- "${c:t}" }   # command name of pid $1 ('' when gone)
+# Is pid $1 a claude? Claude Code runs as .../claude/versions/<n.n.n>, so its basename is a version number:
+# match the command name against $2 (TC_AWAKE_ANCESTOR, default claude) as a substring of the basename OR as a whole path component.
+_aw_is_claude() {
+  local c; c="$(ps -o comm= -p "$1" 2>/dev/null)"; [[ -n "$c" ]] || return 1
+  [[ "${c:t}" == *"$2"* || "/${c:h}/" == *"/$2/"* ]]
+}
 _aw_alive() { [[ "$(_aw_comm "$1")" == "$2" ]] }                                        # pid $1 is still the process named $2
 _aw_power() { pmset -g batt 2>/dev/null | head -2 }
 _aw_on_battery() { [[ "$(pmset -g batt 2>/dev/null)" == *'Battery Power'* ]] }
@@ -56,7 +62,7 @@ _aw_claude_pid() {   # nearest ancestor of this shell whose command name contain
     line="$(ps -o ppid=,comm= -p "$p" 2>/dev/null)" || return 1
     [[ -n "$line" ]] || return 1
     p="${${(z)line}[1]}"
-    [[ "$(_aw_comm "$p")" == *"$want"* ]] && { print -r -- "$p"; return 0 }
+    _aw_is_claude "$p" "$want" && { print -r -- "$p"; return 0 }
   done
   return 1
 }

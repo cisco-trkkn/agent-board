@@ -8,17 +8,12 @@ S="${$(mktemp -d "${TMPDIR:-/tmp}/ttawake.XXXXXX"):A}"
 mkdir -p "$S/bin" "$S/real"
 cp /bin/sleep "$S/real/caffeinate"
 cp /bin/zsh "$S/real/claude-fake"
-codesign -s - -f "$S/real/caffeinate" "$S/real/claude-fake" 2>/dev/null   # a copied platform binary is killed on macOS until re-signed
+mkdir -p "$S/real/claude/versions"; cp /bin/zsh "$S/real/claude/versions/9.9.9"   # how Claude Code runs: basename is a version number
+codesign -s - -f "$S/real/caffeinate" "$S/real/claude-fake" "$S/real/claude/versions/9.9.9" 2>/dev/null   # a copied platform binary is killed on macOS until re-signed
 cat > "$S/bin/caffeinate" <<STUB
 #!/bin/sh
 echo "\$*" >> "$S/caffeinate.args"
 exec "$S/real/caffeinate" 600
-STUB
-#!/bin/sh
-case "\$*" in
-  "-g batt") cat "\${AWAKE_FIXTURE_BATT:-$FX/batt-ac.txt}" ;;
-  "-g log")  cat "$FX/log-sleeps.txt" ;;
-esac
 STUB
 # pmset: $S/batt.cur (a fixture path) overrides the battery capture at call time (a running watchdog sees changes);
 # $S/sleepdisabled present = `pmset -g` carries a SleepDisabled line (absent when 0, as on the real Mac).
@@ -127,6 +122,10 @@ check "no claude ancestor: nothing started"    test "$(nstub)" = 0
 out="$("$S/real/claude-fake" -c "$C awake on; true")"
 check "claude ancestor found"                  zsh -c '[[ $1 == "awake: on (pid "*", watching "[0-9]*")" ]]' _ "$out"
 check "ancestor pid is not the test shell"     test "$(jq -r .pid "$AF")" != "$W"
+$C awake off >/dev/null
+out="$("$S/real/claude/versions/9.9.9" -c "$C awake on; true")"
+check "versioned claude ancestor (.../claude/versions/9.9.9) found"  zsh -c '[[ $1 == "awake: on (pid "*", watching "[0-9]*")" ]]' _ "$out"
+check "versioned ancestor: pid is not the test shell"  test "$(jq -r .pid "$AF")" != "$W"
 $C awake off >/dev/null
 
 # --- sleeps
@@ -308,5 +307,6 @@ check "help still ends at the blank line"      test "$($C help | tail -1)" = ""
 # --- leak check
 $C awake off >/dev/null
 check "leak: no stub process left"             test "$(nstub)" = 0
-check "leak: no watchdog left"                 test "$(pgrep -f "tmux-ctl awake _watchdog" | wc -l | tr -d " ")" = 0
+alivewd=0; for p in $WDS; do [[ -n "$p" ]] && wdalive $p && (( alivewd++ )); done   # only the watchdogs this test started
+check "leak: no watchdog of this test left"    test $alivewd = 0
 tt_done

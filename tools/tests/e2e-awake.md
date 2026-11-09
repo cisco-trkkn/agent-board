@@ -86,10 +86,11 @@ This Mac has no admin rights, so the rule was never installed: the real output o
 ## Lid user gate (the user runs it; agents never do)
 
 - [ ] Install the rule: `tmux-ctl awake lid-setup`, then `sudo visudo -f /etc/sudoers.d/agent-board-awake` with the printed line.
-- [ ] Check the rule is seen: `sudo -n -l /usr/bin/pmset -a disablesleep 1` prints a line `/usr/bin/pmset -a disablesleep 1` (the one unverified output shape).
+- [ ] Check the rule is seen: `sudo -n -l /usr/bin/pmset -a disablesleep 1` prints the exact line `/usr/bin/pmset -a disablesleep 1`, and `sudo -n -l /usr/bin/pmset -a disablesleep 0` prints the exact line `/usr/bin/pmset -a disablesleep 0` (the one unverified output shape; `awake off` depends on the `0` one).
 - [ ] On AC, run `tmux-ctl awake on --lid`: it prints `awake: lid hold on: …`, `tmux-ctl awake status` says `lid: on`.
 - [ ] Note the time, close the lid for 2 minutes, open it.
 - [ ] `tmux-ctl awake sleeps <time before closing>`: expected no `Sleep` line.
 - [ ] `tmux-ctl awake off`: prints `awake: off`.
 - [ ] `pmset -g | grep SleepDisabled`: expected no output (the line only exists while it is 1), i.e. `SleepDisabled` 0.
 - [ ] `pgrep -fl 'caffeinate|_watchdog'` lists none that `awake` started.
+- [ ] Watchdog (run after the items above): with the lid hold on (`awake on --lid --pid <pid of a throwaway sleep 900>`), kill that `sleep`; within 60 s `pmset -g | grep SleepDisabled` prints nothing and `awake status` says `lid: off`.
