@@ -45,7 +45,7 @@ out="$(ctl run -t 25 tests 'echo short-$RANDOM' 2>/dev/null)"
 check "short run: ran" grep -q '^short-[0-9]' <<< "$out"
 pane="$(tt capture-pane -p -J -t "$lane" -S -100)"
 check "short run: command typed literally" grep -qF 'echo short-$RANDOM' <<< "$pane"
-check "short run: no sourcing line"        sh -c '! grep -q "^[^ ]* *\. .*cmds/" <<< "$1"' _ "$pane"
+check "short run: no sourcing line"        zsh -c '! grep -q "^[^ ]* *\. .*cmds/" <<< "$1"' _ "$pane"
 # (5) an unwritable command file: run exits 2 before any record or typing, send just dies
 tt kill-window -t "$lane" 2>/dev/null
 rm -rf "$TC_STATE/cmds"; : > "$TC_STATE/cmds"
@@ -57,8 +57,8 @@ check "unwritable cmds: no run record left as running" sh -c '! grep -qh "\"exit
 allpanes() { local w; for w in ${(f)"$(tt list-panes -s -t '=tt-bg' -F '#{pane_id}')"}; do tt capture-pane -p -J -t "$w" -S -200; done }
 after_all="$(allpanes)"
 check "unwritable cmds: base window untouched"  test "$(tt capture-pane -p -J -t '=tt-bg:tests' -S -200)" = "$base_cap"
-check "unwritable cmds: no long text in any window" sh -c '! grep -q xxxxxxxx <<< "$1"' _ "$after_all"
-check "unwritable cmds: no sourcing line in any window" sh -c '! grep -q "\. .*cmds/" <<< "$1"' _ "$after_all"
+check "unwritable cmds: no long text in any window" zsh -c '! grep -q xxxxxxxx <<< "$1"' _ "$after_all"
+check "unwritable cmds: no sourcing line in any window" zsh -c '! grep -q "\. .*cmds/" <<< "$1"' _ "$after_all"
 ctl send tests "export LONGV=$v" >/dev/null 2>&1; check "unwritable cmds: send exits 2" test $? -eq 2
 rm -f "$TC_STATE/cmds"
 # (6) command files older than a day are reaped, fresh ones stay
