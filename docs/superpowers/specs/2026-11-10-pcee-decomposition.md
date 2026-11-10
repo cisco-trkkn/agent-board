@@ -19,7 +19,7 @@ passes.
 | --- | --- | --- | --- | --- | --- |
 | 1 | `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` | — | queued (1st) | — | 2026-11-10 |
 | 2 | `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` | K1 | queued (3rd) | — | 2026-11-10 |
-| 3 | `docs/superpowers/specs/2026-11-10-pcee-engine-design.md` | K2 | queued (8th), entry gated by K1 | — | 2026-11-10 |
+| 3 | `docs/superpowers/specs/2026-11-10-pcee-engine-design.md` | K2 | queued (8th and 9th: two parts), entry gated by K1 | — | 2026-11-10 |
 | 4 | — | K3 | not started | — | 2026-11-10 |
 | 5 | — | K4 | not started | — | 2026-11-10 |
 | 6 | — | — | not started | — | 2026-11-10 |
