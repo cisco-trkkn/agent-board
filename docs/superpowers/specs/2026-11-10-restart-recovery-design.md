@@ -2,7 +2,7 @@
 
 Date: 2026-11-10 · Ideas: 101, 105, 107, 108, 109 in `~/.local/state/agent-board/ideas/agent-board.md`
 Related: `docs/superpowers/notes/2026-11-09-relay-gone-cwd.md`, plan `2026-11-09-relay-launch-check`
-Runs after: `2026-11-10-fast-test-suite-design.md` (queued first; it fixes the six tests and adds `tools/tests/all.zsh`)
+Runs after: `2026-11-10-fast-test-suite-design.md` (queued before this one; it fixes the six tests and adds `tools/tests/all.zsh`)
 
 ## Problem
 
@@ -18,7 +18,7 @@ Runs after: `2026-11-10-fast-test-suite-design.md` (queued first; it fixes the s
    restarted lead then starts in `~` without anyone noticing.
 4. **Six board tests failed on main (108, 109).** `board/tests/test_orchestrator_path.py` (4) and
    `board/tests/test_restart_orchestrator.py` (2) expected the bare launcher. These are fixed by
-   `2026-11-10-fast-test-suite-design.md`, which runs first in the queue; this spec only keeps them green.
+   `2026-11-10-fast-test-suite-design.md`, which runs earlier in the queue; this spec only keeps them green.
 
 ## Decisions
 
@@ -98,7 +98,7 @@ this is macOS only and exits 2. INSTALL documents it as optional.
 - Tests: `test_deleted_worktree_session_path_falls_back_to_home` becomes two tests: removed worktree → main checkout;
   gone non-git path → `None` and relay refuses with the message.
 - `test_orchestrator_path.py` and `test_restart_orchestrator.py` are already fixed by the fast-test-suite spec
-  (queued first); they must stay green.
+  (queued before this one); they must stay green.
 
 ## Error handling
 

@@ -76,7 +76,7 @@ test) keeps it and the reason goes in the ledger.
 
 ### 4. Green baseline
 
-This spec runs **first** in the queue (user's call, 2026-11-10), so it fixes all five failing files:
+This spec runs **second** in the queue, right after the queue-metrics spec and before restart-recovery (user's call, 2026-11-10), so it fixes all five failing files:
 
 - `board/tests/test_orchestrator_path.py` (4) and `board/tests/test_restart_orchestrator.py` (2): the expected launch
   text becomes `relay.launch_line(root, prompt)`'s output (`cd -- <root> && <launcher> [prompt]`), asserted against
