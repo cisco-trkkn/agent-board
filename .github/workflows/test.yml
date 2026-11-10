@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-24.04]   # ubuntu-latest (26.04) has no Python 3.9 for setup-python
     runs-on: ${{ matrix.os }}
     env:
       PYTHONFAULTHANDLER: "1"   # a crash prints the Python stack
