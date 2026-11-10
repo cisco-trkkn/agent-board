@@ -1017,6 +1017,7 @@ class SweepRecent(StateBase):
         self._no_state_dir_env(TMPDIR=str(tmpdir) + "/")
         self.assertEqual(ws.sweep_recent(), ["removed m1"])
 
+    @unittest.skipUnless(sys.platform == "darwin", "recent_dir() consults the confstr fallback on macOS only")
     def test_recent_file_falls_back_to_darwin_user_temp_dir(self):
         add_worktree(self.repo, "m1")
         tmpdir = Path(self.tmp) / "dt"
