@@ -30,10 +30,14 @@
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
 #   tmux-ctl awake on [--pid N] [--lid]|off|status|sleeps <since>|lid-setup
 #                                          hold the Mac awake (caffeinate) while the queue runs; sleeps lists Sleep/Wake lines since a time
+#   tmux-ctl approve <win> once|deny --expect <text>  answer the permission prompt showing in a window: the one-time Yes, or No
+#                                          (never an always/auto-mode row; refuses when there is no prompt or it changed)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)
 #   tmux-ctl overview [project] [--json]   the overseer digest: one line per open project (plan, in-progress
 #                                          tasks, needs-you, lead, last run, spend, alerts), or the JSON
+#   tmux-ctl telegram token|status|forget [project]  the project's Telegram bot token (read from stdin, never printed) and status;
+#                                          outside tmux give --project <name>
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
@@ -48,8 +52,10 @@ mkdir -p "$STATE"
 die() { print -u2 "tmux-ctl: $*"; exit 2 }
 t()   { tc_tmux "$@" }
 
-[[ -n "$TMUX" ]] || die "not inside tmux"
-if [[ -n "$TC_SESSION" ]]; then
+[[ -n "$TMUX" || "$1" == telegram ]] || die "not inside tmux"   # telegram works outside tmux with --project
+if [[ -z "$TMUX" ]]; then
+  SESSION=; FEEDKEY=
+elif [[ -n "$TC_SESSION" ]]; then
   SESSION="$TC_SESSION"
 elif [[ -n "$TMUX_PANE" ]]; then
   SESSION="$(t display -p -t "$TMUX_PANE" '#{session_name}')"
@@ -57,9 +63,11 @@ else
   SESSION="$(t display -p '#{session_name}')"
 fi
 # feed logs are keyed by the canonical session: the group (web-attach views are throwaway grouped sessions)
-FEEDKEY="$(t display -p -t "=$SESSION:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; FEEDKEY="${FEEDKEY:-$SESSION}"
-# a -bg pane belongs to its project: never key state under <project>-bg
-[[ -n "$(t show-options -qv -t "=$SESSION:" @tc_bg 2>/dev/null)" ]] && FEEDKEY="${FEEDKEY%-bg}"
+if [[ -n "$TMUX" ]]; then
+  FEEDKEY="$(t display -p -t "=$SESSION:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; FEEDKEY="${FEEDKEY:-$SESSION}"
+  # a -bg pane belongs to its project: never key state under <project>-bg
+  [[ -n "$(t show-options -qv -t "=$SESSION:" @tc_bg 2>/dev/null)" ]] && FEEDKEY="${FEEDKEY%-bg}"
+fi
 warn_web_key() {   # state filed under a browser view's name is invisible to the project's board
   [[ "$FEEDKEY" == _web-* ]] && print -u2 "tmux-ctl: warning: this is a browser view (${FEEDKEY}), not a project — run it from the project's own session or its state is filed under the wrong key"
 }
@@ -239,6 +247,10 @@ long_line() {
 }
 
 cmd="$1"; shift 2>/dev/null
+if [[ "$cmd" == telegram ]]; then   # before the tmux housekeeping below: no tmux needed
+  source "${0:A:h:h}/tools/lib/telegram.zsh"
+  telegram_cmd "$@"; exit $?
+fi
 # _done runs when a lane's command ends (the lane looks idle then); help needs no tmux
 if [[ "$cmd" != (_done|_append|help|-h|--help|"") ]]; then
   for SESSION in "$MAIN" "$BG"; do t has-session -t "=$SESSION" 2>/dev/null && reap_lanes; done
@@ -379,6 +391,10 @@ case "$cmd" in
     use_win "$win"; exists "$win"
     is_agent "$win" && die "'$win' is a worker agent — use 'tmux-ctl tell', and leave its prompts to the user"
     t send-keys -t "$(target "$win")" "$@" ;;
+
+  approve)   # works on worker windows too (unlike keys): only the one-time Yes / No, by digit
+    source "${0:A:h:h}/tools/lib/approve.zsh"
+    approve_cmd "$@"; exit $? ;;
 
   new)
     [[ -n "$1" ]] || die "usage: tmux-ctl new <win> [dir]"
@@ -534,7 +550,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/overview.py" "${popt[@]}" "${jflag[@]}" ;;
 
   ""|-h|--help|help)
-    sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

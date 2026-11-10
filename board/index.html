@@ -298,6 +298,7 @@ main { grid-template-rows: minmax(0, 1fr) auto; }
 .usage-alert { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 12.5px; }
 .alert-badge { border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .alert-badge.amber { background: var(--amber-soft); color: var(--amber); }
+.alert-badge.tg { background: var(--blue-soft); color: var(--blue); align-self: center; margin-left: 6px; }
 .alert-badge.red { background: var(--red-soft); color: var(--red); }
 .card .alert-badges { display: flex; gap: 6px; flex-wrap: wrap; }
 table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -569,6 +570,7 @@ function card(s, w, p) {
   const facts = lab ? [lab.role, lab.model, lab.effort] : [r && ROLE[r], `window ${w.index}`, r ? null : p.command];   // labelled: role · model · effort
   who.append(el("span", null, [...facts, mate && task !== w.name ? task : null].filter(Boolean).join(" · ")));
   head.append(who, el("span", "pill " + p.status, STATUS_LABEL[p.status] || p.status));
+  if (p.telegram) { const tg = el("span", "alert-badge tg", "tg"); tg.title = "Telegram channel on (delivery not checked by the board)"; head.append(tg); }
   c.append(head);
   const alerts = (s.usage_alerts || {})[p.id] || [];
   if (alerts.length) {

@@ -76,7 +76,7 @@ class OverviewApiTest(unittest.TestCase):
 
     def test_overseer_session_is_not_a_project_card(self):
         S = server.SEP
-        row = lambda sess: S.join([sess, "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r"])
+        row = lambda sess: S.join([sess, "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/r", "1", "1", "", "", "/r", "999"])
         out = "\n".join([row("proj"), row("overseer")])
         with mock.patch.object(server, "tmux", side_effect=lambda *a, **k: out if a[0] == "list-panes" else ""), \
              mock.patch.object(server.relay, "root_for", side_effect=lambda p: p), \
@@ -88,7 +88,7 @@ class OverviewApiTest(unittest.TestCase):
     def test_project_root_is_the_session_root_not_the_pane_path(self):
         # the lead's pane sits in $HOME while the session started in the project: alerts, spend and plan follow #{session_path}
         S = server.SEP
-        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/pane-elsewhere", "1", "1", "", "", "/proj-root"])
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/pane-elsewhere", "1", "1", "", "", "/proj-root", "999"])
         tm = lambda *a, **k: row if a[0] == "list-panes" else ""
         live = [{"name": "a1", "cwd": "/proj-root", "context_pct": 90, "alerts": [{"kind": "context", "label": "ctx 90%"}]},
                 {"name": "b1", "cwd": "/pane-elsewhere", "context_pct": 91, "alerts": [{"kind": "context", "label": "ctx 91%"}]}]

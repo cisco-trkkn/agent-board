@@ -128,7 +128,7 @@ class GitFailureTest(unittest.TestCase):
 
     def test_build_state_survives_git_failing(self):
         S = server.SEP
-        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/e", "1", "1", "", "", str(self.r.repo)])
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/e", "1", "1", "", "", str(self.r.repo), "999"])
         with mock.patch.object(server, "INDEXER", None), mock.patch.object(server, "tmux", return_value=row), \
              mock.patch.object(server, "pane_text", return_value=[]), mock.patch.object(server, "cached_worktrees", return_value=[]), \
              self.failing(FileNotFoundError("git")):
@@ -157,7 +157,7 @@ class RootedBase(unittest.TestCase):
 class BuildStateRootTest(RootedBase):
     def state(self, start):
         S = server.SEP
-        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/elsewhere", "1", "1", "", "", start])
+        row = S.join(["proj", "1", "1", "claude", "0", "", "0", "%1", "t", "zsh", "/elsewhere", "1", "1", "", "", start, "999"])
         with mock.patch.object(server, "INDEXER", None), mock.patch.object(server, "tmux", return_value=row), \
              mock.patch.object(server, "pane_text", return_value=[]), mock.patch.object(server, "cached_worktrees", return_value=[]):
             return server.build_state()["sessions"][0]
