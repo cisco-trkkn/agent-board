@@ -40,8 +40,8 @@ check "launch file under TC_STATE_DIR/agents"    test -n "$(print -rl -- $TC_STA
 dry="$(cd "$repo" && TC_STATE="$TC_STATE_DIR" TC_SESSION=tt TC_AGENT_DRYRUN=1 "$R/bin/tmux-ctl" agent dryw --force "a b" 2>&1)"
 check "dry run prints DRYRUN launch:"  grep -q '^DRYRUN launch: .*agents/tt-dryw\.zsh' <<< "$dry"
 check "dry run writes no launch file"  test ! -e "$TC_STATE_DIR/agents/tt-dryw.zsh"
-check "launch file is mode 600"  test "$(stat -f %Lp "$TC_STATE_DIR"/agents/tt-launchtest.zsh)" = 600
-check "agents dir is mode 700"   test "$(stat -f %Lp "$TC_STATE_DIR/agents")" = 700
+check "launch file is mode 600"  test "$(mode "$TC_STATE_DIR"/agents/tt-launchtest.zsh)" = 600
+check "agents dir is mode 700"   test "$(mode "$TC_STATE_DIR/agents")" = 700
 dry2="$(cd "$repo" && TC_STATE="$TC_STATE_DIR" TC_SESSION='my sess:1' TC_AGENT_DRYRUN=1 "$R/bin/tmux-ctl" agent dryw --force "a b" 2>&1)"
 check "session part of the file name is sanitized" grep -qF "DRYRUN launch: $TC_STATE_DIR/agents/my_sess_1-dryw.zsh" <<< "$dry2"
 has_win() { tt list-windows -t '=tt' -F '#{window_name}' | grep -qxF -- "$1" }
@@ -63,8 +63,8 @@ check "existing window: launch file left untouched"   test "$(<"$TC_STATE_DIR/ag
 # modes are guaranteed even when the dir and file already existed with looser ones
 chmod 755 "$TC_STATE_DIR/agents"; : > "$TC_STATE_DIR/agents/tt-modes.zsh"; chmod 644 "$TC_STATE_DIR/agents/tt-modes.zsh"
 ( cd "$repo" && PATH="$stub:$PATH" TC_STATE="$TC_STATE_DIR" TC_SESSION=tt "$R/bin/tmux-ctl" agent modes --force "a b" ) > "$work/out5" 2>&1
-check "pre-existing file tightened to 600"  test "$(stat -f %Lp "$TC_STATE_DIR/agents/tt-modes.zsh")" = 600
-check "pre-existing dir tightened to 700"   test "$(stat -f %Lp "$TC_STATE_DIR/agents")" = 700
+check "pre-existing file tightened to 600"  test "$(mode "$TC_STATE_DIR/agents/tt-modes.zsh")" = 600
+check "pre-existing dir tightened to 700"   test "$(mode "$TC_STATE_DIR/agents")" = 700
 # names that look like options or paths are refused
 for bad in -x .. .; do
   ( cd "$repo" && PATH="$stub:$PATH" TC_STATE="$TC_STATE_DIR" TC_SESSION=tt "$R/bin/tmux-ctl" agent "$bad" --force "a b" ) > "$work/out6" 2>&1; rc=$?

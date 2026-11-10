@@ -24,7 +24,6 @@ cleanup() { [[ -n "$POLLER" ]] && kill $POLLER 2>/dev/null; rm -rf "$S" }
 trap 'cleanup; tt_teardown' EXIT INT TERM
 # run <stdin> <cmd…>: capture stdout+stderr in $S/out.N (scanned for the secret at the end), print it, keep the exit code in $rc
 run() { local in="$1"; shift; (( N++ )); print -r -- "$in" | "$@" > "$S/out.$N" 2>&1; rc=$?; out="$(<$S/out.$N)" }
-mode() { stat -f %Lp "$1" 2>/dev/null }
 
 # --- token
 run "$TOK" $C telegram token
