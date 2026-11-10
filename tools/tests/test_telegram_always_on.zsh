@@ -69,4 +69,45 @@ mkdir -p "$TT_DIR/repo3/bin" "$TT_DIR/repo3/tools" "$TT_DIR/repo3/claude"; cp "$
 print -r -- 'import sys; sys.exit(3)' > "$TT_DIR/repo3/tools/telegram_cache.py"
 run "$TT_DIR/repo3/bin/claude-orchestrator"
 check "launcher: failing helper: claude still starts" test -s $S/argv
+
+# --- part 3: `tmux-ctl telegram watch --once` against a fake claude TUI in a scratch tmux window
+if (( ! $+commands[python3] )); then print "skip - no python3"; tt_done; exit 0; fi
+MARK="tgfake-$$-$RANDOM"
+ln -sf "${commands[zsh]:A}" "$STUB/claude"   # a process whose command line starts with claude (tmux still calls its command zsh)
+FAKE="$TT_REPO/tools/tests/fixtures/fake_claude_tui.zsh"
+tt new-window -d -n lead -c "$TT_DIR" "$STUB/claude -f $FAKE $MARK --channels plugin:telegram@claude-plugins-official"
+LP="$(tt display -p -t '=tt:lead' '#{pane_id}')"
+sleep 1.5
+watch() { env TC_NOTIFY=0 TC_TELEGRAM_WATCH_GRACE=0 "$@" "$TT_REPO/bin/tmux-ctl" telegram watch --once }
+nserv() { pgrep -f "telegram/server.ts $MARK" | wc -l | tr -d ' ' }
+screen() { tt capture-pane -p -J -t "$LP" }
+WLOG="$TC_STATE/telegram-watch.log"
+# typed text in the input line: never typed over, the user is told instead
+tt send-keys -t "$LP" -l 'half a sentence'; sleep 0.5
+watch >/dev/null
+check "typed text: no server started"      test "$(nserv)" = 0
+check "typed text: input untouched"        grep -q 'half a sentence' =(screen)
+check "typed text: logged as not typing"   grep -q 'not typing' "$WLOG"
+tt send-keys -t "$LP" C-u; sleep 0.5
+rm -f "$WLOG"
+watch >/dev/null
+check "idle: telegram server running after one pass" test "$(nserv)" = 1
+check "idle: one reconnect line logged"    test "$(grep -c 'reconnect: ok' "$WLOG")" = 1
+check "idle: pane back at the prompt"      grep -q '^❯' =(screen)
+watch >/dev/null
+# (a real lead on this machine may also be down: it has no pane in the scratch server and is logged as such, so count ours only)
+check "healthy lead: second pass is a no-op" test "$(grep -c "pane $LP" "$WLOG")" = 1
+pkill -f "telegram/server.ts $MARK"; sleep 0.5; rm -f "$WLOG"
+watch TC_TELEGRAM_WATCH=0 >/dev/null
+check "TC_TELEGRAM_WATCH=0: nothing happens" test "$(nserv)" = 0 -a ! -e "$WLOG"
+touch "$TC_STATE/telegram-watch.off"; watch >/dev/null
+check "flag file: nothing happens"         test "$(nserv)" = 0 -a ! -e "$WLOG"
+rm -f "$TC_STATE/telegram-watch.off"
+# a busy pane (menu open) is not typed into
+tt send-keys -t "$LP" -l '/mcp'; sleep 0.3; tt send-keys -t "$LP" Enter; sleep 0.5
+watch >/dev/null
+check "open menu: no server started"       test "$(nserv)" = 0
+tt kill-window -t "$LP"; pkill -f "telegram/server.ts $MARK"; sleep 0.5
+check "leak: no fake server left"          test "$(nserv)" = 0
+check "leak: no fake lead left"            test "$(pgrep -f "fake_claude_tui.zsh $MARK" | wc -l | tr -d ' ')" = 0
 tt_done

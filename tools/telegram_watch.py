@@ -257,7 +257,8 @@ def watch_once(env=None, now=None, table=None, panes=None, pane_idle=None, do_re
         except OSError:
             pass
 
-    need = [p for p in leads if table[p].age >= GRACE and not has_server(p, table)]
+    grace = float(env.get("TC_TELEGRAM_WATCH_GRACE") or GRACE)
+    need = [p for p in leads if table[p].age >= grace and not has_server(p, table)]
     if not need:
         return lines
     if panes is None:
@@ -311,11 +312,12 @@ def _rows(pane):
 
 def _pane_idle(pane):
     t = _tmux()
-    cmd = t("display", "-p", "-t", pane, "#{pane_current_command}").strip()
+    # the pane holds a claude process (find_leads found it by its command line), whatever tmux calls the command
+    # (a bare version number, node...): classify it as claude
     rows = _rows(pane)
     while rows and not rows[-1]:
         rows.pop()
-    return idle_at_prompt(cmd, rows, paneclass.mod_states().get(pane))
+    return idle_at_prompt("claude", rows, paneclass.mod_states().get(pane))
 
 
 def _do_reconnect(pane):
@@ -333,9 +335,15 @@ def _do_reconnect(pane):
         return "pane no longer idle"
     pid = int(t("display", "-p", "-t", pane, "#{pane_pid}").strip() or 0)
 
-    def server():
+    def leads():
         tbl = read_table()
-        lead = [p for p in find_leads(tbl) if pane_of(p, tbl, {pid: pane}) == pane]
+        return tbl, [p for p in find_leads(tbl) if pane_of(p, tbl, {pid: pane}) == pane]
+
+    if not leads()[1]:
+        return "lead has gone"           # never type /mcp into a shell prompt
+
+    def server():
+        tbl, lead = leads()
         return bool(lead) and all(has_server(p, tbl) for p in lead)
 
     return reconnect(PaneCtl(lambda: _rows(pane), send), server)

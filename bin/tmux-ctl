@@ -38,6 +38,7 @@
 #                                          tasks, needs-you, lead, last run, spend, alerts), or the JSON
 #   tmux-ctl telegram token|status|forget [project]  the project's Telegram bot token (read from stdin, never printed) and status;
 #                                          outside tmux give --project <name>
+#   tmux-ctl telegram watch --once         the watchdog: reconnect any lead whose telegram MCP server is missing
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
