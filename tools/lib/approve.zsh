@@ -36,12 +36,15 @@ _ap_prompt() {
       for (i = q; i >= 1; i--) if (index(l[i], "──────────") == 1) { s = i; break }
       for (i = s; i <= e; i++) print "B:" l[i]
       # P: the lines --expect may equal, trimmed: the command of a Bash prompt (between its two ╌ rules); any other prompt also its
-      # header-area lines below the title (the file path). Never the Bash description, the question or the option rows.
+      # header-area lines below the title (the file path only). Never the Bash description, the question or the option rows.
       # X:ambiguous (no P lines) when the preview could fake its own frame: a solid divider or ╌ rule at column 1 above the chosen divider,
       # or not exactly two ╌ rules between the divider and the question.
       r1 = 0; r2 = 0; nr = 0
       for (i = s + 1; i < q; i++) if (index(l[i], "╌╌╌╌╌╌╌╌╌╌") == 1) { nr++; if (!r1) r1 = i; else if (!r2) r2 = i }
       amb = (nr != 2)
+      # Claude Code indents every preview line (" cmd", or " │ line" for a multi-line command; fixtures/approve/bash-multiline.txt), so a
+      # non-space first character between the two rules is not part of the command.
+      for (i = r1 + 1; r1 && r2 && i < r2; i++) if (l[i] ~ /^[^ \t]/) amb = 1
       for (i = 1; i < s; i++) if (index(l[i], "──────────") == 1 || index(l[i], "╌╌╌╌╌╌╌╌╌╌") == 1) amb = 1
       if (amb) print "X:ambiguous"
       else if (r1 && r2) {
@@ -75,7 +78,7 @@ approve_cmd() {
   if [[ "$got" != "$want_lines" || -z "$got" ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
   [[ "$act" == once ]] && want=Yes || want=No
   while IFS= read -r line; do
-    [[ "$line" == O:*:"$want" ]] && { digit="${${line#O:}%%:*}"; break }
+    [[ "$line" == O:<->:"$want" ]] && { digit="${${line#O:}%%:*}"; break }
   done <<< "$block"
   if [[ -z "$digit" ]]; then
     [[ "$act" == once ]] && print -u2 "approve: no one-time Yes in $win" || print -u2 "approve: no No option in $win"

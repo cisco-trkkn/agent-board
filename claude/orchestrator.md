@@ -264,7 +264,7 @@ are never covered):
    a line, a missing or extra line, the description or an option label never matches. `approve` reads the prompt, picks only the option labelled exactly `Yes`
    (once) or `No` (deny), re-checks the prompt, sends the option's digit and prints `approve: <window>: chose
    "<label>"`. It presses nothing and exits 1 with `approve: no permission prompt in <window>`, `approve: the
-   prompt in <window> changed` (also when `<line>` is not a line of the command), `approve: no one-time Yes in
+   prompt in <window> changed` (also when `<lines>` are not exactly the lines of the command), `approve: no one-time Yes in
    <window>`, `approve: no No option in <window>` or `approve: <window> is in copy mode`: say so in Telegram
    and ask again. A line other than the "Esc to cancel" footer below the options also reads as "no permission
    prompt".
