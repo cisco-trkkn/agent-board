@@ -70,6 +70,8 @@ act on the repo of the current directory.
 | `metrics report <batch>` | Prints the Markdown Metrics section (section 6). |
 | `metrics compare <config>` | Prints the index and the verdict of the decision rule (section 5), with its inputs. |
 | `metrics backfill [--since <date>]` | Writes `run` lines for specs already merged (section 7). |
+| `metrics gate <id>` | Evaluates a gate file and prints `gate <id>: pass`, `fail` or `too early` with each condition's value and threshold (section 5). Exit 0, 1, 3. |
+| `metrics status` | Prints the one-line roadmap status (section 6). |
 
 - `<spec>` is the spec's repo-relative path. The plan is the file in `docs/superpowers/plans/` whose header names
   that spec; the branch and merge commit come from the first-parent merge on `main` after the `start` line whose
@@ -111,8 +113,8 @@ Fields, grouped. A field whose source is missing is `null` and its name is added
   - `stale_base`: `clean` or `conflict`, with the conflicting paths: whether the spec's diff (`base..head`)
     applies without textual conflict onto the batch base
     (`git merge-tree --write-tree --merge-base=<base> <batch base> <head>`).
-- **Reserved, `null` until the engine sub-projects fill them:** `lock_wait_s`, `lock_wait_cause`, `repair_runs`,
-  `integration_s`, `integration_tokens`.
+- **Reserved, `null` until later stages fill them:** `manifest_tokens` (stage 2), `lock_wait_s`,
+  `lock_wait_cause`, `repair_runs`, `integration_s`, `integration_tokens`.
 
 ### 4. Batch numbers
 
@@ -164,10 +166,27 @@ Derived by `report` and `compare` from the batch's `run` lines, never stored:
   9, and 20% needs about 30. Differences under about 1.5x are not decidable this way; the checkpoints in the
   decomposition are set at large effects for that reason. `compare` prints this limit under its verdict.
 
+- **Gates:** `docs/superpowers/metrics/gates/<id>.md` describes a checkpoint in prose and holds one fenced block
+  tagged `json:gate`. `metrics gate <id>` evaluates it from the run log alone, so an unattended run can check it:
+
+      {"id": "K2", "compare": "engine-c1"}
+      {"id": "K1", "min_specs": 4, "where": {"has": "manifest_tokens"}, "conditions": [
+        {"metric": "manifest.recall", "agg": "median", "min": 0.9},
+        {"metric": "analysis.parallelism", "agg": "last", "min": 1.5},
+        {"metric": "manifest_tokens/tokens.total", "agg": "ratio_of_sums", "max": 0.10}]}
+
+  - A `compare` gate passes on the verdict `replace`, fails on `kill or adjust`, and is `too early` otherwise.
+  - A `conditions` gate takes the last `run` line per `(batch, spec)` that has the `where` field, is `too early`
+    below `min_specs`, and passes when every condition holds. `agg` is `median`, `ratio_of_sums` (sum of the
+    numerator over sum of the denominator) or `last` (the newest `analysis` line's value).
+  - This spec ships the evaluator and no gate files. Each stage's spec adds its gate file and the fields it reads
+    (`manifest_tokens` and the `analysis` line kind come with stage 2).
+
 ### 6. Queue mode and the morning report
 
-Three additions to Queue mode in `claude/orchestrator.md`. The file has an uncommitted edit of the user's; the
-plan carries it across as Queue mode's own rule says (a dry-run-checked patch).
+Four additions to Queue mode in `claude/orchestrator.md`: three numbered here, the fourth under Roadmap status.
+The file has an uncommitted edit of the user's; the plan carries it across as Queue mode's own rule says (a
+dry-run-checked patch).
 
 1. Step 1, after the answers are written: `tmux-ctl metrics batch start --config seq-sdd <specs>`; the batch id
    goes into each queued task's `metadata.queue.batch`, so a handoff carries it. A spec queued later joins the
@@ -182,7 +201,24 @@ plan carries it across as Queue mode's own rule says (a dry-run-checked patch).
    - the batch numbers of section 4;
    - the limit percentages at the batch's start and end;
    - records excluded and metrics commands that failed;
-   - for a challenger configuration, the output of `compare`.
+   - for a challenger configuration, the output of `compare`;
+   - last, when the repo has a roadmap, the output of `tmux-ctl metrics status`, one line.
+
+**Roadmap status.** `docs/superpowers/metrics/roadmap` is one line, `<label> <repo-relative path>`, naming a
+document with a `## Status` table of the columns Stage, Spec, Gate, State, Evidence, Date. In this repo:
+`PCEE docs/superpowers/specs/2026-11-10-pcee-decomposition.md`. `metrics status` prints
+
+    PCEE: stage 2 running, next gate K1: manifest.recall 0.84 (min 0.9), analysis.parallelism 1.7 (min 1.5), … fail
+
+- The stage shown is the first row whose state is not `passed`; the next gate is that row's gate, or the next
+  row's that has one.
+- After the colon comes `metrics gate <id>`'s result: each condition's value and threshold and `pass` or `fail`,
+  or `too early`, or `no gate file` when `gates/<id>.md` does not exist.
+- A repo with no roadmap file prints nothing, and the report has no such line.
+
+A fourth addition to the lead rules, in the morning-report step: after writing the Metrics section, update the
+roadmap document's Status table (state, evidence, date) for every stage whose spec ran in this queue, and commit
+it with the report.
 
 The handoff skill's State of the work already lists `metadata.queue`; the batch id rides in it.
 
@@ -222,6 +258,8 @@ The handoff skill's State of the work already lists `metadata.queue`; the batch 
   window; the even split of shared lead calls; `unpriced_calls`); a copy of a real archived ledger and tasks
   file (`docs/superpowers/ledgers/2026-11-09-remote-access/progress.md` and its plan's `.tasks.json`) for
   bounces, fix rounds, findings, declared files and tiers.
+- **Gates and status:** a `compare` gate and a `conditions` gate, each for pass, fail and too early, with the
+  exit codes; `metrics status` against a fixture Status table (first not-passed row, `no gate file`, no roadmap).
 - **Decision rule:** one synthetic run log per verdict (`too early`, `kill or adjust` by index, `kill or adjust`
   by veto, `replace`, `continue`, `weak evidence`), and the assignment (deterministic, groups kept together,
   alternating from the baseline).
