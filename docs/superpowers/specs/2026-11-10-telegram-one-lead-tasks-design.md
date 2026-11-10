@@ -1,6 +1,6 @@
-# Telegram: one lead per bot, and /tasks from the phone
+# Telegram: one lead per bot, /tasks from the phone, and a receipt reaction
 
-Date: 2026-11-10 · Ideas: 117 and 123 in `~/.local/state/agent-board/ideas/agent-board.md`
+Date: 2026-11-10 · Ideas: 117, 123 and 124 in `~/.local/state/agent-board/ideas/agent-board.md`
 Builds on: `docs/superpowers/specs/2026-11-10-telegram-fixes-design.md` (queued #4) and
 `docs/superpowers/specs/2026-11-10-interactive-tasks-window-design.md` (queued #7). Both land before this spec runs.
 Code: `bin/claude-orchestrator`, `tools/lib/telegram.zsh`, `bin/tmux-ctl`, `board/taskwin.py`, `claude/orchestrator.md`.
@@ -75,7 +75,32 @@ today. Accepted: leads are started by hand.
   > reply with its stdout verbatim, `format: markdownv2`. Nothing else in the reply. It works whether or not the user
   > is remote.
 
-### 3. Tests
+### 3. Receipt reaction (idea 124)
+
+The user wants every Telegram message confirmed, so they know the bot is working. The plugin already supports this
+itself:
+- `ackReaction` in the bot's `access.json` (`server.ts:118`, applied at `server.ts:958`) makes the telegram server
+  react to each delivered message on receipt.
+- No LLM is involved, so it works while the lead is busy.
+- `access.json` is read per message, so a change applies without a restart.
+
+On 2026-11-10 the user's two bots (agent-board, interiors) were set to `👀` by hand, with backups in
+`~/.claude/plugin-backups/telegram/`. This spec makes that the default:
+
+- `tmux-ctl telegram token` sets `ackReaction` to `👀` in `<dir>/access.json` after saving the token:
+  - when the file is missing, it creates `{"dmPolicy": "pairing", "allowFrom": [], "groups": {}, "pending": {}}` plus
+    `ackReaction`, mode 600;
+  - when the file has no `ackReaction` key, it adds the key;
+  - when the key exists, even empty (empty means the user turned it off), it leaves the file alone.
+  - The write is atomic (temp file, then rename) and every other key is kept.
+- `tmux-ctl telegram status` prints `ack reaction: 👀` or `ack reaction: off`.
+- Tests:
+  - token on a new dir creates `access.json` with `ackReaction`;
+  - token on an existing file without the key adds it and keeps every other key byte-for-byte equal as parsed JSON;
+  - an existing empty `ackReaction` is left alone;
+  - the `status` line, for both cases.
+
+### 4. Tests
 
 - `tools/tests/test_telegram_guard.zsh` (scratch tmux server, `-f /dev/null`). The fake poller is a script named
   `server.ts` under a `telegram/` dir; its parent is a fake `claude`, a symlinked shell script. Cases:
