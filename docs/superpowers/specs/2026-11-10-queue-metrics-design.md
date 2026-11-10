@@ -29,8 +29,8 @@ The user decided to measure on real work only: no frozen replays and no dedicate
 - **Metrics** include escaped defects (a manual command) and, from now on, what PCEE will be judged on: manifest
   accuracy, overlap, waves under exclusive file locks, stale-base sensitivity.
 - **Normalise per task. Replace at 8 or more challenger specs over 2 or more batches. Large effects only.**
-- **Queue order:** this spec runs first in the queue of 2026-11-10. Every spec after it, fast-test-suite
-  included, is measured live under `seq-sdd`; only the earlier specs are backfilled.
+- **Queue order:** this spec runs first in the queue of 2026-11-10. Every spec after it is measured live
+  (`seq-sdd`, then `upfront-seq` once stage 2 has merged); only the earlier specs are backfilled.
 
 ## Design
 
@@ -232,9 +232,15 @@ The handoff skill's State of the work already lists `metadata.queue`; the batch 
   numbers computed on 2026-11-10 as the fallback and as the check for the real-state test.
 - Not in the backfill: `queue-followups` (merged without a merge commit). Known gap: Fable 5.2 is unpriced, so
   `usd` understates runs that used it; tokens are complete.
-- **Order in the queue of 2026-11-10:** this spec first. Then `fast-test-suite`, `telegram-fixes`,
-  `restart-recovery`, `queue-reliability` and `interactive-tasks-window` are recorded live under `seq-sdd`.
-  Only this spec's own run and the earlier specs are backfilled.
+- **Order in the queue of 2026-11-10:** this spec first; `fast-test-suite` and `pcee-registry` (stage 2) are
+  recorded live under `seq-sdd`; then `telegram-fixes`, `restart-recovery`, `queue-reliability` and
+  `interactive-tasks-window` under stage 2's `upfront-seq`; `pcee-engine` (stage 3) last, behind gate K1. Only
+  this spec's own run and the earlier specs are backfilled.
+- **Taking effect mid-queue:** a running lead keeps the rules it started with. The plan's last task states, as
+  a step the lead performs after the merge: hand off to a fresh lead (`agent-board:handoff`; in Queue mode it
+  relays without asking). A lead in Queue mode whose pending tasks have no `metadata.queue.batch` runs
+  `metrics batch start` for the pending specs before the next one, so a queue that began before this spec
+  merged is measured from that point.
 - **Relation to those specs:** all five are independent of this one. `interactive-tasks-window` keeps a history
   journal of task transitions in the state directory, for display; the run log holds per-spec measurements in
   the repo, for decisions. Neither reads the other.

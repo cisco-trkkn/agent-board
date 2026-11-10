@@ -18,7 +18,7 @@ passes.
 | Stage | Spec | Gate | State | Evidence | Date |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` | — | queued (1st) | — | 2026-11-10 |
-| 2 | `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` | K1 | queued (7th) | — | 2026-11-10 |
+| 2 | `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` | K1 | queued (3rd) | — | 2026-11-10 |
 | 3 | `docs/superpowers/specs/2026-11-10-pcee-engine-design.md` | K2 | queued (8th), entry gated by K1 | — | 2026-11-10 |
 | 4 | — | K3 | not started | — | 2026-11-10 |
 | 5 | — | K4 | not started | — | 2026-11-10 |
@@ -93,8 +93,10 @@ tests PCEE's premises before any engine exists.
 
 **Checkpoint K1** (adjust before building further if missed):
 
-- Manifest accuracy: median `manifest.recall` at least 0.9 (the share of files a plan really touched that its
-  write set declared).
+- Manifest accuracy: median `manifest.recall_existing` at least 0.9 (of the files a plan really touched that
+  existed when it was written, the share its write set declared). Recall on created files is reported, not
+  gated.
+- At least 4 specs run with manifests.
 - Predicted parallelism: specs divided by predicted waves under the lock policy at least 1.5.
 - Cost: manifest and analysis tokens at most 10% of the plans' tokens.
 
