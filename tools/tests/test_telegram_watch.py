@@ -1,6 +1,9 @@
 """telegram_watch: the watchdog that notices a lead without its telegram MCP server and reconnects it."""
 import json
 import os
+import plistlib
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -267,6 +270,101 @@ class Banner(unittest.TestCase):
             tw.subprocess.run, tw.sys.platform = real_run, real_plat
             if old is not None:
                 os.environ["TC_NOTIFY"] = old
+
+
+def write_stub(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(0o755)
+
+
+class Schedule(unittest.TestCase):
+    """The launchd job, against a fake launchctl and a scratch HOME (never the real LaunchAgents)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.home = Path(self.tmp) / "home"
+        self.calls = Path(self.tmp) / "calls"
+        self.stub = Path(self.tmp) / "launchctl"
+        write_stub(self.stub, f'echo "$@" >> {self.calls}\nexit ${{LC_RC:-0}}\n')
+        self.sibling = Path(self.tmp) / "repo" / "bin"
+        self.link = self.home / ".local" / "bin" / "tmux-ctl"
+        write_stub(self.link, "exit 0\n")
+        self.saved = {k: os.environ.get(k) for k in ("TW_HOME", "TW_LAUNCHCTL", "TW_BIN_DIR")}
+        os.environ.update(TW_HOME=str(self.home), TW_LAUNCHCTL=str(self.stub), TW_BIN_DIR=str(self.sibling))
+        self.addCleanup(self.restore)
+        self.plist = self.home / "Library" / "LaunchAgents" / "com.user.agent-board-telegram-watch.plist"
+        real = Path.home() / "Library" / "LaunchAgents" / "com.user.agent-board-telegram-watch.plist"
+        before = (real.exists(), real.stat().st_mtime if real.exists() else None)
+        self.addCleanup(lambda: self.assertEqual(
+            (real.exists(), real.stat().st_mtime if real.exists() else None), before, "a schedule test touched the real plist"))
+
+    def restore(self):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def called(self):
+        return self.calls.read_text().splitlines() if self.calls.exists() else []
+
+    def test_plist_fields(self):
+        cli = str(self.link)
+        d = plistlib.loads(tw.plist_text(cli, str(self.home)))
+        self.assertEqual(d["Label"], "com.user.agent-board-telegram-watch")
+        self.assertEqual(d["ProgramArguments"], [cli, "telegram", "watch", "--once"])
+        self.assertEqual(d["StartInterval"], 60)
+        log = str(self.home / ".local" / "state" / "agent-board" / "telegram-watch.launchd.log")
+        self.assertEqual((d["StandardOutPath"], d["StandardErrorPath"]), (log, log))
+        path = d["EnvironmentVariables"]["PATH"].split(":")
+        for need in (f"{self.home}/.local/bin", "/opt/homebrew/bin", f"{self.home}/.bun/bin", "/usr/bin", "/bin"):
+            self.assertIn(need, path)
+
+    @unittest.skipUnless(shutil.which("plutil"), "plutil is macOS only")
+    def test_plist_passes_plutil_lint(self):
+        f = Path(self.tmp) / "x.plist"
+        f.write_bytes(tw.plist_text(str(self.link), str(self.home)))
+        r = subprocess.run(["plutil", "-lint", str(f)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_install_writes_plist_then_bootout_and_bootstrap(self):
+        lines = tw.schedule_install()
+        self.assertEqual(plistlib.loads(self.plist.read_bytes())["ProgramArguments"][0], str(self.link))
+        uid = os.getuid()
+        self.assertEqual(self.called(), [f"bootout gui/{uid}/com.user.agent-board-telegram-watch",
+                                         f"bootstrap gui/{uid} {self.plist}"])
+        self.assertTrue(lines)
+
+    def test_install_backs_up_an_existing_plist(self):
+        self.plist.parent.mkdir(parents=True); self.plist.write_text("old")
+        tw.schedule_install()
+        self.assertEqual([p.read_text() for p in self.plist.parent.glob("*.bak-*")], ["old"])
+
+    def test_install_falls_back_to_the_tmux_ctl_beside_the_checkout(self):
+        self.link.unlink()
+        beside = self.sibling / "tmux-ctl"
+        write_stub(beside, "exit 0\n")
+        tw.schedule_install()
+        self.assertEqual(plistlib.loads(self.plist.read_bytes())["ProgramArguments"][0], str(beside))
+
+    def test_install_without_any_tmux_ctl_writes_nothing(self):
+        self.link.unlink()
+        with self.assertRaises(RuntimeError):
+            tw.schedule_install()
+        self.assertFalse(self.plist.exists())
+        self.assertEqual(self.called(), [])
+
+    def test_failed_bootstrap_is_an_error(self):
+        os.environ["LC_RC"] = "5"
+        self.addCleanup(os.environ.pop, "LC_RC", None)
+        with self.assertRaises(RuntimeError):
+            tw.schedule_install()
+
+    def test_uninstall_boots_out_and_removes(self):
+        tw.schedule_install()
+        self.calls.unlink()
+        self.assertEqual(tw.schedule_uninstall(), [f"removed {self.plist}"])
+        self.assertFalse(self.plist.exists())
+        self.assertEqual(self.called(), [f"bootout gui/{os.getuid()}/com.user.agent-board-telegram-watch"])
+        self.assertEqual(tw.schedule_uninstall(), ["not installed"])
 
 
 if __name__ == "__main__":

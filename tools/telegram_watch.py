@@ -10,11 +10,15 @@ State and log: ${TC_STATE:-~/.local/state/agent-board}/telegram-watch.{json,log}
 Off: TC_TELEGRAM_WATCH=0, or a file telegram-watch.off in that directory."""
 import json
 import os
+import plistlib
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
 from collections import namedtuple
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "board"))
@@ -360,12 +364,109 @@ def _notify(title, text):
         pass
 
 
+# ---- the launchd job (every 60 s), same shape as `agent-worktrees schedule`
+
+LABEL = "com.user.agent-board-telegram-watch"
+
+
+def _home():
+    return Path(os.environ.get("TW_HOME") or Path.home())
+
+
+def _plist_path(home=None):
+    return Path(home or _home()) / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+
+
+def plist_text(cli_path, home):
+    """The LaunchAgent plist (bytes): `<cli_path> telegram watch --once` every 60 seconds."""
+    log = f"{home}/.local/state/agent-board/telegram-watch.launchd.log"
+    return plistlib.dumps({
+        "Label": LABEL,
+        "ProgramArguments": [str(cli_path), "telegram", "watch", "--once"],
+        "StartInterval": 60,
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+        # ~/.bun/bin: tmux-ctl's helpers and the plugin's launcher live there; tmux and python3 come from the other two
+        "EnvironmentVariables": {"PATH": f"{home}/.local/bin:/opt/homebrew/bin:{home}/.bun/bin:/usr/bin:/bin"},
+    })
+
+
+def _launchctl(*args):
+    cmd = shlex.split(os.environ.get("TW_LAUNCHCTL") or "launchctl")
+    try:
+        return subprocess.run([*cmd, *args], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(args, 127, "", str(e))
+
+
+def _executable(p):
+    return p.is_file() and os.access(p, os.X_OK)
+
+
+def tmux_ctl_path(home=None):
+    """~/.local/bin/tmux-ctl, else the one beside this checkout (TW_BIN_DIR is the test seam); RuntimeError otherwise."""
+    beside = Path(os.environ.get("TW_BIN_DIR") or Path(__file__).resolve().parent.parent / "bin")
+    cands = [Path(home or _home()) / ".local" / "bin" / "tmux-ctl", beside / "tmux-ctl"]
+    for c in cands:
+        if _executable(c):
+            return c
+    raise RuntimeError("no executable tmux-ctl to schedule; checked " + ", ".join(str(c) for c in cands))
+
+
+def schedule_install():
+    home = _home()
+    target = tmux_ctl_path(home)               # before anything is written
+    plist = _plist_path(home)
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    (home / ".local" / "state" / "agent-board").mkdir(parents=True, exist_ok=True)
+    lines = []
+    if plist.exists():
+        bak = plist.with_name(f"{plist.name}.bak-{datetime.now():%Y%m%d}")
+        shutil.copy2(plist, bak)
+        lines.append(f"backed up the old plist to {bak}")
+    plist.write_bytes(plist_text(target, str(home)))
+    uid = os.getuid()
+    _launchctl("bootout", f"gui/{uid}/{LABEL}")   # not loaded yet is fine
+    r = _launchctl("bootstrap", f"gui/{uid}", str(plist))
+    if r.returncode != 0:
+        raise RuntimeError(f"launchctl bootstrap failed: {(r.stderr or r.stdout).strip()}")
+    return lines + [f"installed {plist}: telegram watch --once every 60 seconds"]
+
+
+def schedule_uninstall():
+    plist = _plist_path()
+    _launchctl("bootout", f"gui/{os.getuid()}/{LABEL}")
+    if plist.exists():
+        plist.unlink()
+        return [f"removed {plist}"]
+    return ["not installed"]
+
+
+def schedule_status():
+    r = _launchctl("print", f"gui/{os.getuid()}/{LABEL}")
+    if r.returncode != 0:
+        return ["not installed"]
+    keep = [l.strip() for l in r.stdout.splitlines() if re.match(r"^\t(state|last exit code) = ", l)]
+    return keep or ["installed"]
+
+
 def main(argv):
     if argv[:1] == ["--once"] or not argv:
         for line in watch_once():
             print(line)
         return 0
-    print("usage: telegram_watch.py --once", file=sys.stderr)
+    if argv[:1] in (["install"], ["uninstall"], ["status"]):
+        if sys.platform != "darwin" and "TW_LAUNCHCTL" not in os.environ:
+            print("telegram watch: launchd is macOS only; run `tmux-ctl telegram watch --once` from cron or a timer", file=sys.stderr)
+            return 2
+        try:
+            lines = {"install": schedule_install, "uninstall": schedule_uninstall, "status": schedule_status}[argv[0]]()
+        except RuntimeError as e:
+            print(f"telegram watch: {e}", file=sys.stderr)
+            return 1
+        print("\n".join(lines))
+        return 0
+    print("usage: tmux-ctl telegram watch --once|install|uninstall|status", file=sys.stderr)
     return 2
 
 

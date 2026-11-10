@@ -18,6 +18,7 @@ KEY='plugin:telegram:telegram'
 seed() { print -r -- '{"plugin:gitlab:gitlab":{"timestamp":1},"plugin:telegram:telegram":{"timestamp":2,"id":"abc"}}' > "$CACHE" }
 haskey() { jq -e --arg k "$1" 'has($k)' "$CACHE" >/dev/null 2>&1 }
 
+REAL_PLISTS="$(ls ~/Library/LaunchAgents 2>/dev/null | grep -c agent-board-telegram-watch.plist)"
 # --- part 2a: the helper
 seed
 CLAUDE_CONFIG_DIR="$CFG" python3 "$HELPER" clear; rc=$?
@@ -110,4 +111,21 @@ check "open menu: no server started"       test "$(nserv)" = 0
 tt kill-window -t "$LP"; pkill -f "telegram/server.ts $MARK"; sleep 0.5
 check "leak: no fake server left"          test "$(nserv)" = 0
 check "leak: no fake lead left"            test "$(pgrep -f "fake_claude_tui.zsh $MARK" | wc -l | tr -d ' ')" = 0
+
+# --- part 3: the launchd job through tmux-ctl, against a fake launchctl and a scratch HOME (never the real LaunchAgents)
+LC="$TT_DIR/launchctl"; LCALLS="$TT_DIR/lcalls"
+print -r -- "#!/bin/sh
+echo \"\$@\" >> $LCALLS" > "$LC"; chmod +x "$LC"
+mkdir -p "$RT/.local/bin"; ln -sf "$TT_REPO/bin/tmux-ctl" "$RT/.local/bin/tmux-ctl"
+PL="$RT/Library/LaunchAgents/com.user.agent-board-telegram-watch.plist"
+sched() { env TW_HOME="$RT" TW_LAUNCHCTL="$LC" "$TT_REPO/bin/tmux-ctl" telegram watch "$@" }
+sched install >/dev/null; rc=$?
+check "schedule install: exit 0"               test $rc = 0
+check "schedule install: plist written"        test -f "$PL"
+check "schedule install: StartInterval 60"     grep -q '<integer>60</integer>' "$PL"
+check "schedule install: runs watch --once"    grep -q '<string>--once</string>' "$PL"
+check "schedule install: bootout then bootstrap" test "$(sed 's/gui\/[0-9]*/gui\/UID/' $LCALLS | tr '\n' '|')" = "bootout gui/UID/com.user.agent-board-telegram-watch|bootstrap gui/UID $PL|"
+sched uninstall >/dev/null
+check "schedule uninstall: plist gone"         not test -e "$PL"
+check "schedule: the real LaunchAgents plist untouched" test "$(ls ~/Library/LaunchAgents 2>/dev/null | grep -c agent-board-telegram-watch.plist)" = "${REAL_PLISTS:-0}"
 tt_done
