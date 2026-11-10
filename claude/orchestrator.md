@@ -260,7 +260,7 @@ are never covered):
    same as what you sent in step 1 for `#n`; if not, press nothing and ask again in Telegram. Then press with
    `tmux-ctl approve <window> once|deny --expect "<lines>"`. `--expect` is required for both (missing or empty
    exits 2). `<lines>` is every line of the command as the pane shows it between the two dashed rules,
-   newline-separated, in order, exactly as shown (a multi-line command shows each line after a `│ ` gutter, and `--expect` lists the lines with it) (for a Write or Edit prompt, the file path line); the match is exact, so part of
+   newline-separated, in order, exactly as shown (a multi-line command shows each line after a `│ ` gutter, and `--expect` lists the lines as shown, gutter included, e.g. `$'│ echo a\n│ ──── echo probe'`) (for a Write or Edit prompt, the file path line); the match is exact, so part of
    a line, a missing or extra line, the description or an option label never matches. `approve` reads the prompt, picks only the option labelled exactly `Yes`
    (once) or `No` (deny), re-checks the prompt, sends the option's digit and prints `approve: <window>: chose
    "<label>"`. It presses nothing and exits 1 with `approve: no permission prompt in <window>`, `approve: the
