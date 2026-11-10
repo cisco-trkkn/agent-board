@@ -28,7 +28,9 @@ what happened. Execution order and concurrency of implementation do not change.
 - **A stale check before each spec runs**, with one refresh pass when a manifest file changed on `main`.
 - **Graphs by code, plus one cross-plan model pass** that reads only manifests and the specs' titles and
   decisions.
-- **Waves under three lock policies**; K1 reads the strict one.
+- **Waves under three lock policies**; K1 reads the **append-aware** one (two appends to one file are
+  compatible). Strict and writes-only waves are reported beside it. A declared append is verified from the diff
+  after the run, and one that was not an append counts as a manifest miss.
 - **K1's recall is measured on files that existed when the plan was written** (modified and appended). Recall on
   created files is reported, not gated.
 - **Queue order of 2026-11-10:** this spec runs third (after queue-metrics and fast-test-suite). The four specs
@@ -126,15 +128,16 @@ database in this stage.
 - **Clusters:** connected components of the plans joined by `hard` dependencies or by `strict` conflicts on
   a path that is not append-only for both.
 - **Waves:** a greedy colouring of the conflict graph, most-conflicting plan first, in which a plan's wave is
-  after the waves of its `hard` dependencies. Computed per policy. `parallelism` is specs divided by `strict`
-  waves.
+  after the waves of its `hard` dependencies. Computed per policy. `parallelism` is specs divided by `append`
+  waves; `parallelism_strict` and `parallelism_writes_only` are the same ratio for the other two.
 - **Output of `registry analyse <batch>`:**
   - `docs/superpowers/metrics/analysis/<batch>.md`: the manifest table, the two graphs as edge lists (relations
     from the cross-plan pass marked as such, with their `why`), clusters, waves per policy, hot files (written
     by three or more plans);
   - one `analysis` line in the run log:
     `{"kind": "analysis", "batch": …, "specs": n, "waves": {"strict": n, "append": n, "writes_only": n},
-    "parallelism": x, "clusters": n, "relations": n}`. A later line for the same batch supersedes an earlier
+    "parallelism": x, "parallelism_strict": x, "parallelism_writes_only": x, "appends_verified": bool,
+    "clusters": n, "relations": n}`. A later line for the same batch supersedes an earlier
     one.
 
 ### 5. What each run record gains, and prediction against outcome
@@ -144,6 +147,11 @@ database in this stage.
 - `manifest` is computed from the manifest's `writes` instead of the tasks' `files`, and gains
   `recall_existing` (of the touched files that existed at the spec's base, the share listed as `modify` or
   `append`) and `recall_created` (of the touched files that did not exist, the share listed as `create`).
+- **Append verification.** A path is an append when the manifest declares it `append` and, after the run, the
+  spec's diff of that file (`base..head`) has only added lines, in one contiguous block, with no deleted or
+  changed line. `metrics record` checks every declared append. One that fails is an `append_violation`: the
+  record lists the path, and for `recall_existing` the file counts as not declared (a miss). A file declared
+  `modify` is never treated as an append, whatever its diff.
 - `refreshes` (0 or 1) and `stale_paths` (a count).
 - `manifest_tokens`: the tokens of the spec's `refresh-…` agent plus an even share of the batch's `crossplan-…`
   agent, found in the usage index by agent name and batch window. Writing the manifest block itself is part of
@@ -153,7 +161,10 @@ database in this stage.
 `tmux-ctl registry report <batch>`, run for the morning report, appends **Prediction against outcome** to the
 analysis document:
 
-- per spec: `recall_existing`, `recall_created`, `precision`, refreshes, the files missed;
+- per spec: `recall_existing`, `recall_created`, `precision`, refreshes, the files missed, append violations;
+- the waves again with every violated append treated as `modify`, written as a new `analysis` line with
+  `"appends_verified": true`. It supersedes the line written before the run, so K1 reads parallelism that
+  rests on verified appends only;
 - per pair of specs: predicted conflict under each policy against the real textual result (the parallel-buildable
   pairs of the metrics spec), totalled as predicted and clean, predicted and conflicting, not predicted and
   conflicting, not predicted and clean;
@@ -165,7 +176,7 @@ analysis document:
 
       {"id": "K1", "min_specs": 4, "where": {"has": "refreshes"}, "conditions": [
         {"metric": "manifest.recall_existing", "agg": "median", "min": 0.9},
-        {"metric": "analysis.parallelism", "agg": "last", "min": 1.5},
+        {"metric": "analysis.parallelism", "agg": "last", "min": 1.5, "where": {"appends_verified": true}},
         {"metric": "manifest_tokens/tokens.total", "agg": "ratio_of_sums", "max": 0.10}]}
 
   `tmux-ctl metrics gate K1` prints each value against its threshold and `pass`, `fail` or `too early`.
@@ -176,11 +187,13 @@ analysis document:
   `tmux-ctl metrics gate <id>`. Exit 0: the spec is planned and run. Any other exit: the spec is not planned; its
   task is completed with `failed — gate <id>: <the command's output line>` and it is recorded with
   `metrics record … --outcome failed`.
-- **If K1 fails,** the analysis document already shows the waves under `append` and `writes_only` and the
-  pair table; the user adjusts the lock policy or the threshold in the gate file. Nothing in the queue decides
-  that.
+- `analysis.parallelism` is the append-aware ratio, and K1 is `too early` until the batch's analysis line has
+  `appends_verified` true (the gate's `where` for that condition), that is until `registry report` has run after
+  the batch's specs.
+- **If K1 fails,** the analysis document shows the waves under all three policies, the append violations and
+  the pair table; the user adjusts the gate file. Nothing in the queue decides that.
 - With the minimum of four specs, `parallelism` can only be 4, 2, 1.33 or 1: K1 passes on waves only when the
-  four specs fit in two strict waves. The gate prints the wave count beside the ratio.
+  four specs fit in two append-aware waves. The gate prints the wave count beside the ratio.
 
 ### 7. Lead rules and taking effect mid-queue
 
@@ -211,6 +224,10 @@ new lead starts with the new rules and applies the boundary rule before the next
   dependency forcing a later wave, a relation edge). One fixture built from the 13 real past plans' `files` lists
   as `modify` writes pins the strict wave count (7 in the 2026-11-10 measurement; ties between equally
   conflicting plans are broken by spec path, and the plan pins the count that rule gives).
+- **Append verification:** on a scratch repository, a declared append that adds one block (an append), one that
+  adds two separate blocks, one that changes a line, and one that deletes a line (three violations, each a miss
+  in `recall_existing`); the waves recomputed with a violated append as `modify`; K1 `too early` while
+  `appends_verified` is false.
 - **Stale check:** a scratch repository where `main` moves a manifest path, a path outside the manifest, and
   creates a path the manifest lists as `create`.
 - **Record fields:** `recall_existing` and `recall_created` on a scratch repository; `manifest_tokens` from a

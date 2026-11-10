@@ -71,7 +71,8 @@ each one is tied to a checkpoint below.
 
 | Risk | Evidence | Checkpoint |
 | --- | --- | --- |
-| Exclusive file locks give little parallelism | A greedy colouring of the 13 real plans by declared files gives 7 waves: under 2x | K1, K4 |
+| Exclusive file locks give little parallelism | A greedy colouring of the 13 real plans by declared files gives 7 waves: under 2x. K1 therefore judges the append-aware policy | K1, K4 |
+| Appends are declared, not guaranteed | A plan may call an edit an append and then change existing lines | K1 (verified from the diff; a violation is a manifest miss) |
 | Clusters collapse into serial execution | The cluster rule would put the five mod plans in one cluster | K1 |
 | File sets are forecasts, not contracts | Tasks were added mid-plan (relay-launch-check Task 5); declared and actual file counts differ (queue-keep-awake 6 declared, 15 touched) | K1 |
 | More tokens per plan | Manifests, a cross-plan analysis pass and change packages are new work, and tokens stopped the last queue | K1, K2, K3 |
@@ -97,11 +98,19 @@ tests PCEE's premises before any engine exists.
   existed when it was written, the share its write set declared). Recall on created files is reported, not
   gated.
 - At least 4 specs run with manifests.
-- Predicted parallelism: specs divided by predicted waves under the lock policy at least 1.5.
+- Predicted parallelism: specs divided by predicted waves at least 1.5, under the append-aware lock policy (two
+  plans that both only append to a file do not exclude each other), counting only appends verified from the
+  diff after the run. Strict and writes-only waves are reported beside it.
 - Cost: manifest and analysis tokens at most 10% of the plans' tokens.
 
-If predicted parallelism misses, the lock policy changes first (for example an append lock class for registry
-files) rather than the engine being built on it.
+Why append-aware and not PCEE's strict rule (same file, exclusive lock), decided 2026-11-10: on the 13 real
+plans strict locks give 7 waves, and most of that overlap is three registry-style files to which each plan adds
+its own lines; and four of the five specs merged on 2026-11-09 apply onto the `main` they started from without
+a textual conflict. A declared append is trusted only after the diff confirms it (added lines only, one block);
+one that does not hold counts against manifest accuracy.
+
+If predicted parallelism still misses, the lock policy is adjusted again from the analysis report rather than
+the engine being built on it.
 
 ### 3. Execution state, scheduler and worker pool at concurrency 1
 

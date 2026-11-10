@@ -171,14 +171,15 @@ Derived by `report` and `compare` from the batch's `run` lines, never stored:
 
       {"id": "K2", "compare": "engine-c1"}
       {"id": "K1", "min_specs": 4, "where": {"has": "manifest_tokens"}, "conditions": [
-        {"metric": "manifest.recall", "agg": "median", "min": 0.9},
-        {"metric": "analysis.parallelism", "agg": "last", "min": 1.5},
+        {"metric": "manifest.recall_existing", "agg": "median", "min": 0.9},
+        {"metric": "analysis.parallelism", "agg": "last", "min": 1.5, "where": {"appends_verified": true}},
         {"metric": "manifest_tokens/tokens.total", "agg": "ratio_of_sums", "max": 0.10}]}
 
   - A `compare` gate passes on the verdict `replace`, fails on `kill or adjust`, and is `too early` otherwise.
   - A `conditions` gate takes the last `run` line per `(batch, spec)` that has the `where` field, is `too early`
     below `min_specs`, and passes when every condition holds. `agg` is `median`, `ratio_of_sums` (sum of the
-    numerator over sum of the denominator) or `last` (the newest `analysis` line's value).
+    numerator over sum of the denominator) or `last` (the newest `analysis` line's value). A condition may carry its own `where` on that line's fields;
+    while it does not hold the gate is `too early`.
   - This spec ships the evaluator and no gate files. Each stage's spec adds its gate file and the fields it reads
     (`manifest_tokens` and the `analysis` line kind come with stage 2).
 
@@ -208,7 +209,7 @@ dry-run-checked patch).
 document with a `## Status` table of the columns Stage, Spec, Gate, State, Evidence, Date. In this repo:
 `PCEE docs/superpowers/specs/2026-11-10-pcee-decomposition.md`. `metrics status` prints
 
-    PCEE: stage 2 running, next gate K1: manifest.recall 0.84 (min 0.9), analysis.parallelism 1.7 (min 1.5), … fail
+    PCEE: stage 2 running, next gate K1: manifest.recall_existing 0.84 (min 0.9), analysis.parallelism 2.0 (min 1.5), … fail
 
 - The stage shown is the first row whose state is not `passed`; the next gate is that row's gate, or the next
   row's that has one.
