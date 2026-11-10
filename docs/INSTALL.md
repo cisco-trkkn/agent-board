@@ -208,7 +208,7 @@ Reach a dev lead from your phone through a Telegram bot. One bot per project; on
 **Rules.**
 
 - Never run `/telegram:configure` and never put a token in `~/.claude/channels/telegram/.env`: every session would then poll that bot. `tmux-ctl telegram status` warns when that file exists; delete it.
-- One live lead per project. A second lead for the same bot stops the first one's poller, and the first stops receiving. The lead's own Bash commands do not see `TELEGRAM_STATE_DIR` (a plugin hook unsets it for them), so a `claude` started from a lead's shell never polls that lead's bot; still, never start a second lead for the same project.
+- One live lead per project. A second lead for the same bot stops the first one's poller, and the first stops receiving. The lead's own Bash commands do not see `TELEGRAM_STATE_DIR` (a plugin hook unsets it for them), so a `claude` started from the lead's Bash tool never polls that lead's bot (hooks and other non-Bash children of the lead still inherit it; none of this repo's hooks starts `claude` from the lead); still, never start a second lead for the same project.
 - Sessions without a token print `plugin:telegram:telegram … Connection closed`. That is expected: the plugin's server exits at once without a token.
 - The lead's own permission prompts reach the phone as buttons; the first answer, phone or terminal, wins.
 - AskUserQuestion is not relayed: while you are remote, the lead asks as a numbered list in Telegram.
