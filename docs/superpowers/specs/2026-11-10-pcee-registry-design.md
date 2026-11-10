@@ -184,7 +184,8 @@ analysis document:
   `{"id": "upfront-seq", "baseline": false, "targets": [{"metric": "tokens_per_task", "max": 1.0}]}`.
 - **Entry gates**, a Queue mode rule added here because up-front planning must skip gated specs: a spec whose
   header has a line `Entry gate: <id>` is not planned up front. When its turn comes the lead runs
-  `tmux-ctl metrics gate <id>`. Exit 0: the spec is planned and run. Any other exit: the spec is not planned; its
+  `tmux-ctl registry report <batch>` for the batch that just ran (so the analysis line rests on verified
+  appends; the morning report runs it again, which is harmless) and then `tmux-ctl metrics gate <id>`. Exit 0: the spec is planned and run. Any other exit: the spec is not planned; its
   task is completed with `failed — gate <id>: <the command's output line>` and it is recorded with
   `metrics record … --outcome failed`.
 - `analysis.parallelism` is the append-aware ratio, and K1 is `too early` until the batch's analysis line has

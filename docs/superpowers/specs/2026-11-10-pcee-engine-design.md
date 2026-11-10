@@ -34,7 +34,9 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
 ## How Queue mode runs this spec
 
 - **Entry gate.** The header line `Entry gate: K1` is the registry spec's entry gate: this spec is not planned up
-  front. At its turn the lead runs `tmux-ctl metrics gate K1`. Exit 0: go on. Any other exit: nothing is planned;
+  front. At its turn the lead runs `tmux-ctl registry report <batch>` for the batch of specs that ran with manifests,
+  then `tmux-ctl metrics gate K1` (append-aware parallelism on verified appends, recall on existing files,
+  manifest tokens, at least 4 specs). Exit 0: go on. Any other exit: nothing is planned;
   both tasks below are completed with `failed — gate K1: <the command's output line>` and recorded with
   `tmux-ctl metrics record … --outcome failed`.
 - **Two tasks.** The spec is queued as two tasks, the second blocked by the first:
