@@ -28,15 +28,17 @@
       "Bash(gcloud * set-iam-policy*)",
       "Bash(terraform apply*)",
       "Bash(terraform destroy*)",
-      "Bash(git push*)",
       "Bash(glab mr create*)",
       "Bash(glab variable*)",
       "Bash(terraform * apply*)",
       "Bash(terraform * destroy*)",
-      "Bash(git * push*)",
       "Bash(gcloud * remove-iam-policy-binding*)"
     ],
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "ask": [
+      "Bash(git push*)",
+      "Bash(git * push*)"
+    ]
   },
   "model": "opus",
   "hooks": {
