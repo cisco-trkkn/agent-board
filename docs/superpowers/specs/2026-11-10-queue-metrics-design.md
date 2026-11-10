@@ -29,8 +29,8 @@ The user decided to measure on real work only: no frozen replays and no dedicate
 - **Metrics** include escaped defects (a manual command) and, from now on, what PCEE will be judged on: manifest
   accuracy, overlap, waves under exclusive file locks, stale-base sensitivity.
 - **Normalise per task. Replace at 8 or more challenger specs over 2 or more batches. Large effects only.**
-- **Queue order:** `2026-11-10-fast-test-suite-design.md` runs first, this spec second. The four specs after it
-  are measured live under `seq-sdd`; fast-test-suite and the earlier specs are backfilled.
+- **Queue order:** this spec runs first in the queue of 2026-11-10. Every spec after it, fast-test-suite
+  included, is measured live under `seq-sdd`; only the earlier specs are backfilled.
 
 ## Design
 
@@ -232,9 +232,9 @@ The handoff skill's State of the work already lists `metadata.queue`; the batch 
   numbers computed on 2026-11-10 as the fallback and as the check for the real-state test.
 - Not in the backfill: `queue-followups` (merged without a merge commit). Known gap: Fable 5.2 is unpriced, so
   `usd` understates runs that used it; tokens are complete.
-- **Order in the queue of 2026-11-10:** `fast-test-suite` first (the user's instruction), this spec second. Then
-  `telegram-fixes`, `restart-recovery`, `queue-reliability` and `interactive-tasks-window` are recorded live
-  under `seq-sdd`. `fast-test-suite` and this spec's own run are backfilled.
+- **Order in the queue of 2026-11-10:** this spec first. Then `fast-test-suite`, `telegram-fixes`,
+  `restart-recovery`, `queue-reliability` and `interactive-tasks-window` are recorded live under `seq-sdd`.
+  Only this spec's own run and the earlier specs are backfilled.
 - **Relation to those specs:** all five are independent of this one. `interactive-tasks-window` keeps a history
   journal of task transitions in the state directory, for display; the run log holds per-spec measurements in
   the repo, for decisions. Neither reads the other.
@@ -270,7 +270,11 @@ The handoff skill's State of the work already lists `metadata.queue`; the batch 
 - **Real state:** `metrics backfill` on this repo gives the 12 records of the appendix; total tokens, total
   priced cost and total active minutes each within 2% of the appendix totals when the usage index still holds
   those days (the test is skipped, and says so, when it does not).
-- **First live use:** the four specs after this one in the queue are recorded under `seq-sdd`; the morning
+- **Full suite:** when this spec runs, `main` has five known failing test files (`test_orchestrator_path`,
+  `test_restart_orchestrator`, `test_session_path`, `test_session_root_path`, `tools/tests/test_prompt_argv.zsh`)
+  and no single runner (`tools/tests/all.zsh` comes with fast-test-suite). Acceptance on the suites of CLAUDE.md
+  Commands is: no new failures beyond those five.
+- **First live use:** the specs after this one in the queue are recorded under `seq-sdd`; the morning
   report's Metrics section is the end-to-end evidence and a user gate.
 
 ## Out of scope
