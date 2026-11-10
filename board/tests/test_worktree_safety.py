@@ -1119,8 +1119,9 @@ class Schedule(Base):
         self.home = Path(self.tmp) / "home"
         self.home.mkdir()
         self.calls = Path(self.tmp) / "launchctl-calls"
+        printed = LAUNCHCTL_PRINT.replace(chr(10), "\\n").replace(chr(9), "\\t")   # outside the f-string: Python 3.9 refuses a backslash in an f-string expression
         self.stub = write_stub(self.bin / "launchctl", f'echo "$@" >> "{self.calls}"\n'
-                               f'case "$1" in print) [ -f "{self.tmp}/loaded" ] && {{ printf "%b" \'{LAUNCHCTL_PRINT.replace(chr(10), "\\n").replace(chr(9), "\\t")}\'; exit 0; }}; echo "Could not find service" >&2; exit 113;; '
+                               f'case "$1" in print) [ -f "{self.tmp}/loaded" ] && {{ printf "%b" \'{printed}\'; exit 0; }}; echo "Could not find service" >&2; exit 113;; '
                                f'bootout) exit 3;; bootstrap) touch "{self.tmp}/loaded"; exit 0;; esac\n')
         self.sibling = Path(self.tmp) / "sibling-bin"   # where "the agent-board beside this CLI" is looked up
         self.sibling.mkdir()
