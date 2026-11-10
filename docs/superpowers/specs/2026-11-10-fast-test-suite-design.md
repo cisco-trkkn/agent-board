@@ -18,8 +18,7 @@ suite has its own command; there is no single runner or verdict line. The slowes
 | `board/tests/test_worktree_board.py` | 44 |
 | `tools/tests/test_bg.zsh` | 38 |
 
-Five files fail on main: `test_orchestrator_path`, `test_restart_orchestrator` (fixed by the queued
-`2026-11-10-restart-recovery` spec), and `test_session_path` (4 errors), `test_session_root_path`,
+Five files fail on main: `test_orchestrator_path`, `test_restart_orchestrator` (the relay launch line change), and `test_session_path` (4 errors), `test_session_root_path`,
 `tools/tests/test_prompt_argv.zsh` (`orchestrator puts <repo>/bin first`, `set-environment PATH has <repo>/bin`).
 
 ## Decisions
@@ -77,10 +76,15 @@ test) keeps it and the reason goes in the ledger.
 
 ### 4. Green baseline
 
-`test_session_path`, `test_session_root_path` and `test_prompt_argv.zsh` are debugged with
-`superpowers-extended-cc:systematic-debugging` (root cause first: the tests or the code) and fixed. The two files the
-restart-recovery spec fixes are not touched here; this spec runs after it in the queue. If they are still red when
-this plan starts, that is recorded and the acceptance run waits for them (the plan does not re-fix them).
+This spec runs **first** in the queue (user's call, 2026-11-10), so it fixes all five failing files:
+
+- `board/tests/test_orchestrator_path.py` (4) and `board/tests/test_restart_orchestrator.py` (2): the expected launch
+  text becomes `relay.launch_line(root, prompt)`'s output (`cd -- <root> && <launcher> [prompt]`), asserted against
+  the function, not a copied string. No change to `board/relay.py`.
+- `test_session_path`, `test_session_root_path` and `test_prompt_argv.zsh` are debugged with
+  `superpowers-extended-cc:systematic-debugging` (root cause first: the tests or the code) and fixed. Check first
+  whether they fail only when run inside a live tmux/agent-board pane (inherited `TMUX`, `TC_*` or `PATH`): if so,
+  the fix is isolation in the test (a clean env), not a code change.
 
 ### 5. Docs
 

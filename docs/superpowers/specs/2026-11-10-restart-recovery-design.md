@@ -2,6 +2,7 @@
 
 Date: 2026-11-10 · Ideas: 101, 105, 107, 108, 109 in `~/.local/state/agent-board/ideas/agent-board.md`
 Related: `docs/superpowers/notes/2026-11-09-relay-gone-cwd.md`, plan `2026-11-09-relay-launch-check`
+Runs after: `2026-11-10-fast-test-suite-design.md` (queued first; it fixes the six tests and adds `tools/tests/all.zsh`)
 
 ## Problem
 
@@ -15,9 +16,9 @@ Related: `docs/superpowers/notes/2026-11-09-relay-gone-cwd.md`, plan `2026-11-09
 3. **`relay.root_for` silently falls back to `$HOME` (107).** When a session's start path is gone it returns `$HOME`
    (`board/relay.py` `root_for`), pinned by `test_deleted_worktree_session_path_falls_back_to_home`. A relayed or
    restarted lead then starts in `~` without anyone noticing.
-4. **Six board tests fail on main (108, 109).** `board/tests/test_orchestrator_path.py` (4) and
-   `board/tests/test_restart_orchestrator.py` (2) expect the bare launcher; `relay.launch_line` now types
-   `cd -- <root> && <launcher>`.
+4. **Six board tests failed on main (108, 109).** `board/tests/test_orchestrator_path.py` (4) and
+   `board/tests/test_restart_orchestrator.py` (2) expected the bare launcher. These are fixed by
+   `2026-11-10-fast-test-suite-design.md`, which runs first in the queue; this spec only keeps them green.
 
 ## Decisions
 
@@ -96,9 +97,8 @@ this is macOS only and exits 2. INSTALL documents it as optional.
   returned to the caller (board toast / `tmux-ctl relay` stderr, exit 1).
 - Tests: `test_deleted_worktree_session_path_falls_back_to_home` becomes two tests: removed worktree → main checkout;
   gone non-git path → `None` and relay refuses with the message.
-- `test_orchestrator_path.py` and `test_restart_orchestrator.py`: expected launch text becomes
-  `relay.launch_line(root, prompt)` output (`cd -- <root> && <launcher> [prompt]`), asserted against the function, not
-  a copied string.
+- `test_orchestrator_path.py` and `test_restart_orchestrator.py` are already fixed by the fast-test-suite spec
+  (queued first); they must stay green.
 
 ## Error handling
 
@@ -113,7 +113,7 @@ board's state poll. A restore of one project that fails does not stop the others
   restore builds the `bin/dev` call with the env (stub runner) for lead and non-lead projects and marks restored;
   dismiss; token required; resume prompt contains `TaskList` and `awake on --lid`.
 - `tmux_server_cwd` with a stub runner: gone path → warning text; existing → none; lsof failure → none.
-- root_for cases above; the six fixed tests pass; full `python3 -m unittest discover -s board/tests` green.
+- root_for cases above; full `python3 -m unittest discover -s board/tests` green.
 - zsh (`tools/tests/`, scratch tmux server): `dev` started from a temp dir that is then deleted leaves the server cwd
   at `$HOME`; `tmux-ctl list` prints the warning when a scratch server is started from a dir that is then removed.
 - `agent-board dash schedule install` with a temp `HOME` writes the plist with the right keys (no `launchctl` call
