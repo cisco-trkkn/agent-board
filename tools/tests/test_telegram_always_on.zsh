@@ -1,0 +1,72 @@
+source "${0:A:h}/lib.zsh"
+# Telegram always-on fixes: part 2 (the launcher clears the stale MCP failure) and part 3 (the watchdog).
+# Everything runs against scratch dirs: CLAUDE_CONFIG_DIR, TC_STATE and HOME are temp, `claude` is a stub.
+tt_setup claude
+RT="$TT_DIR/home"; mkdir -p "$RT"
+CFG="$TT_DIR/cfg"; mkdir -p "$CFG"
+STUB="$TT_DIR/stub"; S="$TT_DIR/out"; mkdir -p "$STUB" "$S"
+cat > "$STUB/claude" <<STUBEOF
+#!/bin/zsh
+print -rl -- "\$@" > $S/argv
+STUBEOF
+chmod +x "$STUB/claude"
+not() { ! "$@" }
+ORIG_PATH="$PATH"
+CACHE="$CFG/mcp-needs-auth-cache.json"
+HELPER="$TT_REPO/tools/telegram_cache.py"
+KEY='plugin:telegram:telegram'
+seed() { print -r -- '{"plugin:gitlab:gitlab":{"timestamp":1},"plugin:telegram:telegram":{"timestamp":2,"id":"abc"}}' > "$CACHE" }
+haskey() { jq -e --arg k "$1" 'has($k)' "$CACHE" >/dev/null 2>&1 }
+
+# --- part 2a: the helper
+seed
+CLAUDE_CONFIG_DIR="$CFG" python3 "$HELPER" clear; rc=$?
+check "helper: exit 0"                     test $rc = 0
+check "helper: telegram key removed"       not haskey "$KEY"
+check "helper: other key kept"             haskey plugin:gitlab:gitlab
+check "helper: other key value intact"     test "$(jq -c '.["plugin:gitlab:gitlab"]' "$CACHE")" = '{"timestamp":1}'
+check "helper: no temp file left"          test "$(ls -A $CFG | grep -c tmp)" = 0
+rm -f "$CACHE"
+CLAUDE_CONFIG_DIR="$CFG" python3 "$HELPER" clear; rc=$?
+check "helper: missing file: exit 0"       test $rc = 0
+check "helper: missing file: not created"  not test -e "$CACHE"
+print -r -- 'not json{' > "$CACHE"
+CLAUDE_CONFIG_DIR="$CFG" python3 "$HELPER" clear; rc=$?
+check "helper: bad JSON: exit 0"           test $rc = 0
+check "helper: bad JSON: file untouched"   test "$(<$CACHE)" = 'not json{'
+print -r -- '[1,2]' > "$CACHE"
+CLAUDE_CONFIG_DIR="$CFG" python3 "$HELPER" clear; rc=$?
+check "helper: non-object JSON: exit 0"    test $rc = 0
+check "helper: non-object JSON untouched"  test "$(<$CACHE)" = '[1,2]'
+print -r -- '{"plugin:gitlab:gitlab":{"timestamp":1}}' > "$CACHE"; touch -t 202001010000 "$CACHE"
+CLAUDE_CONFIG_DIR="$CFG" python3 "$HELPER" clear
+check "helper: key absent: file not rewritten" test "$(stat -c %Y "$CACHE" 2>/dev/null || stat -f %m "$CACHE")" -lt 1600000000
+# default dir: HOME/.claude when CLAUDE_CONFIG_DIR is unset
+mkdir -p "$RT/.claude"; print -r -- '{"plugin:telegram:telegram":{"timestamp":2}}' > "$RT/.claude/mcp-needs-auth-cache.json"
+env -u CLAUDE_CONFIG_DIR HOME="$RT" python3 "$HELPER" clear
+check "helper: default dir is HOME/.claude" test "$(<$RT/.claude/mcp-needs-auth-cache.json)" = '{}'
+
+# --- part 2b: the launcher calls it, only for a lead with a token
+TG="$TC_STATE/telegram/tt"
+L="$TT_REPO/bin/claude-orchestrator"
+run() { rm -f $S/argv; env HOME="$RT" CLAUDE_CONFIG_DIR="$CFG" PATH="$STUB:$ORIG_PATH" "$@" >/dev/null 2>&1 }
+rm -rf "$TG"; seed
+run "$L"
+check "launcher: no token: cache untouched"  haskey "$KEY"
+mkdir -p "$TG"; : > "$TG/.env"; seed
+run "$L"
+check "launcher: token: claude still started" test -s $S/argv
+check "launcher: token: telegram key cleared" not haskey "$KEY"
+check "launcher: token: other key kept"       haskey plugin:gitlab:gitlab
+seed; run TC_TELEGRAM=0 "$L"
+check "launcher: TC_TELEGRAM=0: cache untouched" haskey "$KEY"
+print -r -- 'garbage' > "$CACHE"; run "$L"
+check "launcher: bad cache JSON: claude still starts" test -s $S/argv
+rm -f "$CACHE"; run "$L"
+check "launcher: missing cache: claude still starts" test -s $S/argv
+# a failing helper never blocks the launch
+mkdir -p "$TT_DIR/repo3/bin" "$TT_DIR/repo3/tools" "$TT_DIR/repo3/claude"; cp "$TT_REPO"/bin/{claude-orchestrator,_ab_claude.zsh,_tc_bins.zsh} "$TT_DIR/repo3/bin/"
+print -r -- 'import sys; sys.exit(3)' > "$TT_DIR/repo3/tools/telegram_cache.py"
+run "$TT_DIR/repo3/bin/claude-orchestrator"
+check "launcher: failing helper: claude still starts" test -s $S/argv
+tt_done

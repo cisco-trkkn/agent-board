@@ -30,6 +30,9 @@ if [[ "${TC_TELEGRAM-1}" != 0 && -n "$TMUX" && -n "$TMUX_PANE" ]]; then
     (( ${@[(I)--channels|--channels=*]} )) || TG_ARGS=(--channels plugin:telegram@claude-plugins-official)
   fi
 fi
+# A failed telegram start is cached by Claude Code for 15 min, machine-wide: a lead that starts inside the window skips the
+# channel for good. Clear that one key before the lead starts; never let it block the launch.
+(( ${#TG_ARGS} )) && { python3 "$AB_REPO/tools/telegram_cache.py" clear || true } >/dev/null 2>&1
 AB_ARGS=("${(@Q)${(z)$(ab_claude_args)}}")
 PROMPT_FILE="$HOME/.config/agent-board/orchestrator.md"   # a user override wins over the repo's rules
 [[ -r "$PROMPT_FILE" ]] || PROMPT_FILE="$AB_REPO/claude/orchestrator.md"
