@@ -9,6 +9,8 @@ _aw_comm() { local c; c="$(ps -o comm= -p "$1" 2>/dev/null)"; print -r -- "${c:t
 # match the command name against $2 (TC_AWAKE_ANCESTOR, default claude) as a substring of the basename OR as a whole path component.
 _aw_is_claude() {
   local c; c="$(ps -o comm= -p "$1" 2>/dev/null)"; [[ -n "$c" ]] || return 1
+  # Linux ps prints only the 15-char name, no path: the executable's real path (/proc) carries the claude/versions/ component
+  local e; e="$(readlink "/proc/$1/exe" 2>/dev/null)" && [[ -n "$e" ]] && c="$e"
   [[ "${c:t}" == *"$2"* || "/${c:h}/" == *"/$2/"* ]]
 }
 _aw_alive() { [[ "$(_aw_comm "$1")" == "$2" ]] }                                        # pid $1 is still the process named $2
