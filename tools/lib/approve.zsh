@@ -1,5 +1,6 @@
 # approve.zsh — sourced by tmux-ctl for `tmux-ctl approve <win> once|deny --expect <text>` (spec 2026-11-09-remote-access §5).
-# --expect is required and must equal one whole line of the prompt's command preview (or a non-Bash prompt's file path). Presses the one-time Yes or the No of the permission prompt showing in <win>'s main pane, by its digit alone (claude 2.1.321:
+# --expect is required and must be EVERY line of the prompt's command preview (or a non-Bash prompt's file path), newline-separated, in order:
+# the approval passes only when the preview's lines equal the --expect lines exactly (same count, same order). Presses the one-time Yes or the No of the permission prompt showing in <win>'s main pane, by its digit alone (claude 2.1.321:
 # a digit answers a permission prompt, no Enter; tools/tests/fixtures/approve/README.md). Only an option labelled exactly `Yes`
 # (once) or `No` (deny) is ever chosen: "Yes, and don’t ask again…", "Yes, and switch to auto mode…" rows are never pressed.
 # Uses tmux-ctl's t, use_win, exists, target. TC_APPROVE_BEFORE_SEND (tests): a command run between the capture and the re-capture.
@@ -8,7 +9,7 @@
 _ap_screen() { t capture-pane -p -J -t "$1" 2>/dev/null | sed -e 's/[[:space:]]*$//' | grep -v '^$' }
 
 # _ap_prompt: stdin = the screen. Prints nothing when no prompt shows. Otherwise prints `B:<line>` for each line of the prompt block
-# (from the solid divider above the command preview, through the last option), `P:<line>` for each line --expect may equal, and `O:<n>:<label>` for each option.
+# (from the solid divider above the command preview, through the last option), `P:<line>` for each line --expect must equal, in order, and `O:<n>:<label>` for each option.
 # The options are only the contiguous run `1.` `2.` … right after the last "Do you want…"/"Would you like…" line, so option-shaped
 # text inside the command preview is never one. Byte-literal divider and cursor (no {n}, no multibyte class): same result in any locale.
 _ap_prompt() {
@@ -36,11 +37,16 @@ _ap_prompt() {
       for (i = s; i <= e; i++) print "B:" l[i]
       # P: the lines --expect may equal, trimmed: the command of a Bash prompt (between its two ╌ rules); any other prompt also its
       # header-area lines below the title (the file path). Never the Bash description, the question or the option rows.
-      r1 = 0; r2 = 0
-      for (i = s + 1; i < q; i++) if (index(l[i], "╌╌╌╌╌╌╌╌╌╌") == 1) { if (!r1) r1 = i; else if (!r2) r2 = i }
-      if (r1 && r2) {
-        if (l[s+1] !~ /^[ \t]*Bash command/) for (i = s + 2; i < r1; i++) emit(l[i])
-        for (i = r1 + 1; i < r2; i++) emit(l[i])
+      # X:ambiguous (no P lines) when the preview could fake its own frame: a solid divider or ╌ rule at column 1 above the chosen divider,
+      # or not exactly two ╌ rules between the divider and the question.
+      r1 = 0; r2 = 0; nr = 0
+      for (i = s + 1; i < q; i++) if (index(l[i], "╌╌╌╌╌╌╌╌╌╌") == 1) { nr++; if (!r1) r1 = i; else if (!r2) r2 = i }
+      amb = (nr != 2)
+      for (i = 1; i < s; i++) if (index(l[i], "──────────") == 1 || index(l[i], "╌╌╌╌╌╌╌╌╌╌") == 1) amb = 1
+      if (amb) print "X:ambiguous"
+      else if (r1 && r2) {
+        if (l[s+1] !~ /^[ \t]*Bash command/) { for (i = s + 2; i < r1; i++) emit(l[i]) }   # file path only; never the file content
+        else for (i = r1 + 1; i < r2; i++) emit(l[i])
       }
       for (i = q + 1; i <= e; i++) print "O:" optnum(l[i]) ":" optlabel(l[i])
     }'
@@ -57,14 +63,16 @@ approve_cmd() {
   done
   [[ -n "$win" && ( "$act" == once || "$act" == deny ) ]] || die "$u"
   (( have_expect )) || die "--expect <text> is required: the exact command or path text of the prompt ($u)"
-  [[ -n "$expect" ]] || die "--expect needs the exact command or path text, not an empty value ($u)"
+  [[ -n "$expect" ]] || die "--expect needs the exact command or path text (every preview line, newline-separated), not an empty value ($u)"
   use_win "$win"; exists "$win"
   pane="$(target "$win")"
   block="$(_ap_screen "$pane" | _ap_prompt)"
   [[ -n "$block" ]] || { print -u2 "approve: no permission prompt in $win"; return 1 }
-  local found=0 ex; ex="$(print -r -- "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-  while IFS= read -r line; do [[ "$line" == P:"$ex" ]] && found=1; done <<< "$block"
-  if (( ! found )); then print -u2 "approve: the prompt in $win changed"; return 1; fi
+  # the preview's P: lines must equal the --expect lines (trimmed, empty ones dropped), same count and order; an ambiguous prompt has no P: lines, so it never matches
+  local got want_lines
+  got="$(print -r -- "$block" | grep -a '^P:' | sed -e 's/^P://')"
+  want_lines="$(print -r -- "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$')"
+  if [[ "$got" != "$want_lines" || -z "$got" ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
   [[ "$act" == once ]] && want=Yes || want=No
   while IFS= read -r line; do
     [[ "$line" == O:*:"$want" ]] && { digit="${${line#O:}%%:*}"; break }
