@@ -25,6 +25,7 @@ file notes.txt containing the single line hello", "Use the Bash tool to run exac
 | `bash-touch.txt` | Bash prompt: 1 Yes / 2 "Yes, and always allow access to <dir> from this project" / 3 "Yes, and switch to auto mode" / 4 No |
 | `bash-git.txt` | Bash prompt: 1 Yes / 2 "Yes, and don’t ask again for: git config *" (curly apostrophe) / 3 switch to auto mode / 4 No |
 | `write.txt` | Write prompt "Do you want to create notes.txt?": 1 Yes / 2 "Yes, and switch to accept edits ..." / 3 No (no "always" option, only 3 options) |
+| `bash-multiline.txt` | Bash prompt for a two-line command (asked: "Use the Bash tool to run a two-line command: the first line is echo a and the second line is … ──── echo probe", claude 2.1.321, captured 2026-11-09 the same way): the preview lines are drawn ` │ echo a` and ` │ ──── echo probe`, every one indented, even a line that starts with `────` or `╌╌╌╌` (a second probe, not saved, showed ` │ ╌╌╌╌ echo probe2`); the tip line precedes the description; 4 options as in `bash-git.txt` |
 | `after-yes.txt` | the pane after answering `touch made-by-test` with `1` (prompt gone, "Ran 1 shell command") |
 | `after-no-arrows.txt` | the pane after Down, Down, Enter on `write.txt` (No); blank lines removed (`grep -v '^$' | tail -8`) |
 | `no-prompt.txt` | idle pane after answering `git config` with `4` (No): empty `❯` input, no prompt |
