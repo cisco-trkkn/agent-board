@@ -38,7 +38,8 @@ check "relay scheduled"     zsh -c 'print -r -- "$1" | grep -q "relay scheduled"
 check "orchestrator started" tt_wait 30 test -s "$STUB/args"
 check "prompt names doc"    grep -qF "Read $doc and continue from where the previous session left off." "$STUB/args"
 check "lineage written"     tt_wait 10 sh -c "test \"\$(jq -r .old_session_id $TC_LINEAGE/tt.jsonl 2>/dev/null)\" = OLD1"
-tt_wait 10 test -n "$(tt list-panes -t '=tt:claude' -F '#{pane_current_command}' | grep -x sleep)"
+has_sleep() { tt list-panes -t '=tt:claude' -F '#{pane_current_command}' | grep -qx sleep }
+tt_wait 20 has_sleep
 tt send-keys -t '=tt:claude' C-c 2>/dev/null
 tt respawn-pane -k -t '=tt:claude'       # no command: a fresh interactive shell, as relay.respawn does
 tt_wait 5 tt_all_idle

@@ -14,14 +14,14 @@ win_of() { tt list-windows -t '=tt' -F '#{window_index} #{window_name}' | awk -v
 # of a teammate under Claude Code 2.1.301 (2026-10-16): cd <dir> && env CLAUDECODE=1 … <binary> --agent-id …
 # --agent-name <name> --team-name …; the binary is swapped for a harmless sleeper that keeps the args.
 tt split-window -d -t '=tt:claude' "cd /tmp && env CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 sh -c 'sleep 60; :' --agent-id probe-a@tt --agent-name probe-a --team-name tt --agent-color green --parent-session-id 00000000-0000-0000-0000-000000000000 --agent-type general-purpose --permission-mode auto --model sonnet"
-tt_wait 12 have probe-a
+tt_wait 30 have probe-a
 check "direct shape gets a window"   test -n "$(win_of probe-a)"
 check "placed after the lead"        test "$(win_of probe-a)" = $(( lead + 1 ))
 check "flagged teammate"             test "$(tt show-options -wqv -t "=tt:✦ probe-a" @tc_teammate)" = 1
 # cat shape: started as cat, then respawned into the teammate command (older Claude)
 p="$(tt split-window -d -P -F '#{pane_id}' -t '=tt:claude' cat)"
 tt respawn-pane -k -t "$p" "exec sh -c 'sleep 60; :' teammate --agent-name probe-b"
-tt_wait 12 have probe-b
+tt_wait 30 have probe-b
 check "cat shape gets a window"      test -n "$(win_of probe-b)"
 check "second teammate after first"  test "$(win_of probe-b)" = $(( lead + 2 ))
 # a plain split must stay where it is
@@ -30,14 +30,14 @@ tt split-window -d -t '=tt:claude'
 sleep 2
 check "plain split stays"            test "$(tt list-panes -t '=tt:claude' | wc -l | tr -d ' ')" = $(( before + 1 ))
 check "--hook ignores other panes"   test -z "$(win_of stray-a)$(win_of stray-b)$(win_of stray-c)"
-"$H" --hook; tt_wait 12 have stray-a
+"$H" --hook; tt_wait 30 have stray-a
 check "--hook without a pane scans"  test -n "$(win_of stray-a)"
 # the --hook scan above moved every stray; wait for that, then make a fresh one for the bare call
-tt_wait 12 have stray-b; tt_wait 12 have stray-c
+tt_wait 30 have stray-b; tt_wait 30 have stray-c
 tt set-hook -gu after-split-window       # so the split hook can't move it: only the bare call may
 stray other4 stray-d
 sleep 1
 check "fresh stray not yet moved"    test -z "$(win_of stray-d)"
-"$H"; tt_wait 12 have stray-d
+"$H"; tt_wait 30 have stray-d
 check "bare call scans"              test -n "$(win_of stray-d)"
 tt_done

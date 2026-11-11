@@ -7,7 +7,7 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"; tt_teardown' EXIT INT TERM
 mkdir -p "$TT_DIR/proj"
 # the bg session (tests/shell) is made with normal shells; only the lanes made later get a slow rc file
 ( cd "$TT_DIR/proj" && $C run tests true >/dev/null )
-busy() { tt send-keys -t '=tt-bg:tests' 'sleep 60' Enter; tt_wait 3 test "$(tt display -p -t '=tt-bg:tests' '#{pane_current_command}')" = sleep }
+busy() { tt send-keys -t '=tt-bg:tests' 'sleep 60' Enter; tt_wait 20 tt_pane_is '=tt-bg:tests' sleep }
 busy
 slowz="$work/slowz"; mkdir -p "$slowz"
 print -r -- 'unsetopt GLOBAL_RCS' > "$slowz/.zshenv"; # a builtin wait: no child process, so the pane looks idle while ZLE is not up yet
@@ -50,6 +50,9 @@ check "short run: no sourcing line"        zsh -c '! grep -q "^[^ ]* *\. .*cmds/
 tt kill-window -t "$lane" 2>/dev/null
 rm -rf "$TC_STATE/cmds"; : > "$TC_STATE/cmds"
 rm -f "$TC_STATE"/runs-*.jsonl
+# let the base window finish drawing first (two equal captures 0.5 s apart), or late output of the cases above lands between the two captures
+settled() { local a b; a="$(tt capture-pane -p -J -t '=tt-bg:tests' -S -200)"; sleep 0.5; b="$(tt capture-pane -p -J -t '=tt-bg:tests' -S -200)"; [[ "$a" == "$b" ]] }
+tt_wait 30 settled
 base_cap="$(tt capture-pane -p -J -t '=tt-bg:tests' -S -200)"
 out="$(ctl run -t 25 tests "printf '%s\\n' '$fill'" 2>&1)"; rc=$?
 check "unwritable cmds: run exits 2"     test $rc -eq 2

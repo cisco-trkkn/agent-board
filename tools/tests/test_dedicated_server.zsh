@@ -121,7 +121,7 @@ check "legacy: teammate window on A"          tt_wait 12 win_of "$A_SOCK" tt pro
 check "legacy: not on B"                      sh -c "! $TT_BIN -L $B_SOCK list-windows -a -F '#{window_name}' | grep -q probe-l"
 
 # --- the board: lists B's sessions and its terminals attach to them (TMUX_DASH_TMUX_ARGS, as tmux-dash passes it)
-PORT=$(( 20000 + RANDOM % 20000 ))
+PORT="$(tt_free_port)"
 TMUX_DASH_TOKEN=t TMUX_DASH_PORT=$PORT TMUX_DASH_TMUX_ARGS="-L $B_SOCK" USAGE_ROOT="$TT_DIR/usage" TC_IDEAS_DIR="$TT_DIR/ideas" \
   python3 "$R/board/server.py" > "$TT_DIR/server.log" 2>&1 & SRV_PID=$!
 up() { curl -s -o /dev/null "http://127.0.0.1:$PORT/t/" }

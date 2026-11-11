@@ -6,8 +6,8 @@ sed "s|__HOME__|$HOME|" "$F/ok.json" | "${TC_MIRROR:-$TT_REPO/claude/hooks/bash-
 (cd "$TT_DIR" && $C run tests true >/dev/null)      # creates the hidden tt-bg session
 mp="$(tt list-panes -t '=tt-bg:tests' -F '#{pane_id} #{@tc_role}' | awk '$2==""{print $1}')"
 check "hook entry in feed log"  grep -qxF '$ pytest -q tests/unit' "$TC_STATE/feed-tt-tests.log"
-tt send-keys -t "$mp" 'sleep 30' Enter
-tt_wait 3 test "$(tt display -p -t "$mp" '#{pane_current_command}')" = sleep
+tt send-keys -t "$mp" 'sleep 120' Enter
+tt_wait 20 tt_pane_is "$mp" sleep
 out="$($C run tests 'echo e2e' 2>/dev/null)"
 check "lane run output"         test "$(print -r -- "$out" | head -1)" = e2e
 check "lane window created"     sh -c "$TT_BIN list-windows -t '=tt-bg' -F '#{window_name}' | grep -qx 'tests·claude'"

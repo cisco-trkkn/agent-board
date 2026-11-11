@@ -1,4 +1,5 @@
 source "${0:A:h}/bg_common.zsh"
+# serial: "send returns fast" asserts a latency bound (a send under 2 s) that fails when other jobs load the machine
 # test_bg_lock.zsh — parallel first uses create one shell window; the run lock (a killed waiter, a stale lock), send latency, and output cut with a two-line prompt.
 # race: two parallel first-uses create exactly one shell window
 tt kill-session -t '=tt-bg' 2>/dev/null

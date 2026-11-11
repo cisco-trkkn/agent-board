@@ -8,7 +8,8 @@ last_log() { jq -rs 'map(select(.log))|last|.log' "$TC_STATE/runs-tt.jsonl" }
 ( cd "$TT_DIR" && $C run -t 1 tests 'sleep 3; echo late' >/dev/null 2>&1 ); rc=$?
 check "timeout exits 124"        test $rc -eq 124
 check "timeout leaves a log"     test -f "$(last_log)"
-sleep 5
+# the late _done arrives when the command's end marker is printed (a fixed `sleep 5` was too short on a loaded machine)
+tt_wait 40 sh -c "$TT_BIN capture-pane -p -J -t '=tt-bg:tests' | grep -q '@@TCEND'"
 check "no stale .rc after a late _done" test -z "$(print -l $TC_STATE/*.rc(N))"
 tt_wait 8 tt_all_idle
 # INT/TERM: the pane is captured into the log
