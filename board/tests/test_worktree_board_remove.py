@@ -113,12 +113,19 @@ class StopWaitsForExit(BoardBase):
     def test_no_wait_when_everything_is_already_gone(self):
         self.die(self.shell)
         self.die(self.claude)
-        # the wait polls with time.sleep(0.2) between looks; "no wait" means it never slept, whatever the load did to
-        # the wall clock of the rest of stop_agent (git calls in the sweep)
-        with mock.patch.object(server, "WORKER_EXIT_WAIT", 5), \
-                mock.patch.object(server.time, "sleep", wraps=time.sleep) as slept:
+        # the wait polls with time.sleep(0.2) between looks; "no wait" means the server never slept, whatever the load
+        # did to the wall clock of the rest of stop_agent (git calls in the sweep). Only the server's own calls count:
+        # subprocess waits sleep for a millisecond inside the stdlib.
+        slept = []
+        real_sleep = time.sleep
+
+        def spy(secs):
+            if sys._getframe(1).f_globals is server.__dict__:
+                slept.append(secs)
+            return real_sleep(secs)
+        with mock.patch.object(server, "WORKER_EXIT_WAIT", 5), mock.patch.object(server.time, "sleep", spy):
             self.stop(lambda: None)
-        slept.assert_not_called()
+        self.assertEqual(slept, [])
 
 
 if __name__ == "__main__":
