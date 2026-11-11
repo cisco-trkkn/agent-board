@@ -9,6 +9,7 @@ CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|bac
 A failing command prints one line `metrics: <sub>: <reason>` to stderr and exits 1. `tmux-ctl metrics` calls this.
 """
 import argparse
+import calendar
 import hashlib
 import json
 import re
@@ -191,7 +192,6 @@ def _git_try(repo, *args):
 
 
 def _epoch(iso):
-    import calendar
     return calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
 
 
@@ -277,18 +277,33 @@ def _first_commit(repo, path):
     return (first[0], int(first[1])) if first else (None, None)
 
 
-def find_merge(repo, plan_commit, since_ts):
-    """First first-parent merge on main at/after since_ts whose second parent descends from plan_commit."""
+def find_merge(repo, plan_commit, since_ts, slug):
+    """The first-parent merge on main (at/after since_ts) that brought the plan's work in.
+
+    1. the first merge whose second parent contains the plan's first commit and whose first parent does not;
+    2. else, when the plan commit was already on main, the first merge whose subject branch ends with `slug`
+       (the plan basename without its date prefix);
+    3. else None."""
     rc, out = _git_try(repo, "log", "--first-parent", "--merges", "--reverse", "main", "--format=%H%x09%P%x09%ct%x09%s")
     if rc != 0:
         return None
+    cands = []
     for line in out.splitlines():
         sha, parents, ct, subject = (line.split("\t", 3) + [""])[:4]
         ps = parents.split()
-        if len(ps) < 2 or int(ct) < since_ts:
-            continue
-        if _git_try(repo, "merge-base", "--is-ancestor", plan_commit, ps[1])[0] == 0:
-            return {"sha": sha, "first": ps[0], "second": ps[1], "ct": int(ct), "subject": subject}
+        if len(ps) >= 2 and int(ct) >= since_ts:
+            cands.append({"sha": sha, "first": ps[0], "second": ps[1], "ct": int(ct), "subject": subject})
+
+    def has(commit):
+        return _git_try(repo, "merge-base", "--is-ancestor", plan_commit, commit)[0] == 0
+
+    for c in cands:
+        if has(c["second"]) and not has(c["first"]):
+            return c
+    for c in cands:
+        m = re.match(r"Merge branch '([^']+)'", c["subject"])
+        if m and slug and m.group(1).endswith(slug):
+            return c
     return None
 
 
@@ -338,14 +353,14 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
             rec[k] = None
             missing.append(k)
 
-    rec["window_start"] = start["at"] if start else None
+    rec["started_at"] = start["at"] if start else None
     if not start:
-        missing.append("window_start")
+        missing.append("started_at")
 
     plan = find_plan(repo, spec)
-    plan_path = plan_text = plan_ref = None
+    plan_path = plan_ref = None
     if plan:
-        plan_path, plan_text, plan_ref = plan
+        plan_path, _, plan_ref = plan
     rec["plan"] = plan_path
     if not plan:
         missing.append("plan")
@@ -354,7 +369,8 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
     merge = None
     if plan_commit:
         since = _epoch(start["at"]) if start else plan_ts
-        merge = find_merge(repo, plan_commit, since)
+        slug = re.sub(r"^\d{4}-\d\d-\d\d-", "", Path(plan_path).name[:-3])
+        merge = find_merge(repo, plan_commit, since, slug)
     head = base = None
     if merge:
         m = re.match(r"Merge branch '([^']+)'", merge["subject"])
@@ -362,7 +378,7 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
         head = merge["second"]
         rc, mb = _git_try(repo, "merge-base", merge["first"], head)
         base = mb.strip() if rc == 0 and mb.strip() else None
-        rec["merge"] = {"commit": merge["sha"], "at": utc(merge["ct"])}
+        rec["merge"] = merge["sha"]
     else:
         rec["merge"] = None
         if not branch and plan_commit:
@@ -378,11 +394,9 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
     for k in ("branch", "head", "base"):
         if rec[k] is None:
             missing.append(k)
-    if rec["merge"] is None and plan:
-        pass  # not merged is a result, not a missing source
-    elif rec["merge"] is None:
+    if rec["merge"] is None:
         missing.append("merge")
-    rec["window_end"] = rec["merge"]["at"] if rec["merge"] else utc(now)
+    rec["ended_at"] = utc(merge["ct"]) if merge else utc(now)
 
     word = (outcome or "").split()[0].lower() if (outcome or "").strip() else None
     if word is None:

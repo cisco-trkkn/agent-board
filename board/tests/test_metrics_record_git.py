@@ -76,8 +76,6 @@ class Base(unittest.TestCase):
         git(r, "commit", "-q", "-am", "main moves f")
         self.main_tip = git(r, "rev-parse", "main")
         self.now = time.time()
-        for spec, base in ((SPEC_A, self.base0), (SPEC_B, self.main_tip)):
-            pass
         metrics.append(r, {"kind": "batch", "batch": "B1", "base": self.base0, "configs": ["c"], "assignment": {SPEC_A: "c"},
                            "groups": [], "at": metrics.utc(self.now - 3600)})
         metrics.append(r, {"kind": "batch", "batch": "B2", "base": self.main_tip, "configs": ["c"], "assignment": {SPEC_B: "c"},
@@ -95,11 +93,13 @@ class MergedTest(Base):
         self.assertEqual((r["kind"], r["batch"], r["spec"]), ("run", "B1", SPEC_A))
         self.assertEqual(r["plan"], PLAN_A)
         self.assertEqual(r["branch"], "feat/a")
-        self.assertEqual(r["merge"]["commit"], self.merge_a)
+        self.assertEqual(r["merge"], self.merge_a)
         self.assertEqual(r["head"], git(self.repo, "rev-parse", self.merge_a + "^2"))
         self.assertEqual(r["base"], self.base0)
         self.assertEqual(r["outcome"], "merged")
-        self.assertRegex(r["merge"]["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertRegex(r["ended_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(r["ended_at"], metrics.utc(int(git(self.repo, "log", "-1", "--format=%ct", self.merge_a))))
+        self.assertRegex(r["started_at"], r"^\d{4}-\d\d-\d\dT")
         self.assertEqual(r["missing"], [])
 
     def test_part_suffix_kept_in_record_and_stripped_for_match(self):
@@ -139,6 +139,9 @@ class MergedTest(Base):
         # the fixture must exercise the counters, or the equalities above prove nothing
         self.assertGreater(r["fix_rounds"], 0)
         self.assertGreater(r["rulings"], 0)
+        self.assertGreater(r["bounces"], 0)
+        self.assertGreater(r["parked"], 0)
+        self.assertTrue(r["fix_wave"])
 
     def test_manifest_on_real_tasks_fixture(self):
         text = (FIX / "remote-access.tasks.json").read_text()
@@ -183,6 +186,7 @@ class UnmergedTest(Base):
     def test_conflict_and_branch_from_plan_commit(self):
         r = self.rec(spec=SPEC_B, batch="B2")
         self.assertIsNone(r["merge"])
+        self.assertIn("merge", r["missing"])
         self.assertEqual(r["branch"], "feat/b")
         self.assertEqual(r["head"], self.head_b)
         self.assertEqual(r["outcome"], "kept")
@@ -207,14 +211,55 @@ class UnmergedTest(Base):
         r = self.rec(spec="docs/superpowers/specs/none.md", batch="B1")
         self.assertEqual((r["kind"], r["batch"], r["spec"], r["outcome"]), ("run", "B1", "docs/superpowers/specs/none.md", "kept"))
         self.assertIn("at", r)
-        self.assertIn("window_end", r)
-        ident = {"kind", "batch", "spec", "outcome", "at", "window_start", "window_end", "missing"}
+        self.assertIn("ended_at", r)
+        ident = {"kind", "batch", "spec", "outcome", "at", "started_at", "ended_at", "missing"}
         nulls = [k for k in r if k not in ident]
         self.assertGreater(len(nulls), 10)
         for k in nulls:
             self.assertIsNone(r[k], k)
         for k in ("plan", "branch", "head", "base", "merge", "tasks", "stale_base", "bounces", "manifest"):
             self.assertIn(k, r["missing"], k)
+
+
+class PlanAlreadyOnMainTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        t = Path(self.tmp.name)
+        p = mock.patch.dict(os.environ, {"TC_STATE": str(t / "state"), "USAGE_ROOT": str(t / "proj")})
+        p.start()
+        self.addCleanup(p.stop)
+        self.repo = r = t / "repo"
+        r.mkdir()
+        git(r, "init", "-q", "-b", "main")
+        write(r, "f.txt", "1\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
+        self.plan = "docs/superpowers/plans/2026-01-03-gamma.md"
+        write(r, self.plan, "# P\n\n**Spec:** `docs/superpowers/specs/gamma.md`\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "plan on main")
+        for br, f in (("feat/unrelated", "u.txt"), ("feat/gamma", "g.txt")):
+            git(r, "checkout", "-q", "-b", br, "main")
+            write(r, f, "x\n")
+            git(r, "add", "."); git(r, "commit", "-q", "-m", br)
+            git(r, "checkout", "-q", "main")
+            git(r, "merge", "-q", "--no-ff", "-m", f"Merge branch '{br}'", br)
+            setattr(self, "merge_" + br.split("/")[1], git(r, "rev-parse", "HEAD"))
+        self.now = time.time()
+        metrics.append(r, {"kind": "batch", "batch": "B", "base": git(r, "rev-parse", "HEAD~2"), "configs": ["c"],
+                           "assignment": {}, "groups": [], "at": metrics.utc(self.now)})
+
+    def test_branch_name_picks_the_matching_merge(self):
+        r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", None, self.now)
+        self.assertEqual(r["merge"], self.merge_gamma)
+        self.assertNotEqual(r["merge"], self.merge_unrelated)
+        self.assertEqual(r["branch"], "feat/gamma")
+
+    def test_no_match_is_null_and_missing(self):
+        git(self.repo, "branch", "-m", "feat/gamma", "feat/zzz")
+        git(self.repo, "commit", "-q", "--amend", "-m", "Merge branch 'feat/zzz'")
+        r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", None, self.now)
+        self.assertIsNone(r["merge"])
+        self.assertIn("merge", r["missing"])
 
 
 if __name__ == "__main__":
