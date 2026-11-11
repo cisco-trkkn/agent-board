@@ -33,6 +33,9 @@ fi
 # A failed telegram start is cached by Claude Code for 15 min, machine-wide: a lead that starts inside the window skips the
 # channel for good. Clear that one key before the lead starts; never let it block the launch.
 (( ${#TG_ARGS} )) && { python3 "$AB_REPO/tools/telegram_cache.py" clear || true } >/dev/null 2>&1
+# The telegram plugin runs in every session, token or not: point it at the launcher that connects a stub when there is
+# no token, so a token-less session never records the failure either (tools/lib/telegram-launch.zsh). Never blocks the launch.
+{ source "$AB_REPO/tools/lib/telegram-launch.zsh" && tg_ensure_launcher } || true
 AB_ARGS=("${(@Q)${(z)$(ab_claude_args)}}")
 PROMPT_FILE="$HOME/.config/agent-board/orchestrator.md"   # a user override wins over the repo's rules
 [[ -r "$PROMPT_FILE" ]] || PROMPT_FILE="$AB_REPO/claude/orchestrator.md"

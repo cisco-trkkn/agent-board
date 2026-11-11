@@ -1,0 +1,17 @@
+#!/bin/sh
+# telegram-mcp-launch <plugin root> — the command the telegram plugin's .mcp.json runs (tools/lib/telegram-launch.zsh
+# installs it). With a bot token it is the real server; without one it is a stub MCP server that connects and offers
+# nothing. The real server exits at once without a token, and Claude Code caches that failure for 15 minutes for the
+# whole machine, which keeps a lead that starts inside the window from ever connecting Telegram.
+# Token: TELEGRAM_BOT_TOKEN in the environment, else a TELEGRAM_BOT_TOKEN=<non-empty> line in <state dir>/.env, the
+# state dir being $TELEGRAM_STATE_DIR, else ${CLAUDE_CONFIG_DIR:-~/.claude}/channels/telegram (as server.ts resolves it).
+root="${1:-${CLAUDE_PLUGIN_ROOT:-.}}"
+dir="${TELEGRAM_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/channels/telegram}"
+if [ -n "$TELEGRAM_BOT_TOKEN" ] || grep -q '^TELEGRAM_BOT_TOKEN=.' "$dir/.env" 2>/dev/null; then
+  if command -v node >/dev/null 2>&1; then
+    exec node --experimental-strip-types --no-warnings "$root/server.ts"
+  fi
+  exec bun run --cwd "$root" --shell=bun --silent start
+fi
+if command -v node >/dev/null 2>&1; then exec node "$root/telegram-mcp-stub.js"; fi
+exec bun "$root/telegram-mcp-stub.js"
