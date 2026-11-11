@@ -186,7 +186,7 @@ class UnmergedTest(Base):
     def test_conflict_and_branch_from_plan_commit(self):
         r = self.rec(spec=SPEC_B, batch="B2")
         self.assertIsNone(r["merge"])
-        self.assertIn("merge", r["missing"])
+        self.assertNotIn("merge", r["missing"])  # kept: no merge is the result, not a gap
         self.assertEqual(r["branch"], "feat/b")
         self.assertEqual(r["head"], self.head_b)
         self.assertEqual(r["outcome"], "kept")
@@ -217,7 +217,7 @@ class UnmergedTest(Base):
         self.assertGreater(len(nulls), 10)
         for k in nulls:
             self.assertIsNone(r[k], k)
-        for k in ("plan", "branch", "head", "base", "merge", "tasks", "stale_base", "bounces", "manifest"):
+        for k in ("plan", "branch", "head", "base", "tasks", "stale_base", "bounces", "manifest"):
             self.assertIn(k, r["missing"], k)
 
 
@@ -258,6 +258,9 @@ class PlanAlreadyOnMainTest(unittest.TestCase):
         git(self.repo, "branch", "-m", "feat/gamma", "feat/zzz")
         git(self.repo, "commit", "-q", "--amend", "-m", "Merge branch 'feat/zzz'")
         r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", None, self.now)
+        self.assertIsNone(r["merge"])
+        self.assertNotIn("merge", r["missing"])
+        r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", "merged", self.now)
         self.assertIsNone(r["merge"])
         self.assertIn("merge", r["missing"])
 

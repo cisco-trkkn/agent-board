@@ -187,7 +187,7 @@ class CommandsTest(Base):
         self.assertRegex(d["date"], r"^\d{4}-\d{2}-\d{2}$")
 
     def test_not_implemented_one_line(self):
-        for sub in ("record", "report", "compare", "backfill", "gate", "status"):
+        for sub in ("report", "compare", "backfill", "gate", "status"):
             rc, _, err = self.run_main(sub)
             self.assertEqual((rc, err), (1, f"metrics: {sub}: not implemented\n"))
 

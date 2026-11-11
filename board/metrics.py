@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
+import tc_env  # noqa: E402
 import usage  # noqa: E402
 
 METRICS_DIR = Path("docs/superpowers/metrics")
@@ -394,8 +395,6 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
     for k in ("branch", "head", "base"):
         if rec[k] is None:
             missing.append(k)
-    if rec["merge"] is None:
-        missing.append("merge")
     rec["ended_at"] = utc(merge["ct"]) if merge else utc(now)
 
     word = (outcome or "").split()[0].lower() if (outcome or "").strip() else None
@@ -405,6 +404,8 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
         rec["outcome"] = word
         if word not in OUTCOMES:
             missing.append("outcome")
+    if rec["merge"] is None and rec["outcome"] in ("merged", "mr"):
+        missing.append("merge")
 
     info = None
     tasks_text = _read(repo, plan_ref, plan_path + ".tasks.json") if plan_path else None
@@ -452,6 +453,241 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
     return rec
 
 
+# ---- record: the usage-index half and the command ----------------------------------------------------------------
+
+LEAD_KEYS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
+
+
+def main_root(repo):
+    """The main checkout's root: transcripts and lead rows are keyed by it even when the cwd is a worktree."""
+    rc, out = _git_try(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    common = Path(out.strip()) if rc == 0 and out.strip() else None
+    if common and common.name == ".git":
+        return str(common.parent)
+    return str(Path(repo))
+
+
+def slug_of(path):
+    return str(path).replace("/", "-").replace(".", "-")
+
+
+def worktree_dirs(repo, root, branch, conn):
+    """Directories of worktrees on `branch`: from `git worktree list`, plus names seen in rows with that git_branch."""
+    dirs = set()
+    if branch:
+        rc, out = _git_try(repo, "worktree", "list", "--porcelain")
+        cur = None
+        for l in out.splitlines() if rc == 0 else []:
+            if l.startswith("worktree "):
+                cur = l[9:]
+            elif l == f"branch refs/heads/{branch}" and cur:
+                dirs.add(cur)
+        for (cwd,) in conn.execute("select distinct cwd from calls where git_branch=?", (branch,)):
+            m = re.match(re.escape(root) + r"/\.claude/worktrees/[^/]+", cwd or "")
+            if m:
+                dirs.add(m.group(0))
+    return dirs
+
+
+def is_lead(r):
+    return not r["agent_name"] and not r["sidechain"] and not r["subagent_file"]
+
+
+def attributed_rows(conn, root, branch, wt_dirs, window, others):
+    """[(row, weight)] per M-attr. window = (start_ts, end_ts); others = windows of the batch's other started specs.
+
+    Branch and worktree rows weigh 1. A lead row with cwd == the repo root weighs 1/k, k = this spec plus the other
+    specs whose window contains the row."""
+    lo, hi = window
+    out = []
+    for r in usage._rows(conn, "select * from calls where ts>=? and ts<=?", (lo, hi)):
+        cwd = r["cwd"] or ""
+        by_branch = branch is not None and r["git_branch"] == branch
+        by_dir = any(cwd == d or cwd.startswith(d + "/") for d in wt_dirs)
+        if by_branch or by_dir:
+            out.append((r, 1.0))
+        elif is_lead(r) and cwd == root:
+            k = 1 + sum(1 for a, b in others if a <= r["ts"] <= b)
+            out.append((r, 1.0 / k))
+    return out
+
+
+def budget(weighted, prices):
+    tot = {k: 0.0 for k in LEAD_KEYS}
+    usd = unpriced = 0
+    by_role = {"lead": [0.0, 0.0], "agents": [0.0, 0.0]}
+    by_model, shared = {}, False
+    for r, w in weighted:
+        t = sum(r[k] for k in LEAD_KEYS) * w
+        c = usage.call_cost(r, prices)
+        if c is None:
+            unpriced += 1
+        role = by_role["lead" if is_lead(r) else "agents"]
+        role[0] += t
+        role[1] += (c or 0.0) * w
+        usd += (c or 0.0) * w
+        for k in LEAD_KEYS:
+            tot[k] += r[k] * w
+        by_model[r["model"]] = by_model.get(r["model"], 0.0) + t
+        shared = shared or w < 1.0
+    total = round(sum(tot.values()))
+    return {"tokens": {"input": round(tot["input"]), "output": round(tot["output"]), "cache_read": round(tot["cache_read"]),
+                       "cache_write": round(tot["cache_write_5m"] + tot["cache_write_1h"]), "total": total},
+            "usd": round(usd, 6), "unpriced_calls": unpriced,
+            "by_role": {k: {"tokens": round(v[0]), "usd": round(v[1], 6)} for k, v in by_role.items()},
+            "lead_share": round(by_role["lead"][0] / sum(v[0] for v in by_role.values()), 4) if total else None,
+            "by_model": {m: round(v) for m, v in by_model.items()}, "lead_shared": shared}
+
+
+def time_fields(batch_at, start_ts, end_ts, weighted):
+    """M-active and the time numbers; ready_at is the batch time."""
+    minutes, agents = set(), {}
+    for r, _ in weighted:
+        m = int(r["ts"] // 60)
+        minutes.add(m)
+        if not is_lead(r):
+            agents.setdefault(m, set()).add(r["session_id"])
+    buckets = {"0": 0, "1": 0, "2+": 0}
+    for m in minutes:
+        n = len(agents.get(m, ()))
+        buckets["2+" if n >= 2 else str(n)] += 1
+    ready = _epoch(batch_at) if batch_at else None
+    return {"ready_at": batch_at, "wait_s": int(start_ts - ready) if ready is not None else None,
+            "elapsed_s": int(end_ts - start_ts), "active_min": len(minutes), "agents_active_min": buckets}
+
+
+def transcript_dirs(root):
+    base = usage.root()
+    slug = slug_of(root)
+    dirs = [base / slug] + sorted(base.glob(slug + "--claude-worktrees-*"))
+    return [d for d in dirs if d.is_dir()]
+
+
+def count_questions(root, window):
+    """AskUserQuestion tool_use blocks in lead transcript lines inside the window; None when no transcripts dir."""
+    dirs = transcript_dirs(root)
+    if not dirs:
+        return None
+    lo, hi = window
+    n = 0
+    for d in dirs:
+        for f in d.rglob("*.jsonl"):
+            if "subagents" in f.parts:
+                continue
+            try:
+                if f.stat().st_mtime < lo:
+                    continue
+                text = f.read_text()
+            except OSError:
+                continue
+            for raw in text.splitlines():
+                if "AskUserQuestion" not in raw:
+                    continue
+                try:
+                    d = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(d, dict) or d.get("agentName") or not lo <= usage._epoch(d.get("timestamp")) <= hi:
+                    continue
+                content = (d.get("message") or {}).get("content")
+                if isinstance(content, list):
+                    n += sum(1 for b in content if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "AskUserQuestion")
+    return n
+
+
+def count_handoffs(project, window):
+    p = tc_env.lineage_dir() / f"{project}.jsonl"
+    if not p.exists():
+        return 0
+    lo, hi = window
+    n = 0
+    for raw in p.read_text().splitlines():
+        try:
+            ts = float(json.loads(raw)["ts"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if lo <= ts <= hi:
+            n += 1
+    return n
+
+
+def _other_windows(lines, batch, spec, now):
+    """Windows of the batch's other specs that have a start line; an unrecorded one runs to now."""
+    runs = last_runs(lines)
+    out = []
+    for d in lines:
+        if d.get("kind") == "start" and d.get("batch") == batch and d.get("spec") != spec:
+            later = [x for x in lines if x.get("kind") == "start" and x.get("batch") == batch and x.get("spec") == d["spec"]]
+            if later[-1] is not d:
+                continue
+            run = runs.get((batch, d["spec"]))
+            end = _epoch(run["ended_at"]) if run and run.get("ended_at") else now
+            out.append((_epoch(d["at"]), end))
+    return out
+
+
+def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, project=None, window=None):
+    """The whole `run` line: build_record_static plus the usage half. `window` = (start_ts, end_ts, kind) overrides
+    the stamped window (backfill)."""
+    repo = Path(repo)
+    lines, _ = read_log(repo)
+    batch_line = next((d for d in reversed(lines) if d.get("kind") == "batch" and d.get("batch") == batch), None)
+    start = next((d for d in reversed(lines) if d.get("kind") == "start" and d.get("batch") == batch and d.get("spec") == spec), None)
+    rec = build_record_static(repo, spec, batch, outcome, now, branch=branch)
+    missing = rec["missing"]
+    if window:
+        lo, hi, kind = window
+        rec["started_at"], rec["ended_at"] = utc(lo), utc(hi)
+        if "started_at" in missing:
+            missing.remove("started_at")
+    elif start:
+        lo, hi, kind = _epoch(start["at"]), _epoch(rec["ended_at"]), "stamped"
+    else:
+        lo, hi, kind = _epoch(batch_line["at"]) if batch_line else now, _epoch(rec["ended_at"]), "derived"
+        if batch_line:
+            rec["started_at"] = batch_line["at"]
+    rec["window"], rec["backfilled"] = kind, False
+    assign_cfg = (batch_line or {}).get("assignment") or {}
+    rec["config"] = "seq-sdd" if batch == "backfill" else assign_cfg.get(spec)
+    root = main_root(repo)
+    others = _other_windows(lines, batch, spec, now) if start and kind == "stamped" else []
+    wt = worktree_dirs(repo, root, rec["branch"], conn)
+    weighted = attributed_rows(conn, root, rec["branch"], wt, (lo, hi), others)
+    rec.update(budget(weighted, usage.load_prices()))
+    rec.update(time_fields((batch_line or {}).get("at"), lo, hi, weighted))
+    pl = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+    rec["limits"] = {"start": (start or {}).get("limits"),
+                     "record": {"five_hour": pl.get("five_hour"), "seven_day": pl.get("seven_day")} if pl else None}
+    if not pl:
+        missing.append("limits")
+    rec["questions"] = count_questions(root, (lo, hi))
+    if rec["questions"] is None:
+        missing.append("questions")
+    rec["handoffs"] = count_handoffs(project or Path(root).name, (lo, hi))
+    return rec
+
+
+def ingest_project(conn, root):
+    for d in transcript_dirs(root):
+        for f in sorted(d.rglob("*.jsonl")):
+            try:
+                usage.ingest(conn, f)
+            except OSError:
+                pass
+
+
+def cmd_record(repo, args):
+    if not any(d.get("kind") == "batch" and d.get("batch") == args.batch for d in read_log(repo)[0]):
+        raise MetricsError(f"unknown batch {args.batch}")
+    conn = usage.connect(args.usage_db or usage.db_path())
+    if not args.no_ingest:
+        ingest_project(conn, main_root(repo))
+    rec = build_record(repo, args.spec, args.batch, args.outcome, time.time(), branch=args.branch, conn=conn, project=args.project)
+    append(repo, rec)
+    tasks = rec["tasks"] if rec["tasks"] is not None else "?"
+    print(f"recorded {args.spec} {args.batch}: {tasks} tasks, {rec['tokens']['total'] / 1e6:.2f}M tokens, {rec['active_min']} active min")
+
+
 def _parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--repo", default=argparse.SUPPRESS)
@@ -468,7 +704,15 @@ def _parser():
     df = sp.add_parser("defect", parents=[common])
     df.add_argument("spec")
     df.add_argument("what")
-    for name in ("record", "report", "compare", "backfill", "gate", "status"):
+    rc = sp.add_parser("record", parents=[common])
+    rc.add_argument("spec")
+    rc.add_argument("--batch", required=True)
+    rc.add_argument("--outcome")
+    rc.add_argument("--branch")
+    rc.add_argument("--project")
+    rc.add_argument("--usage-db")
+    rc.add_argument("--no-ingest", action="store_true")
+    for name in ("report", "compare", "backfill", "gate", "status"):
         sp.add_parser(name, parents=[common], add_help=False).add_argument("rest", nargs="*")
     return ap
 
@@ -498,10 +742,10 @@ def main(argv=None):
                 raise MetricsError("usage: metrics batch start --config C [--group a,b] <spec>...")
         if not args.sub:
             raise MetricsError("usage: metrics <" + "|".join(SUBS) + "> ...")
-        if args.sub in ("record", "report", "compare", "backfill", "gate", "status"):
+        if args.sub in ("report", "compare", "backfill", "gate", "status"):
             raise MetricsError("not implemented")
         repo = repo_root(getattr(args, "repo", None))
-        {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect}[args.sub](repo, args)
+        {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record}[args.sub](repo, args)
         return 0
     except MetricsError as e:
         print(f"metrics: {sub}: {e}", file=sys.stderr)
