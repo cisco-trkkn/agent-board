@@ -2,6 +2,7 @@ import os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
+os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")  # server.py reads it at import
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import relay, server
