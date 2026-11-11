@@ -129,8 +129,8 @@ check "forget: access.json kept"          test -f "$D/tt/access.json"
 # --- help
 h="$($C help)"
 check "help: telegram line"               test -n "$(print -r -- "$h" | grep 'tmux-ctl telegram token|status|forget')"
-# mutation: leave the sed range at 2,37 → the telegram lines are cut and these fail; 2,40 → the "send/run only type" line shows and the second fails
-check "help: ends at the header's last line"  test "$(print -r -- "$h" | tail -1)" = "                                         outside tmux give --project <name>"
+# mutation: leave the sed range at 2,37 → the telegram lines are cut and these fail; 2,41 cuts the metrics line (the last is then the telegram "outside tmux" line); 2,44 shows the "send/run only type" line
+check "help: ends at the header's last line"  test "$(print -r -- "$h" | tail -1)" = "  tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)"
 check "help: nothing after the header"    test -z "$(print -r -- "$h" | grep 'send/run only type')"
 
 # --- the token never appears in any captured output
