@@ -172,6 +172,8 @@ check "copied plugin: TC_TMUX honoured"       test "$(grep -c '^── ' "$TC_ST
 
 # --- the user's server is untouched: same hooks and keys as before everything above
 A show-hooks -g > "$TT_DIR/hooks.after"; A list-keys > "$TT_DIR/keys.after"
+# `tmux list-keys` on a heavily loaded machine once printed one line fewer (the last copy-mode-vi binding was missing); a real change persists, so capture again a few times before comparing
+n=0; until diff -q "$TT_DIR/keys.before" "$TT_DIR/keys.after" >/dev/null || (( n++ >= 5 )); do sleep 0.5; A list-keys > "$TT_DIR/keys.after"; done
 check "A: hooks unchanged"                    diff -q "$TT_DIR/hooks.before" "$TT_DIR/hooks.after"
 check "A: keys unchanged"                     diff -q "$TT_DIR/keys.before" "$TT_DIR/keys.after"
 tt_done
