@@ -212,6 +212,51 @@ sys.exit(0 if res.wasSuccessful() else 1)
 """
 
 
+ABS_VALUE = re.compile(r'"/[A-Za-z]')
+TEMP_ROOTS = sorted({tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())} - {"/"})
+
+
+class PlanlessMergeWindowTest(Base):
+    """A plan-less merge between two plan merges starts the second window when the second plan came after it."""
+
+    def build(self, plan_before_fix):
+        r, T = self.repo, 1_790_000_000
+        self.T = T
+        git(r, "init", "-q", "-b", "main")
+        (r / "f.txt").write_text("1\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "base", date=T)
+
+        def branch(name, plan, when_plan, when_work, when_merge):
+            git(r, "checkout", "-q", "-b", f"feat/{name}", "main")
+            if plan:
+                (r / "docs/superpowers/plans").mkdir(parents=True, exist_ok=True)
+                (r / f"docs/superpowers/plans/2026-01-01-{name}.md").write_text(f"# P\n\n**Spec:** `docs/superpowers/specs/{name}-design.md`\n")
+                git(r, "add", "."); git(r, "commit", "-q", "-m", f"{name} plan", date=when_plan)
+            (r / f"{name}.txt").write_text("x\n")
+            git(r, "add", "."); git(r, "commit", "-q", "-m", f"{name} work", date=when_work)
+            git(r, "checkout", "-q", "main")
+            git(r, "merge", "-q", "--no-ff", "-m", f"Merge branch 'feat/{name}'", f"feat/{name}", date=when_merge)
+
+        branch("alpha", True, T + 100, T + 110, T + 1000)
+        branch("fixit", False, None, T + 1500, T + 2000)
+        branch("beta", True, T + (1200 if plan_before_fix else 2500), T + 2600, T + 3000)
+
+    def window_starts(self):
+        rc, _, err = self.cli("backfill", "--since", "2026-01-01", "--usage-db", str(self.db), "--no-ingest")
+        self.assertEqual((rc, err), (0, ""))
+        return {r["spec"].split("/")[-1]: r["started_at"] for r in self.runs()}
+
+    def test_window_starts_at_the_planless_merge_when_the_plan_came_after_it(self):
+        self.build(plan_before_fix=False)
+        st = self.window_starts()
+        self.assertEqual(st["beta-design.md"], metrics.utc(self.T + 2000))
+        self.assertEqual(st["alpha-design.md"], metrics.utc(self.T + 100))
+
+    def test_window_starts_at_the_previous_plan_merge_when_the_plan_predates_the_planless_one(self):
+        self.build(plan_before_fix=True)
+        self.assertEqual(self.window_starts()["beta-design.md"], metrics.utc(self.T + 1000))
+
+
 class PrivacySweepTest(unittest.TestCase):
     def sweep(self, lines, label):
         home = os.path.expanduser("~")
@@ -219,6 +264,9 @@ class PrivacySweepTest(unittest.TestCase):
             self.assertNotIn("/Users/", l, f"{label}: {l[:200]}")
             self.assertNotIn(home, l, f"{label}: {l[:200]}")
             self.assertIsNone(UUID.search(l), f"{label}: {l[:200]}")
+            self.assertIsNone(ABS_VALUE.search(l), f"{label}: absolute path value in {l[:200]}")
+            for root in TEMP_ROOTS:
+                self.assertNotIn(root, l, f"{label}: temp root in {l[:200]}")
 
     def test_committed_run_log(self):
         p = CHECKOUT / "docs/superpowers/metrics/runs.jsonl"

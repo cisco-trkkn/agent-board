@@ -281,6 +281,7 @@ class ErrorLineTest(Base):
         return rc, out.getvalue(), err.getvalue()
 
     def test_failing_command_appends_error_line_without_paths(self):
+        (self.repo / "docs/superpowers/metrics").mkdir(parents=True, exist_ok=True)   # the log is appended only where metrics exist
         rc, _, err = self.main("--repo", str(self.repo), "start", "s.md", "--batch", f"{self.repo}/nope")
         self.assertEqual(rc, 1)
         errs = [l for l in metrics.read_log(self.repo)[0] if l["kind"] == "error"]

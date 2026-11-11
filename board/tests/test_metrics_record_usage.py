@@ -197,6 +197,20 @@ class TimeTest(Base):
         r = self.rec()
         self.assertEqual((r["window"], r["backfilled"], r["config"]), ("stamped", False, "cfg"))
 
+    def test_late_joining_spec_takes_the_only_config(self):
+        late = "docs/superpowers/specs/late.md"
+        r = metrics.build_record(self.repo, late, "B", None, self.now, conn=self.conn, project="proj", branch="feat/y")
+        self.assertEqual(r["config"], "cfg")
+        self.assertNotIn("config", r["missing"])
+
+    def test_late_joining_spec_in_a_two_config_batch_is_null_and_missing(self):
+        late = "docs/superpowers/specs/late.md"
+        metrics.append(self.repo, {"kind": "batch", "batch": "C", "base": "x", "configs": ["a", "b"],
+                                   "assignment": {SPEC1: "a"}, "groups": [], "at": metrics.utc(self.t0 - 600)})
+        r = metrics.build_record(self.repo, late, "C", None, self.now, conn=self.conn, project="proj", branch="feat/y")
+        self.assertIsNone(r["config"])
+        self.assertIn("config", r["missing"])
+
     def test_limits_start_and_record(self):
         self.start(SPEC1, limits={"five_hour": {"used_percentage": 5}, "seven_day": None})
         r = self.rec()

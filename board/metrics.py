@@ -12,6 +12,7 @@ import argparse
 import calendar
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,8 +45,13 @@ def repo_root(repo_arg=None):
 LOG_OVERRIDE = None   # `backfill --log PATH` (tests, dry runs): read and write this file instead of the repo's run log
 
 
+def mdir(repo):
+    """The metrics directory of the MAIN checkout: every worktree of the repo shares its run log, configs, gates and roadmap."""
+    return Path(main_root(repo)) / METRICS_DIR
+
+
 def log_path(repo):
-    return Path(LOG_OVERRIDE) if LOG_OVERRIDE else Path(repo) / METRICS_DIR / "runs.jsonl"
+    return Path(LOG_OVERRIDE) if LOG_OVERRIDE else mdir(repo) / "runs.jsonl"
 
 
 def read_log(repo):
@@ -96,7 +102,7 @@ def _fence(text, tag):
 
 
 def _load(repo, sub, name, tag):
-    p = Path(repo) / METRICS_DIR / sub / (name + ".md")
+    p = mdir(repo) / sub / (name + ".md")
     if not p.exists():
         return None
     return _fence(p.read_text(), tag)
@@ -657,6 +663,13 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
     rec["window"], rec["backfilled"] = kind, bool(backfilled)
     assign_cfg = (batch_line or {}).get("assignment") or {}
     rec["config"] = "seq-sdd" if batch == "backfill" else assign_cfg.get(spec)
+    if rec["config"] is None and batch != "backfill":
+        # a spec that joined the batch late is not in its assignment
+        cfgs = (batch_line or {}).get("configs") or []
+        if len(cfgs) == 1:
+            rec["config"] = cfgs[0]
+        else:
+            missing.append("config")
     root = main_root(repo)
     others = _other_windows(lines, batch, spec, now) if start and kind == "stamped" else []
     wt = worktree_dirs(repo, root, rec["branch"], conn)
@@ -958,7 +971,7 @@ def report_text(repo, batch_id, usage_db=None):
             except MetricsError as e:
                 out += ["", f"compare {c}: {e}"]
     fn = getattr(me, "status_line", None)
-    if fn and (repo / METRICS_DIR / "roadmap").exists():
+    if fn and (mdir(repo) / "roadmap").exists():
         try:
             line = fn(repo)
         except MetricsError as e:
@@ -1339,7 +1352,7 @@ def _status_rows(doc):
 
 
 def status_line(repo):
-    ro = Path(repo) / METRICS_DIR / "roadmap"
+    ro = mdir(repo) / "roadmap"
     if not ro.exists():
         return ""
     first = next((l.strip() for l in ro.read_text().splitlines() if l.strip()), "")
@@ -1418,16 +1431,19 @@ def _parse_when(text, end=False):
 
 def backfill_runs(repo, since, until, conn, project=None, now=None):
     """Run lines for every first-parent merge on main in [since, until] whose branch has a plan, with derived windows:
-    from the previous such merge (the first: the plan's first commit) to the merge. A spec that already has a run line
+    from the later of the previous such merge and the last merge of any kind before the plan's first commit (the first: the
+    plan's first commit) to the merge. A spec that already has a run line
     in any batch is skipped (it still anchors the next window)."""
     repo = Path(repo)
     now = now or time.time()
     have = {d.get("spec") for d in read_log(repo)[0] if d.get("kind") == "run"}
     rc, out = _git_try(repo, "log", "--first-parent", "--merges", "--reverse", "main", "--format=%H%x09%P%x09%ct%x09%s")
-    merges = []
+    merges, all_cts = [], []
     for line in out.splitlines() if rc == 0 else []:
         sha, parents, ct, subject = (line.split("\t", 3) + [""])[:4]
         ps = parents.split()
+        if len(ps) >= 2:
+            all_cts.append(int(ct))
         if len(ps) >= 2 and since <= int(ct) <= (until if until is not None else float("inf")):
             merges.append({"sha": sha, "first": ps[0], "second": ps[1], "ct": int(ct), "subject": subject})
     written, prev_ct = [], None
@@ -1436,9 +1452,16 @@ def backfill_runs(repo, since, until, conn, project=None, now=None):
         if not plan_path:
             continue
         spec = _spec_of_plan(repo, m, plan_path)
+        _, first_ts = _first_commit(repo, plan_path)
         start_ts = prev_ct
         if start_ts is None:
-            _, start_ts = _first_commit(repo, plan_path)
+            start_ts = first_ts
+        elif first_ts is not None:
+            # the window starts at the later of the previous plan merge and the last merge of any kind before the plan's
+            # first commit: plan-less merges (fixes) in between are not this spec's time
+            before = [c for c in all_cts if c < first_ts]
+            if before and max(before) > start_ts:
+                start_ts = max(before)
         prev_ct = m["ct"]
         if spec in have:
             continue
@@ -1472,20 +1495,43 @@ def cmd_backfill(repo, args):
         LOG_OVERRIDE = None
 
 
-def _log_error(repo, sub, exc):
-    """Append a kind:error line when the repo resolved (a failing repo lookup has nowhere to write)."""
+def _log_error(repo, sub, exc, log=None):
+    """Append a kind:error line: to `log` when the command was given one, else to the run log, but only when the
+    repo already has a metrics directory (a repo without metrics files stays clean)."""
+    global LOG_OVERRIDE
     if repo is None:
         return
+    saved = LOG_OVERRIDE
     try:
+        if log:
+            LOG_OVERRIDE = log
+        elif not mdir(repo).is_dir():
+            return
         append(repo, {"kind": "error", "sub": sub, "reason": clean_reason(exc, repo), "at": utc()})
     except Exception:
         pass
+    finally:
+        LOG_OVERRIDE = saved
+
+
+def rel_spec(repo, spec):
+    """A spec argument as a repo-relative path: absolute paths inside the repo (or its main checkout) are made relative,
+    a leading ./ is dropped, anything outside is an error naming only the basename."""
+    roots = {os.path.realpath(str(repo)), os.path.realpath(main_root(repo))}
+    p = spec if os.path.isabs(spec) else os.path.join(main_root(repo), spec)
+    p = os.path.normpath(p)
+    rp = os.path.realpath(p) if os.path.exists(p) else os.path.join(os.path.realpath(os.path.dirname(p)), os.path.basename(p))
+    for r in sorted(roots, key=len, reverse=True):
+        if rp == r or rp.startswith(r + os.sep):
+            return os.path.relpath(rp, r)
+    raise MetricsError(f"spec outside the repo: {os.path.basename(spec)}")
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     sub = "metrics"
     repo = None
+    args = None
     try:
         ap = _parser()
         ap.error = lambda msg: (_ for _ in ()).throw(_ArgError(msg))
@@ -1506,12 +1552,17 @@ def main(argv=None):
             raise MetricsError("usage: metrics <" + "|".join(SUBS) + "> ...")
         repo = None
         repo = repo_root(getattr(args, "repo", None))
+        if args.sub == "batch":
+            args.specs = [rel_spec(repo, s) for s in args.specs]
+            args.group = [",".join(rel_spec(repo, x.strip()) for x in g.split(",") if x.strip()) for g in args.group]
+        elif hasattr(args, "spec"):
+            args.spec = rel_spec(repo, args.spec)
         rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
               "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill}[args.sub](repo, args)
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
-        _log_error(repo, sub, e)
+        _log_error(repo, sub, e, getattr(args, "log", None))
         return 1
 
 
