@@ -935,10 +935,18 @@ def report_text(repo, batch_id, usage_db=None):
     for c in batch.get("configs") or []:
         fn = getattr(me, "compare_text", None)
         if c != base_cfg and fn:
-            out += ["", fn(repo, c)]
+            try:
+                out += ["", fn(repo, c)]
+            except MetricsError as e:
+                out += ["", f"compare {c}: {e}"]
     fn = getattr(me, "status_line", None)
     if fn and (repo / METRICS_DIR / "roadmap").exists():
-        out += ["", fn(repo)]
+        try:
+            line = fn(repo)
+        except MetricsError as e:
+            line = f"status: {e}"
+        if line:
+            out += ["", line]
     return "\n".join(out) + "\n"
 
 
@@ -973,13 +981,369 @@ def _parser():
     rp = sp.add_parser("report", parents=[common])
     rp.add_argument("batch")
     rp.add_argument("--usage-db")
-    for name in ("compare", "backfill", "gate", "status"):
+    cp = sp.add_parser("compare", parents=[common])
+    cp.add_argument("config")
+    gp = sp.add_parser("gate", parents=[common])
+    gp.add_argument("id")
+    sp.add_parser("status", parents=[common])
+    for name in ("backfill",):
         sp.add_parser(name, parents=[common], add_help=False).add_argument("rest", nargs="*")
     return ap
 
 
 class _ArgError(Exception):
     pass
+
+
+# ---- compare, gates, status --------------------------------------------------------------------------------------
+
+import itertools
+import math
+import random
+import statistics
+
+LIMIT_SENTENCE = ("With this spread, a 2x effect shows after about 4 specs per configuration, 1.5x after about 9, and 20% needs "
+                  "about 30; differences under about 1.5x are not decidable this way.")
+PER_SPEC = ("tokens_per_task", "active_min_per_task")
+EXACT_MAX = 200000
+SAMPLES = 20000
+
+
+def permutation_p(ch, base, direction):
+    """One-sided permutation test on log values: statistic = mean(log ch) - mean(log base); p = share of splits with a
+    statistic <= observed (direction "max": lower is better) or >= observed ("min"). Exact enumeration when
+    comb(n+m, m) <= 200000, else 20,000 random splits from random.Random(0). Returns (p, "exact"|"sampled")."""
+    lg = [math.log(v) for v in list(ch) + list(base)]
+    m, n = len(ch), len(base)
+    total = sum(lg)
+    obs = sum(lg[:m]) / m - sum(lg[m:]) / n
+
+    def stat(idx):
+        s = sum(lg[i] for i in idx)
+        return s / m - (total - s) / n
+
+    def hit(v):
+        return v <= obs + 1e-12 if direction == "max" else v >= obs - 1e-12
+
+    if math.comb(m + n, m) <= EXACT_MAX:
+        hits = splits = 0
+        for idx in itertools.combinations(range(m + n), m):
+            splits += 1
+            hits += hit(stat(idx))
+        return hits / splits, "exact"
+    rng = random.Random(0)
+    hits = sum(hit(stat(rng.sample(range(m + n), m))) for _ in range(SAMPLES))
+    return hits / SAMPLES, "sampled"
+
+
+def _norm(r, key):
+    tasks, tot, act = r.get("tasks"), (r.get("tokens") or {}).get("total"), r.get("active_min")
+    if not tasks or not tot or not act:
+        return None
+    return tot / tasks if key == "tokens_per_task" else act / tasks
+
+
+def _exclusion(r):
+    if r.get("outcome") in ("failed", "kept"):
+        return f"outcome {r['outcome']}"
+    if _norm(r, "tokens_per_task") is None:
+        return "tokens, active_min or tasks missing or zero"
+    return None
+
+
+def _day(iso):
+    return calendar.timegm(time.strptime(iso[:10], "%Y-%m-%d")) // 86400
+
+
+def quality_veto(chal, base, defects):
+    """(holds, lines). For failed specs, escaped defects (within 14 days of the spec's end) and fix waves: the
+    challenger's count is above the baseline's rate times the challenger's spec count, plus one."""
+    def counts(runs):
+        failed = sum(1 for r in runs if r.get("outcome") == "failed")
+        waves = sum(1 for r in runs if r.get("fix_wave"))
+        esc = 0
+        for r in runs:
+            if not r.get("ended_at"):
+                continue
+            end = _day(r["ended_at"])
+            esc += sum(1 for d in defects if d.get("spec") == r["spec"] and d.get("date")
+                       and 0 <= _day(d["date"]) - end <= 14)
+        return {"failed specs": failed, "escaped defects": esc, "fix waves": waves}
+    c, b = counts(chal), counts(base)
+    holds, lines = False, []
+    for k in c:
+        rate = b[k] / len(base) if base else 0.0
+        limit = rate * len(chal) + 1
+        over = c[k] > limit
+        holds = holds or over
+        lines.append(f"{k} {c[k]} (baseline rate {rate:.2f} x {len(chal)} + 1 = {limit:.2f}) {'over' if over else 'ok'}")
+    return holds, lines
+
+
+def _config_of(repo, cache, name):
+    if name not in cache:
+        cache[name] = load_config(repo, name) if name else None
+    return cache[name]
+
+
+def _throughput(runs):
+    tasks = sum(r.get("tasks") or 0 for r in runs if r.get("outcome") in ("merged", "mr"))
+    act = sum(r.get("active_min") or 0 for r in runs)
+    return tasks / (act / 60) if act else None
+
+
+def compare_data(repo, config):
+    lines, _ = read_log(repo)
+    conf = load_config(repo, config)
+    if conf is None:
+        raise MetricsError(f"unknown config {config}")
+    cache = {}
+    last = list(last_runs(lines).values())
+    base = [r for r in last if (_config_of(repo, cache, r.get("config")) or {}).get("baseline") is True]
+    chal = [r for r in last if r.get("config") == config]
+    if not base:
+        raise MetricsError("no baseline records")
+    defects = [d for d in lines if d.get("kind") == "defect"]
+    inc_c = [r for r in chal if _exclusion(r) is None]
+    inc_b = [r for r in base if _exclusion(r) is None]
+    veto, veto_lines = quality_veto(chal, base, defects)
+    out = {"config": config, "conf": conf, "base": base, "chal": chal, "inc_c": inc_c, "inc_b": inc_b,
+           "veto": veto, "veto_lines": veto_lines, "targets": []}
+    for t in conf.get("targets") or []:
+        m = t.get("metric")
+        direction = "max" if "max" in t else "min"
+        thr = t.get(direction)
+        row = {"metric": m, "dir": direction, "thr": thr, "index": None, "met": False, "wrong": False, "p": None, "mode": None,
+               "batch_met": None}
+        if m in PER_SPEC:
+            cv, bv = [_norm(r, m) for r in inc_c], [_norm(r, m) for r in inc_b]
+            if cv and bv:
+                row["index"] = statistics.median(cv) / statistics.median(bv)
+                if thr is not None:
+                    row["met"] = row["index"] <= thr if direction == "max" else row["index"] >= thr
+                row["p"], row["mode"] = permutation_p(cv, bv, direction)
+        elif m == "throughput":
+            bt = _throughput(base)
+            per_batch = {}
+            for r in chal:
+                per_batch.setdefault(r.get("batch"), []).append(r)
+            ratios = {b: (_throughput(rs) / bt if bt and _throughput(rs) is not None else None) for b, rs in per_batch.items()}
+            pooled = _throughput(chal)
+            if bt and pooled is not None:
+                row["index"] = pooled / bt
+            row["batch_met"] = bool(ratios) and all(v is not None and (v <= thr if direction == "max" else v >= thr)
+                                                    for v in ratios.values()) if thr is not None else bool(ratios)
+            row["met"] = row["batch_met"]
+        if row["index"] is not None:
+            row["wrong"] = row["index"] > 1.0 if direction == "max" else row["index"] < 1.0
+        out["targets"].append(row)
+    n = len(chal)
+    batches = len({r.get("batch") for r in chal})
+    tg = out["targets"]
+    wrong = any(t["wrong"] for t in tg)
+    sig = all((t["p"] is not None and t["p"] < 0.10) for t in tg if t["metric"] in PER_SPEC)
+    replace = (n >= 8 and batches >= 2 and bool(tg) and all(t["met"] for t in tg) and sig and not veto)
+    if n < 4:
+        verdict = "too early"
+    elif n >= 8 and (wrong or veto):
+        verdict = "kill or adjust"
+    elif replace:
+        verdict = "replace"
+    elif n >= 16:
+        verdict = "weak evidence"
+    else:
+        verdict = "continue"
+    out.update({"verdict": verdict, "n": n, "batches": batches})
+    return out
+
+
+def compare_text(repo, config):
+    d = compare_data(repo, config)
+    cache = {}
+    bases = sorted({r.get("config") for r in d["base"]})
+    out = [f"compare {config} (baseline: {', '.join(str(b) for b in bases)})", f"Verdict: {d['verdict']}", LIMIT_SENTENCE, ""]
+    out.append(f"Challenger specs: {d['n']} over {d['batches']} batches; {len(d['inc_c'])} in the index")
+    out.append(f"Baseline specs: {len(d['base'])}; {len(d['inc_b'])} in the index")
+    exc = [f"{r['spec']} ({_exclusion(r)})" for r in d["chal"] + d["base"] if _exclusion(r)]
+    out.append(f"Excluded: {len(exc)}" + (" - " + "; ".join(exc) if exc else ""))
+    for t in d["targets"]:
+        idx = "-" if t["index"] is None else f"{t['index']:.3f}"
+        side = "wrong side" if t["wrong"] else "right side"
+        line = f"Target {t['metric']} ({t['dir']} {t['thr']}): index {idx}, {side}, {'met' if t['met'] else 'not met'}"
+        if t["p"] is not None:
+            line += f", p {t['p']:.4f} ({t['mode']})"
+        if t["batch_met"] is not None:
+            line += f", every challenger batch {'met' if t['batch_met'] else 'not met'}"
+        out.append(line)
+    out.append("Quality veto: " + ("holds" if d["veto"] else "does not hold"))
+    out += ["  " + l for l in d["veto_lines"]]
+    if d["verdict"] == "weak evidence":
+        out.append("The evidence is weak: " + "; ".join(f"{t['metric']} index is on the {'wrong' if t['wrong'] else 'right'} side of 1.0"
+                                                        for t in d["targets"]) + ". The user decides.")
+    out.append("Per spec (tokens, tokens per task, tokens per declared file, active min per task):")
+    for tag, rs in (("challenger", d["inc_c"]), ("baseline", d["inc_b"])):
+        for r in rs:
+            tot, df = r["tokens"]["total"], r.get("declared_files")
+            per_file = f"{tot / df:.0f}" if df else "-"
+            out.append(f"- {tag} {r['spec']}: {tot}, {_norm(r, 'tokens_per_task'):.0f}, {per_file}, {_norm(r, 'active_min_per_task'):.1f}")
+    return "\n".join(out)
+
+
+def cmd_compare(repo, args):
+    print(compare_text(repo, args.config))
+
+
+# ---- gates ----
+
+def _dig(d, path):
+    for k in path.split("."):
+        d = d.get(k) if isinstance(d, dict) else None
+    return d
+
+
+def _fmt(v):
+    return "-" if v is None else repr(round(v, 4)) if isinstance(v, float) else str(v)
+
+
+def _where_ok(rec, where):
+    for k, v in (where or {}).items():
+        if k == "has":
+            if _dig(rec, v) is None:
+                return False
+        elif _dig(rec, k) != v:
+            return False
+    return True
+
+
+def _thr(c):
+    parts = [f"{k} {c[k]}" for k in ("min", "max") if k in c]
+    return "(" + ", ".join(parts) + ")"
+
+
+def gate_eval(repo, gate_id):
+    """(result, summary, lines): result is pass|fail|too early; summary is the conditions without verdicts."""
+    gate = load_gate(repo, gate_id)
+    if gate is None:
+        raise MetricsError(f"no gate file {gate_id}")
+    if "compare" in gate:
+        v = compare_data(repo, gate["compare"])["verdict"]
+        res = "pass" if v == "replace" else "fail" if v == "kill or adjust" else "too early"
+        return res, f"compare {gate['compare']} {v}", [f"compare {gate['compare']}: {v}"]
+    lines, _ = read_log(repo)
+    runs = [r for r in last_runs(lines).values() if _where_ok(r, gate.get("where"))]
+    analyses = [d for d in lines if d.get("kind") == "analysis"]
+    verdicts, text, summ = [], [], []
+    for c in gate.get("conditions") or []:
+        m, agg = c["metric"], c.get("agg", "median")
+        val, early = None, False
+        if agg == "last":
+            last = analyses[-1] if analyses else None
+            if last is None or not _where_ok(last, c.get("where")):
+                early = True
+            else:
+                val = _dig(last, m)
+                early = val is None
+        elif agg == "ratio_of_sums" or "/" in m:
+            num, _, den = m.partition("/")
+            if agg == "ratio_of_sums":
+                ns = [_dig(r, num) for r in runs]
+                ds = [_dig(r, den) for r in runs]
+                pairs = [(a, b) for a, b in zip(ns, ds) if a is not None and b is not None]
+                val = sum(a for a, _ in pairs) / sum(b for _, b in pairs) if pairs and sum(b for _, b in pairs) else None
+            else:
+                vals = [(_dig(r, num) / _dig(r, den)) for r in runs if _dig(r, num) is not None and _dig(r, den)]
+                val = statistics.median(vals) if vals else None
+            early = val is None
+        else:
+            vals = [_dig(r, m) for r in runs if isinstance(_dig(r, m), (int, float))]
+            val = statistics.median(vals) if vals else None
+            early = val is None
+        if early:
+            res = "too early"
+        else:
+            ok = (("min" not in c or val >= c["min"]) and ("max" not in c or val <= c["max"]))
+            res = "pass" if ok else "fail"
+        verdicts.append(res)
+        summ.append(f"{m} {_fmt(val)} {_thr(c)}")
+        text.append(f"{m} {_fmt(val)} {_thr(c)} {res}")
+    if len(runs) < int(gate.get("min_specs") or 0) or "too early" in verdicts:
+        result = "too early"
+    elif all(v == "pass" for v in verdicts):
+        result = "pass"
+    else:
+        result = "fail"
+    return result, ", ".join(summ), text
+
+
+GATE_RC = {"pass": 0, "fail": 1, "too early": 3}
+
+
+def cmd_gate(repo, args):
+    result, _, lines = gate_eval(repo, args.id)
+    print(f"gate {args.id}: {result}")
+    for l in lines:
+        print(l)
+    return GATE_RC[result]
+
+
+# ---- status ----
+
+def _cell_text(c):
+    return re.sub(r"[`*]", "", c).strip()
+
+
+def _status_rows(doc):
+    m = re.search(r"^##\s+Status\s*$", doc, re.M)
+    if not m:
+        return []
+    rows = []
+    for l in doc[m.end():].splitlines():
+        if l.startswith("## "):
+            break
+        if l.strip().startswith("|"):
+            rows.append([_cell_text(c) for c in l.strip().strip("|").split("|")])
+    if len(rows) < 2:
+        return []
+    head = [h.lower() for h in rows[0]]
+    out = []
+    for r in rows[1:]:
+        if all(re.fullmatch(r":?-+:?", c) for c in r if c):
+            continue
+        out.append({h: (r[i] if i < len(r) else "") for i, h in enumerate(head)})
+    return out
+
+
+def status_line(repo):
+    ro = Path(repo) / METRICS_DIR / "roadmap"
+    if not ro.exists():
+        return ""
+    first = next((l.strip() for l in ro.read_text().splitlines() if l.strip()), "")
+    label, _, path = first.partition(" ")
+    path = path.strip()
+    if not label or not path:
+        raise MetricsError("roadmap needs `<label> <path>`")
+    doc = Path(repo) / path
+    if not doc.is_file():
+        raise MetricsError(f"cannot read {path}")
+    rows = _status_rows(doc.read_text())
+    idx = next((i for i, r in enumerate(rows) if r.get("state", "").lower() != "passed"), None)
+    if idx is None:
+        return f"{label}: all stages passed"
+    row = rows[idx]
+    head = f"{label}: stage {row.get('stage', '?')} {row.get('state', '')}".rstrip()
+    gate = next((r.get("gate", "") for r in rows[idx:] if r.get("gate", "").lower() not in ("", "-", "—", "none", "n/a")), None)
+    if gate is None:
+        return head + ", no gate"
+    if load_gate(repo, gate) is None:
+        return f"{head}, next gate {gate}: no gate file"
+    result, summary, _ = gate_eval(repo, gate)
+    return f"{head}, next gate {gate}: {summary} {result}"
+
+
+def cmd_status(repo, args):
+    line = status_line(repo)
+    if line:
+        print(line)
 
 
 def _log_error(repo, sub, exc):
@@ -1014,12 +1378,13 @@ def main(argv=None):
                 raise MetricsError("usage: metrics batch start --config C [--group a,b] <spec>...")
         if not args.sub:
             raise MetricsError("usage: metrics <" + "|".join(SUBS) + "> ...")
-        if args.sub in ("compare", "backfill", "gate", "status"):
+        if args.sub in ("backfill",):
             raise MetricsError("not implemented")
         repo = None
         repo = repo_root(getattr(args, "repo", None))
-        {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report}[args.sub](repo, args)
-        return 0
+        rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
+              "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status}[args.sub](repo, args)
+        return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
         _log_error(repo, sub, e)
