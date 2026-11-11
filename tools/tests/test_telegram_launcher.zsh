@@ -24,6 +24,7 @@ OUT="$(rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVer
 check "stub: exits 0 when stdin closes"        test $rc = 0
 check "stub: initialize echoes the protocol"   test "$(print -r -- "$OUT" | jq -r 'select(.id==1) | .result.protocolVersion')" = 2025-06-18
 check "stub: initialize names a server"        test "$(print -r -- "$OUT" | jq -r 'select(.id==1) | .result.serverInfo.name')" = telegram-stub
+check "stub: advertises only tools"            test "$(print -r -- "$OUT" | jq -cS 'select(.id==1) | .result.capabilities')" = '{"tools":{}}'
 check "stub: tools/list is empty"              test "$(print -r -- "$OUT" | jq -c 'select(.id==2) | .result.tools')" = '[]'
 check "stub: prompts/list is empty"            test "$(print -r -- "$OUT" | jq -c 'select(.id==3) | .result.prompts')" = '[]'
 check "stub: resources/list is empty"          test "$(print -r -- "$OUT" | jq -c 'select(.id==4) | .result.resources')" = '[]'
@@ -53,6 +54,16 @@ mkdir -p "$CFG/channels/telegram"; print -r -- 'TELEGRAM_BOT_TOKEN=9:y' > "$CFG/
 R="$(print -r -- "$INIT" | launch CLAUDE_CONFIG_DIR="$CFG")"
 check "launcher: default state dir is CLAUDE_CONFIG_DIR/channels/telegram" test "$R" = "REAL-SERVER notoken"
 rm -rf "$CFG/channels"
+
+# --- --has-token <dir>: the one definition of "has a token" (the orchestrator opts a lead in with it)
+rm -rf "$SD"; mkdir -p "$SD"
+check "has-token: no .env"                      not "$LAUNCH" --has-token "$SD"
+: > "$SD/.env";                                  check "has-token: empty .env"    not "$LAUNCH" --has-token "$SD"
+print -r -- 'TELEGRAM_BOT_TOKEN=' > "$SD/.env"; check "has-token: empty value"    not "$LAUNCH" --has-token "$SD"
+print -r -- '# TELEGRAM_BOT_TOKEN=1:x' > "$SD/.env"; check "has-token: commented out" not "$LAUNCH" --has-token "$SD"
+print -r -- 'TELEGRAM_BOT_TOKEN=1:x' > "$SD/.env"; check "has-token: a value"      "$LAUNCH" --has-token "$SD"
+check "has-token: prints nothing and starts no server" test -z "$("$LAUNCH" --has-token "$SD" 2>&1)"
+rm -rf "$SD"; mkdir -p "$SD"
 
 # --- the helper: heal every installed version's .mcp.json
 source "$TT_REPO/tools/lib/telegram-launch.zsh"
@@ -101,7 +112,7 @@ env HOME="$D/home" CLAUDE_CONFIG_DIR="$CFG" PATH="$STUB:$PATH" "$TT_REPO/bin/cla
 check "orchestrator, no token: claude still started"   test -s "$D/argv"
 check "orchestrator, no token: .mcp.json healed"       test "$(jq -r .mcpServers.telegram.command "$P/0.0.7/.mcp.json")" = '${CLAUDE_PLUGIN_ROOT}/telegram-mcp-launch'
 print -r -- '{"mcpServers":{"telegram":{"command":"bun","args":[]}}}' > "$P/0.0.7/.mcp.json"; rm -f "$D/argv"
-mkdir -p "$TC_STATE/telegram/tt"; : > "$TC_STATE/telegram/tt/.env"
+mkdir -p "$TC_STATE/telegram/tt"; print -r -- "TELEGRAM_BOT_TOKEN=1:x" > "$TC_STATE/telegram/tt/.env"
 env HOME="$D/home" CLAUDE_CONFIG_DIR="$CFG" PATH="$STUB:$PATH" "$TT_REPO/bin/claude-orchestrator" >/dev/null 2>&1
 check "orchestrator, token: .mcp.json healed"          test "$(jq -r .mcpServers.telegram.command "$P/0.0.7/.mcp.json")" = '${CLAUDE_PLUGIN_ROOT}/telegram-mcp-launch'
 print -r -- '{"mcpServers":{"telegram":{"command":"bun","args":[]}}}' > "$P/0.0.7/.mcp.json"; rm -f "$D/argv"

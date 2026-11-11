@@ -5,9 +5,13 @@
 # whole machine, which keeps a lead that starts inside the window from ever connecting Telegram.
 # Token: TELEGRAM_BOT_TOKEN in the environment, else a TELEGRAM_BOT_TOKEN=<non-empty> line in <state dir>/.env, the
 # state dir being $TELEGRAM_STATE_DIR, else ${CLAUDE_CONFIG_DIR:-~/.claude}/channels/telegram (as server.ts resolves it).
+# telegram-mcp-launch --has-token <state dir> — exit 0 when <dir>/.env holds a non-empty TELEGRAM_BOT_TOKEN. The one definition
+# of "has a token": bin/claude-orchestrator opts a lead into the channel with it, so a lead never gets --channels for a stub.
+has_token() { grep -q '^TELEGRAM_BOT_TOKEN=.' "$1/.env" 2>/dev/null; }
+if [ "$1" = "--has-token" ]; then has_token "$2"; exit $?; fi
 root="${1:-${CLAUDE_PLUGIN_ROOT:-.}}"
 dir="${TELEGRAM_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/channels/telegram}"
-if [ -n "$TELEGRAM_BOT_TOKEN" ] || grep -q '^TELEGRAM_BOT_TOKEN=.' "$dir/.env" 2>/dev/null; then
+if [ -n "$TELEGRAM_BOT_TOKEN" ] || has_token "$dir"; then
   if command -v node >/dev/null 2>&1; then
     exec node --experimental-strip-types --no-warnings "$root/server.ts"
   fi

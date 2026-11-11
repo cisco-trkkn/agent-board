@@ -25,7 +25,8 @@ if [[ "${TC_TELEGRAM-1}" != 0 && -n "$TMUX" && -n "$TMUX_PANE" ]]; then
   # a -bg session belongs to its project (same rule as tmux-ctl's FEEDKEY)
   [[ -n "$(tc_tmux display -p -t "$TMUX_PANE" '#{@tc_bg}' 2>/dev/null)" ]] && TG_PROJECT="${TG_PROJECT%-bg}"
   TG_DIR="${TC_STATE:-$HOME/.local/state/agent-board}/telegram/$TG_PROJECT"
-  if [[ -n "$TG_PROJECT" && -f "$TG_DIR/.env" ]]; then
+  # the same test the plugin launcher applies (a .env without a token value runs its stub, which has no channel to offer)
+  if [[ -n "$TG_PROJECT" ]] && "$AB_REPO/claude/plugin/scripts/telegram-mcp-launch" --has-token "$TG_DIR"; then
     export TELEGRAM_STATE_DIR="$TG_DIR"
     (( ${@[(I)--channels|--channels=*]} )) || TG_ARGS=(--channels plugin:telegram@claude-plugins-official)
   fi

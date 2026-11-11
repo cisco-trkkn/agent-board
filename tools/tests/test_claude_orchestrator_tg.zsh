@@ -27,7 +27,7 @@ check "no token: no --channels"        test "$(nch)" = 0
 check "no token: TELEGRAM_STATE_DIR unset" test "$(<$S/tsd)" = UNSET
 check "no token: caller args kept"     grep -qx -- '--continue' $S/argv
 
-mkdir -p "$TG"; : > "$TG/.env"
+mkdir -p "$TG"; print -r -- "TELEGRAM_BOT_TOKEN=1:x" > "$TG/.env"
 run "$L" --continue
 check "token: one --channels"          test "$(nch)" = 1
 check "token: plugin value follows"    test "$(grep -A1 -x -- '--channels' $S/argv | tail -1)" = plugin:telegram@claude-plugins-official
@@ -49,12 +49,18 @@ run env -u TMUX -u TMUX_PANE "$L" --continue
 check "outside tmux: no --channels"    test "$(nch)" = 0
 check "outside tmux: state dir unset"  test "$(<$S/tsd)" = UNSET
 
+# a .env without a token value is no token: the launcher would run the stub, so the lead gets no channel either
+mkdir -p "$TG"; : > "$TG/.env"; run "$L" --continue
+check "empty .env: no --channels"      test "$(nch)" = 0
+check "empty .env: state dir unset"    test "$(<$S/tsd)" = UNSET
+print -r -- 'TELEGRAM_BOT_TOKEN=' > "$TG/.env"; run "$L" --continue
+check "TELEGRAM_BOT_TOKEN= : no --channels" test "$(nch)" = 0
 rm -rf "$TG"
 run TELEGRAM_STATE_DIR=/bogus "$L"
 check "inherited state dir cleared"    test "$(<$S/tsd)" = UNSET
 
 # -bg session of the same project shares the project's token
-mkdir -p "$TG"; : > "$TG/.env"
+mkdir -p "$TG"; print -r -- "TELEGRAM_BOT_TOKEN=1:x" > "$TG/.env"
 tt new-session -d -s tt-bg -c "$TT_DIR"; tt set-option -t '=tt-bg:' @tc_bg 1
 BGPANE="$(tt display -p -t '=tt-bg:' '#{pane_id}')"
 run env TMUX_PANE="$BGPANE" "$L"
@@ -72,6 +78,7 @@ check "~/.bun/bin in session env PATH" has "$(tt show-environment -t '=tt' PATH)
 
 # the exec line without a prompt file (no claude/orchestrator.md next to the launcher) carries the flag too
 mkdir -p "$TT_DIR/repo2/bin"; cp "$TT_REPO"/bin/{claude-orchestrator,_ab_claude.zsh,_tc_bins.zsh} "$TT_DIR/repo2/bin/"
+mkdir -p "$TT_DIR/repo2/claude/plugin/scripts"; cp "$TT_REPO/claude/plugin/scripts/telegram-mcp-launch" "$TT_DIR/repo2/claude/plugin/scripts/"
 rm -rf "$RT/.config"
 run "$TT_DIR/repo2/bin/claude-orchestrator" --continue
 check "no prompt file: one --channels"  test "$(nch)" = 1

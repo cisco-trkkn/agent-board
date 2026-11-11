@@ -56,7 +56,7 @@ _tg_token() {
 
 _tg_status() {
   local project="$1" dir="$2" n pol pid line
-  [[ -f "$dir/.env" ]] && print -r -- "token: set" || print -r -- "token: missing"
+  "$_TG_TOOLS/../claude/plugin/scripts/telegram-mcp-launch" --has-token "$dir" && print -r -- "token: set" || print -r -- "token: missing"
   n="$(jq '.allowFrom | length' "$dir/access.json" 2>/dev/null)"
   if [[ "${n:-0}" -gt 0 ]]; then print -r -- "paired: $n allowlisted"; else print -r -- "paired: none"; fi
   pol="$(jq -r '.dmPolicy // "pairing"' "$dir/access.json" 2>/dev/null)"

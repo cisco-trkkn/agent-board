@@ -12,7 +12,7 @@ function handle(line) {
   if (!m || typeof m !== 'object' || m.method === undefined || m.id === undefined) return   // notifications and replies
   if (m.method === 'initialize') {
     send({ id: m.id, result: { protocolVersion: (m.params && m.params.protocolVersion) || '2025-06-18',
-      capabilities: { tools: {}, prompts: {}, resources: {} }, serverInfo: { name: 'telegram-stub', version: '0' } } })
+      capabilities: { tools: {} }, serverInfo: { name: 'telegram-stub', version: '0' } } })
   } else if (m.method === 'ping') send({ id: m.id, result: {} })
   else if (EMPTY[m.method]) send({ id: m.id, result: EMPTY[m.method] })
   else send({ id: m.id, error: { code: -32601, message: 'Method not found' } })
