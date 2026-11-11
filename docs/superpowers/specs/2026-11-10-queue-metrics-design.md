@@ -31,6 +31,7 @@ The user decided to measure on real work only: no frozen replays and no dedicate
 - **Normalise per task. Replace at 8 or more challenger specs over 2 or more batches. Large effects only.**
 - **Queue order:** this spec runs first in the queue of 2026-11-10. Every spec after it is measured live
   (`seq-sdd`, then `upfront-seq` once stage 2 has merged); only the earlier specs are backfilled.
+- **2026-11-11 (queue run ruling):** the repo-root part of attribution counts every row in the window, lead or agent: the lead's teammates start in the repo root. (Section 3 still says the lead's calls.)
 
 ## Design
 
