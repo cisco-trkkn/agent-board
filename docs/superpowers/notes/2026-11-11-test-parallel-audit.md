@@ -67,7 +67,7 @@ Spec section 2: every job must be safe to run concurrently with every other unde
 | board/test_usage | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
 | board/test_worktree_board_remove | StopWaitsForExit counted every time.sleep call, including subprocess internals (sleep(0.001)) under parallel load: failed in two parallel runs | test counts only sleeps called from server.py (commit ad973bd) | no |
 | board/test_worktree_board | real git/sleep subprocesses in tmp dirs only | none needed | no |
-| board/test_worktree_lock | known flake under load: test_live_non_claude_pid_is_stale races real pids (sleep/ps); no shared files | Task 6 part B watches the parallel runs; marked only if it repeats | no |
+| board/test_worktree_lock | was a flake in test_live_non_claude_pid_is_stale (1 failure in 72 runs at 24 concurrent): the `listed()` helper searched `git worktree list` output for "w1", and the random temp dir in the repo path can contain "w1", so the removed worktree still looked listed. No shared state | `listed()` matches worktree dir names from `--porcelain` output; verified red with TMPDIR containing `w1` (2 failures) and green after, plus 3 clean solo runs | no |
 | board/test_worktree_safety_classify | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
 | board/test_worktree_safety_ignored | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
 | board/test_worktree_safety_recent | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
