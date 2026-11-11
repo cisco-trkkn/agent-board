@@ -14,6 +14,7 @@ sys.path.insert(0, str(BOARD))
 import relay  # noqa: E402
 
 REPO = BOARD.parent
+CD_WORDS = 4  # words in the "cd -- <root> &&" prefix of relay.launch_line
 
 
 class Rec:
@@ -35,31 +36,33 @@ class OrchestratorPathTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("AGENT_BOARD_REPO", None)
             relay.respawn(rec, "%1", "/r", "Read /d.md")
-        self.assertEqual(typed(rec), relay.launch_line("/r", "Read /d.md"))
-        words = shlex.split(typed(rec))
-        self.assertEqual(words[4], str(REPO / "bin" / "claude-orchestrator"))
-        self.assertTrue(os.access(words[4], os.X_OK))
-        self.assertEqual(words[5:], ["Read /d.md"])
+            self.assertEqual(typed(rec), relay.launch_line("/r", "Read /d.md"))
+        words = shlex.split(typed(rec))[CD_WORDS:]
+        self.assertEqual(words[0], str(REPO / "bin" / "claude-orchestrator"))
+        self.assertTrue(os.access(words[0], os.X_OK))
+        self.assertEqual(words[1:], ["Read /d.md"])
 
     def test_respawn_without_prompt_is_just_the_launcher(self):
         rec = Rec()
-        os.environ.pop("AGENT_BOARD_REPO", None)
-        relay.respawn(rec, "%1", "/r")
-        self.assertEqual(typed(rec), relay.launch_line("/r", None))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AGENT_BOARD_REPO", None)
+            relay.respawn(rec, "%1", "/r")
+            self.assertEqual(typed(rec), relay.launch_line("/r", None))
+        self.assertEqual(shlex.split(typed(rec))[CD_WORDS:], [str(REPO / "bin" / "claude-orchestrator")])
 
     def test_agent_board_repo_wins(self):
         rec = Rec()
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"AGENT_BOARD_REPO": d}):
             relay.respawn(rec, "%1", "/r")
             self.assertEqual(typed(rec), relay.launch_line("/r", None))
-        self.assertEqual(shlex.split(typed(rec))[4:], [os.path.join(d, "bin", "claude-orchestrator")])
+        self.assertEqual(shlex.split(typed(rec))[CD_WORDS:], [os.path.join(d, "bin", "claude-orchestrator")])
 
     def test_launcher_with_a_space_in_the_repo_path_is_quoted(self):
         rec = Rec()
         with mock.patch.dict(os.environ, {"AGENT_BOARD_REPO": "/a b/repo"}):
             relay.respawn(rec, "%1", "/r", "p")
             self.assertEqual(typed(rec), relay.launch_line("/r", "p"))
-        self.assertEqual(shlex.split(typed(rec))[4:], ["/a b/repo/bin/claude-orchestrator", "p"])
+        self.assertEqual(shlex.split(typed(rec))[CD_WORDS:], ["/a b/repo/bin/claude-orchestrator", "p"])
 
     def test_manual_hint_names_the_absolute_launcher(self):
         import io

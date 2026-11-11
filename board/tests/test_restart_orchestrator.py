@@ -1,6 +1,5 @@
 import importlib.util
 import os
-import shlex
 import subprocess
 import tempfile
 import unittest
