@@ -173,6 +173,15 @@ class SyntheticTest(Base):
         self.assertIn("Limits at start: five_hour 5, seven_day 40", out)
         self.assertIn("Limits at end: five_hour 30, seven_day 44", out)
 
+    def test_limits_at_end_come_from_the_run_with_the_latest_at(self):
+        self.batch()
+        lim = lambda n: {"start": None, "record": {"five_hour": {"used_percentage": n}, "seven_day": {"used_percentage": n}}}
+        self.run_line(S1, at=iso(self.t0 + 900), limits=lim(77))   # latest at, first by spec path
+        self.run_line(S3, at=iso(self.t0 + 300), limits=lim(11))
+        self.run_line(S2, at=iso(self.t0 + 600), limits=lim(22))
+        _, out, _ = self.report()
+        self.assertIn("Limits at end: five_hour 77, seven_day 77", out)
+
     def test_excluded_malformed_and_errors(self):
         self.batch(assignment={S1: "A", S2: "A"})
         self.run_line(S1, touched_list=None, stale_base=None)

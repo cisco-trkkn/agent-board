@@ -911,7 +911,7 @@ def report_text(repo, batch_id, usage_db=None):
 
     # limits
     first = starts[0] if starts else None
-    last = runs[-1] if runs else None
+    last = max(runs, key=lambda r: r.get("at") or "") if runs else None
     out.append(_limits_line("Limits at start", (first or {}).get("limits")))
     out.append(_limits_line("Limits at end", ((last or {}).get("limits") or {}).get("record")))
     out.append("")
