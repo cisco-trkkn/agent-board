@@ -51,7 +51,9 @@ tt() { "$TT_BIN" "$@" }                       # talks to the test server through
 tt_all_idle() { ! tt list-panes -s -t '=tt' -F '#{pane_current_command}' | grep -qvE '^-?(zsh|bash|sh)$' }
 # tt_pane_is <target> <command>: true when the pane's current command is <command>. Poll it with `tt_wait <secs> tt_pane_is …`:
 # tt_wait runs its arguments as given, so `tt_wait 3 test "$(tt display …)" = x` would evaluate the substitution once, before waiting.
-# tt_free_port: a TCP port the kernel just handed out for 127.0.0.1 (bind port 0), not a RANDOM pick that another job may hold
+# tt_free_port: a TCP port the kernel just handed out for 127.0.0.1 (bind port 0), not a RANDOM pick that another job may hold.
+# The socket is closed before the caller binds the port, so another process could take it in that window; the kernel hands
+# out ephemeral ports in rotation, which makes a repeat within milliseconds unlikely, but not impossible.
 tt_free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])' }
 tt_pane_is() { [[ "$(tt display -p -t "$1" '#{pane_current_command}')" == "$2" ]] }
 tt_wait() { local n=$(( $1 * 4 )); shift; while (( n-- > 0 )); do "$@" && return 0; sleep 0.25; done; return 1 }
