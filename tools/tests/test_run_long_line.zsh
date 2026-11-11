@@ -7,7 +7,7 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"; tt_teardown' EXIT INT TERM
 mkdir -p "$TT_DIR/proj"
 # the bg session (tests/shell) is made with normal shells; only the lanes made later get a slow rc file
 ( cd "$TT_DIR/proj" && $C run tests true >/dev/null )
-busy() { tt send-keys -t '=tt-bg:tests' 'sleep 60' Enter; tt_wait 20 tt_pane_is '=tt-bg:tests' sleep }
+busy() { tt send-keys -t '=tt-bg:tests' 'sleep 600' Enter; tt_wait 20 tt_pane_is '=tt-bg:tests' sleep }
 busy
 slowz="$work/slowz"; mkdir -p "$slowz"
 print -r -- 'unsetopt GLOBAL_RCS' > "$slowz/.zshenv"; # a builtin wait: no child process, so the pane looks idle while ZLE is not up yet
