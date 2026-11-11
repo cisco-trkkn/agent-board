@@ -101,6 +101,17 @@ class AttributionTest(Base):
         self.assertEqual(r["tokens"]["total"], 1500)
         self.assertFalse(r["lead_shared"])
 
+    def test_agent_rows_at_the_repo_root_are_counted_and_stay_agent_rows(self):
+        self.start(SPEC1)
+        self.row(self.t0 + 10, inp=100, out=0)                          # lead at the root
+        self.row(self.t0 + 11, agent="spike", inp=40, out=0)            # named agent in the main checkout
+        self.row(self.t0 + 12, agent="other", cwd=f"{self.root}/.claude/worktrees/elsewhere", inp=999, out=0)   # another worktree: out
+        self.row(self.t0 - 30, agent="early", inp=777, out=0)           # agent at the root before the window: out
+        self.row(self.now + 500, agent="late", inp=555, out=0)          # and after it: out
+        r = self.rec()
+        self.assertEqual(r["tokens"]["total"], 140)
+        self.assertEqual((r["by_role"]["lead"]["tokens"], r["by_role"]["agents"]["tokens"]), (100, 40))
+
     def test_overlap_splits_lead_row_evenly(self):
         self.start(SPEC1, self.t0)
         self.start(SPEC2, self.t0 + 600)

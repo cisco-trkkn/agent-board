@@ -500,7 +500,7 @@ def is_lead(r):
 def attributed_rows(conn, root, branch, wt_dirs, window, others):
     """[(row, weight)] per M-attr. window = (start_ts, end_ts); others = windows of the batch's other started specs.
 
-    Branch and worktree rows weigh 1. A lead row with cwd == the repo root weighs 1/k, k = this spec plus the other
+    Branch and worktree rows weigh 1. A row (lead or agent) with cwd == the repo root weighs 1/k, k = this spec plus the other
     specs whose window contains the row."""
     lo, hi = window
     out = []
@@ -510,7 +510,7 @@ def attributed_rows(conn, root, branch, wt_dirs, window, others):
         by_dir = any(cwd == d or cwd.startswith(d + "/") for d in wt_dirs)
         if by_branch or by_dir:
             out.append((r, 1.0))
-        elif is_lead(r) and cwd == root:
+        elif cwd == root:   # any role: named agents working in the main checkout belong to the window too
             k = 1 + sum(1 for a, b in others if a <= r["ts"] <= b)
             out.append((r, 1.0 / k))
     return out
