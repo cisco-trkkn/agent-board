@@ -10,7 +10,7 @@ REALTMUX="${TT_BIN:A}"; ln -s "$REALTMUX" "$BREW/tmux"
 SOCK="fp-$$-$RANDOM"
 cleanup() { "$REALTMUX" -L "$SOCK" kill-server 2>/dev/null; rm -rf "$SCR" }
 trap cleanup EXIT INT TERM
-unset TMUX TMUX_PANE TC_TMUX TMUX_DASH_TMUX_ARGS DEV_CLAUDE_CMD DEV_NO_ATTACH DEV_CLIENT AGENT_BOARD_REPO
+unset TMUX TMUX_PANE TC_TMUX TMUX_DASH_TMUX_ARGS CLAUDE_CONFIG_DIR DEV_CLAUDE_CMD DEV_NO_ATTACH DEV_CLIENT AGENT_BOARD_REPO
 CLEAN=/usr/bin:/bin     # a PATH without <repo>/bin, ~/.local/bin and the micromamba tmux
 fresh() { env -u TC_TMUX HOME="$H" PATH="$BREW:$CLEAN" "$@" }
 

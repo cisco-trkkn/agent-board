@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.322
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /private/tmp/claude-503/-Users-francisco-ruiz-agent-board/6924cb18-d97e-4cb3-b364-0adc7d36bd4c/scratchpad/wd
+
+▎ Channels (experimental) messages from plugin:telegram@claude-plugins-official inject directly in this session · restart without --channels to stop
+
+❯ /mcp reconnect plugin:telegram:telegram
+  ⎿  Successfully reconnected to plugin:telegram:telegram
+
+❯ /mcp reconnect nosuch
+  ⎿  MCP server "nosuch" not found
+
+❯ Reply with the single word ok
+
+⏺ ok
+
+✻ Cooked for 2s · done 7:55 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 · ctx 4% · 5h 53%
+  ⏵⏵ auto mode on (shift+tab to cycle)

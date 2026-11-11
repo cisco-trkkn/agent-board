@@ -1,12 +1,19 @@
 # telegram.zsh — sourced by tmux-ctl for `tmux-ctl telegram token|status|forget` (spec 2026-11-09-remote-access §1).
 # One bot per project: ${TC_STATE:-$HOME/.local/state/agent-board}/telegram/<project>/.env holds TELEGRAM_BOT_TOKEN=<token>.
+# `tmux-ctl telegram watch --once` runs the watchdog (tools/telegram_watch.py) once; launchd does it every 60 s.
 # The token is read from stdin only and is never printed. <project> = --project, else the caller's FEEDKEY (inside tmux).
 
+_TG_TOOLS="${${(%):-%x}:A:h:h}"   # file scope: tools/
 _tg_root() { print -r -- "${TC_STATE:-$HOME/.local/state/agent-board}/telegram" }
 _tg_usage() { print -u2 "usage: tmux-ctl telegram token|status|forget [<project>] (outside tmux: --project <name>; the token is read from stdin)"; return 2 }
 
 telegram_cmd() {
-  local sub="$1" project="" a; shift 2>/dev/null
+  local sub="$1" project="" a
+  if [[ "$sub" == watch ]]; then   # the watchdog: no project, no tmux of our own (it finds the leads' panes itself)
+    shift
+    python3 "$_TG_TOOLS/telegram_watch.py" "${@:---once}"; return $?
+  fi
+  shift 2>/dev/null
   local -a pos=()
   while (( $# )); do
     case "$1" in
@@ -49,7 +56,7 @@ _tg_token() {
 
 _tg_status() {
   local project="$1" dir="$2" n pol pid line
-  [[ -f "$dir/.env" ]] && print -r -- "token: set" || print -r -- "token: missing"
+  "$_TG_TOOLS/../claude/plugin/scripts/telegram-mcp-launch" --has-token "$dir" && print -r -- "token: set" || print -r -- "token: missing"
   n="$(jq '.allowFrom | length' "$dir/access.json" 2>/dev/null)"
   if [[ "${n:-0}" -gt 0 ]]; then print -r -- "paired: $n allowlisted"; else print -r -- "paired: none"; fi
   pol="$(jq -r '.dmPolicy // "pairing"' "$dir/access.json" 2>/dev/null)"
