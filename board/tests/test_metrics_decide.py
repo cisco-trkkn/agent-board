@@ -132,6 +132,28 @@ class VerdictTest(Base):
         self.challenger([50, 52, 54, 56, 58, 60, 62, 64], fix_wave=True)    # 8 > 1.0 * 8 + 1 is false
         self.assertEqual(self.verdict()[0], "replace")
 
+    def test_replace_counts_only_included_specs(self):
+        self.baseline()
+        self.challenger([50, 52, 54, 56, 58, 60])
+        self.challenger([60, 61], outcome="kept")      # 8 challenger lines, 2 excluded: only 6 reach the index
+        v, out = self.verdict()
+        self.assertNotEqual(v, "replace")
+        self.assertEqual(v, "continue")
+
+    def test_throughput_batch_target_met_and_not_met(self):
+        self.cfg("B", False, targets=[{"metric": "throughput", "min": 1.5}])
+        self.baseline()                                              # 2 tasks / 20 min each: 6 tasks per hour
+        self.add("B", 50, batch="b1", active_min=10)                 # 2 tasks / 10 min: 12 per hour, ratio 2.0
+        t = metrics.compare_data(self.repo, "B")["targets"][0]
+        self.assertTrue(t["batch_met"])
+        self.assertTrue(t["met"])
+        self.assertAlmostEqual(t["index"], 2.0)
+        self.add("B", 50, batch="b2", active_min=40)                 # 2 tasks / 40 min: 3 per hour, ratio 0.5
+        t = metrics.compare_data(self.repo, "B")["targets"][0]
+        self.assertFalse(t["batch_met"])                             # not met in every challenger batch
+        self.assertFalse(t["met"])
+        self.assertIn("every challenger batch not met", metrics.compare_text(self.repo, "B"))
+
     def test_exclusions_are_counted_and_printed(self):
         self.baseline()
         self.challenger([50, 52, 54, 56, 58, 60, 62, 64])
@@ -268,6 +290,15 @@ class StatusTest(Base):
     def test_status_line_function(self):
         self.roadmap(self.table([("1", "planned", "K9")]))
         self.assertEqual(metrics.status_line(self.repo), "PCEE: stage 1 planned, next gate K9: no gate file")
+
+    def test_doc_without_a_status_table_is_an_error_not_success(self):
+        self.roadmap("# Dec\n\nno table here\n")
+        rc, out, err = self.main("status")
+        self.assertEqual((rc, out), (1, ""))
+        self.assertEqual(err, "metrics: status: no Status table in docs/superpowers/specs/dec.md\n")
+        self.roadmap("# Dec\n\n## Status\n\n| Stage | State |\n|---|---|\n")    # a header and no rows
+        rc, out, err = self.main("status")
+        self.assertEqual((rc, out), (1, ""))
 
     def test_no_roadmap_prints_nothing(self):
         rc, out, err = self.main("status")

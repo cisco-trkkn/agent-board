@@ -819,11 +819,16 @@ def report_text(repo, batch_id, usage_db=None):
     note = ""
     if overlap and not usage_db and Path(usage.db_path()).exists():
         usage_db = usage.db_path()
+    active = None
     if overlap and usage_db:
         active = _union_active(repo, runs, usage_db)
-    else:
+        if active == 0:   # the index exists but holds nothing for these windows: a 0 would read as "no activity"
+            active = None
+            note = " (sum, index lacks the window)"
+    if active is None or not (overlap and usage_db):
         active = sum(r.get("active_min") or 0 for r in runs)
-        note = " (sum, windows overlap)" if overlap else ""
+        if not note:
+            note = " (sum, windows overlap)" if overlap else ""
     out.append(f"Accepted: {len(accepted)} specs, {a_tasks} tasks; batch active {active} min{note}")
     if active:
         h = active / 60
@@ -1146,7 +1151,9 @@ def compare_data(repo, config):
     tg = out["targets"]
     wrong = any(t["wrong"] for t in tg)
     sig = all((t["p"] is not None and t["p"] < 0.10) for t in tg if t["metric"] in PER_SPEC)
-    replace = (n >= 8 and batches >= 2 and bool(tg) and all(t["met"] for t in tg) and sig and not veto)
+    # rule 3 counts only the specs that enter the index: excluded (failed, kept, zero) ones do not count toward 8 and 2
+    inc_batches = len({r.get("batch") for r in out["inc_c"]})
+    replace = (len(out["inc_c"]) >= 8 and inc_batches >= 2 and bool(tg) and all(t["met"] for t in tg) and sig and not veto)
     if n < 4:
         verdict = "too early"
     elif n >= 8 and (wrong or veto):
@@ -1330,6 +1337,8 @@ def status_line(repo):
     if not doc.is_file():
         raise MetricsError(f"cannot read {path}")
     rows = _status_rows(doc.read_text())
+    if not rows:
+        raise MetricsError(f"no Status table in {path}")
     idx = next((i for i, r in enumerate(rows) if r.get("state", "").lower() != "passed"), None)
     if idx is None:
         return f"{label}: all stages passed"

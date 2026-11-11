@@ -181,6 +181,15 @@ class SyntheticTest(Base):
         self.assertIn("batch active 3 min", out)
         self.assertNotIn("(sum, windows overlap)", out)
 
+    def test_empty_default_index_falls_back_to_the_sum_with_its_own_label(self):
+        self.batch()
+        self.run_line(S1, started_at=iso(self.t0), ended_at=iso(self.t0 + 600), active_min=10, branch="b1")
+        self.run_line(S2, started_at=iso(self.t0 + 300), ended_at=iso(self.t0 + 900), active_min=10, branch="b2")
+        usage.connect(usage.db_path()).close()       # the default index exists but holds no rows
+        _, out, _ = self.report()
+        self.assertIn("batch active 20 min (sum, index lacks the window)", out)
+        self.assertNotIn("batch active 0 min", out)
+
     def test_limits_start_and_end(self):
         self.batch()
         metrics.append(self.repo, {"kind": "start", "batch": "B", "spec": S1, "at": iso(self.t0), "main": "x",
