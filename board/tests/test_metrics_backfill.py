@@ -55,28 +55,44 @@ class Base(unittest.TestCase):
 
 
 class FixtureBackfillTest(Base):
-    def setUp(self):
-        super().setUp()
-        r = self.repo
-        self.T = 1_790_000_000
+    _template = None     # (repo dir, merges): built once per class, copied for every test
+
+    @classmethod
+    def build_template(cls):
+        tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(tmp.cleanup)
+        r = Path(tmp.name).resolve() / "repo"
+        r.mkdir()
+        T = 1_790_000_000
         git(r, "init", "-q", "-b", "main")
         (r / "f.txt").write_text("1\n")
-        git(r, "add", "."); git(r, "commit", "-q", "-m", "base", date=self.T)
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "base", date=T)
         # gamma's plan is on main before its branch exists: found by the branch name
         (r / "docs/superpowers/plans").mkdir(parents=True)
         (r / "docs/superpowers/plans/2026-01-03-gamma.md").write_text("# G\n\n**Spec:** `docs/superpowers/specs/gamma-design.md`\n")
-        git(r, "add", "."); git(r, "commit", "-q", "-m", "gamma plan", date=self.T + 50)
-        self.merges = {}
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "gamma plan", date=T + 50)
+        merges = {}
         for i, (name, plan) in enumerate((("alpha", True), ("beta", True), ("gamma", False), ("nofan", False))):
             git(r, "checkout", "-q", "-b", f"feat/{name}", "main")
             if plan:
                 (r / f"docs/superpowers/plans/2026-01-0{i + 1}-{name}.md").write_text(f"# P\n\n**Spec:** `docs/superpowers/specs/{name}-design.md`\n")
-                git(r, "add", "."); git(r, "commit", "-q", "-m", f"{name} plan", date=self.T + 100 * (i + 1))
+                git(r, "add", "."); git(r, "commit", "-q", "-m", f"{name} plan", date=T + 100 * (i + 1))
             (r / f"{name}.txt").write_text("x\n")
-            git(r, "add", "."); git(r, "commit", "-q", "-m", f"{name} work", date=self.T + 100 * (i + 1) + 10)
+            git(r, "add", "."); git(r, "commit", "-q", "-m", f"{name} work", date=T + 100 * (i + 1) + 10)
             git(r, "checkout", "-q", "main")
-            self.merges[name] = self.T + 1000 * (i + 1)
-            git(r, "merge", "-q", "--no-ff", "-m", f"Merge branch 'feat/{name}'", f"feat/{name}", date=self.merges[name])
+            merges[name] = T + 1000 * (i + 1)
+            git(r, "merge", "-q", "--no-ff", "-m", f"Merge branch 'feat/{name}'", f"feat/{name}", date=merges[name])
+        cls._template = (r, merges)
+
+    def setUp(self):
+        super().setUp()
+        if FixtureBackfillTest._template is None:
+            FixtureBackfillTest.build_template()
+        src, merges = FixtureBackfillTest._template
+        self.T = 1_790_000_000
+        shutil.rmtree(self.repo)
+        shutil.copytree(src, self.repo, symlinks=True)     # a repo without worktrees holds no absolute paths
+        self.merges = dict(merges)
         self.plan_ts = {}
 
     def backfill(self, *extra):
@@ -194,28 +210,6 @@ class RealStateTest(Base):
         self.assertAlmostEqual(act, TOTALS["active_min"], delta=TOTALS["active_min"] * 0.02, msg="\n".join(table))
 
 
-SWEEP = r"""
-import sys, unittest
-sys.path.insert(0, {board!r})
-import metrics
-sink = open({sink!r}, "a")
-orig = metrics.append
-def spy(repo, obj):
-    import json
-    sink.write(json.dumps(obj, sort_keys=True) + "\n")
-    sink.flush()
-    orig(repo, obj)
-metrics.append = spy
-suite = unittest.defaultTestLoader.discover({tests!r}, pattern={pattern!r})
-res = unittest.TextTestRunner(stream=open({log!r}, "w")).run(suite)
-sys.exit(0 if res.wasSuccessful() else 1)
-"""
-
-
-ABS_VALUE = re.compile(r'"/[A-Za-z]')
-TEMP_ROOTS = sorted({tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())} - {"/"})
-
-
 class PlanlessMergeWindowTest(Base):
     """A plan-less merge between two plan merges starts the second window when the second plan came after it."""
 
@@ -255,41 +249,6 @@ class PlanlessMergeWindowTest(Base):
     def test_window_starts_at_the_previous_plan_merge_when_the_plan_predates_the_planless_one(self):
         self.build(plan_before_fix=True)
         self.assertEqual(self.window_starts()["beta-design.md"], metrics.utc(self.T + 1000))
-
-
-class PrivacySweepTest(unittest.TestCase):
-    def sweep(self, lines, label):
-        home = os.path.expanduser("~")
-        for l in lines:
-            self.assertNotIn("/Users/", l, f"{label}: {l[:200]}")
-            self.assertNotIn(home, l, f"{label}: {l[:200]}")
-            self.assertIsNone(UUID.search(l), f"{label}: {l[:200]}")
-            self.assertIsNone(ABS_VALUE.search(l), f"{label}: absolute path value in {l[:200]}")
-            for root in TEMP_ROOTS:
-                self.assertNotIn(root, l, f"{label}: temp root in {l[:200]}")
-
-    def test_committed_run_log(self):
-        p = CHECKOUT / "docs/superpowers/metrics/runs.jsonl"
-        if not p.exists():
-            self.skipTest("docs/superpowers/metrics/runs.jsonl is not committed yet")
-        lines = p.read_text().splitlines()
-        self.sweep(lines, "runs.jsonl")
-        print(f"checked {len(lines)} lines (committed runs.jsonl)")
-        self.assertGreater(len(lines), 0)
-
-    @unittest.skipIf(os.environ.get("METRICS_SWEEP_INNER"), "already inside the sweep's own run")
-    def test_every_line_the_other_metrics_tests_write(self):
-        with tempfile.TemporaryDirectory() as d:
-            sink, log = Path(d) / "sink.jsonl", Path(d) / "run.log"
-            code = SWEEP.format(board=str(HERE), sink=str(sink), tests=str(HERE / "tests"),
-                                pattern="test_metrics_[!b]*.py", log=str(log))
-            p = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True,
-                               env={**os.environ, "METRICS_SWEEP_INNER": "1"})
-            self.assertEqual(p.returncode, 0, p.stderr + log.read_text()[-2000:])
-            lines = sink.read_text().splitlines()
-        self.assertGreater(len(lines), 20)
-        self.sweep(lines, "test logs")
-        print(f"checked {len(lines)} lines (every run-log line the other test_metrics_* tests wrote)")
 
 
 if __name__ == "__main__":

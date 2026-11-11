@@ -1,4 +1,4 @@
-import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
+import contextlib, io, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -19,6 +19,25 @@ def iso(ts):
     return metrics.utc(ts)
 
 
+_TEMPLATE = {}
+
+
+def _template():
+    """The scratch repo every test starts from, built once per process and copied (it holds no worktrees, so a copy
+    is independent of the template and of every other copy). Returns (repo dir, base commit)."""
+    if not _TEMPLATE:
+        tmp = tempfile.TemporaryDirectory()
+        _TEMPLATE["tmp"] = tmp
+        r = Path(tmp.name).resolve() / "repo"
+        r.mkdir()
+        git(r, "init", "-q", "-b", "main")
+        for name, text in (("f.txt", "a\n"), ("k.txt", "k\n"), ("hot.txt", "\n".join(f"l{i}" for i in range(1, 12)) + "\n")):
+            (r / name).write_text(text)
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
+        _TEMPLATE["repo"] = (r, git(r, "rev-parse", "HEAD"))
+    return _TEMPLATE["repo"]
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -31,11 +50,9 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         r = self.repo
-        git(r, "init", "-q", "-b", "main")
-        for name, text in (("f.txt", "a\n"), ("k.txt", "k\n"), ("hot.txt", "\n".join(f"l{i}" for i in range(1, 12)) + "\n")):
-            (r / name).write_text(text)
-        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
-        self.base = git(r, "rev-parse", "HEAD")
+        shutil.rmtree(r)
+        src, self.base = _template()
+        shutil.copytree(src, r, symlinks=True)
         self.t0 = float(int(time.time())) - 7200
         self.heads = {}
 

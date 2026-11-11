@@ -1,4 +1,4 @@
-import json, os, re, subprocess, sys, tempfile, time, unittest
+import json, os, re, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -34,22 +34,22 @@ def tasks_json(plan, tasks):
     return json.dumps({"planPath": plan, "tasks": out})
 
 
-class Base(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        t = Path(self.tmp.name)
-        self.repo = t / "repo"
-        self.repo.mkdir()
-        p = mock.patch.dict(os.environ, {"TC_STATE": str(t / "state"), "USAGE_ROOT": str(t / "proj")})
-        p.start()
-        self.addCleanup(p.stop)
-        r = self.repo
+_TEMPLATE = {}
+
+
+def _template():
+    """The scratch repo every test starts from, built once per process and copied: it holds no worktrees, so a copy
+    is independent of the template and of every other copy. Returns (repo dir, the hashes the tests compare)."""
+    if not _TEMPLATE:
+        tmp = tempfile.TemporaryDirectory()
+        _TEMPLATE["tmp"] = tmp
+        r = Path(tmp.name).resolve() / "repo"
+        r.mkdir()
         git(r, "init", "-q", "-b", "main")
         write(r, "f.txt", "one\n")
         write(r, "g.txt", "g\n")
         git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
-        self.base0 = git(r, "rev-parse", "HEAD")
+        base0 = git(r, "rev-parse", "HEAD")
         # branch A: plan, tasks, ledger, code (3 lines in src/a.py, 2 in src/extra.py, a binary), merged
         git(r, "checkout", "-q", "-b", "feat/a")
         write(r, PLAN_A, f"# Plan A\n\n**Goal:** g\n\n**Spec:** `{SPEC_A}`\n\nbody\n")
@@ -64,17 +64,33 @@ class Base(unittest.TestCase):
         git(r, "add", "."); git(r, "commit", "-q", "-m", "A work")
         git(r, "checkout", "-q", "main")
         git(r, "merge", "-q", "--no-ff", "-m", "Merge branch 'feat/a'", "feat/a")
-        self.merge_a = git(r, "rev-parse", "HEAD")
+        merge_a = git(r, "rev-parse", "HEAD")
         # branch B from base: plan on the branch only, conflicts with a later main commit
-        git(r, "checkout", "-q", "-b", "feat/b", self.base0)
+        git(r, "checkout", "-q", "-b", "feat/b", base0)
         write(r, "docs/superpowers/plans/2026-01-02-b.md", f"# Plan B\n\n**Spec:** `{SPEC_B}`\n")
         write(r, "f.txt", "B edit\n")
         git(r, "add", "."); git(r, "commit", "-q", "-m", "B work")
-        self.head_b = git(r, "rev-parse", "HEAD")
+        head_b = git(r, "rev-parse", "HEAD")
         git(r, "checkout", "-q", "main")
         write(r, "f.txt", "main edit\n")
         git(r, "commit", "-q", "-am", "main moves f")
-        self.main_tip = git(r, "rev-parse", "main")
+        _TEMPLATE["repo"] = r
+        _TEMPLATE["hashes"] = (base0, merge_a, head_b, git(r, "rev-parse", "main"))
+    return _TEMPLATE["repo"], _TEMPLATE["hashes"]
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        t = Path(self.tmp.name)
+        self.repo = t / "repo"
+        p = mock.patch.dict(os.environ, {"TC_STATE": str(t / "state"), "USAGE_ROOT": str(t / "proj")})
+        p.start()
+        self.addCleanup(p.stop)
+        r = self.repo
+        src, (self.base0, self.merge_a, self.head_b, self.main_tip) = _template()
+        shutil.copytree(src, r, symlinks=True)
         self.now = time.time()
         metrics.append(r, {"kind": "batch", "batch": "B1", "base": self.base0, "configs": ["c"], "assignment": {SPEC_A: "c"},
                            "groups": [], "at": metrics.utc(self.now - 3600)})
