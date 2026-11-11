@@ -1,3 +1,5 @@
+> Superseded by 2026-11-11-discord-bridge-visibility-design.md (2026-11-11): the pinned status card replaces /tasks.
+
 # /tasks from Discord
 
 Date: 2026-11-11 · Ideas: 117, 123 in `~/.local/state/agent-board/ideas/agent-board.md`
