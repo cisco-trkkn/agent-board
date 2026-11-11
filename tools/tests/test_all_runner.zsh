@@ -18,7 +18,8 @@ def log(m):
     with open(os.environ["STUB_LOG"], "a") as f: f.write(m + "\n")
 class T(unittest.TestCase):
     def test(self):
-        log("S $n"); time.sleep($sl); log("E $n")
+        log("S $n"); log("ENV $n " + os.environ.get("TMPDIR", "") + " " + os.environ.get("TC_STATE", "") + " " + os.getcwd())
+        time.sleep($sl); log("E $n")
         self.assertEqual($rc, 0)
 EOF
     ;;
@@ -70,12 +71,16 @@ check "pass: run dir removed" [ -z "$(print -l $SCR/tc-all.*(N))" ]
 check "pass: 5 slowest listed before the verdict" [ "$(grep -c '^  .* [0-9]*s$' <<<"$out")" = 5 ]
 rm -rf $SCR/tc-all.*(N)
 
-# --- concurrency cap
+# --- concurrency cap (6 jobs of 1 s each: two are alive together unless the runner starts them one by one, whatever the load)
+CAPROOT="$SCR/caproot"; for n in 1 2 3 4 5 6; do stub $CAPROOT tools/tests/test_cap$n.zsh 1 0; done
+ROOT_SAVE=$ROOT; ROOT=$CAPROOT
 run zsh $ALL -j 2
+ROOT=$ROOT_SAVE
 maxc=$(awk '$1=="S"{r++; if(r>m)m=r} $1=="E"{r--} END{print m+0}' "$STUB_LOG")
-# mutation: drop the -j cap (no running-count wait) → max concurrency is 12
+# mutation: drop the -j cap (no running-count wait) → max concurrency is 6
 check "-j 2: never more than 2 jobs at once" [ "$maxc" -le 2 ]
 check "-j 2: does use 2 at once" [ "$maxc" -eq 2 ]
+rm -rf $SCR/tc-all.*(N)
 
 # --- serial jobs run alone, after every parallel job
 run zsh $ALL -j 4
@@ -151,7 +156,7 @@ for l in $envs; do
   w=(${=l}); [[ $w[3] == $SCR/* && $w[4] == $w[3]/state && $w[5] == $ROOT && -z $seen[$w[3]] ]] || bad=1; seen[$w[3]]=1
 done
 # mutation: share one TMPDIR, or leave TC_STATE unset → a line breaks the rule
-check "env: each zsh job has its own TMPDIR, TC_STATE=\$TMPDIR/state, cwd = root" [ $bad -eq 0 -a ${#envs} -eq 6 ]
+check "env: every job (zsh, sh and python stubs) has its own TMPDIR, TC_STATE=\$TMPDIR/state, cwd = root" [ $bad -eq 0 -a ${#envs} -eq 12 ]
 rm -rf $SCR/tc-all.*(N)
 
 # --- budget: rc 4 and SLOW line
@@ -232,6 +237,16 @@ wait $dp 2>/dev/null; drc=$?
 # mutation: drop the dead-PID check in reap → the runner waits forever (killed here after 20 s)
 dieok() { [ $dead -eq 1 -a $drc -eq 1 ] && grep -q '^FAIL 1/1: zsh/test_die.zsh$' $SCR/die.out }
 check "dead job subshell: runner finishes and reports FAIL 1/1" dieok
+rm -rf $SCR/tc-all.*(N)
+
+# --- two failing jobs: the verdict names both (the failed-job list is indexed by two numbers)
+F2ROOT="$SCR/f2root"; mkroot $F2ROOT; stub $F2ROOT tools/tests/test_bad.zsh 0.1 1; stub $F2ROOT tools/tests/test_bad2.zsh 0.1 1
+ROOT_SAVE=$ROOT; ROOT=$F2ROOT
+run zsh $ALL -j 4
+ROOT=$ROOT_SAVE
+# mutation: index the job names with the failed list ("J_name[$failed]") → bad math expression, no verdict
+check "two failures: exit 1" [ $rc -eq 1 ]
+check "two failures: verdict FAIL 2/14 names both" grep -q '^FAIL 2/14: zsh/test_bad.zsh, zsh/test_bad2.zsh$' <<<"$out"
 rm -rf $SCR/tc-all.*(N)
 
 tt_done

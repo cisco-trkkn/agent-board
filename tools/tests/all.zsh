@@ -70,7 +70,8 @@ T0=$EPOCHREALTIME
 
 run_job() {   # run_job <index>: log, then <name>.res = "rc seconds" (written last, so its existence means done)
   local i=$1 name=$J_name[$i] jt t0 rc
-  jt="$rundir/tmp/${name//\//_}"; mkdir -p "$jt/state" "$rundir/${name:h}"
+  # short dir name: a unix socket path under TMPDIR is limited to 104 bytes on macOS
+  jt="$rundir/tmp/$i"; mkdir -p "$jt/state" "$rundir/${name:h}"
   t0=$EPOCHREALTIME
   if (( $+commands[perl] )); then
     env TMPDIR="$jt" TC_STATE="$jt/state" perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
@@ -148,7 +149,8 @@ total=$(( EPOCHREALTIME - T0 )); ts=$(( int(total) ))
 fmt="$(( ts / 60 ))m$(( ts % 60 ))s"
 if (( ${#failed} )); then
   print "run dir kept: $rundir"
-  print -r -- "FAIL ${#failed}/$n: ${(j:, :)J_name[$failed]}"
+  fnames=(); for i in $failed; do fnames+=$J_name[$i]; done   # not J_name[$failed]: with two failures the subscript is "22 33" (arithmetic)
+  print -r -- "FAIL ${#failed}/$n: ${(j:, :)fnames}"
   exit 1
 fi
 rm -rf "$rundir"
