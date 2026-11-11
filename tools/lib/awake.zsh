@@ -8,8 +8,11 @@ _aw_comm() { local c; c="$(ps -o comm= -p "$1" 2>/dev/null)"; print -r -- "${c:t
 # Is pid $1 a claude? Claude Code runs as .../claude/versions/<n.n.n>, so its basename is a version number:
 # match the command name against $2 (TC_AWAKE_ANCESTOR, default claude) as a substring of the basename OR as a whole path component.
 _aw_is_claude() {
-  local c; c="$(ps -o comm= -p "$1" 2>/dev/null)"; [[ -n "$c" ]] || return 1
-  [[ "${c:t}" == *"$2"* || "/${c:h}/" == *"/$2/"* ]]
+  local c e; c="$(ps -o comm= -p "$1" 2>/dev/null)"; [[ -n "$c" ]] || return 1
+  [[ "${c:t}" == *"$2"* || "/${c:h}/" == *"/$2/"* ]] && return 0
+  # Linux ps prints only the 15-char name, no path: the executable's real path (/proc) carries the claude/versions/ component
+  e="$(readlink "/proc/$1/exe" 2>/dev/null)"; [[ -n "$e" ]] || return 1
+  [[ "${e:t}" == *"$2"* || "/${e:h}/" == *"/$2/"* ]]
 }
 _aw_alive() { [[ "$(_aw_comm "$1")" == "$2" ]] }                                        # pid $1 is still the process named $2
 _aw_power() { pmset -g batt 2>/dev/null | head -2 }

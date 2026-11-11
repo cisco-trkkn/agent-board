@@ -8,6 +8,7 @@ S="${$(mktemp -d "${TMPDIR:-/tmp}/ttawake.XXXXXX"):A}"
 mkdir -p "$S/bin" "$S/real"
 cp /bin/sleep "$S/real/caffeinate"
 cp /bin/zsh "$S/real/claude-fake"
+mkdir -p "$S/real/lnk"; ln -s /bin/zsh "$S/real/lnk/claude"   # comm is claude, but on Linux the exe path (/proc) resolves to /bin/zsh
 mkdir -p "$S/real/claude/versions"; cp /bin/zsh "$S/real/claude/versions/9.9.9"   # how Claude Code runs: basename is a version number
 codesign -s - -f "$S/real/caffeinate" "$S/real/claude-fake" "$S/real/claude/versions/9.9.9" 2>/dev/null   # a copied platform binary is killed on macOS until re-signed
 cat > "$S/bin/caffeinate" <<STUB
@@ -126,6 +127,9 @@ $C awake off >/dev/null
 out="$("$S/real/claude/versions/9.9.9" -c "$C awake on; true")"
 check "versioned claude ancestor (.../claude/versions/9.9.9) found"  zsh -c '[[ $1 == "awake: on (pid "*", watching "[0-9]*")" ]]' _ "$out"
 check "versioned ancestor: pid is not the test shell"  test "$(jq -r .pid "$AF")" != "$W"
+$C awake off >/dev/null
+out="$("$S/real/lnk/claude" -c "$C awake on; true")"
+check "claude by comm, exe elsewhere (symlink named claude) found"  zsh -c '[[ $1 == "awake: on (pid "*", watching "[0-9]*")" ]]' _ "$out"
 $C awake off >/dev/null
 
 # --- sleeps

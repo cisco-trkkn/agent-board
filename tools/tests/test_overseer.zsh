@@ -43,14 +43,14 @@ export TC_OVERSEER_CMD='exec sleep 6007'
 tt kill-session -t '=overseer'; "$O" ensure
 check "a running command is not retyped"          tt_wait 5 sh -c "$TT_BIN display -p -t '=overseer:claude' '#{pane_current_command}' | grep -qx sleep"
 TC_OVERSEER_RETRY_S=0 "$O" ensure; sleep 1
-check "still one sleeper after ensure"            sh -c "[ \"\$(pgrep -f 'sleep 6007' | wc -l | tr -d ' ')\" = 1 ]"
+check "still one sleeper after ensure"            sh -c "[ \"\$(pgrep -f 'sleep [6]007' | wc -l | tr -d ' ')\" = 1 ]"
 # I3: a browser view (grouped _web- session) must not keep the overseer's window alive after stop
 tt new-session -d -t '=overseer' -s _web-9999
 tt kill-session -t '=p5'
 "$O" stop
 check "stop with a grouped _web- view: overseer gone"   sh -c "! $TT_BIN has-session -t '=overseer' 2>/dev/null"
 check "stop with a grouped _web- view: view gone too"   sh -c "! $TT_BIN has-session -t '=_web-9999' 2>/dev/null"
-check "stop with a view: no sleeper left"               tt_wait 5 sh -c "! pgrep -f 'sleep 6007' >/dev/null"
+check "stop with a view: no sleeper left"               tt_wait 5 sh -c "! pgrep -f 'sleep [6]007' >/dev/null"
 tt new-session -d -s p3 -n claude -c "$TT_DIR"
 TC_OVERSEER=0 "$O" ensure
 check "not created with TC_OVERSEER=0"            sh -c "! $TT_BIN has-session -t '=overseer' 2>/dev/null"
@@ -59,7 +59,7 @@ grep '^set-hook -g session-closed' "${TC_CONF:-$TT_REPO/config/tmux.conf}" > "$T
 "$O" ensure; check "created again for p3" running
 tt kill-session -t '=p3'
 check "session-closed hook stops it"              tt_wait 5 sh -c "! $TT_BIN has-session -t '=overseer' 2>/dev/null"
-check "leak check: no overseer process left"      sh -c "! pgrep -f 'sleep 6007' >/dev/null"
+check "leak check: no overseer process left"      sh -c "! pgrep -f 'sleep [6]007' >/dev/null"
 # tmux-ctl overview: no board reachable (empty token dir) -> the local build lists this scratch server's projects
 C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt new-session -d -s p4 -n claude -c "$TT_DIR"

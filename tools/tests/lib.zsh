@@ -53,3 +53,6 @@ ok()    { print -r -- "ok   - $1" }
 fail()  { print -r -- "FAIL - $1"; (( TT_FAILS++ )) }
 check() { local name="$1"; shift; if "$@"; then ok "$name"; else fail "$name"; fi }
 tt_done() { if (( TT_FAILS == 0 )); then print "ALL PASS"; else print "$TT_FAILS FAILED"; exit 1; fi }
+
+# mode <path>: octal permission bits, GNU stat first (Linux), BSD stat (macOS) as the fallback
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null }
