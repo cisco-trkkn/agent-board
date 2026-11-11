@@ -138,6 +138,8 @@ for (( i=1; i<=n; i++ )); do
     tail -30 "$rundir/$J_name[$i].log"
   fi
 done
+# tests run: unittest "Ran N tests" lines + zsh "ok" lines + hook "PASS" lines, summed over every job log (read before the run dir goes)
+print "tests: $(find "$rundir" -name '*.log' -exec cat {} + 2>/dev/null | awk '/^Ran [0-9]+ tests? in /{n+=$2} /^(ok|PASS)( |$)/{n++} END{print n+0}')"
 print "slowest:"
 for r in ${(f)"$(print -rl -- $rows | LC_ALL=C sort -t$'\t' -k1,1gr | head -5)"}; do print -r -- "  ${r#*$'\t'} $(( int(${r%%$'\t'*}) ))s"; done
 

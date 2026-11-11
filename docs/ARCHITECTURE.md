@@ -288,7 +288,7 @@ Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `c
 
 | Suite | Command | How it isolates |
 | --- | --- | --- |
-| Everything (parallel) | `zsh tools/tests/all.zsh` | one verdict line (`ALL PASS <n> jobs in <m>m<s>s` or `FAIL <k>/<n>: <jobs>`); each job gets its own `TMPDIR` and `TC_STATE`; `--suite`, `--serial`, `-j`, `--list`; a test file marked `# serial` in its first 5 lines runs alone afterwards |
+| Everything (parallel) | `zsh tools/tests/all.zsh` | a `tests: <N>` line (unittest `Ran N` + `ok` + `PASS` lines over every job log) and one verdict line (`ALL PASS <n> jobs in <m>m<s>s` or `FAIL <k>/<n>: <jobs>`); each job gets its own `TMPDIR` and `TC_STATE`; `--suite`, `--serial`, `-j`, `--list`; a test file marked `# serial` in its first 5 lines runs alone afterwards |
 | Board (Python `unittest`) | `python3 -m unittest discover -s board/tests` | temporary `TC_STATE` / `TC_IDEAS_DIR` / `TC_CONTEXT_DIR`, fake tmux runners |
 | Install helpers (Python `unittest`) | `python3 -m unittest discover -s tools/tests -p 'test_*.py'` | `install_lib` (the `install.sh --migrate` settings and tmux edits) on temporary files |
 | Toolkit (zsh) | `zsh tools/tests/run-all.zsh` | `tools/tests/lib.zsh` starts a private tmux server (`-L tctest-…  -f /dev/null`) with a temp `TC_STATE`, and kills it on exit. Covers tmux-ctl, the dev layout, the overseer lifecycle, the plugin and hooks, `install.sh` |

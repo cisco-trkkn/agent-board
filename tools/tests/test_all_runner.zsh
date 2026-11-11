@@ -71,6 +71,19 @@ check "pass: run dir removed" [ -z "$(print -l $SCR/tc-all.*(N))" ]
 check "pass: 5 slowest listed before the verdict" [ "$(grep -c '^  .* [0-9]*s$' <<<"$out")" = 5 ]
 rm -rf $SCR/tc-all.*(N)
 
+# --- test count: `tests: <N>` just before the slowest list, N = unittest "Ran N" + "ok" lines + "PASS" lines of every job log
+CNTROOT="$SCR/cntroot"
+stub $CNTROOT board/tests/test_c1.py 0.1 0                      # unittest: "Ran 1 test"
+mkdir -p $CNTROOT/tools/tests $CNTROOT/claude/hooks/tests
+print -r -- "echo 'ok   - one'; echo 'ok   - two'; echo 'not ok - three'; echo 'ok'" > $CNTROOT/tools/tests/test_c2.zsh
+print -r -- "echo 'PASS first'; echo 'PASS second'; echo 'FAIL third'; echo 'passed=2 failed=1'" > $CNTROOT/claude/hooks/tests/test-c3.sh
+run env TC_TEST_ROOT="$CNTROOT" zsh $ALL -j 3
+# mutation: count only the unittest lines (1) or also count "not ok"/"FAIL" lines → fails
+check "count: tests: 6 line (1 Ran + 3 ok + 2 PASS)" grep -qx 'tests: 6' <<<"$out"
+check "count: tests line comes right before the slowest list" [ "$(grep -A1 -x 'tests: 6' <<<"$out" | tail -1)" = "slowest:" ]
+check "count: verdict is still the last line" [ "$(tail -1 <<<"$out" | cut -c1-8)" = "ALL PASS" ]
+rm -rf $SCR/tc-all.*(N)
+
 # --- concurrency cap (6 jobs of 1 s each: two are alive together unless the runner starts them one by one, whatever the load)
 CAPROOT="$SCR/caproot"; for n in 1 2 3 4 5 6; do stub $CAPROOT tools/tests/test_cap$n.zsh 1 0; done
 ROOT_SAVE=$ROOT; ROOT=$CAPROOT
