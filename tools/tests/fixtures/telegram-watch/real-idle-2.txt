@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.322
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /private/tmp/claude-503/-Users-francisco-ruiz-agent-board/3adc76bc-6371-4aff-b41d-2c8f8dc8d83d/scratchpad/real/work
+
+▎ Channels (experimental) messages from plugin:telegram@claude-plugins-official inject directly in this session · restart without --channels to stop
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                          tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "edit <filepath> to..."
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 · ctx –
+  ⏵⏵ auto mode on (shift+tab to cycle)

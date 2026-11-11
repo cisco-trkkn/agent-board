@@ -135,6 +135,14 @@ class Screens(unittest.TestCase):
         self.assertEqual(tw.input_text(screen("typed-list")), CMD)
         self.assertFalse(tw.idle_at_prompt("claude", screen("typed-list"), None))
 
+    def test_two_real_idle_captures_taken_3_s_apart_are_quiet(self):
+        a, b = screen("real-idle-1"), screen("real-idle-2")          # a real idle lead, capture-pane twice, 3 s apart
+        for rows in (a, b):
+            self.assertTrue(tw.idle_at_prompt("claude", rows, None))
+            self.assertEqual(tw.input_text(rows), "")                  # the `Try "..."` placeholder reads as empty
+        self.assertEqual(tw.input_frame(a), tw.input_frame(b))
+        self.assertIn('Try "', tw.input_frame(a)[1])                   # and it is the same placeholder both times
+
     def test_a_turn_in_progress_is_not_idle(self):
         self.assertFalse(tw.idle_at_prompt("claude", screen("working"), None))
 
