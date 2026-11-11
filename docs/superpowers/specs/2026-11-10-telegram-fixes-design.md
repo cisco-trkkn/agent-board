@@ -1,3 +1,5 @@
+> Superseded by 2026-11-11-discord-replaces-telegram-design.md and 2026-11-11-discord-tasks-design.md (2026-11-11): Telegram is retired.
+
 # Telegram remote-access fixes (spec 11 follow-up)
 
 Date: 2026-11-10 · Ideas: 113, 114, 115, 116 in `~/.local/state/agent-board/ideas/agent-board.md`
