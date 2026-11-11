@@ -3,6 +3,7 @@
 # Stubs append "S <name>" at start and "E <name>" at end to one shared $STUB_LOG; line order is the event order.
 # TC_ALL_RUNNER overrides the runner under test (used to run the mutations named in the comments below).
 source "${0:A:h}/lib.zsh"
+zmodload zsh/datetime
 ALL="${TC_ALL_RUNNER:-${0:A:h}/all.zsh}"
 SCR="$(mktemp -d "${TMPDIR:-/tmp}/test-all-runner.XXXXXX")"; SCR="${SCR:A}"
 trap 'rm -rf "$SCR"; tt_teardown' EXIT INT TERM
@@ -75,10 +76,11 @@ rm -rf $SCR/tc-all.*(N)
 CNTROOT="$SCR/cntroot"
 stub $CNTROOT board/tests/test_c1.py 0.1 0                      # unittest: "Ran 1 test"
 mkdir -p $CNTROOT/tools/tests $CNTROOT/claude/hooks/tests
-print -r -- "echo 'ok   - one'; echo 'ok   - two'; echo 'not ok - three'; echo 'ok'" > $CNTROOT/tools/tests/test_c2.zsh
+# the job also leaves a log of its own under its TMPDIR (inside the run dir): 3 more "ok" lines that must not be counted
+print -r -- "echo 'ok   - one'; echo 'ok   - two'; echo 'not ok - three'; echo 'ok'; printf 'ok\\nok\\nok\\n' > \"\$TMPDIR/nested.log\"" > $CNTROOT/tools/tests/test_c2.zsh
 print -r -- "echo 'PASS first'; echo 'PASS second'; echo 'FAIL third'; echo 'passed=2 failed=1'" > $CNTROOT/claude/hooks/tests/test-c3.sh
 run env TC_TEST_ROOT="$CNTROOT" zsh $ALL -j 3
-# mutation: count only the unittest lines (1) or also count "not ok"/"FAIL" lines → fails
+# mutation: count every *.log under the run dir (find) → 9; count only the unittest lines (1) or also count "not ok"/"FAIL" lines → fails
 check "count: tests: 6 line (1 Ran + 3 ok + 2 PASS)" grep -qx 'tests: 6' <<<"$out"
 check "count: tests line comes right before the slowest list" [ "$(grep -A1 -x 'tests: 6' <<<"$out" | tail -1)" = "slowest:" ]
 check "count: verdict is still the last line" [ "$(tail -1 <<<"$out" | cut -c1-8)" = "ALL PASS" ]
@@ -203,6 +205,19 @@ run zsh $ALL -j abc
 # mutation: ignore a bad -j (fall back to the cpu count) → rc 0 and the jobs run
 check "-j abc: usage error, exit 2, nothing ran" [ $rc -eq 2 -a ! -s "$STUB_LOG" ]
 
+# --- I2: a bare -j (no value) is a usage error, not an endless loop
+: > "$STUB_LOG"
+env TC_TEST_ROOT="$ROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j > $SCR/bare.out 2>&1 &
+bp=$!
+bgone() { ! kill -0 $bp 2>/dev/null }
+tt_wait 5 bgone
+if kill -0 $bp 2>/dev/null; then bdead=0; kill $bp; else bdead=1; fi
+wait $bp 2>/dev/null; brc=$?
+# mutation: "-j) jn=$2; shift 2" without a value check → shift fails, the loop never ends (killed after 5 s)
+bareok() { [ $bdead -eq 1 -a $brc -eq 2 -a ! -s "$STUB_LOG" ] && grep -q 'needs a' $SCR/bare.out }
+check "bare -j: exits 2 within 5 s with a usage message, nothing ran" bareok
+rm -rf $SCR/tc-all.*(N)
+
 # --- M5: nproc fallback, with sysctl failing and nproc printing 1 (PATH stubs): concurrency must be 1
 mkdir -p $SCR/bin; printf '#!/bin/sh\nexit 1\n' > $SCR/bin/sysctl; printf '#!/bin/sh\necho 1\n' > $SCR/bin/nproc; chmod +x $SCR/bin/*
 : > "$STUB_LOG"; out=$(env PATH="$SCR/bin:$PATH" TC_TEST_ROOT="$ROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL 2>&1); rc=$?
@@ -230,6 +245,75 @@ sleep 0.5
 alive=0; for p in $(<$SCR/pids); do kill -0 $p 2>/dev/null && { alive=$((alive+1)); kill $p 2>/dev/null }; done   # by PID: only processes this test started
 # mutation: kill only the job subshells (kill $(jobs -p)) → the stub shells and their sleep children stay alive
 check "TERM to the runner: no job process (shell or child) is left alive" [ "$(wc -l < $SCR/pids | tr -d ' ')" -ge 6 -a $alive -eq 0 ]
+rm -rf $SCR/tc-all.*(N)
+
+# --- I1: an interrupt signals only jobs still running. A finished job leaves a straggler in its process group (its pgid is
+# still the pid in <name>.pid); the runner must not signal that group, since a finished pid can be reused by something else.
+IROOT="$SCR/iroot"; mkdir -p $IROOT/tools/tests
+cat > $IROOT/tools/tests/test_fin.zsh <<STUBEND
+sleep 60 &
+echo \$! >> "$SCR/ipids_fin"
+STUBEND
+cat > $IROOT/tools/tests/test_run.zsh <<STUBEND
+echo \$\$ >> "$SCR/ipids_run"
+sleep 60 &
+echo \$! >> "$SCR/ipids_run"
+wait
+STUBEND
+: > $SCR/ipids_fin; : > $SCR/ipids_run
+env TC_TEST_ROOT="$IROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 2 > $SCR/int.out 2>&1 &
+ip=$!
+fin_done() { [ -s $SCR/ipids_fin -a "$(wc -l < $SCR/ipids_run | tr -d ' ')" -ge 2 ] && ls $SCR/tc-all.*/zsh/test_fin.zsh.res >/dev/null 2>&1 }
+tt_wait 10 fin_done
+fin_sp=$(<$SCR/ipids_fin)
+kill -TERM $ip; wait $ip 2>/dev/null
+sleep 0.5
+finalive=0; kill -0 $fin_sp 2>/dev/null && finalive=1
+runalive=0; for p in $(<$SCR/ipids_run); do kill -0 $p 2>/dev/null && runalive=$((runalive+1)); done
+for p in $(<$SCR/ipids_fin) $(<$SCR/ipids_run); do kill $p 2>/dev/null; done   # by PID: only processes this test started
+# mutation: signal every job's group, finished or not → the finished job's straggler dies (finalive=0)
+check "interrupt: a finished job's process group is not signalled" [ $finalive -eq 1 ]
+check "interrupt: the still-running job's tree is gone" [ $runalive -eq 0 ]
+rm -rf $SCR/tc-all.*(N)
+
+# --- I3: a job that ignores INT and TERM is KILLed, after a grace period, in under 5 s in total
+SROOT="$SCR/sroot"; mkdir -p $SROOT/tools/tests
+cat > $SROOT/tools/tests/test_stub.zsh <<STUBEND
+trap '' INT TERM
+echo \$\$ >> "$SCR/spids"
+while :; do sleep 0.2; done
+STUBEND
+: > $SCR/spids
+env TC_TEST_ROOT="$SROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 1 > $SCR/stub.out 2>&1 &
+sp=$!
+sp_n() { [ -s $SCR/spids ] }
+tt_wait 10 sp_n
+sleep 0.3; s0=$EPOCHREALTIME
+kill -TERM $sp; wait $sp 2>/dev/null; src=$?
+selapsed=$(( EPOCHREALTIME - s0 ))
+sleep 0.2
+salive=0; for p in $(<$SCR/spids); do kill -0 $p 2>/dev/null && { salive=1; kill -KILL $p 2>/dev/null }; done
+# mutation: no KILL step → the stub survives; a 0.3 s gap → fine here, but no polling loop leaves it alive for the full 3 s (>5 s total)
+check "interrupt: a job ignoring INT and TERM is KILLed, runner exits 130 in under 5 s" [ $salive -eq 0 -a $src -eq 130 -a $(( selapsed < 5 )) -eq 1 ]
+rm -rf $SCR/tc-all.*(N)
+
+# a job that needs 1 s to wind down after TERM gets to finish (the old 0.3 s gap KILLed it first)
+cat > $SROOT/tools/tests/test_stub.zsh <<STUBEND
+trap '' INT
+trap 'sleep 1; echo clean >> "$SCR/sclean"; exit 0' TERM
+echo \$\$ >> "$SCR/spids"
+while :; do sleep 0.2; done
+STUBEND
+: > $SCR/spids; : > $SCR/sclean
+env TC_TEST_ROOT="$SROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 1 > $SCR/stub.out 2>&1 &
+sp=$!
+tt_wait 10 sp_n
+sleep 0.3
+kill -TERM $sp; wait $sp 2>/dev/null
+sleep 0.2
+for p in $(<$SCR/spids); do kill -KILL $p 2>/dev/null; done
+# mutation: KILL 0.3 s after TERM → the job dies before it writes "clean"
+check "interrupt: a job that winds down within the grace period is not KILLed early" [ -s $SCR/sclean ]
 rm -rf $SCR/tc-all.*(N)
 
 # --- M1: a job subshell killed without writing its .res must not hang the runner

@@ -16,7 +16,7 @@ while (( $# )); do
     --suite)   [[ -n $2 ]] || { print -u2 "all.zsh: --suite needs a value"; exit 2 }; suites+=("$2"); shift 2 ;;
     --suite=*) suites+=("${1#--suite=}"); shift ;;
     --serial)  serial=1; shift ;;
-    -j)        jn="$2"; shift 2 ;;
+    -j)        [[ -n $2 ]] || { print -u2 "all.zsh: -j needs a positive number"; exit 2 }; jn="$2"; shift 2 ;;
     -j*)       jn="${1#-j}"; shift ;;
     --list)    list=1; shift ;;
     *) print -u2 "usage: all.zsh [--suite board|zsh|tools|skills|statusline|hooks]… [--serial] [-j N] [--list]"; exit 2 ;;
@@ -104,12 +104,24 @@ reap() {
 }
 # each job's command runs in its own session (setsid via perl; pgid = its pid, in <name>.pid), so an interrupt kills the whole
 # tree (sh, the test, its tmux and board servers) and not only the job subshell
+# Only jobs still running are signalled (no .res yet): a finished job's pid may be reused. INT then TERM to each live group,
+# up to 3 s for them to go, then KILL what is left.
 killjobs() {
-  local k p; local -a pids=()
-  for k in ${(k)jpid}; do kill -TERM ${jpid[$k]} 2>/dev/null; p="$(<"$rundir/$J_name[$k].pid" 2>/dev/null)"; [[ -n $p ]] && pids+=$p; done
+  local k p i; local -a pids=() left=()
+  for k in ${(k)jpid}; do
+    [[ -e "$rundir/$J_name[$k].res" ]] && continue
+    kill -TERM ${jpid[$k]} 2>/dev/null
+    p="$(<"$rundir/$J_name[$k].pid" 2>/dev/null)"; [[ -n $p ]] && pids+=$p
+  done
+  for p in $pids; do kill -INT -- -$p 2>/dev/null; done
+  sleep 0.2
   for p in $pids; do kill -TERM -- -$p 2>/dev/null; done
-  sleep 0.3
-  for p in $pids; do kill -KILL -- -$p 2>/dev/null; done
+  for (( i=0; i<30; i++ )); do
+    left=(); for p in $pids; do kill -0 -- -$p 2>/dev/null && left+=$p; done
+    (( ${#left} )) || break
+    sleep 0.1
+  done
+  for p in $left; do kill -KILL -- -$p 2>/dev/null; done
 }
 trap 'killjobs; print -u2 "all.zsh: interrupted, run dir $rundir"; exit 130' INT TERM
 
@@ -139,7 +151,8 @@ for (( i=1; i<=n; i++ )); do
   fi
 done
 # tests run: unittest "Ran N tests" lines + zsh "ok" lines + hook "PASS" lines, summed over every job log (read before the run dir goes)
-print "tests: $(find "$rundir" -name '*.log' -exec cat {} + 2>/dev/null | awk '/^Ran [0-9]+ tests? in /{n+=$2} /^(ok|PASS)( |$)/{n++} END{print n+0}')"
+logs=(); for (( i=1; i<=n; i++ )); do logs+="$rundir/$J_name[$i].log"; done   # each job's own log, not logs a test left under its TMPDIR
+print "tests: $(cat $logs 2>/dev/null | awk '/^Ran [0-9]+ tests? in /{n+=$2} /^(ok|PASS)( |$)/{n++} END{print n+0}')"
 print "slowest:"
 for r in ${(f)"$(print -rl -- $rows | LC_ALL=C sort -t$'\t' -k1,1gr | head -5)"}; do print -r -- "  ${r#*$'\t'} $(( int(${r%%$'\t'*}) ))s"; done
 
