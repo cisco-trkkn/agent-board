@@ -256,6 +256,7 @@ class PlanAlreadyOnMainTest(unittest.TestCase):
 
     def test_branch_flag_still_works_with_the_plan_on_main(self):
         git(self.repo, "branch", "feat/manual", self.merge_gamma + "^2")
+        git(self.repo, "commit", "-q", "--amend", "-m", "Merge branch 'feat/zzz'")  # no merge matches gamma any more
         r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", "kept", self.now, branch="feat/manual")
         self.assertEqual(r["branch"], "feat/manual")
         self.assertEqual(r["head"], git(self.repo, "rev-parse", "feat/manual"))
