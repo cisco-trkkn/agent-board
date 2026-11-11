@@ -73,7 +73,11 @@ def _is_claude(args):
 
 
 def find_leads(table):
-    return [p.pid for p in table.values() if CHANNEL in p.args.split() and _is_claude(p.args)]
+    """claude processes started with the telegram channel, as `--channels plugin:telegram@…` or `--channels=plugin:…`."""
+    def has_channel(args):
+        w = args.split()
+        return CHANNEL in w or f"--channels={CHANNEL}" in w
+    return [p.pid for p in table.values() if has_channel(p.args) and _is_claude(p.args)]
 
 
 def descendants(pid, table):
@@ -107,13 +111,21 @@ def pane_of(pid, table, panes):
     return panes.get(pid)
 
 
+BACKOFF_FIRST, BACKOFF_CAP = 60, 1800   # seconds between reconnect attempts: 60, 120, 240 ... capped at 30 min
+
+
 class State:
+    """notified: pid -> last banner time. tries: pid -> {"n": failed attempts in a row, "next": earliest next attempt}."""
+
     def __init__(self, path):
         self.path = Path(path)
+        self.notified, self.tries = {}, {}
         try:
-            self.notified = {int(k): float(v) for k, v in json.loads(self.path.read_text()).get("notified", {}).items()}
-        except (OSError, ValueError, AttributeError, TypeError):
-            self.notified = {}
+            d = json.loads(self.path.read_text())
+            self.notified = {int(k): float(v) for k, v in d.get("notified", {}).items()}
+            self.tries = {int(k): {"n": int(v["n"]), "next": float(v["next"])} for k, v in d.get("tries", {}).items()}
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):
+            self.notified, self.tries = {}, {}
 
     def should_notify(self, pid, now):
         return now - self.notified.get(pid, -1e12) >= NOTIFY_EVERY
@@ -122,10 +134,26 @@ class State:
         self.notified[pid] = now
         self.save()
 
+    def may_try(self, pid, now):
+        return now >= self.tries.get(pid, {"next": 0})["next"]
+
+    def failed(self, pid, now):
+        """Record a failed reconnect; returns how many in a row. The next attempt waits 60 s, then 120, 240 ... up to 30 min."""
+        n = self.tries.get(pid, {"n": 0})["n"] + 1
+        self.tries[pid] = {"n": n, "next": now + min(BACKOFF_FIRST * 2 ** (n - 1), BACKOFF_CAP)}
+        self.save()
+        return n
+
+    def alive(self, pid):
+        """A server was seen under this lead: forget its failures."""
+        if self.tries.pop(pid, None) is not None:
+            self.save()
+
     def prune(self, live):
-        gone = [p for p in self.notified if p not in live]
+        gone = [p for p in set(self.notified) | set(self.tries) if p not in live]
         for p in gone:
-            del self.notified[p]
+            self.notified.pop(p, None)
+            self.tries.pop(p, None)
         if gone:
             self.save()
 
@@ -133,7 +161,8 @@ class State:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_name(self.path.name + ".tmp")
-            tmp.write_text(json.dumps({"notified": {str(k): v for k, v in self.notified.items()}}))
+            tmp.write_text(json.dumps({"notified": {str(k): v for k, v in self.notified.items()},
+                                       "tries": {str(k): v for k, v in self.tries.items()}}))
             os.replace(tmp, self.path)
         except OSError:
             pass
@@ -141,95 +170,77 @@ class State:
 
 # ---- the pane
 
+def _spinner_above_input(rows, span=8):
+    """True when a spinner line (`✽ Actioning…`, `✻ Thinking… (3s …)`) sits in the few rows above the input box. Stricter than
+    paneclass: its first-frame rule ignores a spinner followed by a `⎿ Tip:` row, which is how a turn starts (real 2.1.322
+    capture in fixtures/telegram-watch/working.txt); calling that idle would type into a working lead."""
+    tail = rows[-30:]
+    for n in range(len(tail) - 1, 0, -1):
+        if paneclass.INPUT_RE.match(tail[n]) and paneclass.RULE_RE.match(tail[n - 1]):
+            return any(paneclass.SPINNER_RE.match(r) or paneclass.SPINNER_FIRST_RE.match(r) for r in tail[max(0, n - 1 - span):n - 1])
+    return False
+
+
 def idle_at_prompt(cmd, rows, mod):
     """A claude pane that is ready (no spinner, no dialog) and whose input line is empty."""
     if paneclass.classify(cmd, rows, False, mod) != ("claude", "ready"):
         return False
-    return not paneclass.input_has_text(rows)
+    return not paneclass.input_has_text(rows) and not _spinner_above_input(rows)
 
 
-class PaneCtl:
-    def __init__(self, capture, send, sleep=time.sleep):
-        self.capture, self.send, self.sleep = capture, send, sleep
+COMMAND = "/mcp reconnect plugin:telegram:telegram"
+RECENT = 30        # seconds: a pane with output or typing more recent than this is not touched
+NOT_TYPED = "pane busy or has typed text"
 
 
-def _menu_rows(rows, header):
-    """The rows from the menu's header line down: a `❯ /mcp` line of the transcript above it is not the cursor."""
-    for i, r in enumerate(rows):
-        if header in r:
-            return rows[i:]
-    return []
-
-
-def _cursor_row(rows, header):
-    for r in _menu_rows(rows, header):
-        if r.lstrip().startswith("❯"):
-            return r
-    return ""
-
-
-def _menu_open(rows):
-    return any("Esc to " in r for r in rows)
-
-
-def _wait(ctl, pred, tries=12, step=0.25):
-    for _ in range(tries):
-        rows = ctl.capture()
-        if pred(rows):
-            return rows
-        ctl.sleep(step)
+def input_text(rows):
+    """The text on Claude's input line (the `❯` line right below a full-width rule, lowest first), '' when empty,
+    None when there is no input line. Same screen rules as paneclass.input_has_text."""
+    tail = rows[-30:]
+    for n in range(len(tail) - 1, -1, -1):
+        m = paneclass.INPUT_RE.match(tail[n])
+        if not m:
+            continue
+        boxed = tail[n].lstrip()[:1] in ("│", "|")
+        if not boxed and not (n > 0 and paneclass.RULE_RE.match(tail[n - 1])):
+            continue
+        txt = m.group(1)
+        return "" if txt.startswith('Try "') else txt
     return None
 
 
-def _back_out(ctl):
-    """Escape while a menu is on screen, and no further: Escape twice at the prompt opens Rewind."""
-    for _ in range(4):
-        if not _menu_open(ctl.capture()):
-            return
-        ctl.send("Escape")
-        ctl.sleep(0.3)
+def unsafe_reason(in_mode, idle_for, recent=RECENT):
+    if in_mode:
+        return "pane in copy mode"
+    if idle_for < recent:
+        return f"pane active in the last {recent:g} s"
+    return None
+
+
+class PaneCtl:
+    """What reconnect() needs from a pane: capture() -> rows, type_text(t), enter(), clear(), check() -> reason or None,
+    pane_idle() -> bool, sleep(s)."""
+
+    def __init__(self, capture, type_text, enter, clear, check, pane_idle, sleep=time.sleep):
+        self.capture, self.type_text, self.enter, self.clear = capture, type_text, enter, clear
+        self.check, self.pane_idle, self.sleep = check, pane_idle, sleep
 
 
 def reconnect(ctl, has_server, settle=8):
-    """Drive /mcp -> telegram -> Reconnect by reading the menu. 'ok' or the reason it stopped (after Escape x3)."""
-    def fail(why):
-        _back_out(ctl)
+    """Type `/mcp reconnect plugin:telegram:telegram` and Enter into an idle pane. 'ok', 'no server after reconnect' (the
+    command ran) or why nothing was sent. The pane is checked again right before typing; after typing, the input line must
+    read back exactly the command (the user may have started typing) or the line is cleared and no Enter is sent."""
+    why = ctl.check()
+    if why:
         return why
-
-    ctl.send("/mcp")
-    ctl.sleep(0.8)                     # the slash-command list must settle before Enter
-    ctl.send("Enter")
-    rows = _wait(ctl, lambda r: any("Manage MCP servers" in x for x in r))
-    if rows is None:
-        if paneclass.input_has_text(ctl.capture()):
-            ctl.send("C-u")                   # Enter was not taken: clear the typed /mcp
-        return fail("menu did not open")
-    for _ in range(25):
-        if "plugin:telegram:telegram" in _cursor_row(rows, "Manage MCP servers"):
-            break
-        ctl.send("Down")
-        ctl.sleep(0.3)
-        rows = ctl.capture()
-        if "Manage MCP servers" not in "\n".join(rows):
-            return fail("menu changed while looking for telegram")
-    else:
-        return fail("telegram not in the /mcp list")
-    ctl.send("Enter")
-    rows = _wait(ctl, lambda r: any("MCP Server" in x and "elegram" in x for x in r))
-    if rows is None:
-        return fail("telegram detail menu did not open")
-    for _ in range(6):
-        cur = _cursor_row(rows, "MCP Server")
-        if "Reconnect" in cur:
-            break
-        if not any("Reconnect" in x for x in _menu_rows(rows, "MCP Server")):
-            return fail("no Reconnect option")
-        ctl.send("Down")
-        ctl.sleep(0.3)
-        rows = ctl.capture()
-    else:
-        return fail("could not reach Reconnect")
-    ctl.send("Enter")
+    if not ctl.pane_idle() or input_text(ctl.capture()) != "":
+        return NOT_TYPED
+    ctl.type_text(COMMAND)
+    ctl.sleep(0.3)                  # the slash-command list needs a moment before Enter submits
+    if input_text(ctl.capture()) != COMMAND:
+        ctl.clear()
+        return "input changed while typing"
+    ctl.enter()
     for _ in range(settle * 2):
         ctl.sleep(0.5)
         if has_server():
@@ -262,7 +273,10 @@ def watch_once(env=None, now=None, table=None, panes=None, pane_idle=None, do_re
             pass
 
     grace = float(env.get("TC_TELEGRAM_WATCH_GRACE") or GRACE)
-    need = [p for p in leads if table[p].age >= grace and not has_server(p, table)]
+    for pid in leads:
+        if has_server(pid, table):
+            st.alive(pid)
+    need = [p for p in leads if table[p].age >= grace and not has_server(p, table) and st.may_try(p, now)]
     if not need:
         return lines
     if panes is None:
@@ -272,20 +286,25 @@ def watch_once(env=None, now=None, table=None, panes=None, pane_idle=None, do_re
         why = ""
         if pane is None:
             why = "no tmux pane"
-        elif (pane_idle or _pane_idle)(pane):
+            log(f"lead pid {pid}: telegram server missing, {why}")
+        elif not (pane_idle or _pane_idle)(pane):
+            why = NOT_TYPED
+            log(f"lead pid {pid} pane {pane}: telegram server missing, {why}, not typing")
+        else:
             res = (do_reconnect or _do_reconnect)(pane)
             log(f"lead pid {pid} pane {pane}: telegram server missing, reconnect: {res}")
             if res == "ok":
+                st.alive(pid)
                 continue
-            why = f"reconnect failed ({res})"
-        else:
-            why = "pane busy or has typed text"
-            log(f"lead pid {pid} pane {pane}: telegram server missing, {why}, not typing")
-        if pane is None:
-            log(f"lead pid {pid}: telegram server missing, {why}")
+            if res == "no server after reconnect":      # the command ran and did not help: back off, one banner
+                if st.failed(pid, now) == 1:
+                    (notify or _notify)("Telegram is down", f"lead pid {pid}: reconnect did not bring the server back; retrying with backoff. Check /mcp.")
+                    log(f"lead pid {pid} pane {pane}: notified, backing off")
+                continue
+            why = res                                   # nothing was typed: same as a busy pane
         if st.should_notify(pid, now):
             st.mark_notified(pid, now)
-            (notify or _notify)("Telegram is down", f"lead pid {pid}: {why}. Run /mcp and reconnect telegram.")
+            (notify or _notify)("Telegram is down", f"lead pid {pid}: {why}. Run /mcp reconnect plugin:telegram:telegram.")
             log(f"lead pid {pid}: notified")
     return lines
 
@@ -311,46 +330,46 @@ def tmux_panes():
 
 def _rows(pane):
     t = _tmux()
-    return [l.rstrip() for l in t("capture-pane", "-p", "-J", "-t", pane, "-S", "-40").splitlines()]
+    rows = [l.rstrip() for l in t("capture-pane", "-p", "-J", "-t", pane, "-S", "-40").splitlines()]
+    while rows and not rows[-1]:
+        rows.pop()
+    return rows
 
 
 def _pane_idle(pane):
-    t = _tmux()
     # the pane holds a claude process (find_leads found it by its command line), whatever tmux calls the command
     # (a bare version number, node...): classify it as claude
-    rows = _rows(pane)
-    while rows and not rows[-1]:
-        rows.pop()
-    return idle_at_prompt("claude", rows, paneclass.mod_states().get(pane))
+    return idle_at_prompt("claude", _rows(pane), paneclass.mod_states().get(pane))
 
 
 def _do_reconnect(pane):
     t = _tmux()
 
-    def send(*keys):
-        for k in keys:
-            if k == "/mcp":
-                t("send-keys", "-t", pane, "-l", "/mcp")
-            else:
-                t("send-keys", "-t", pane, k)
+    def check():
+        f = t("display", "-p", "-t", pane, "#{pane_in_mode} #{window_activity} #{pane_pid}").split()
+        if len(f) < 3:
+            return "pane not found"
+        return unsafe_reason(f[0] != "0", time.time() - float(f[1] or 0), float(os.environ.get("TC_TELEGRAM_WATCH_QUIET") or RECENT))
 
-    # the pane may have changed since the idle check: look again right before typing
-    if not _pane_idle(pane):
-        return "pane no longer idle"
-    pid = int(t("display", "-p", "-t", pane, "#{pane_pid}").strip() or 0)
+    pid = int((t("display", "-p", "-t", pane, "#{pane_pid}").strip() or "0"))
 
     def leads():
         tbl = read_table()
         return tbl, [p for p in find_leads(tbl) if pane_of(p, tbl, {pid: pane}) == pane]
 
     if not leads()[1]:
-        return "lead has gone"           # never type /mcp into a shell prompt
+        return "lead has gone"           # never type into a shell prompt
 
     def server():
         tbl, lead = leads()
         return bool(lead) and all(has_server(p, tbl) for p in lead)
 
-    return reconnect(PaneCtl(lambda: _rows(pane), send), server)
+    ctl = PaneCtl(lambda: _rows(pane),
+                  lambda text: t("send-keys", "-t", pane, "-l", text),
+                  lambda: t("send-keys", "-t", pane, "Enter"),
+                  lambda: t("send-keys", "-t", pane, "C-u"),
+                  check, lambda: _pane_idle(pane))
+    return reconnect(ctl, server)
 
 
 def _notify(title, text):

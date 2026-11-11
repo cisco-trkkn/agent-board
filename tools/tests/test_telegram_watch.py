@@ -14,6 +14,16 @@ import telegram_watch as tw  # noqa: E402
 
 CH = "--channels plugin:telegram@claude-plugins-official"
 SRV = "node --experimental-strip-types --no-warnings /h/.claude/plugins/cache/claude-plugins-official/telegram/0.0.7/server.ts"
+FX = Path(__file__).resolve().parent / "fixtures" / "telegram-watch"
+CMD = "/mcp reconnect plugin:telegram:telegram"
+
+
+def screen(name):
+    """A real Claude Code 2.1.322 pane capture (see fixtures/telegram-watch/README.md), as the rows the watchdog reads."""
+    rows = (FX / f"{name}.txt").read_text().splitlines()
+    while rows and not rows[-1].strip():
+        rows.pop()
+    return rows
 
 
 def table(*rows):
@@ -28,8 +38,9 @@ class Finding(unittest.TestCase):
                   (3, 0, 999, "claude --model opus --settings x"),                 # no channel: a teammate or token-less lead
                   (4, 0, 999, f"vim {CH}"),                                         # not claude
                   (5, 0, 999, f"tail -f {CH}"),
-                  (6, 0, 999, f"claude {CH.replace('telegram', 'other')}"))
-        self.assertEqual(sorted(tw.find_leads(t)), [1, 2])
+                  (6, 0, 999, f"claude {CH.replace('telegram', 'other')}"),
+                  (7, 0, 999, "claude --channels=plugin:telegram@claude-plugins-official --model opus"))
+        self.assertEqual(sorted(tw.find_leads(t)), [1, 2, 7])
 
     def test_server_among_descendants_only(self):
         t = table((10, 1, 999, "claude " + CH), (11, 10, 99, "sh -c x"), (12, 11, 99, SRV),
@@ -58,131 +69,144 @@ class Finding(unittest.TestCase):
         self.assertEqual(len(t), 3)
 
 
-class Rate(unittest.TestCase):
-    def test_once_per_lead_per_15_minutes(self):
+class State(unittest.TestCase):
+    def test_banner_once_per_lead_per_15_minutes(self):
         d = tempfile.mkdtemp()
         s = tw.State(Path(d) / "s.json")
         self.assertTrue(s.should_notify(5, 1000)); s.mark_notified(5, 1000)
         self.assertFalse(s.should_notify(5, 1000 + 899))
         self.assertTrue(s.should_notify(5, 1000 + 901))
         self.assertTrue(s.should_notify(6, 1001))
-        s2 = tw.State(Path(d) / "s.json")                      # persisted
-        self.assertFalse(s2.should_notify(5, 1100))
+        self.assertFalse(tw.State(Path(d) / "s.json").should_notify(5, 1100))      # persisted
 
     def test_corrupt_state_file_is_ignored(self):
         d = Path(tempfile.mkdtemp()); (d / "s.json").write_text("garbage")
-        self.assertTrue(tw.State(d / "s.json").should_notify(1, 5))
+        s = tw.State(d / "s.json")
+        self.assertTrue(s.should_notify(1, 5))
+        self.assertTrue(s.may_try(1, 5))
+
+    def test_backoff_doubles_from_60s_and_caps_at_30_minutes(self):
+        s = tw.State(Path(tempfile.mkdtemp()) / "s.json")
+        self.assertTrue(s.may_try(7, 0))
+        delays, now = [], 1000
+        for _ in range(8):
+            s.failed(7, now)
+            delays.append(s.tries[7]["next"] - now)
+            self.assertFalse(s.may_try(7, now + delays[-1] - 1))
+            self.assertTrue(s.may_try(7, now + delays[-1]))
+            now += delays[-1]
+        self.assertEqual(delays, [60, 120, 240, 480, 960, 1800, 1800, 1800])
+
+    def test_failed_returns_the_attempt_count_and_alive_resets_it(self):
+        d = Path(tempfile.mkdtemp()) / "s.json"
+        s = tw.State(d)
+        self.assertEqual(s.failed(7, 0), 1)
+        self.assertEqual(s.failed(7, 100), 2)
+        s.alive(7)
+        self.assertEqual(s.failed(7, 200), 1)
+        self.assertEqual(tw.State(d).tries[7]["n"], 1)                           # persisted
+
+    def test_prune_drops_dead_leads(self):
+        s = tw.State(Path(tempfile.mkdtemp()) / "s.json")
+        s.failed(7, 0); s.mark_notified(7, 0); s.failed(8, 0)
+        s.prune({8})
+        self.assertEqual(list(s.tries), [8]); self.assertEqual(s.notified, {})
 
 
-class Fake:
-    """A tmux stand-in that shows the /mcp menu for one pane, driven by the keys it is sent."""
+class Screens(unittest.TestCase):
+    """The parsers against real 2.1.322 captures."""
 
-    def __init__(self, menu_rows=("claude.ai Claude Docs", "claude-artifacts", "plugin:telegram:telegram"), status="ok", input_text=""):
-        self.keys, self.rows, self.menu, self.cur, self.screen, self.status = [], list(menu_rows), menu_rows, 0, "prompt", status
-        self.input_text = input_text
-        self.server_started = False
+    def test_idle_screens_are_idle(self):
+        for name in ("idle", "after-turn", "reconnect-ok", "reconnect-unknown", "reconnecting"):   # the last two quote `❯ /mcp …` in the transcript
+            with self.subTest(name):
+                self.assertTrue(tw.idle_at_prompt("claude", screen(name), None))
+                self.assertEqual(tw.input_text(screen(name)), "")
+
+    def test_typed_input_is_not_idle_and_is_read_back_exactly(self):
+        self.assertFalse(tw.idle_at_prompt("claude", screen("typed-input"), None))
+        self.assertEqual(tw.input_text(screen("typed-input")), "half a sentence")
+        self.assertEqual(tw.input_text(screen("typed-list")), CMD)
+        self.assertFalse(tw.idle_at_prompt("claude", screen("typed-list"), None))
+
+    def test_a_turn_in_progress_is_not_idle(self):
+        self.assertFalse(tw.idle_at_prompt("claude", screen("working"), None))
+
+    def test_a_busy_mod_state_wins_over_an_idle_screen(self):
+        self.assertFalse(tw.idle_at_prompt("claude", screen("idle"), "working"))
+
+    def test_no_input_line_reads_as_none(self):
+        self.assertIsNone(tw.input_text(["$ ls", "file"]))
+
+
+class Safe(unittest.TestCase):
+    def test_copy_mode_and_recent_typing_block(self):
+        self.assertIsNone(tw.unsafe_reason(in_mode=False, idle_for=31))
+        self.assertEqual(tw.unsafe_reason(in_mode=True, idle_for=999), "pane in copy mode")
+        self.assertEqual(tw.unsafe_reason(in_mode=False, idle_for=29), "pane active in the last 30 s")
+        self.assertIsNone(tw.unsafe_reason(False, 3, recent=2))
+
+
+class Ctl:
+    """A pane stand-in: records what is typed. screens: what capture() returns in turn (the last repeats)."""
+
+    def __init__(self, screens, check=None, server_after_enter=True):
+        self.screens, self.log, self.n = screens, [], 0
+        self._check, self.server, self.entered = check, server_after_enter, False
 
     def capture(self):
-        if self.screen == "prompt":
-            return ["", "─" * 40, f"❯ {self.input_text}", "─" * 40, "  auto mode on"]
-        if self.screen == "list":
-            out = ["❯ /mcp", "  ⎿  Reconnected to plugin:telegram:telegram.", "   Manage MCP servers"]
-            out += [("   ❯ ✔ " if i == self.cur else "     ✔ ") + r for i, r in enumerate(self.rows)]
-            return out + ["   ↑/↓ to navigate · Enter to confirm · Esc to cancel"]
-        if self.screen == "detail":
-            opts = ["Reconnect", "Disable"] if self.status == "ok" else ["Something else"]
-            out = ["❯ /mcp", "   Plugin:telegram:telegram MCP Server", "   Status: ✘ failed"]
-            out += [("   ❯ " if i == self.cur else "     ") + f"{i + 1}. {o}" for i, o in enumerate(opts)]
-            return out + ["   ↑/↓ to navigate · Enter to select · Esc to back"]
-        return ["???"]
+        r = self.screens[min(self.n, len(self.screens) - 1)]
+        self.n += 1
+        return r
 
-    def send(self, *keys):
-        for k in keys:
-            self.keys.append(k)
-            if k == "Escape":
-                self.screen = {"detail": "list", "list": "prompt"}.get(self.screen, "prompt"); self.cur = 0
-            elif k == "Down":
-                self.cur += 1
-            elif k == "Enter":
-                if self.screen == "typed":
-                    self.screen, self.cur = "list", 0
-                elif self.screen == "list":
-                    self.screen, self.cur = "detail", 0
-                elif self.screen == "detail":
-                    if self.status == "ok" and self.cur == 0:
-                        self.server_started = True
-                    self.screen = "prompt"
-            elif k == "/mcp":
-                self.screen = "typed"
+    def check(self): return self._check
+    def pane_idle(self): return tw.idle_at_prompt("claude", self.capture(), None)
+    def type_text(self, t): self.log.append(("type", t))
+    def enter(self): self.log.append(("enter",)); self.entered = True
+    def clear(self): self.log.append(("clear",))
+    def sleep(self, s): pass
+    def has_server(self): return self.entered and self.server
+
+
+def run(ctl):
+    return tw.reconnect(tw.PaneCtl(ctl.capture, ctl.type_text, ctl.enter, ctl.clear, ctl.check, ctl.pane_idle, ctl.sleep), ctl.has_server)
 
 
 class Reconnect(unittest.TestCase):
-    def run_it(self, fake, server_after=True, idle=True):
-        ctl = tw.PaneCtl(capture=lambda: fake.capture(), send=fake.send, sleep=lambda s: None)
-        return tw.reconnect(ctl, has_server=lambda: fake.server_started and server_after)
+    def test_types_the_command_and_enter_when_the_input_reads_back_exactly(self):
+        c = Ctl([screen("idle"), screen("idle"), screen("typed-list")])
+        self.assertEqual(run(c), "ok")
+        self.assertEqual(c.log, [("type", CMD), ("enter",)])
 
-    def test_happy_path_finds_telegram_by_reading_the_menu(self):
-        f = Fake()
-        self.assertEqual(self.run_it(f), "ok")
-        self.assertEqual(f.keys, ["/mcp", "Enter", "Down", "Down", "Enter", "Enter"])
+    def test_unsafe_pane_gets_no_keys(self):
+        c = Ctl([screen("idle")], check="pane in copy mode")
+        self.assertEqual(run(c), "pane in copy mode")
+        self.assertEqual(c.log, [])
 
-    def test_position_is_not_hardcoded(self):
-        f = Fake(menu_rows=("a", "b", "c", "d", "plugin:telegram:telegram", "e"))
-        self.assertEqual(self.run_it(f), "ok")
-        self.assertEqual(f.keys.count("Down"), 4)
+    def test_input_with_text_gets_no_keys(self):
+        c = Ctl([screen("typed-input")])
+        self.assertEqual(run(c), "pane busy or has typed text")
+        self.assertEqual(c.log, [])
 
-    def test_no_telegram_row_backs_out_with_escape(self):
-        f = Fake(menu_rows=("a", "b"))
-        r = self.run_it(f)
-        self.assertNotEqual(r, "ok")
-        self.assertEqual(f.keys[-1:], ["Escape"])               # one menu open, one Escape: never an Escape at the prompt
-        self.assertEqual(f.screen, "prompt")
-        self.assertFalse(f.server_started)
+    def test_a_turn_in_progress_gets_no_keys(self):
+        c = Ctl([screen("working")])
+        self.assertEqual(run(c), "pane busy or has typed text")
+        self.assertEqual(c.log, [])
 
-    def test_unexpected_detail_menu_backs_out(self):
-        f = Fake(status="weird")
-        self.assertNotEqual(self.run_it(f), "ok")
-        self.assertEqual(f.keys[-2:], ["Escape"] * 2)           # detail -> list -> prompt
-        self.assertEqual(f.screen, "prompt")
-        self.assertEqual(f.keys.count("Enter"), 2)             # /mcp and open telegram, never "select" an unknown option
+    def test_user_typing_in_the_gap_aborts_before_enter_and_clears(self):
+        c = Ctl([screen("idle"), screen("idle"), screen("typed-input")])      # the line holds something else when re-read
+        self.assertEqual(run(c), "input changed while typing")
+        self.assertEqual(c.log, [("type", CMD), ("clear",)])                   # never an Enter
 
-    def test_screen_with_a_prompt_line_in_the_transcript_still_finds_the_menu_cursor(self):
-        f = Fake(menu_rows=("plugin:telegram:telegram",))       # the menu cursor is on telegram; a "❯ /mcp" line sits above it
-        self.assertEqual(self.run_it(f), "ok")
+    def test_no_server_after_enter_is_a_failure_without_further_keys(self):
+        c = Ctl([screen("idle"), screen("idle"), screen("typed-list")], server_after_enter=False)
+        r = tw.reconnect(tw.PaneCtl(c.capture, c.type_text, c.enter, c.clear, c.check, c.pane_idle, c.sleep), c.has_server, settle=1)
+        self.assertEqual(r, "no server after reconnect")
+        self.assertEqual(c.log, [("type", CMD), ("enter",)])
 
-    def test_server_still_missing_after_reconnect_is_a_failure(self):
-        f = Fake()
-        self.assertEqual(self.run_it(f, server_after=False), "no server after reconnect")
-
-    def test_menu_never_appears(self):
-        class Dead(Fake):
-            def send(self, *k): self.keys += list(k)
-        f = Dead()
-        f.screen = "prompt"
-        r = tw.reconnect(tw.PaneCtl(capture=lambda: f.capture(), send=f.send, sleep=lambda s: None), has_server=lambda: False)
-        self.assertEqual(r, "menu did not open")
-        self.assertNotIn("Escape", f.keys)                      # at the prompt Escape twice opens Rewind
-
-
-class Idle(unittest.TestCase):
-    def test_ready_with_empty_input_is_idle(self):
-        rows = ["", "─" * 50, "❯ ", "─" * 50, "  auto mode"]
-        self.assertTrue(tw.idle_at_prompt("claude", rows, None))
-
-    def test_typed_text_is_not_idle(self):
-        rows = ["", "─" * 50, "❯ half a sentence", "─" * 50]
-        self.assertFalse(tw.idle_at_prompt("claude", rows, None))
-
-    def test_working_spinner_is_not_idle(self):
-        rows = ["✻ Thinking… (12s · ↓ 40 tokens)", "", "─" * 50, "❯ ", "─" * 50]
-        self.assertFalse(tw.idle_at_prompt("claude", rows, None))
-
-    def test_a_busy_mod_state_wins(self):
-        rows = ["", "─" * 50, "❯ ", "─" * 50]
-        self.assertFalse(tw.idle_at_prompt("claude", rows, "working"))
-
-    def test_a_shell_is_not_a_lead(self):
-        self.assertFalse(tw.idle_at_prompt("zsh", ["$ "], None))
+    def test_no_escape_or_menu_keys_exist(self):
+        src = Path(tw.__file__).read_text()
+        for banned in ("Escape", '"Down"', "Manage MCP servers", "_back_out", "_cursor_row"):
+            self.assertNotIn(banned, src)
 
 
 class Once(unittest.TestCase):
@@ -190,6 +214,7 @@ class Once(unittest.TestCase):
         self.d = Path(tempfile.mkdtemp())
         self.env = {"TC_STATE": str(self.d)}
         self.lead = table((100, 1, 9, "-zsh"), (101, 100, 600, f"claude {CH}"))
+        self.healthy = table((100, 1, 9, "-zsh"), (101, 100, 600, f"claude {CH}"), (102, 101, 5, SRV))
         self.notes, self.recon = [], []
 
     def go(self, tbl=None, idle=True, recon="ok", now=5000, env=None, panes=None):
@@ -203,8 +228,7 @@ class Once(unittest.TestCase):
         return (self.d / "telegram-watch.log").read_text().splitlines() if (self.d / "telegram-watch.log").exists() else []
 
     def test_healthy_lead_does_nothing(self):
-        t = table(*[(p.pid, p.ppid, p.age, p.args) for p in self.lead.values()], (102, 101, 5, SRV))
-        self.go(t)
+        self.go(self.healthy)
         self.assertEqual((self.recon, self.notes, self.log()), ([], [], []))
 
     def test_missing_idle_reconnects_and_logs_without_notifying(self):
@@ -220,13 +244,25 @@ class Once(unittest.TestCase):
         self.assertEqual(len(self.notes), 1)
         self.assertIn("busy", self.log()[0])
 
-    def test_failed_reconnect_notifies_once_per_15_min(self):
-        self.go(recon="menu did not open", now=5000)
-        self.go(recon="menu did not open", now=5060)
-        self.assertEqual(len(self.recon), 2)                    # retried next minute
-        self.assertEqual(len(self.notes), 1)                    # but one banner
-        self.go(recon="menu did not open", now=5000 + 901)
-        self.assertEqual(len(self.notes), 2)
+    def test_failed_reconnect_backs_off_and_notifies_once_when_the_backoff_starts(self):
+        self.go(recon="no server after reconnect", now=5000)
+        self.assertEqual((len(self.recon), len(self.notes)), (1, 1))
+        self.go(recon="no server after reconnect", now=5059)                  # inside the 60 s backoff: no attempt, no log
+        self.assertEqual(len(self.recon), 1)
+        n = len(self.log())
+        self.go(recon="no server after reconnect", now=5060)                  # attempt 2, next in 120 s, no new banner
+        self.assertEqual((len(self.recon), len(self.notes)), (2, 1))
+        self.go(recon="no server after reconnect", now=5060 + 119)
+        self.assertEqual(len(self.recon), 2)
+        self.go(recon="no server after reconnect", now=5060 + 120)
+        self.assertEqual((len(self.recon), len(self.notes)), (3, 1))
+        self.assertGreater(len(self.log()), n)
+
+    def test_a_live_server_resets_the_backoff(self):
+        self.go(recon="no server after reconnect", now=5000)
+        self.go(self.healthy, now=5010)                                         # server seen alive
+        self.go(recon="no server after reconnect", now=5011)                   # attempts again at once, banner again
+        self.assertEqual((len(self.recon), len(self.notes)), (2, 2))
 
     def test_lead_without_a_pane_only_notifies(self):
         self.go(panes={})
