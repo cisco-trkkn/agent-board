@@ -31,4 +31,5 @@ for i in 1 2 3 4 5 6; do
   tt send-keys -t '=tt-bg:tests' C-c
   check "early TERM $i: pane idle again" tt_wait $cap bg_idle
 done
+no_stuck
 tt_done

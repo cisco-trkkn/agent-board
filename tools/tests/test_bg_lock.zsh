@@ -22,4 +22,5 @@ check "send returns fast"                  test $(( (EPOCHREALTIME - s0) < 2 )) 
 $C send tests "PS1=\$'top\\nbot> '; PROMPT=\$PS1" >/dev/null; sleep 1
 check "two-line prompt: only the output" test "$($C run tests 'echo x')" = $'x\n[exit 0]'
 check "no trailing newline kept"         test "$($C run tests 'printf y')" = $'y\n[exit 0]'
+no_stuck
 tt_done

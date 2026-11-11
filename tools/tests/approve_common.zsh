@@ -11,13 +11,19 @@ trap 'rm -rf "$S"; tt_teardown' EXIT INT TERM
 # The window reads one key in a loop of short timeouts until $S/stop-<win> exists, then prints GOT:<key>|NONE. The key
 # is sent (synchronously) before approve returns, so `got` touches the stop file after it: a key that was going to
 # arrive is already in the tty, and NONE needs only one more 0.05 s read instead of a fixed 3 s timeout.
-# readloop <win> <ready-file-suffix>: the zsh snippet shared by replay and the swap seam
-readloop() { print -r -- "touch $S/ready-$1; until [[ -e $S/stop-$1 ]]; do read -t 0.05 -k1 k && break; done; print -r -- \"GOT:\${k:-NONE}\"; sleep 600" }
+# mkpane <win> <fixture>: writes $S/pane-<win>.zsh (cat the fixture, signal ready, read one key, print GOT:<key>|NONE). A script
+# file, not a quoted -c string: the swap seam respawns the pane with another fixture and the `$k` must reach the pane's own zsh.
+# The read after the loop drains a key that was sent just as the stop file appeared, so a "no key" check cannot pass on a missed key.
+mkpane() {
+  rm -f $S/ready-$1 $S/stop-$1
+  print -rl -- "cat ${(q)2}" "touch $S/ready-$1" 'until [[ -e '$S/stop-$1' ]]; do read -t 0.05 -k1 k && break; done' \
+    '[[ -n $k ]] || read -t 0.05 -k1 k' 'print -r -- "GOT:${k:-NONE}"' 'sleep 600' > $S/pane-$1.zsh
+}
 # replay <win> <file>: a window showing the fixture, then waiting for one key; returns once it is waiting
-replay() { rm -f $S/ready-$1 $S/stop-$1; tt new-window -d -t '=tt:' -n "$1" -c "$TT_DIR" "zsh -c 'cat $2; $(readloop $1)'"; fwait $S/ready-$1; sleep 0.05 }
+replay() { mkpane $1 $2; tt new-window -d -t '=tt:' -n "$1" -c "$TT_DIR" "zsh $S/pane-$1.zsh"; fwait $S/ready-$1; sleep 0.05 }
 # fwait <file>: poll every 0.05 s (tt_wait polls every 0.25 s) up to 10 s for the file
 fwait() { local n=200; until [[ -e $1 ]] || (( n-- <= 0 )); do sleep 0.05; done }
-got() { touch $S/stop-$1; local n=40 g; while (( n-- > 0 )); do g="$(tt capture-pane -p -J -t "=tt:$1" | grep -a -o 'GOT:[^ ]*' | tail -1)"; [[ -n "$g" ]] && { print -r -- "${g#GOT:}"; return }; sleep 0.1; done; print -r -- TIMEOUT }
+got() { touch $S/stop-$1; local n=50 g; while (( n-- > 0 )); do g="$(tt capture-pane -p -J -t "=tt:$1" | grep -a -o 'GOT:[^ ]*' | tail -1)"; [[ -n "$g" ]] && { print -r -- "${g#GOT:}"; return }; sleep 0.1; done; print -r -- TIMEOUT }
 APENV=()   # extra env for the approve call, e.g. LC_ALL=C
 # --expect is mandatory: ap adds the window's own command/path text unless the call names --expect itself (NOEXP=1: never)
 defexp() { case "$1" in *touch*|hi-*|c-cmd-*|s-yes|wk|c-copy) print -r -- "touch made-by-test" ;; *git*|c-swap|s-no|v-no-plain-yes|e-*|spoof-*) print -r -- "git config user.name probe-user" ;; *) print -r -- "notes.txt" ;; esac }

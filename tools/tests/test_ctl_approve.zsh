@@ -36,9 +36,10 @@ swap_case() {
   replay $1 $2
   cat > $S/swap-$1.zsh <<SW
 rm -f $S/ready-$1 $S/stop-$1
-$TT_BIN respawn-pane -k -t '=tt:$1' "cat $3; $(readloop $1)"
+$TT_BIN respawn-pane -k -t '=tt:$1' "zsh $S/pane2-$1.zsh"
 n=100; while [[ ! -e $S/ready-$1 ]] && (( n-- > 0 )); do sleep 0.05; done
 SW
+  cp $S/pane-$1.zsh $S/pane-$1.first; mkpane $1 $3; mv $S/pane-$1.zsh $S/pane2-$1.zsh; cp $S/pane-$1.first $S/pane-$1.zsh
   export TC_APPROVE_BEFORE_SEND="zsh $S/swap-$1.zsh"
   ap $1 once; unset TC_APPROVE_BEFORE_SEND
 }

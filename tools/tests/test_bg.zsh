@@ -20,4 +20,5 @@ check "zsh summary"          test "$(jq -sr 'last|.summary' "$r")" = "ALL PASS"
 check "list shows bg"        sh -c "$C list | grep -q 'tests .*(bg)'"
 check "read bg"              sh -c "$C read tests 40 | grep -qx hi"
 check "send to bg shell"     sh -c "$C send shell 'echo via-send' && sleep 1 && $TT_BIN capture-pane -p -t '=tt-bg:shell' | grep -q via-send"
+no_stuck
 tt_done
