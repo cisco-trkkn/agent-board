@@ -374,12 +374,45 @@ def tmux_panes():
     return d
 
 
-def _rows(pane):
-    t = _tmux()
-    rows = [l.rstrip() for l in t("capture-pane", "-p", "-J", "-t", pane, "-S", "-40").splitlines()]
+SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
+ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
+
+
+def _dim_flips(params, dim):
+    """Dim state after one SGR sequence: 2 turns it on; 22 and 0 (or an empty list) turn it off."""
+    for n in (params.split(";") if params else ["0"]):
+        if n == "2":
+            dim = True
+        elif n in ("0", "22", ""):
+            dim = False
+    return dim
+
+
+def _plain_line(line):
+    """The line without escape sequences; on an input line (`❯ …`) also without its dim text, which is Claude's greyed
+    prompt suggestion (real 2.1.322 capture: fixtures/telegram-watch/real-ghost-suggestion.ansi), not typed text."""
+    out, dim, pos, plain = [], False, 0, ANSI_RE.sub("", line)
+    ghostable = bool(paneclass.INPUT_RE.match(plain))
+    for m in ANSI_RE.finditer(line):
+        out.append((line[pos:m.start()], dim))
+        sgr = SGR_RE.fullmatch(m.group())
+        if sgr:
+            dim = _dim_flips(sgr.group(1), dim)
+        pos = m.end()
+    out.append((line[pos:], dim))
+    return "".join(t for t, d in out if not (d and ghostable)).rstrip()
+
+
+def plain_rows(text):
+    """Rows from a `capture-pane -p -e -J` capture: escapes removed, dim text on the input line dropped (a prompt suggestion)."""
+    rows = [_plain_line(l) for l in text.splitlines()]
     while rows and not rows[-1]:
         rows.pop()
     return rows
+
+
+def _rows(pane):
+    return plain_rows(_tmux()("capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-40"))
 
 
 def _pane_idle(pane):

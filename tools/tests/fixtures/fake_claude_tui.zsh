@@ -6,7 +6,9 @@ marker="$1"; buf=; last=
 RULE='────────────────────────────────────────────────────────────'
 child=
 trap '[[ -n "$child" ]] && kill $child 2>/dev/null' EXIT HUP TERM
-draw() { print -rn -- $'\e[2J\e[H\n'"$RULE"$'\n'"❯ $buf"$'\n'"$RULE"$'\n  auto mode on\n'"${last:+  ⎿  $last}"; }
+# FAKE_GHOST=1: an empty input line shows a dim (SGR 2) prompt suggestion after `❯` and a no-break space, as the real 2.1.322 does
+draw() { local inp="❯ $buf"; [[ -z "$buf" && -n "${FAKE_GHOST:-}" ]] && inp=$'❯\u00a0\e[2mrun it with a few values\e[0m'
+  print -rn -- $'\e[2J\e[H\n'"$RULE"$'\n'"$inp"$'\n'"$RULE"$'\n  auto mode on\n'"${last:+  ⎿  $last}"; }
 draw
 # FAKE_TICK=1: the status row under the input box redraws every 0.3 s, so tmux's window activity is always fresh (a real lead redraws on its own)
 tick=""
