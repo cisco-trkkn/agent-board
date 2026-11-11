@@ -122,6 +122,8 @@ class MergedTest(Base):
         # touched: src/a.py, src/extra.py, bin.dat (docs/superpowers excluded)
         self.assertEqual(r["touched_files"], 3)
         self.assertEqual(r["diff_lines"], 5)  # 3 + 2 + binary 0
+        self.assertEqual(r["declared_list"], ["src/a.py", "src/b.py"])
+        self.assertEqual(r["touched_list"], ["bin.dat", "src/a.py", "src/extra.py"])
         m = r["manifest"]
         self.assertEqual((m["declared"], m["touched"], m["both"]), (2, 3, 1))
         self.assertEqual((m["precision"], m["recall"]), (0.5, round(1 / 3, 4)))

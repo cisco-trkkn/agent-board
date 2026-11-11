@@ -418,16 +418,18 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
             info = None
     if info:
         rec["tasks"], rec["tiers"], rec["declared_files"] = info["tasks"], info["tiers"], len(info["declared"])
+        rec["declared_list"] = sorted(info["declared"])
     else:
-        null("tasks", "tiers", "declared_files")
+        null("tasks", "tiers", "declared_files", "declared_list")
 
     ns = _numstat(repo, base, head) if base and head else None
     if ns:
         touched, rec["diff_lines"] = ns
         rec["touched_files"] = len(touched)
+        rec["touched_list"] = sorted(touched)
     else:
         touched = None
-        null("touched_files", "diff_lines")
+        null("touched_files", "diff_lines", "touched_list")
     if info and touched is not None:
         both = len(info["declared"] & touched)
         rec["manifest"] = {"declared": len(info["declared"]), "touched": len(touched), "both": both,
@@ -682,12 +684,266 @@ def cmd_record(repo, args):
     if not any(d.get("kind") == "batch" and d.get("batch") == args.batch for d in read_log(repo)[0]):
         raise MetricsError(f"unknown batch {args.batch}")
     conn = usage.connect(args.usage_db or usage.db_path())
-    if not args.no_ingest:
-        ingest_project(conn, main_root(repo))
-    rec = build_record(repo, args.spec, args.batch, args.outcome, time.time(), branch=args.branch, conn=conn, project=args.project)
+    try:
+        if not args.no_ingest:
+            ingest_project(conn, main_root(repo))
+        rec = build_record(repo, args.spec, args.batch, args.outcome, time.time(), branch=args.branch, conn=conn, project=args.project)
+    finally:
+        conn.close()
     append(repo, rec)
     tasks = rec["tasks"] if rec["tasks"] is not None else "?"
     print(f"recorded {args.spec} {args.batch}: {tasks} tasks, {rec['tokens']['total'] / 1e6:.2f}M tokens, {rec['active_min']} active min")
+
+
+# ---- report ------------------------------------------------------------------------------------------------------
+
+BASELINE_SENTENCE = "These numbers see textual conflicts only. Two specs that merge cleanly can still be wrong together."
+
+
+def clean_reason(reason, repo):
+    """No absolute paths in a stored reason: the repo root becomes `.`, $HOME `~`, any other absolute path `<path>`."""
+    import os
+    text = str(reason)
+    roots = sorted({str(repo), str(Path(repo).resolve())}, key=len, reverse=True)
+    for r in roots:
+        text = text.replace(r, ".")
+    home = os.environ.get("HOME")
+    if home and home != "/":
+        text = text.replace(home, "~")
+    return re.sub(r"(?<![\w.~])/(?:[\w.@+-]+/)*[\w.@+-]+", "<path>", text)
+
+
+def _merge_trees(repo, base, x, y):
+    """`git merge-tree --write-tree --merge-base=<commit> <x> <y>`: x and y may be trees. Probe (git 2.54): tree OIDs are
+    accepted as the two sides with a commit as the merge base (rc 0 clean, rc 1 conflict, the OID first, then the paths
+    with --name-only). Returns (tree, conflicted paths or []) for rc 0/1, None for any other failure."""
+    p = subprocess.run(["git", "-C", str(repo), "merge-tree", "--write-tree", "--name-only", f"--merge-base={base}", x, y],
+                       capture_output=True, text=True)
+    if p.returncode not in (0, 1):
+        return None
+    out = p.stdout.splitlines()
+    if not out:
+        return None
+    paths = []
+    if p.returncode == 1:
+        for l in out[1:]:
+            if not l.strip():
+                break
+            paths.append(l)
+    return out[0], p.returncode == 0, paths
+
+
+def _spec_tree(repo, run, batch_base):
+    r = _merge_trees(repo, run["base"], batch_base, run["head"])
+    return r[0] if r and r[1] else None
+
+
+def greedy_waves(lists):
+    """Greedy colouring of the file-sharing graph: {spec: color}; vertices by degree desc, then spec path."""
+    specs = sorted(lists)
+    adj = {s: {t for t in specs if t != s and set(lists[s]) & set(lists[t])} for s in specs}
+    order = sorted(specs, key=lambda s: (-len(adj[s]), s))
+    color = {}
+    for s in order:
+        used = {color[t] for t in adj[s] if t in color}
+        c = 0
+        while c in used:
+            c += 1
+        color[s] = c
+    return color
+
+
+def _pct(d):
+    if isinstance(d, dict):
+        v = d.get("used_percentage")
+        return json.dumps(d, sort_keys=True) if v is None else str(v)
+    return "-" if d is None else str(d)
+
+
+def _limits_line(label, lim):
+    if not isinstance(lim, dict):
+        return f"{label}: -"
+    return f"{label}: five_hour {_pct(lim.get('five_hour'))}, seven_day {_pct(lim.get('seven_day'))}"
+
+
+def _cell(v):
+    return "-" if v is None else str(v)
+
+
+def _union_active(repo, runs, usage_db):
+    conn = usage.connect(usage_db)
+    try:
+        root = main_root(repo)
+        minutes = set()
+        for r in runs:
+            if not (r.get("started_at") and r.get("ended_at")):
+                continue
+            wt = worktree_dirs(repo, root, r.get("branch"), conn)
+            for row, _ in attributed_rows(conn, root, r.get("branch"), wt, (_epoch(r["started_at"]), _epoch(r["ended_at"])), []):
+                minutes.add(int(row["ts"] // 60))
+        return len(minutes)
+    finally:
+        conn.close()
+
+
+def report_text(repo, batch_id, usage_db=None):
+    repo = Path(repo)
+    lines, malformed = read_log(repo)
+    batch = next((d for d in reversed(lines) if d.get("kind") == "batch" and d.get("batch") == batch_id), None)
+    if batch is None:
+        raise MetricsError(f"unknown batch {batch_id}")
+    runs_by = last_runs(lines)
+    runs = [runs_by[k] for k in sorted(runs_by, key=lambda k: str(k[1])) if k[0] == batch_id]
+    starts = [d for d in lines if d.get("kind") == "start" and d.get("batch") == batch_id]
+    out, missing, excluded = [f"## Metrics: batch {batch_id}", ""], [], []
+    for s in sorted((batch.get("assignment") or {})):
+        if not any(r["spec"] == s for r in runs):
+            excluded.append(f"{s} (no run line)")
+
+    out.append("| spec | outcome | tasks | tokens | tokens/task | active min | lead share | fix rounds | manifest recall | stale base |")
+    out.append("|---|---|---|---|---|---|---|---|---|---|")
+    for r in runs:
+        tot = (r.get("tokens") or {}).get("total")
+        tasks = r.get("tasks")
+        per = round(tot / tasks) if tot is not None and tasks else None
+        cells = [r["spec"], r.get("outcome"), tasks, tot, per, r.get("active_min"), r.get("lead_share"), r.get("fix_rounds"),
+                 (r.get("manifest") or {}).get("recall"), (r.get("stale_base") or {}).get("result")]
+        out.append("| " + " | ".join(_cell(c) for c in cells) + " |")
+    out += ["", BASELINE_SENTENCE, ""]
+
+    # throughput
+    accepted = [r for r in runs if r.get("outcome") in ("merged", "mr")]
+    a_tasks = sum(r.get("tasks") or 0 for r in accepted)
+    wins = sorted((_epoch(r["started_at"]), _epoch(r["ended_at"])) for r in runs if r.get("started_at") and r.get("ended_at"))
+    overlap = any(wins[i][1] > wins[i + 1][0] for i in range(len(wins) - 1)) if wins else False
+    note = ""
+    if overlap and usage_db:
+        active = _union_active(repo, runs, usage_db)
+    else:
+        active = sum(r.get("active_min") or 0 for r in runs)
+        note = " (sum, windows overlap)" if overlap else ""
+    out.append(f"Accepted: {len(accepted)} specs, {a_tasks} tasks; batch active {active} min{note}")
+    if active:
+        h = active / 60
+        out.append(f"Throughput per active hour: {len(accepted) / h:.2f} specs, {a_tasks / h:.2f} tasks")
+    else:
+        out.append("Throughput per active hour: -")
+    out.append("")
+
+    # overlap and waves
+    def lists_of(key):
+        got = {r["spec"]: r[key] for r in runs if isinstance(r.get(key), list)}
+        for r in runs:
+            if r["spec"] not in got:
+                reason = f"{r['spec']} (no {key})"
+                if reason not in excluded:
+                    excluded.append(reason)
+        return got
+    touched, declared = lists_of("touched_list"), lists_of("declared_list")
+    specs = sorted(set(touched) | set(declared))
+    pairs = [(a, b) for i, a in enumerate(specs) for b in specs[i + 1:]]
+    n_over = 0
+    out.append("Overlap per pair:")
+    for a, b in pairs:
+        sd = sorted(set(declared.get(a, [])) & set(declared.get(b, [])))
+        st = sorted(set(touched.get(a, [])) & set(touched.get(b, [])))
+        if st:
+            n_over += 1
+        if sd or st:
+            out.append(f"- {a} <-> {b}: declared {len(sd)} ({', '.join(sd)}), touched {len(st)} ({', '.join(st)})")
+    out.append(f"Pairs overlapping: {n_over} of {len(pairs)}")
+    counts = {}
+    for fl in touched.values():
+        for f in fl:
+            counts[f] = counts.get(f, 0) + 1
+    hot = sorted((f for f, n in counts.items() if n >= 3), key=lambda f: (-counts[f], f))
+    out.append("Hot files (touched by 3+ specs): " + (", ".join(f"{f} ({counts[f]})" for f in hot) if hot else "none"))
+    for label, lists in (("touched", touched), ("declared", declared)):
+        col = greedy_waves(lists)
+        w = max(col.values()) + 1 if col else 0
+        out.append(f"Waves ({label} files): {w}, {len(col)} specs / {w} waves = {len(col) / w:.2f}" if w else f"Waves ({label} files): 0")
+    out.append("")
+
+    # parallel-buildable pairs
+    by = {r["spec"]: r for r in runs}
+    cand = [s for s in sorted(by)]
+    cpairs = [(a, b) for i, a in enumerate(cand) for b in cand[i + 1:]]
+    def ok(r):
+        res = (r.get("stale_base") or {}).get("result")
+        return res == "conflict" or (res == "clean" and bool(r.get("base")) and bool(r.get("head")))
+    usable = [(a, b) for a, b in cpairs if ok(by[a]) and ok(by[b])]
+    clean, bad, failed = 0, [], False
+    trees = {}
+    for a, b in usable:
+        sa, sb = by[a]["stale_base"], by[b]["stale_base"]
+        if sa["result"] == "conflict" or sb["result"] == "conflict":
+            paths = sorted(set(sa.get("paths") or []) | set(sb.get("paths") or []))
+            bad.append((a, b, paths))
+            continue
+        for s in (a, b):
+            if s not in trees:
+                trees[s] = _spec_tree(repo, by[s], batch["base"])
+        if trees[a] is None or trees[b] is None:
+            failed = True
+            break
+        r = _merge_trees(repo, batch["base"], trees[a], trees[b])
+        if r is None:
+            failed = True
+            break
+        if r[1]:
+            clean += 1
+        else:
+            bad.append((a, b, r[2]))
+    if failed:
+        out.append("Parallel-buildable pairs: unavailable (git merge-tree failed)")
+        missing.append("parallel_pairs")
+    else:
+        pct = f" ({100 * clean / len(usable):.0f}%)" if usable else ""
+        out.append(f"Parallel-buildable pairs: {clean} of {len(usable)}{pct}")
+        for a, b, paths in bad:
+            out.append(f"- {a} <-> {b}: {', '.join(paths)}")
+    for a, b in cpairs:
+        if (a, b) not in usable:
+            reason = f"{a} <-> {b} (no usable stale_base, base or head)"
+            if reason not in excluded:
+                excluded.append(reason)
+    out.append("")
+
+    # limits
+    first = starts[0] if starts else None
+    last = runs[-1] if runs else None
+    out.append(_limits_line("Limits at start", (first or {}).get("limits")))
+    out.append(_limits_line("Limits at end", ((last or {}).get("limits") or {}).get("record")))
+    out.append("")
+    out.append("Excluded: " + ("; ".join(excluded) if excluded else "none"))
+    out.append(f"Malformed log lines: {malformed}")
+    out.append("Missing: " + (", ".join(missing) if missing else "none"))
+    span_lo = _epoch(batch["at"])
+    span_hi = max([_epoch(r["ended_at"]) for r in runs if r.get("ended_at")] + [span_lo])
+    errs = []
+    for d in lines:
+        if d.get("kind") == "error" and d.get("at"):
+            try:
+                if span_lo <= _epoch(d["at"]) <= span_hi:
+                    errs.append(f"{d.get('sub')}: {d.get('reason')}")
+            except ValueError:
+                pass
+    out.append("Failed commands: " + ("; ".join(errs) if errs else "none"))
+
+    me = sys.modules[__name__]
+    base_cfg = _baseline(repo, batch.get("configs") or [""]) if batch.get("configs") else None
+    for c in batch.get("configs") or []:
+        fn = getattr(me, "compare_text", None)
+        if c != base_cfg and fn:
+            out += ["", fn(repo, c)]
+    fn = getattr(me, "status_line", None)
+    if fn and (repo / METRICS_DIR / "roadmap").exists():
+        out += ["", fn(repo)]
+    return "\n".join(out) + "\n"
+
+
+def cmd_report(repo, args):
+    sys.stdout.write(report_text(repo, args.batch, args.usage_db))
 
 
 def _parser():
@@ -714,7 +970,10 @@ def _parser():
     rc.add_argument("--project")
     rc.add_argument("--usage-db")
     rc.add_argument("--no-ingest", action="store_true")
-    for name in ("report", "compare", "backfill", "gate", "status"):
+    rp = sp.add_parser("report", parents=[common])
+    rp.add_argument("batch")
+    rp.add_argument("--usage-db")
+    for name in ("compare", "backfill", "gate", "status"):
         sp.add_parser(name, parents=[common], add_help=False).add_argument("rest", nargs="*")
     return ap
 
@@ -723,9 +982,20 @@ class _ArgError(Exception):
     pass
 
 
+def _log_error(repo, sub, exc):
+    """Append a kind:error line when the repo resolved (a failing repo lookup has nowhere to write)."""
+    if repo is None:
+        return
+    try:
+        append(repo, {"kind": "error", "sub": sub, "reason": clean_reason(exc, repo), "at": utc()})
+    except Exception:
+        pass
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     sub = "metrics"
+    repo = None
     try:
         ap = _parser()
         ap.error = lambda msg: (_ for _ in ()).throw(_ArgError(msg))
@@ -744,16 +1014,15 @@ def main(argv=None):
                 raise MetricsError("usage: metrics batch start --config C [--group a,b] <spec>...")
         if not args.sub:
             raise MetricsError("usage: metrics <" + "|".join(SUBS) + "> ...")
-        if args.sub in ("report", "compare", "backfill", "gate", "status"):
+        if args.sub in ("compare", "backfill", "gate", "status"):
             raise MetricsError("not implemented")
+        repo = None
         repo = repo_root(getattr(args, "repo", None))
-        {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record}[args.sub](repo, args)
+        {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report}[args.sub](repo, args)
         return 0
-    except MetricsError as e:
+    except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:  # never a traceback to the user
-        print(f"metrics: {sub}: {e}", file=sys.stderr)
+        _log_error(repo, sub, e)
         return 1
 
 
