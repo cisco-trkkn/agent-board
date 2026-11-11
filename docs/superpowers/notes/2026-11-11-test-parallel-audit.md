@@ -16,7 +16,7 @@ Spec section 2: every job must be safe to run concurrently with every other unde
 
 **Part B (zsh) scope:** the 57 `zsh/*` jobs, including the files Tasks 4b/5 split (`test_bg*`, `test_ctl_approve*`, `bg_common.zsh` and `approve_common.zsh` are sourced helpers, not jobs).
 
-**Alone check:** all 65 non-zsh jobs and all 57 zsh jobs run one at a time with the exact `all.zsh --list` command. The zsh jobs were first run 4 at a time while the machine was at load average 15-27 (other agents): 49 passed and 8 failed on timing (fresh_path, ctl_interrupt, e2e, bg_lock, ctl_busy, run_long_line, teammate_window, ctl_lanes); those 8 were then run strictly one at a time and all 8 pass (see the rows for what was hardened).
+**Alone check:** all 66 non-zsh jobs and all 57 zsh jobs run one at a time with the exact `all.zsh --list` command. The zsh jobs were first run 4 at a time while the machine was at load average 15-27 (other agents): 49 passed and 8 failed on timing (fresh_path, ctl_interrupt, e2e, bg_lock, ctl_busy, run_long_line, teammate_window, ctl_lanes); those 8 were then run strictly one at a time and all 8 pass (see the rows for what was hardened).
 
 | job | shared state found | fix | serial? |
 | --- | --- | --- | --- |
@@ -151,6 +151,6 @@ Spec section 2: every job must be safe to run concurrently with every other unde
 - parallel 2: ALL PASS 65 jobs, 6m57s (rc=4).
 - parallel, before ad973bd (twice): FAIL 1/65, board/test_worktree_board_remove.
 
-(These runs predate the split of the backfill privacy sweep, so they count 65 non-zsh jobs; the list now has one more.)
+(These runs predate the split of the backfill privacy sweep, so they count 65 non-zsh jobs; `--list` now shows 66.)
 
 The machine was loaded by other work during every run (load average 5-8), so the wall times are upper bounds. Slowest jobs: `board/test_metrics_backfill` (157 s serial), `board/test_metrics_record_git` (49 s), `board/test_metrics_record_usage` (48 s), `board/test_metrics_decide` (35 s), `board/test_metrics_report` (about 160 s under parallel load); none is covered by Tasks 4-5.

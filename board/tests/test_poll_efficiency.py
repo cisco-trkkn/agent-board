@@ -168,7 +168,8 @@ class ExecCountTest(unittest.TestCase):
             st, calls = self.split_and_build()
             if len(pane_ids(st)) == 7:
                 break
-        self.assertEqual(len(pane_ids(st)), 7, f"new pane missing from the first build after the split, attempt {attempt + 1} of 3")
+        raw = self.sc.tmux("list-panes", "-a", "-F", "#{session_name}:#{window_name} #{pane_id} #{pane_current_command}")   # taken after the last attempt, for the failure message
+        self.assertEqual(len(pane_ids(st)), 7, f"new pane missing from the first build after the split, attempt {attempt + 1} of 3; build panes {pane_ids(st)}; raw tmux listing:\n{raw}")
         self.assertLessEqual(len(calls), 2, calls)
         self.assertEqual([v for v in self.previews(st).values() if "new-pane-here" in v], ["new-pane-here"])
 
