@@ -254,12 +254,24 @@ class PlanAlreadyOnMainTest(unittest.TestCase):
         self.assertNotEqual(r["merge"], self.merge_unrelated)
         self.assertEqual(r["branch"], "feat/gamma")
 
+    def test_branch_flag_still_works_with_the_plan_on_main(self):
+        git(self.repo, "branch", "feat/manual", self.merge_gamma + "^2")
+        r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", "kept", self.now, branch="feat/manual")
+        self.assertEqual(r["branch"], "feat/manual")
+        self.assertEqual(r["head"], git(self.repo, "rev-parse", "feat/manual"))
+        self.assertIsNotNone(r["base"])
+
     def test_no_match_is_null_and_missing(self):
         git(self.repo, "branch", "-m", "feat/gamma", "feat/zzz")
         git(self.repo, "commit", "-q", "--amend", "-m", "Merge branch 'feat/zzz'")
         r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", None, self.now)
         self.assertIsNone(r["merge"])
         self.assertNotIn("merge", r["missing"])
+        # no merge found and the plan is on main: feat/unrelated also contains the plan commit, so no branch guess
+        for k in ("branch", "head", "base", "touched_files", "diff_lines", "manifest"):
+            self.assertIsNone(r[k], k)
+        for k in ("branch", "head", "base"):
+            self.assertIn(k, r["missing"], k)
         r = metrics.build_record_static(self.repo, "docs/superpowers/specs/gamma.md", "B", "merged", self.now)
         self.assertIsNone(r["merge"])
         self.assertIn("merge", r["missing"])

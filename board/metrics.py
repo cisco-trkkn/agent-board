@@ -382,7 +382,9 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
         rec["merge"] = merge["sha"]
     else:
         rec["merge"] = None
-        if not branch and plan_commit:
+        # the plan commit already on main makes `--contains` list every later branch: no guess then, only --branch
+        on_main = plan_commit and _git_try(repo, "merge-base", "--is-ancestor", plan_commit, "main")[0] == 0
+        if not branch and plan_commit and not on_main:
             rc, out = _git_try(repo, "branch", "--contains", plan_commit, "--format=%(refname:short)")
             branch = next((b for b in out.split() if b != "main"), None) if rc == 0 else None
         if branch:
