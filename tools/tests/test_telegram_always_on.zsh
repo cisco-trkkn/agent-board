@@ -127,6 +127,16 @@ watch TC_TELEGRAM_WATCH_QUIET=3 >/dev/null; wait
 check "typed in the gap: no server started" test "$(nserv)" = 0
 check "typed in the gap: logged as not quiet" grep -q "pane $LP.*input line not quiet" "$WLOG"
 check "typed in the gap: the user's text is untouched" grep -q '^❯ mid-gap$' =(screen)
+# a dim prompt suggestion on the input line (Claude's greyed "auto prompt") is not typed text: the lead is reconnected
+rm -f "$WLOG" "$TC_STATE/telegram-watch.json"
+tt kill-window -t "$LP"; sleep 0.5
+tt new-window -d -n lead4 -c "$TT_DIR" "env FAKE_GHOST=1 $STUB/claude -f $FAKE $MARK --channels plugin:telegram@claude-plugins-official"
+LP="$(tt display -p -t '=tt:lead4' '#{pane_id}')"; sleep 1.5
+check "ghost: the pane draws a dim suggestion" grep -q $'\e\\[2mrun it' =(tt capture-pane -p -e -J -t "$LP")
+watch >/dev/null
+check "ghost: telegram server running"     test "$(nserv)" = 1
+check "ghost: reconnect ok logged"         grep -q "pane $LP.*reconnect: ok" "$WLOG"
+for p in $(pgrep -f "telegram/server.ts $MARK"); do kill $p; done; sleep 0.5
 # a failed reconnect backs off: a lead whose server never appears is typed into once, not every pass
 rm -f "$WLOG" "$TC_STATE/telegram-watch.json"
 tt kill-window -t "$LP"; sleep 0.5

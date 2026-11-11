@@ -374,12 +374,69 @@ def tmux_panes():
     return d
 
 
-def _rows(pane):
-    t = _tmux()
-    rows = [l.rstrip() for l in t("capture-pane", "-p", "-J", "-t", pane, "-S", "-40").splitlines()]
+SGR_RE = re.compile(r"\x1b\[([0-?]*)m")
+ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
+COLOUR_ARGS = {"5": 1, "2": 3}   # after 38/48/58: `5;n` takes one more parameter, `2;r;g;b` three
+
+
+def _dim_flips(params, dim):
+    """Dim state after one SGR sequence, or None when it does not parse (the caller then trusts nothing on the line).
+    A standalone 2 turns dim on; 22 and 0 (or an empty list or entry) turn it off. The arguments of the colour
+    attributes 38, 48 and 58 (`38;5;2`, `38;2;r;g;b`, and the colon form `38:2::r:g:b`) are skipped: their 2 is a colour."""
+    toks = params.split(";") if params else [""]
+    i = 0
+    while i < len(toks):
+        head = toks[i].split(":")[0]
+        if not (head.isascii() and (head.isdigit() or head == "")) or not all(p.isascii() and (p.isdigit() or p == "") for p in toks[i].split(":")):
+            return None
+        i += 1
+        if head in ("38", "48", "58"):
+            if ":" in toks[i - 1]:
+                continue                        # the colon form carries its own arguments
+            kind = toks[i] if i < len(toks) else None
+            if kind not in COLOUR_ARGS:
+                return None
+            args = toks[i + 1:i + 1 + COLOUR_ARGS[kind]]
+            if len(args) != COLOUR_ARGS[kind] or not all(a.isascii() and a.isdigit() for a in args):
+                return None
+            i += 1 + COLOUR_ARGS[kind]
+        elif head == "2":
+            dim = True
+        elif head in ("0", "22", ""):
+            dim = False
+    return dim
+
+
+def _plain_line(line):
+    """The line without escape sequences; on an input line (`❯ …`) also without its dim text, which is Claude's greyed
+    prompt suggestion (real 2.1.322 capture: fixtures/telegram-watch/real-ghost-suggestion.ansi), not typed text.
+    An SGR sequence that does not parse leaves the whole line as it is: unknown styling counts as typed."""
+    out, dim, pos, plain = [], False, 0, ANSI_RE.sub("", line)
+    ghostable = bool(paneclass.INPUT_RE.match(plain))
+    for m in ANSI_RE.finditer(line):
+        out.append((line[pos:m.start()], dim))
+        if m.group().endswith("m") and m.group().startswith("\x1b["):
+            sgr = SGR_RE.fullmatch(m.group())
+            new = _dim_flips(sgr.group(1), dim) if sgr else None
+            if new is None:
+                ghostable = False
+            else:
+                dim = new
+        pos = m.end()
+    out.append((line[pos:], dim))
+    return "".join(t for t, d in out if not (d and ghostable)).rstrip()
+
+
+def plain_rows(text):
+    """Rows from a `capture-pane -p -e -J` capture: escapes removed, dim text on the input line dropped (a prompt suggestion)."""
+    rows = [_plain_line(l) for l in text.splitlines()]
     while rows and not rows[-1]:
         rows.pop()
     return rows
+
+
+def _rows(pane):
+    return plain_rows(_tmux()("capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-40"))
 
 
 def _pane_idle(pane):

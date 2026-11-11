@@ -27,6 +27,19 @@ def screen(name):
     return rows
 
 
+def styled(name):
+    """A real 2.1.322 capture taken with `capture-pane -p -e -J` (SGR kept), as the rows the watchdog reads."""
+    return tw.plain_rows((FX / f"{name}.ansi").read_text())
+
+
+RULE = "─" * 40
+
+
+def inline(sgr_line):
+    """Rows for one input line drawn from a styled string, under a rule as in a real capture."""
+    return tw.plain_rows(f"{RULE}\n{sgr_line}\n{RULE}")
+
+
 def with_input(text):
     """The real idle capture with `text` on the input line."""
     rows = screen("idle")
@@ -143,6 +156,47 @@ class Screens(unittest.TestCase):
         self.assertEqual(tw.input_frame(a), tw.input_frame(b))
         self.assertIn('Try "', tw.input_frame(a)[1])                   # and it is the same placeholder both times
 
+    def test_a_dim_prompt_suggestion_is_not_typed_text(self):
+        rows = styled("real-ghost-suggestion")     # real capture: `❯ ` + SGR 2 `run it with a few values`, turn ended
+        self.assertEqual(tw.input_text(rows), "")
+        self.assertTrue(tw.idle_at_prompt("claude", rows, None))
+        self.assertEqual(tw.input_frame(rows)[1].rstrip(), "❯")
+
+    def test_real_typed_text_is_text_in_the_same_capture_mode(self):
+        rows = styled("real-typed-text")           # real capture: `❯ my typed words`, normal intensity
+        self.assertEqual(tw.input_text(rows), "my typed words")
+        self.assertFalse(tw.idle_at_prompt("claude", rows, None))
+
+    def test_dim_text_off_the_input_line_is_kept(self):
+        rows = tw.plain_rows("\x1b[2m✻ Thinking… (3s)\x1b[0m\n\x1b[39m❯\xa0\x1b[2mgo on\x1b[0m")
+        self.assertEqual(rows[0], "✻ Thinking… (3s)")
+
+    def test_a_2_inside_a_colour_argument_is_not_dim(self):
+        # the `2` of `38;5;2`, `38;2;r;g;b`, `48;5;2`, `58;5;2` and the colon forms is a colour argument; the text is typed
+        for sgr in ("38;5;2", "38;2;2;2;2", "38;2;200;2;2", "48;5;2", "48;2;2;2;2", "58;5;2", "38:2::2:2:2", "38:5:2", "1;38;5;2"):
+            with self.subTest(sgr):
+                rows = inline(f"\x1b[39m❯\xa0\x1b[{sgr}mtyped\x1b[0m")
+                self.assertEqual(tw.input_text(rows), "typed")
+                self.assertFalse(tw.idle_at_prompt("claude", rows, None))
+
+    def test_dim_among_other_attributes_is_still_a_ghost(self):
+        for sgr in ("2;37", "37;2", "1;2", "2;38;5;244", "38;5;244;2"):
+            with self.subTest(sgr):
+                self.assertEqual(tw.input_text(inline(f"\x1b[39m❯\xa0\x1b[{sgr}mghost\x1b[0m")), "")
+
+    def test_22_and_0_end_the_dim_span(self):
+        for end in ("22", "0", "", "22;38;5;2"):
+            with self.subTest(end):
+                rows = inline(f"\x1b[39m❯\xa0\x1b[2mghost\x1b[{end}mreal")
+                self.assertEqual(tw.input_text(rows), "real")
+
+    def test_an_unparseable_sequence_on_the_input_line_counts_as_typed(self):
+        for sgr in ("2;?", "38;5", "38;2;1;2", "48", "2;99999999999999999999;;;?"):
+            with self.subTest(sgr):
+                rows = inline(f"\x1b[39m❯\xa0\x1b[2mfirst\x1b[0m\x1b[{sgr}mtext\x1b[0m")
+                self.assertIn("first", tw.input_text(rows))   # nothing on that line is dropped as ghost
+                self.assertFalse(tw.idle_at_prompt("claude", rows, None))
+
     def test_a_turn_in_progress_is_not_idle(self):
         self.assertFalse(tw.idle_at_prompt("claude", screen("working"), None))
 
@@ -209,6 +263,17 @@ class Reconnect(unittest.TestCase):
         c = Ctl([screen("idle")] * 4 + [screen("typed-list")])
         self.assertEqual(run(c), "ok")
         self.assertEqual(c.log, [("type", CMD), ("enter",)])
+
+    def test_a_dim_suggestion_does_not_block_the_reconnect(self):
+        ghost, typed = styled("real-ghost-suggestion"), screen("typed-list")
+        c = Ctl([ghost] * 4 + [typed])
+        self.assertEqual(run(c), "ok")
+        self.assertEqual(c.log, [("type", CMD), ("enter",)])
+
+    def test_real_typed_text_still_blocks_with_the_styled_capture(self):
+        c = Ctl([styled("real-typed-text")])
+        self.assertEqual(run(c), NOT_QUIET)
+        self.assertEqual(c.log, [])
 
     def test_unsafe_pane_gets_no_keys(self):
         c = Ctl([screen("idle")], check="pane in copy mode")
