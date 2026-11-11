@@ -817,6 +817,8 @@ def report_text(repo, batch_id, usage_db=None):
     wins = sorted((_epoch(r["started_at"]), _epoch(r["ended_at"])) for r in runs if r.get("started_at") and r.get("ended_at"))
     overlap = any(wins[i][1] > wins[i + 1][0] for i in range(len(wins) - 1)) if wins else False
     note = ""
+    if overlap and not usage_db and Path(usage.db_path()).exists():
+        usage_db = usage.db_path()
     if overlap and usage_db:
         active = _union_active(repo, runs, usage_db)
     else:
@@ -919,7 +921,9 @@ def report_text(repo, batch_id, usage_db=None):
     out.append(f"Malformed log lines: {malformed}")
     out.append("Missing: " + (", ".join(missing) if missing else "none"))
     span_lo = _epoch(batch["at"])
-    span_hi = max([_epoch(r["ended_at"]) for r in runs if r.get("ended_at")] + [span_lo])
+    # a failed record writes no run line, so the span runs to the next batch line (or now), not to the last run
+    later = [_epoch(d["at"]) for d in lines if d.get("kind") == "batch" and d.get("at") and _epoch(d["at"]) > span_lo]
+    span_hi = min(later) if later else time.time()
     errs = []
     for d in lines:
         if d.get("kind") == "error" and d.get("at"):

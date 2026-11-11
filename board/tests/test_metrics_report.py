@@ -164,6 +164,23 @@ class SyntheticTest(Base):
         self.assertIn("batch active 3 min", out)
         self.assertNotIn("(sum, windows overlap)", out)
 
+    def test_union_uses_the_default_usage_db_when_it_exists(self):
+        self.batch()
+        self.run_line(S1, started_at=iso(self.t0), ended_at=iso(self.t0 + 600), active_min=2, branch="b1")
+        self.run_line(S2, started_at=iso(self.t0 + 300), ended_at=iso(self.t0 + 900), active_min=2, branch="b2")
+        _, out, _ = self.report()
+        self.assertIn("(sum, windows overlap)", out)          # no db at the default path yet
+        conn = usage.connect(usage.db_path())                  # TC_STATE/usage.sqlite
+        m = int(self.t0 // 60 + 6) * 60
+        for i, (ts, br) in enumerate(((m, "b1"), (m + 60, "b1"), (m + 60, "b2"), (m + 120, "b2"))):
+            conn.execute(f"insert into calls ({','.join(usage.COLS)}) values ({','.join('?' * 16)})",
+                         (f"r{i}", "s", ts, "claude-opus-5-5", None, None, None, br, "/x", 0, 0, 1, 1, 0, 0, 0))
+        conn.commit()
+        conn.close()
+        _, out, _ = self.report()
+        self.assertIn("batch active 3 min", out)
+        self.assertNotIn("(sum, windows overlap)", out)
+
     def test_limits_start_and_end(self):
         self.batch()
         metrics.append(self.repo, {"kind": "start", "batch": "B", "spec": S1, "at": iso(self.t0), "main": "x",
@@ -195,6 +212,25 @@ class SyntheticTest(Base):
         self.assertIn("Malformed log lines: 2", out)
         self.assertIn("record: unknown batch X", out)
         self.assertNotIn("too early", out)
+
+    def test_failed_record_after_the_last_run_line_is_listed(self):
+        self.batch()
+        self.run_line(S1)
+        later = self.t / "dbdir"
+        later.mkdir()
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = metrics.main(["--repo", str(self.repo), "record", S2, "--batch", "B", "--usage-db", str(later), "--no-ingest"])
+        self.assertEqual(rc, 1)   # a real failing record: the db path is a directory
+        _, rep, _ = self.report()
+        self.assertRegex(rep, r"Failed commands: record: ")
+        # an error dated after the next batch line belongs to that batch, not this one
+        metrics.append(self.repo, {"kind": "batch", "batch": "B9", "base": self.base, "configs": ["A"], "assignment": {},
+                                   "groups": [], "at": iso(time.time() + 100)})
+        metrics.append(self.repo, {"kind": "error", "sub": "start", "reason": "belongs to B9", "at": iso(time.time() + 200)})
+        _, rep, _ = self.report()
+        self.assertIn("record: ", rep)
+        self.assertNotIn("belongs to B9", rep)
 
     def test_unknown_batch_is_one_line_error(self):
         out, err = io.StringIO(), io.StringIO()
