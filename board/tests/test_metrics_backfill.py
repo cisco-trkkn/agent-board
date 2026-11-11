@@ -101,6 +101,18 @@ class FixtureBackfillTest(Base):
         self.assertEqual(g["plan"], "docs/superpowers/plans/2026-01-03-gamma.md")
         self.assertEqual(g["branch"], "feat/gamma")
 
+    def test_backfilled_lines_carry_no_live_limits_reading(self):
+        live = {"five_hour": {"used_percentage": 39}, "seven_day": {"used_percentage": 58}}
+        with mock.patch.object(usage, "plan_limits", return_value=live):   # a fresh tap reading exists today
+            rc, _, err = self.backfill()
+        self.assertEqual((rc, err), (0, ""))
+        for r in self.runs():
+            self.assertEqual(r["limits"], {"start": None, "record": None})
+            for k in ("limits", "ready_at", "wait_s"):
+                self.assertIn(k, r["missing"])
+                if k != "limits":
+                    self.assertIsNone(r[k])
+
     def test_rerun_appends_nothing(self):
         self.backfill()
         before = metrics.log_path(self.repo).read_text()

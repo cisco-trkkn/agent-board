@@ -663,11 +663,16 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
     weighted = attributed_rows(conn, root, rec["branch"], wt, (lo, hi), others)
     rec.update(budget(weighted, usage.load_prices()))
     rec.update(time_fields((batch_line or {}).get("at"), lo, hi, weighted))
-    pl = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-    rec["limits"] = {"start": (start or {}).get("limits"),
-                     "record": {"five_hour": pl.get("five_hour"), "seven_day": pl.get("seven_day")} if pl else None}
-    if not pl:
-        missing.append("limits")
+    if backfilled:
+        # today's tap reading says nothing about a run that ended days ago; ready_at/wait_s have no batch line either
+        rec["limits"] = {"start": None, "record": None}
+        missing.extend(k for k in ("limits", "ready_at", "wait_s") if k not in missing)
+    else:
+        pl = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+        rec["limits"] = {"start": (start or {}).get("limits"),
+                         "record": {"five_hour": pl.get("five_hour"), "seven_day": pl.get("seven_day")} if pl else None}
+        if not pl:
+            missing.append("limits")
     rec["questions"] = count_questions(root, (lo, hi))
     if rec["questions"] is None:
         missing.append("questions")
