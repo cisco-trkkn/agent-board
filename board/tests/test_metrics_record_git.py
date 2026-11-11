@@ -5,7 +5,9 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent.parent
 FIX = HERE / "tests" / "fixtures" / "metrics"
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics  # noqa: E402
+from metrics_fixtures import cache_main_root  # noqa: E402
 
 SPEC_A, SPEC_B = "docs/superpowers/specs/a.md", "docs/superpowers/specs/b.md"
 PLAN_A = "docs/superpowers/plans/2026-01-01-a.md"
@@ -81,6 +83,7 @@ def _template():
 
 class Base(unittest.TestCase):
     def setUp(self):
+        cache_main_root(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         t = Path(self.tmp.name)

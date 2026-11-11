@@ -4,7 +4,9 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics, usage  # noqa: E402
+from metrics_fixtures import cache_main_root  # noqa: E402
 
 SENTENCE = "These numbers see textual conflicts only. Two specs that merge cleanly can still be wrong together."
 S1, S2, S3 = "docs/superpowers/specs/s1.md", "docs/superpowers/specs/s2.md", "docs/superpowers/specs/s3.md"
@@ -40,6 +42,7 @@ def _template():
 
 class Base(unittest.TestCase):
     def setUp(self):
+        cache_main_root(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         t = Path(self.tmp.name).resolve()

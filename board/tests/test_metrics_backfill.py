@@ -5,7 +5,9 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent.parent
 CHECKOUT = HERE.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics, usage  # noqa: E402
+from metrics_fixtures import cache_main_root  # noqa: E402
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-")
 SNAPSHOT = Path.home() / ".local/state/agent-board/metrics/usage-snapshot-20261111.sqlite"
@@ -30,6 +32,7 @@ def git(repo, *a, date=None):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        cache_main_root(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.t = Path(self.tmp.name).resolve()
