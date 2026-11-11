@@ -67,7 +67,10 @@ class LockCase(unittest.TestCase):
         return server.remove_agent_worktree(str(self.repo), self.item())
 
     def listed(self):
-        return "w1" in subprocess.run(["git", "worktree", "list"], cwd=self.repo, capture_output=True, text=True).stdout
+        # match worktree dir names, not the whole output: the random temp dir in the repo path can contain "w1" (that
+        # made test_live_non_claude_pid_is_stale fail about once in 70 runs)
+        out = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=self.repo, capture_output=True, text=True).stdout
+        return "w1" in {Path(l[len("worktree "):]).name for l in out.splitlines() if l.startswith("worktree ")}
 
     def reason(self):
         return self.item()["locked"]

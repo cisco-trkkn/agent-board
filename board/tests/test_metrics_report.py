@@ -1,10 +1,12 @@
-import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
+import contextlib, io, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics, usage  # noqa: E402
+from metrics_fixtures import cache_main_root  # noqa: E402
 
 SENTENCE = "These numbers see textual conflicts only. Two specs that merge cleanly can still be wrong together."
 S1, S2, S3 = "docs/superpowers/specs/s1.md", "docs/superpowers/specs/s2.md", "docs/superpowers/specs/s3.md"
@@ -19,8 +21,28 @@ def iso(ts):
     return metrics.utc(ts)
 
 
+_TEMPLATE = {}
+
+
+def _template():
+    """The scratch repo every test starts from, built once per process and copied (it holds no worktrees, so a copy
+    is independent of the template and of every other copy). Returns (repo dir, base commit)."""
+    if not _TEMPLATE:
+        tmp = tempfile.TemporaryDirectory()
+        _TEMPLATE["tmp"] = tmp
+        r = Path(tmp.name).resolve() / "repo"
+        r.mkdir()
+        git(r, "init", "-q", "-b", "main")
+        for name, text in (("f.txt", "a\n"), ("k.txt", "k\n"), ("hot.txt", "\n".join(f"l{i}" for i in range(1, 12)) + "\n")):
+            (r / name).write_text(text)
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
+        _TEMPLATE["repo"] = (r, git(r, "rev-parse", "HEAD"))
+    return _TEMPLATE["repo"]
+
+
 class Base(unittest.TestCase):
     def setUp(self):
+        cache_main_root(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         t = Path(self.tmp.name).resolve()
@@ -31,11 +53,9 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         r = self.repo
-        git(r, "init", "-q", "-b", "main")
-        for name, text in (("f.txt", "a\n"), ("k.txt", "k\n"), ("hot.txt", "\n".join(f"l{i}" for i in range(1, 12)) + "\n")):
-            (r / name).write_text(text)
-        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
-        self.base = git(r, "rev-parse", "HEAD")
+        shutil.rmtree(r)
+        src, self.base = _template()
+        shutil.copytree(src, r, symlinks=True)
         self.t0 = float(int(time.time())) - 7200
         self.heads = {}
 

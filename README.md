@@ -58,6 +58,7 @@ The checked-out branch is what runs. Restart the board after server changes: `ag
 ## Tests
 
 ```zsh
+zsh tools/tests/all.zsh                                      # every suite, parallel; one verdict line
 python3 -m unittest discover -s board/tests                  # board
 python3 -m unittest discover -s tools/tests -p 'test_*.py'   # install.sh helpers
 zsh tools/tests/run-all.zsh                                  # tmux-ctl, layout, plugin, hooks (private tmux server)

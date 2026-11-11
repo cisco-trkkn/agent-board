@@ -1,10 +1,12 @@
-import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
+import contextlib, io, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics, usage  # noqa: E402
+from metrics_fixtures import cache_main_root  # noqa: E402
 
 SPEC1, SPEC2 = "docs/superpowers/specs/one.md", "docs/superpowers/specs/two.md"
 OPUS, MYSTERY = "claude-opus-5-5", "claude-mystery-9"
@@ -18,8 +20,29 @@ def git(repo, *a):
                           check=True, capture_output=True, text=True).stdout.strip()
 
 
+_TEMPLATE = {}
+
+
+def _template():
+    """The scratch repo every test starts from, built once per process and copied (it holds no worktrees, so a copy
+    is independent of the template and of every other copy)."""
+    if not _TEMPLATE:
+        tmp = tempfile.TemporaryDirectory()
+        _TEMPLATE["tmp"] = tmp
+        r = Path(tmp.name).resolve() / "repo"
+        r.mkdir()
+        git(r, "init", "-q", "-b", "main")
+        (r / "f.txt").write_text("1\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
+        git(r, "branch", "feat/x")
+        git(r, "branch", "feat/y")
+        _TEMPLATE["repo"] = r
+    return _TEMPLATE["repo"]
+
+
 class Base(unittest.TestCase):
     def setUp(self):
+        cache_main_root(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         t = Path(self.tmp.name).resolve()
@@ -33,11 +56,8 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         r = self.repo
-        git(r, "init", "-q", "-b", "main")
-        (r / "f.txt").write_text("1\n")
-        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
-        git(r, "branch", "feat/x")
-        git(r, "branch", "feat/y")
+        shutil.rmtree(r)
+        shutil.copytree(_template(), r, symlinks=True)
         self.root = str(r)
         self.now = float(int(time.time()))
         self.t0 = self.now - 1800

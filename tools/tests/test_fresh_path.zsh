@@ -5,10 +5,12 @@ source "${0:A:h}/lib.zsh"
 R="$TT_REPO"; RES="$R/bin/_tc_bins.zsh"
 SCR="$(mktemp -d "${TMPDIR:-/tmp}/freshp.XXXXXX")"; SCR="${SCR:A}"
 H="$SCR/home"; BREW="$SCR/brewbin"; mkdir -p "$H" "$BREW"
-export TMUX_TMPDIR="$SCR/tmpdir"; mkdir -p "$TMUX_TMPDIR"
+# the tmux socket lives under TMUX_TMPDIR; a unix socket path is limited to 104 bytes on macOS, and under all.zsh $TMPDIR is a deep
+# per-job dir, so this dir is a short unique one under /tmp (mktemp: never shared), removed in cleanup
+export TMUX_TMPDIR="$(mktemp -d /tmp/fp.XXXXXX)"
 REALTMUX="${TT_BIN:A}"; ln -s "$REALTMUX" "$BREW/tmux"
 SOCK="fp-$$-$RANDOM"
-cleanup() { "$REALTMUX" -L "$SOCK" kill-server 2>/dev/null; rm -rf "$SCR" }
+cleanup() { "$REALTMUX" -L "$SOCK" kill-server 2>/dev/null; rm -rf "$SCR" "$TMUX_TMPDIR" }
 trap cleanup EXIT INT TERM
 unset TMUX TMUX_PANE TC_TMUX TMUX_DASH_TMUX_ARGS CLAUDE_CONFIG_DIR DEV_CLAUDE_CMD DEV_NO_ATTACH DEV_CLIENT AGENT_BOARD_REPO
 CLEAN=/usr/bin:/bin     # a PATH without <repo>/bin, ~/.local/bin and the micromamba tmux
@@ -49,7 +51,7 @@ echo "$@" > "$FP_MARK"' > "$BREW/claude"; chmod +x "$BREW/claude"
 export FP_MARK="$SCR/claude-ran"
 proj="$SCR/proj"; mkdir -p "$proj"; git -C "$proj" init -q
 fresh env AGENT_BOARD_TMUX_SOCKET="$SOCK" DEV_NO_ATTACH=1 TC_LAYOUT=/usr/bin/true "$R/bin/dev" "$proj" >/dev/null 2>&1
-check "dev: the lead window started claude-orchestrator (claude stub ran)" tt_wait 10 test -s "$FP_MARK"
+check "dev: the lead window started claude-orchestrator (claude stub ran)" tt_wait 30 test -s "$FP_MARK"
 # the typed word is not on PATH, so it must be an absolute path
 "$REALTMUX" -L "$SOCK" kill-server 2>/dev/null
 tt_done

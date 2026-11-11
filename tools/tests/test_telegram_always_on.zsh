@@ -78,7 +78,9 @@ ln -sf "${commands[zsh]:A}" "$STUB/claude"   # a process whose command line star
 FAKE="$TT_REPO/tools/tests/fixtures/fake_claude_tui.zsh"
 tt new-window -d -n lead -c "$TT_DIR" "$STUB/claude -f $FAKE $MARK --channels plugin:telegram@claude-plugins-official"
 LP="$(tt display -p -t '=tt:lead' '#{pane_id}')"
-sleep 1.5
+# drawn: the fake TUI has painted its input line (a fixed sleep was too short on a loaded machine, so the ghost / refresh checks read a blank pane)
+drawn() { tt capture-pane -p -J -t "$LP" | grep -q '❯' }
+tt_wait 20 drawn
 watch() { env TC_NOTIFY=0 TC_TELEGRAM_WATCH_GRACE=0 TC_TELEGRAM_WATCH_QUIET=0 "$@" "$TT_REPO/bin/tmux-ctl" telegram watch --once }
 nserv() { pgrep -f "telegram/server.ts $MARK" | wc -l | tr -d ' ' }
 screen() { tt capture-pane -p -J -t "$LP" }
@@ -114,7 +116,7 @@ tt send-keys -t "$LP" -X cancel
 rm -f "$WLOG"
 tt kill-window -t "$LP"; sleep 0.5
 tt new-window -d -n lead3 -c "$TT_DIR" "env FAKE_TICK=1 $STUB/claude -f $FAKE $MARK --channels plugin:telegram@claude-plugins-official"
-LP="$(tt display -p -t '=tt:lead3' '#{pane_id}')"; sleep 1.5
+LP="$(tt display -p -t '=tt:lead3' '#{pane_id}')"; tt_wait 20 drawn
 check "refreshing: window activity is fresh" test "$(( $(date +%s) - $(tt display -p -t "$LP" '#{window_activity}') ))" -le 2
 watch TC_TELEGRAM_WATCH_QUIET=1 >/dev/null
 check "refreshing: telegram server running" test "$(nserv)" = 1
@@ -122,8 +124,10 @@ check "refreshing: reconnect ok logged"    grep -q "pane $LP.*reconnect: ok" "$W
 for p in $(pgrep -f "telegram/server.ts $MARK"); do kill $p; done; sleep 0.5
 # text typed between the two captures: nothing is typed, the user's text stays
 rm -f "$WLOG" "$TC_STATE/telegram-watch.json"
-( sleep 1; tt send-keys -t "$LP" -l 'mid-gap' ) &
-watch TC_TELEGRAM_WATCH_QUIET=3 >/dev/null; wait
+# the text must land between the watch's two captures: the first one comes after the watch's own startup (seconds on a loaded machine), so
+# the gap is 8 s and the text is typed 4 s after the start (1 s / 3 s typed it before the first capture under load)
+( sleep 4; tt send-keys -t "$LP" -l 'mid-gap' ) &
+watch TC_TELEGRAM_WATCH_QUIET=8 >/dev/null; wait
 check "typed in the gap: no server started" test "$(nserv)" = 0
 check "typed in the gap: logged as not quiet" grep -q "pane $LP.*input line not quiet" "$WLOG"
 check "typed in the gap: the user's text is untouched" grep -q '^❯ mid-gap$' =(screen)
@@ -131,7 +135,7 @@ check "typed in the gap: the user's text is untouched" grep -q '^❯ mid-gap$' =
 rm -f "$WLOG" "$TC_STATE/telegram-watch.json"
 tt kill-window -t "$LP"; sleep 0.5
 tt new-window -d -n lead4 -c "$TT_DIR" "env FAKE_GHOST=1 $STUB/claude -f $FAKE $MARK --channels plugin:telegram@claude-plugins-official"
-LP="$(tt display -p -t '=tt:lead4' '#{pane_id}')"; sleep 1.5
+LP="$(tt display -p -t '=tt:lead4' '#{pane_id}')"; tt_wait 20 drawn
 check "ghost: the pane draws a dim suggestion" grep -q $'\e\\[2mrun it' =(tt capture-pane -p -e -J -t "$LP")
 watch >/dev/null
 check "ghost: telegram server running"     test "$(nserv)" = 1
@@ -141,7 +145,7 @@ for p in $(pgrep -f "telegram/server.ts $MARK"); do kill $p; done; sleep 0.5
 rm -f "$WLOG" "$TC_STATE/telegram-watch.json"
 tt kill-window -t "$LP"; sleep 0.5
 tt new-window -d -n lead2 -c "$TT_DIR" "$STUB/claude -f $TT_REPO/tools/tests/fixtures/fake_claude_tui_broken.zsh $MARK --channels plugin:telegram@claude-plugins-official"
-LP="$(tt display -p -t '=tt:lead2' '#{pane_id}')"; sleep 1.5
+LP="$(tt display -p -t '=tt:lead2' '#{pane_id}')"; tt_wait 20 drawn
 watch >/dev/null; watch >/dev/null; watch >/dev/null
 check "backoff: three passes, one reconnect attempt" test "$(grep -c "pane $LP.*reconnect:" "$WLOG")" = 1
 check "backoff: one banner line"           test "$(grep -c "pane $LP.*notified" "$WLOG")" = 1

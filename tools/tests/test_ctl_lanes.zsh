@@ -2,26 +2,26 @@ source "${0:A:h}/lib.zsh"
 C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt_setup
 (cd "$TT_DIR" && $C run tests true >/dev/null)
-tt send-keys -t '=tt-bg:tests' 'sleep 30' Enter
-tt_wait 3 test "$(tt display -p -t '=tt-bg:tests' '#{pane_current_command}')" = sleep
+tt send-keys -t '=tt-bg:tests' 'sleep 120' Enter
+tt_wait 20 tt_pane_is '=tt-bg:tests' sleep
 out="$($C run tests 'echo lane' 2>"$TT_DIR/err")"
 check "lane output"     test "$(print -r -- "$out" | head -1)" = lane
 check "lane notice"     grep -q 'using lane tests·claude' "$TT_DIR/err"
 check "lane tagged"     test "$(tt show-options -wqv -t '=tt-bg:tests·claude' @tc_lane)" = 1
 n1="$(tt list-windows -t '=tt-bg' | wc -l)"; $C run tests 'true' 2>/dev/null
 check "lane reused"     test "$(tt list-windows -t '=tt-bg' | wc -l)" = "$n1"
-tt send-keys -t '=tt-bg:tests·claude' 'sleep 30' Enter
-tt_wait 3 test "$(tt display -p -t '=tt-bg:tests·claude' '#{pane_current_command}')" = sleep
+tt send-keys -t '=tt-bg:tests·claude' 'sleep 120' Enter
+tt_wait 20 tt_pane_is '=tt-bg:tests·claude' sleep
 $C run tests true 2>/dev/null; check "both busy -> exit 2" test $? -eq 2
 tt send-keys -t '=tt-bg:tests·claude' C-c
-tt_wait 3 test "$(tt display -p -t '=tt-bg:tests·claude' '#{pane_current_command}')" = zsh
+tt_wait 20 tt_pane_is '=tt-bg:tests·claude' zsh
 zmodload zsh/datetime; tt set-option -w -t '=tt-bg:tests·claude' @tc_lane_used $(( EPOCHSECONDS - 1000 ))
 $C list >/dev/null
 check "stale lane reaped" sh -c "! $TT_BIN list-windows -t '=tt-bg' -F '#{window_name}' | grep -qx 'tests·claude'"
 tt new-window -d -t '=tt-bg:' -n 'tests·keep' -c "$TT_DIR"
 tt set-option -w -t '=tt-bg:tests·keep' @tc_lane 1
 tt set-option -w -t '=tt-bg:tests·keep' @tc_lane_used $(( EPOCHSECONDS - 10 ))
-tt_wait 3 test "$(tt display -p -t '=tt-bg:tests·keep' '#{pane_current_command}')" = zsh
+tt_wait 20 tt_pane_is '=tt-bg:tests·keep' zsh
 $C list >/dev/null
 check "recent lane kept" sh -c "$TT_BIN list-windows -t '=tt-bg' -F '#{window_name}' | grep -qx 'tests·keep'"
 tt send-keys -t '=tt-bg:tests' C-c
@@ -33,15 +33,15 @@ check "pane cwd kept"   test "$(tt display -p -t '=tt-bg:tests' '#{pane_current_
 git -C "$TT_DIR/b" init -q
 check "default -C = caller git root" test "$(cd "$TT_DIR/b" && $C run tests pwd | head -1)" = "$TT_DIR/b"
 # long run in a lane whose stamp is backdated mid-run must survive its own _done
-tt send-keys -t '=tt-bg:tests' 'sleep 30' Enter
-tt_wait 3 test "$(tt display -p -t '=tt-bg:tests' '#{pane_current_command}')" = sleep
+tt send-keys -t '=tt-bg:tests' 'sleep 120' Enter
+tt_wait 20 tt_pane_is '=tt-bg:tests' sleep
 ( sleep 1.5; tt set-option -w -t '=tt-bg:tests·claude' @tc_lane_used $(( EPOCHSECONDS - 2000 )) ) &
 out="$($C run tests 'sleep 3; echo survived' 2>/dev/null)"; rc=$?
 check "reap spares finishing run" test "$(print -r -- "$out" | tr '\n' ' ')" = "survived [exit 0] " -a $rc -eq 0
 check "lane kept after run"       sh -c "$TT_BIN list-windows -t '=tt-bg' -F '#{window_name}' | grep -qx 'tests·claude'"
 wait
 tt send-keys -t '=tt-bg:tests' C-c
-tt_wait 3 test "$(tt display -p -t '=tt-bg:tests' '#{pane_current_command}')" = zsh
+tt_wait 20 tt_pane_is '=tt-bg:tests' zsh
 # narrow pane + deep -C dir: output must be exactly command output + exit line
 deep="$TT_DIR/$(printf 'deepdirectory%.0s/' 1 2 3 4 5 6)x"; mkdir -p "$deep"
 tt resize-window -t '=tt-bg:tests' -x 60

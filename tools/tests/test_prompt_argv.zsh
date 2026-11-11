@@ -1,5 +1,6 @@
 source "${0:A:h}/lib.zsh"
 R="${0:A:h:h:h}"            # the checkout under test, not the live install
+path=(${path:#$R/bin})      # ab_path keeps a PATH that already holds <repo>/bin; the "<repo>/bin first" checks need it absent
 tt_setup
 stub="$(mktemp -d)"; trap 'rm -rf "$stub"; tt_teardown' EXIT INT TERM
 print -r -- '#!/bin/sh

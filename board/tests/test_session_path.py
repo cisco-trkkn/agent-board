@@ -13,6 +13,7 @@ import unittest
 import uuid
 from pathlib import Path
 
+os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")  # server.py reads it at import
 BOARD = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BOARD))
 import paneclass  # noqa: E402

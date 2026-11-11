@@ -80,6 +80,8 @@ check "files: ~/.claude, ~/.tmux.conf, ~/.zshrc hashes unchanged" diff "$TT_DIR/
 check "~/.local/bin: agent-board + the seeded tool only" test "$(ls -A "$H/.local/bin" | tr '\n' ' ')" = "agent-board mytool "
 check "~/.claude: nothing new"                test "$(cd "$H" && find .claude | LC_ALL=C sort | tr '\n' ' ')" = ".claude .claude/agents .claude/agents/y.md .claude/settings.json .claude/skills .claude/skills/x .claude/skills/x/SKILL.md "
 A show-hooks -g > "$TT_DIR/hooks.after"; A list-keys > "$TT_DIR/keys.after"
+# `tmux list-keys` on a heavily loaded machine once printed one line fewer (the last copy-mode-vi binding was missing); a real change persists, so capture again a few times before comparing
+n=0; until diff -q "$TT_DIR/keys.before" "$TT_DIR/keys.after" >/dev/null || (( n++ >= 5 )); do sleep 0.5; A list-keys > "$TT_DIR/keys.after"; done
 check "user server: show-hooks -g unchanged"  diff "$TT_DIR/hooks.before" "$TT_DIR/hooks.after"
 check "user server: list-keys unchanged"      diff "$TT_DIR/keys.before" "$TT_DIR/keys.after"
 

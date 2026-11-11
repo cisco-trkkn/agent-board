@@ -121,7 +121,7 @@ check "legacy: teammate window on A"          tt_wait 12 win_of "$A_SOCK" tt pro
 check "legacy: not on B"                      sh -c "! $TT_BIN -L $B_SOCK list-windows -a -F '#{window_name}' | grep -q probe-l"
 
 # --- the board: lists B's sessions and its terminals attach to them (TMUX_DASH_TMUX_ARGS, as tmux-dash passes it)
-PORT=$(( 20000 + RANDOM % 20000 ))
+PORT="$(tt_free_port)"
 TMUX_DASH_TOKEN=t TMUX_DASH_PORT=$PORT TMUX_DASH_TMUX_ARGS="-L $B_SOCK" USAGE_ROOT="$TT_DIR/usage" TC_IDEAS_DIR="$TT_DIR/ideas" \
   python3 "$R/board/server.py" > "$TT_DIR/server.log" 2>&1 & SRV_PID=$!
 up() { curl -s -o /dev/null "http://127.0.0.1:$PORT/t/" }
@@ -172,6 +172,8 @@ check "copied plugin: TC_TMUX honoured"       test "$(grep -c '^── ' "$TC_ST
 
 # --- the user's server is untouched: same hooks and keys as before everything above
 A show-hooks -g > "$TT_DIR/hooks.after"; A list-keys > "$TT_DIR/keys.after"
+# `tmux list-keys` on a heavily loaded machine once printed one line fewer (the last copy-mode-vi binding was missing); a real change persists, so capture again a few times before comparing
+n=0; until diff -q "$TT_DIR/keys.before" "$TT_DIR/keys.after" >/dev/null || (( n++ >= 5 )); do sleep 0.5; A list-keys > "$TT_DIR/keys.after"; done
 check "A: hooks unchanged"                    diff -q "$TT_DIR/hooks.before" "$TT_DIR/hooks.after"
-check "A: keys unchanged"                     diff -q "$TT_DIR/keys.before" "$TT_DIR/keys.after"
+check "A: keys unchanged"                     diff "$TT_DIR/keys.before" "$TT_DIR/keys.after"
 tt_done

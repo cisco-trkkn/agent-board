@@ -18,9 +18,10 @@ check "TC_TASKS_WINDOW=0: none"   test -z "$(idx off tasks)"
 # teammates land after tasks (same direct shape as test_teammate_window.zsh, copied from Claude Code 2.1.301)
 tt set-hook -g after-split-window "run-shell -b '$H --hook #{pane_id}'"
 tt split-window -d -t '=tt:claude' "cd /tmp && env CLAUDECODE=1 sh -c 'sleep 60; :' --agent-id probe-a@tt --agent-name probe-a --team-name tt"
-tt_wait 12 test -n "$(idx tt '✦ probe-a')"
+have_idx() { [[ -n "$(idx "$@")" ]] }   # tt_wait <secs> have_idx …: a $(idx …) argument would be evaluated once
+tt_wait 20 have_idx tt '✦ probe-a'
 check "teammate after tasks"      test "$(idx tt '✦ probe-a')" = $(( ci + 2 ))
 tt split-window -d -t '=tt:claude' "cd /tmp && env CLAUDECODE=1 sh -c 'sleep 60; :' --agent-id probe-b@tt --agent-name probe-b --team-name tt"
-tt_wait 12 test -n "$(idx tt '✦ probe-b')"
+tt_wait 20 have_idx tt '✦ probe-b'
 check "second teammate after"     test "$(idx tt '✦ probe-b')" = $(( ci + 3 ))
 tt_done

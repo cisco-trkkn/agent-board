@@ -49,7 +49,7 @@ check "agent-board dev --help runs dev" test -n "$(agent-board dev --help 2>&1 |
 check "agent-board with no command exits 2" sh -c "! '$BIN/agent-board' >/dev/null 2>&1"
 
 # 5. dash: scratch ports, scratch state (HOME), killed by PID in the trap
-export TMUX_DASH_PORT=$(( 20000 + RANDOM % 20000 )) TMUX_DASH_TTYD_PORT=$(( 40000 + RANDOM % 20000 )) TTYD_BIN="$REAL_TTYD"
+export TMUX_DASH_PORT="$(tt_free_port)" TMUX_DASH_TTYD_PORT="$(tt_free_port)" TTYD_BIN="$REAL_TTYD"
 out="$(agent-board dash status 2>&1)"
 check "agent-board dash status: server stopped" test -n "$(print -r -- "$out" | grep -F 'server: stopped')"
 check "agent-board dash status: ttyd stopped" test -n "$(print -r -- "$out" | grep -F 'ttyd: stopped')"

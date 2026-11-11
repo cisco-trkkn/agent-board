@@ -9,13 +9,16 @@ FX="$(cd "$(dirname "$0")" && pwd)/fixtures/context-transcript.jsonl"
 REAL=$(ls "$HOME"/.claude/projects/*/48822fd2*.jsonl 2>/dev/null | head -1)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
-RS="$HOME/.local/state/agent-board/context-guard"
+# a leak check against the real state root fails whenever a live session writes there: point HOME at a temp dir for
+# every hook run instead, so a leak into the default path lands (and is counted) under it
+FH="$T/fakehome"; mkdir -p "$FH"
+RS="$FH/.local/state/agent-board/context-guard"
 rs_before=$(ls -A "$RS" 2>/dev/null | wc -l | tr -d ' ')
 check() { if [ "$2" = "$3" ]; then echo "PASS $1"; pass=$((pass+1)); else echo "FAIL $1: expected '$3', got '$2'"; fail=$((fail+1)); fi; }
 run() { # event sid transcript -> hook output
   jq -n --arg t "$3" --arg s "$2" --arg e "$1" \
     '{transcript_path:$t, hook_event_name:$e} + (if $s=="" then {} else {session_id:$s} end)' \
-    | CLAUDE_CONTEXT_GUARD_STATE="${STATE:-$T/state}" "$H" 2>>"$T/err"
+    | HOME="$FH" CLAUDE_CONTEXT_GUARD_STATE="${STATE:-$T/state}" "$H" 2>>"$T/err"
 }
 sm() { printf '%s' "$1" | jq -r "$2" 2>/dev/null; }
 

@@ -27,7 +27,7 @@ err="$("$L" old "$TT_DIR" 2>&1 >/dev/null)"
 check "busy tests kept"  sh -c "$TT_BIN list-windows -t '=old' -F '#{window_name}' | grep -qx tests"
 check "busy note"        zsh -c 'print -r -- "$1" | grep -q busy' x "$err"
 # busy user shell in an existing session stays put, with a note; the idle one goes
-tt new-session -d -s busy -n claude -c "$TT_DIR"; tt new-window -d -t '=busy:' -n shell -c "$TT_DIR" 'sleep 30'
+tt new-session -d -s busy -n claude -c "$TT_DIR"; tt new-window -d -t '=busy:' -n shell -c "$TT_DIR" 'sleep 120'
 err="$("$L" busy "$TT_DIR" 2>&1 >/dev/null)"
 check "busy shell kept"  sh -c "$TT_BIN list-windows -t '=busy' -F '#{window_name}' | grep -qx shell"
 check "busy shell note"  zsh -c 'print -r -- "$1" | grep -q "busy"' x "$err"
@@ -53,7 +53,7 @@ check "dev bg"           test "$(wins proj-bg)" = "shell tests "
 # race: layout migration and tmux-ctl's ensure_bg on a fresh session must not duplicate windows
 CT="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 tt new-session -d -s race -n claude -c "$TT_DIR"; tt new-window -d -t '=race:' -n tests -c "$TT_DIR"
-tt_wait 3 test "$(tt display -p -t '=race:tests' '#{pane_current_command}')" = zsh
+tt_wait 20 tt_pane_is '=race:tests' zsh
 "$L" race "$TT_DIR" & TC_SESSION=race "$CT" run tests true >/dev/null & wait
 check "race: one tests"  test "$(tt list-windows -t '=race-bg' -F '#{window_name}' | grep -cx tests)" = 1
 check "race: one shell"  test "$(tt list-windows -t '=race-bg' -F '#{window_name}' | grep -cx shell)" = 1

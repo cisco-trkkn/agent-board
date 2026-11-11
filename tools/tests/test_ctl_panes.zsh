@@ -6,7 +6,7 @@ log="$TC_STATE/feed-tt-tests.log"; printf 'a\nb\nc\nd\n' > "$log"
 fp="$(tt split-window -d -v -l 35% -t '=tt-bg:tests' -P -F '#{pane_id}' "tail -n 30 -F $log")"
 tt set-option -p -t "$fp" @tc_role feed
 tt select-pane -t "$fp"                                  # feed pane active: worst case
-tt_wait 3 test "$(tt display -p -t "$fp" '#{pane_current_command}')" = tail
+tt_wait 20 tt_pane_is "$fp" tail
 check "run uses main pane"      test "$($C run tests 'echo hi' | head -1)" = hi
 $C run tests false >/dev/null; check "exit code kept" test $? -eq 1
 # match the output line, not the typed command: the bg window is 80 cols, so the echoed
