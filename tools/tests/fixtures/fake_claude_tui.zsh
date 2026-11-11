@@ -8,6 +8,12 @@ child=
 trap '[[ -n "$child" ]] && kill $child 2>/dev/null' EXIT HUP TERM
 draw() { print -rn -- $'\e[2J\e[H\n'"$RULE"$'\n'"❯ $buf"$'\n'"$RULE"$'\n  auto mode on\n'"${last:+  ⎿  $last}"; }
 draw
+# FAKE_TICK=1: the status row under the input box redraws every 0.3 s, so tmux's window activity is always fresh (a real lead redraws on its own)
+tick=""
+if [[ -n "${FAKE_TICK:-}" ]]; then
+  zsh -fc 'while sleep 0.3; do print -rn -- $'"'"'\e7\e[8;1H  tick '"'"'$RANDOM$'"'"'\e8'"'"'; done' ticker & tick=$!   # its own process: a forked copy would show up in ps as a second lead
+  trap '[[ -n "$child" ]] && kill $child 2>/dev/null; [[ -n "$tick" ]] && kill $tick 2>/dev/null' EXIT HUP TERM
+fi
 while read -rsk1 c; do
   if [[ "$c" == $'\r' || "$c" == $'\n' ]]; then
     if [[ "$buf" == '/mcp reconnect plugin:telegram:telegram' ]]; then

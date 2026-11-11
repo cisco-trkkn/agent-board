@@ -110,11 +110,23 @@ watch >/dev/null
 check "copy mode: no server started"       test "$(nserv)" = 0
 check "copy mode: logged"                  grep -q 'copy mode' "$WLOG"
 tt send-keys -t "$LP" -X cancel
-# a pane with output in the last 30 s is left alone (the default quiet time)
+# a lead that keeps redrawing (window activity always fresh) is still reconnected: quiet means an untouched empty input line, not no output
 rm -f "$WLOG"
-env TC_NOTIFY=0 TC_TELEGRAM_WATCH_GRACE=0 "$TT_REPO/bin/tmux-ctl" telegram watch --once >/dev/null
-check "recent activity: no server started" test "$(nserv)" = 0
-check "recent activity: logged"            grep -q 'active in the last 30 s' "$WLOG"
+tt kill-window -t "$LP"; sleep 0.5
+tt new-window -d -n lead3 -c "$TT_DIR" "env FAKE_TICK=1 $STUB/claude -f $FAKE $MARK --channels plugin:telegram@claude-plugins-official"
+LP="$(tt display -p -t '=tt:lead3' '#{pane_id}')"; sleep 1.5
+check "refreshing: window activity is fresh" test "$(( $(date +%s) - $(tt display -p -t "$LP" '#{window_activity}') ))" -le 2
+watch TC_TELEGRAM_WATCH_QUIET=1 >/dev/null
+check "refreshing: telegram server running" test "$(nserv)" = 1
+check "refreshing: reconnect ok logged"    grep -q "pane $LP.*reconnect: ok" "$WLOG"
+for p in $(pgrep -f "telegram/server.ts $MARK"); do kill $p; done; sleep 0.5
+# text typed between the two captures: nothing is typed, the user's text stays
+rm -f "$WLOG" "$TC_STATE/telegram-watch.json"
+( sleep 1; tt send-keys -t "$LP" -l 'mid-gap' ) &
+watch TC_TELEGRAM_WATCH_QUIET=3 >/dev/null; wait
+check "typed in the gap: no server started" test "$(nserv)" = 0
+check "typed in the gap: logged as not quiet" grep -q "pane $LP.*input line not quiet" "$WLOG"
+check "typed in the gap: the user's text is untouched" grep -q '^❯ mid-gap$' =(screen)
 # a failed reconnect backs off: a lead whose server never appears is typed into once, not every pass
 rm -f "$WLOG" "$TC_STATE/telegram-watch.json"
 tt kill-window -t "$LP"; sleep 0.5

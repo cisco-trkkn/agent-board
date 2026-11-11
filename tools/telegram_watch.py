@@ -189,8 +189,10 @@ def idle_at_prompt(cmd, rows, mod):
 
 
 COMMAND = "/mcp reconnect plugin:telegram:telegram"
-RECENT = 30        # seconds: a pane with output or typing more recent than this is not touched
+QUIET_GAP = 3      # seconds between the two captures that must show an untouched, empty input line (TC_TELEGRAM_WATCH_QUIET)
 NOT_TYPED = "pane busy or has typed text"
+QUIET_GAP_MAX = 10 # TC_TELEGRAM_WATCH_QUIET is capped here: it was a 30 s activity window before it became the gap
+NOT_QUIET = "input line not quiet (busy, typed text or changing)"
 
 
 def input_text(rows):
@@ -209,27 +211,71 @@ def input_text(rows):
     return None
 
 
-def unsafe_reason(in_mode, idle_for, recent=RECENT):
-    if in_mode:
-        return "pane in copy mode"
-    if idle_for < recent:
-        return f"pane active in the last {recent:g} s"
+def input_frame(rows):
+    """The input box as drawn: the rule above the input line, the line itself and the rule below it (when there is one).
+    The status rows under the box (ctx %, usage) redraw on their own, so they are left out. None when there is no input line."""
+    tail = rows[-30:]
+    for n in range(len(tail) - 1, 0, -1):
+        if paneclass.INPUT_RE.match(tail[n]) and paneclass.RULE_RE.match(tail[n - 1]):
+            below = tail[n + 1] if n + 1 < len(tail) and paneclass.RULE_RE.match(tail[n + 1]) else ""
+            return (tail[n - 1], tail[n], below)
     return None
+
+
+def quiet_gap(env=None):
+    """Seconds between the two quiet captures: TC_TELEGRAM_WATCH_QUIET (0..QUIET_GAP_MAX), QUIET_GAP when unset or not a number."""
+    env = os.environ if env is None else env
+    try:
+        v = float(env.get("TC_TELEGRAM_WATCH_QUIET") or QUIET_GAP)
+    except ValueError:
+        v = QUIET_GAP
+    return min(max(v, 0), QUIET_GAP_MAX)
+
+
+def unsafe_reason(in_mode):
+    return "pane in copy mode" if in_mode else None
 
 
 class PaneCtl:
     """What reconnect() needs from a pane: capture() -> rows, type_text(t), enter(), clear(), check() -> reason or None,
-    pane_idle() -> bool, sleep(s)."""
+    pane_idle() -> bool, sleep(s), remove(back, count): delete count characters that end `back` characters before the end
+    of the input line (End, Left x back, Backspace x count)."""
 
-    def __init__(self, capture, type_text, enter, clear, check, pane_idle, sleep=time.sleep):
+    def __init__(self, capture, type_text, enter, clear, check, pane_idle, sleep=time.sleep, remove=None):
         self.capture, self.type_text, self.enter, self.clear = capture, type_text, enter, clear
-        self.check, self.pane_idle, self.sleep = check, pane_idle, sleep
+        self.check, self.pane_idle, self.sleep, self.remove = check, pane_idle, sleep, remove
 
 
-def reconnect(ctl, has_server, settle=8):
+def _remove_command(ctl, line):
+    """The line did not read back as the command: take our text out and keep the user's. Done only when the line holds the
+    command once; afterwards the line must be exactly the user's own text, else it is left as it is and the caller notifies."""
+    left_as_is = "input changed while typing, line left as is"
+    if not line or line.count(COMMAND) != 1 or ctl.remove is None:
+        return left_as_is
+    before, _, after = line.partition(COMMAND)
+    ctl.remove(len(after), len(COMMAND))
+    ctl.sleep(0.3)
+    if input_text(ctl.capture()) != before + after:
+        return left_as_is
+    return "input changed while typing"
+
+
+def reconnect(ctl, has_server, settle=8, quiet_gap=QUIET_GAP):
     """Type `/mcp reconnect plugin:telegram:telegram` and Enter into an idle pane. 'ok', 'no server after reconnect' (the
     command ran) or why nothing was sent. The pane is checked again right before typing; after typing, the input line must
-    read back exactly the command (the user may have started typing) or the line is cleared and no Enter is sent."""
+    read back exactly the command (the user may have started typing) or no Enter is sent and only our command text is
+    removed from the line, so what the user typed stays."""
+    why = ctl.check()
+    if why:
+        return why
+    # nobody is typing: two captures quiet_gap apart, both idle with an empty input line, the input box identical
+    first = ctl.capture()
+    if not idle_at_prompt("claude", first, None) or input_text(first) != "":
+        return NOT_QUIET
+    ctl.sleep(quiet_gap)
+    second = ctl.capture()
+    if not idle_at_prompt("claude", second, None) or input_text(second) != "" or input_frame(first) != input_frame(second):
+        return NOT_QUIET
     why = ctl.check()
     if why:
         return why
@@ -237,9 +283,9 @@ def reconnect(ctl, has_server, settle=8):
         return NOT_TYPED
     ctl.type_text(COMMAND)
     ctl.sleep(0.3)                  # the slash-command list needs a moment before Enter submits
-    if input_text(ctl.capture()) != COMMAND:
-        ctl.clear()
-        return "input changed while typing"
+    line = input_text(ctl.capture())
+    if line != COMMAND:
+        return _remove_command(ctl, line)
     ctl.enter()
     for _ in range(settle * 2):
         ctl.sleep(0.5)
@@ -346,10 +392,10 @@ def _do_reconnect(pane):
     t = _tmux()
 
     def check():
-        f = t("display", "-p", "-t", pane, "#{pane_in_mode} #{window_activity} #{pane_pid}").split()
-        if len(f) < 3:
+        f = t("display", "-p", "-t", pane, "#{pane_in_mode} #{pane_pid}").split()
+        if len(f) < 2:
             return "pane not found"
-        return unsafe_reason(f[0] != "0", time.time() - float(f[1] or 0), float(os.environ.get("TC_TELEGRAM_WATCH_QUIET") or RECENT))
+        return unsafe_reason(f[0] != "0")
 
     pid = int((t("display", "-p", "-t", pane, "#{pane_pid}").strip() or "0"))
 
@@ -364,12 +410,16 @@ def _do_reconnect(pane):
         tbl, lead = leads()
         return bool(lead) and all(has_server(p, tbl) for p in lead)
 
+    def remove(back, count):
+        keys = ["End"] + ["Left"] * back + ["BSpace"] * count
+        t("send-keys", "-t", pane, *keys)
+
     ctl = PaneCtl(lambda: _rows(pane),
                   lambda text: t("send-keys", "-t", pane, "-l", text),
                   lambda: t("send-keys", "-t", pane, "Enter"),
                   lambda: t("send-keys", "-t", pane, "C-u"),
-                  check, lambda: _pane_idle(pane))
-    return reconnect(ctl, server)
+                  check, lambda: _pane_idle(pane), remove=remove)
+    return reconnect(ctl, server, quiet_gap=quiet_gap())
 
 
 def _notify(title, text):

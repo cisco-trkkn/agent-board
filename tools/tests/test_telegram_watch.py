@@ -16,6 +16,7 @@ CH = "--channels plugin:telegram@claude-plugins-official"
 SRV = "node --experimental-strip-types --no-warnings /h/.claude/plugins/cache/claude-plugins-official/telegram/0.0.7/server.ts"
 FX = Path(__file__).resolve().parent / "fixtures" / "telegram-watch"
 CMD = "/mcp reconnect plugin:telegram:telegram"
+NOT_QUIET = tw.NOT_QUIET
 
 
 def screen(name):
@@ -24,6 +25,12 @@ def screen(name):
     while rows and not rows[-1].strip():
         rows.pop()
     return rows
+
+
+def with_input(text):
+    """The real idle capture with `text` on the input line."""
+    rows = screen("idle")
+    return [("❯ " + text) if r.startswith("❯") else r for r in rows]
 
 
 def table(*rows):
@@ -128,6 +135,14 @@ class Screens(unittest.TestCase):
         self.assertEqual(tw.input_text(screen("typed-list")), CMD)
         self.assertFalse(tw.idle_at_prompt("claude", screen("typed-list"), None))
 
+    def test_two_real_idle_captures_taken_3_s_apart_are_quiet(self):
+        a, b = screen("real-idle-1"), screen("real-idle-2")          # a real idle lead, capture-pane twice, 3 s apart
+        for rows in (a, b):
+            self.assertTrue(tw.idle_at_prompt("claude", rows, None))
+            self.assertEqual(tw.input_text(rows), "")                  # the `Try "..."` placeholder reads as empty
+        self.assertEqual(tw.input_frame(a), tw.input_frame(b))
+        self.assertIn('Try "', tw.input_frame(a)[1])                   # and it is the same placeholder both times
+
     def test_a_turn_in_progress_is_not_idle(self):
         self.assertFalse(tw.idle_at_prompt("claude", screen("working"), None))
 
@@ -139,11 +154,28 @@ class Screens(unittest.TestCase):
 
 
 class Safe(unittest.TestCase):
-    def test_copy_mode_and_recent_typing_block(self):
-        self.assertIsNone(tw.unsafe_reason(in_mode=False, idle_for=31))
-        self.assertEqual(tw.unsafe_reason(in_mode=True, idle_for=999), "pane in copy mode")
-        self.assertEqual(tw.unsafe_reason(in_mode=False, idle_for=29), "pane active in the last 30 s")
-        self.assertIsNone(tw.unsafe_reason(False, 3, recent=2))
+    def test_only_copy_mode_blocks(self):
+        self.assertIsNone(tw.unsafe_reason(in_mode=False))
+        self.assertEqual(tw.unsafe_reason(in_mode=True), "pane in copy mode")
+
+    def test_input_frame_is_the_rule_input_rule_and_ignores_the_status_rows(self):
+        a = tw.input_frame(screen("typed-input"))
+        self.assertEqual(len(a), 3)
+        self.assertIn("half a sentence", a[1])
+        moved = screen("idle")[:-2] + ["  Opus 5.5 · ctx 9% · 5h 60%", "  other status"]
+        self.assertEqual(tw.input_frame(screen("idle")), tw.input_frame(moved))      # a redrawn status line is not typing
+        self.assertNotEqual(tw.input_frame(screen("idle")), tw.input_frame(screen("typed-input")))
+        self.assertIsNone(tw.input_frame(["$ ls"]))
+
+
+class QuietGap(unittest.TestCase):
+    def test_default_override_cap_and_bad_values(self):
+        self.assertEqual(tw.quiet_gap({}), 3)
+        self.assertEqual(tw.quiet_gap({"TC_TELEGRAM_WATCH_QUIET": "0"}), 0)
+        self.assertEqual(tw.quiet_gap({"TC_TELEGRAM_WATCH_QUIET": "5"}), 5)
+        self.assertEqual(tw.quiet_gap({"TC_TELEGRAM_WATCH_QUIET": "30"}), 10)       # an old 30 s override is capped
+        self.assertEqual(tw.quiet_gap({"TC_TELEGRAM_WATCH_QUIET": "soon"}), 3)
+        self.assertEqual(tw.quiet_gap({"TC_TELEGRAM_WATCH_QUIET": "-4"}), 0)
 
 
 class Ctl:
@@ -163,17 +195,18 @@ class Ctl:
     def type_text(self, t): self.log.append(("type", t))
     def enter(self): self.log.append(("enter",)); self.entered = True
     def clear(self): self.log.append(("clear",))
+    def remove(self, back, count): self.log.append(("remove", back, count))
     def sleep(self, s): pass
     def has_server(self): return self.entered and self.server
 
 
 def run(ctl):
-    return tw.reconnect(tw.PaneCtl(ctl.capture, ctl.type_text, ctl.enter, ctl.clear, ctl.check, ctl.pane_idle, ctl.sleep), ctl.has_server)
+    return tw.reconnect(tw.PaneCtl(ctl.capture, ctl.type_text, ctl.enter, ctl.clear, ctl.check, ctl.pane_idle, ctl.sleep, remove=ctl.remove), ctl.has_server)
 
 
 class Reconnect(unittest.TestCase):
     def test_types_the_command_and_enter_when_the_input_reads_back_exactly(self):
-        c = Ctl([screen("idle"), screen("idle"), screen("typed-list")])
+        c = Ctl([screen("idle")] * 4 + [screen("typed-list")])
         self.assertEqual(run(c), "ok")
         self.assertEqual(c.log, [("type", CMD), ("enter",)])
 
@@ -184,22 +217,59 @@ class Reconnect(unittest.TestCase):
 
     def test_input_with_text_gets_no_keys(self):
         c = Ctl([screen("typed-input")])
-        self.assertEqual(run(c), "pane busy or has typed text")
+        self.assertEqual(run(c), NOT_QUIET)
         self.assertEqual(c.log, [])
 
     def test_a_turn_in_progress_gets_no_keys(self):
         c = Ctl([screen("working")])
-        self.assertEqual(run(c), "pane busy or has typed text")
+        self.assertEqual(run(c), NOT_QUIET)
         self.assertEqual(c.log, [])
 
-    def test_user_typing_in_the_gap_aborts_before_enter_and_clears(self):
-        c = Ctl([screen("idle"), screen("idle"), screen("typed-input")])      # the line holds something else when re-read
+    def test_a_key_typed_before_our_command_is_kept_and_only_the_command_removed(self):
+        c = Ctl([screen("idle")] * 4 + [with_input("x" + CMD), with_input("x")])
         self.assertEqual(run(c), "input changed while typing")
-        self.assertEqual(c.log, [("type", CMD), ("clear",)])                   # never an Enter
+        self.assertEqual(c.log, [("type", CMD), ("remove", 0, len(CMD))])      # no Enter, no C-u
+
+    def test_a_key_typed_after_our_command_is_kept_too(self):
+        c = Ctl([screen("idle")] * 4 + [with_input(CMD + "yz"), with_input("yz")])
+        self.assertEqual(run(c), "input changed while typing")
+        self.assertEqual(c.log, [("type", CMD), ("remove", 2, len(CMD))])
+
+    def test_if_the_line_is_not_the_users_own_text_after_removal_it_is_left_alone(self):
+        c = Ctl([screen("idle")] * 4 + [with_input("x" + CMD), with_input("x" + CMD[:5])])
+        self.assertEqual(run(c), "input changed while typing, line left as is")
+        self.assertEqual(c.log, [("type", CMD), ("remove", 0, len(CMD))])      # one removal, never a C-u, never an Enter
+
+    def test_a_line_that_does_not_contain_our_command_is_left_alone(self):
+        c = Ctl([screen("idle")] * 4 + [with_input("half a sentence")])
+        self.assertEqual(run(c), "input changed while typing, line left as is")
+        self.assertEqual(c.log, [("type", CMD)])
+
+    def test_a_redrawing_idle_pane_is_still_quiet(self):
+        redrawn = screen("idle")[:-2] + ["  Opus 5.5 · ctx 9%", "  x"]          # status row changes every capture, input does not
+        c = Ctl([screen("idle"), redrawn, screen("idle"), redrawn, screen("typed-list")])
+        self.assertEqual(run(c), "ok")
+        self.assertEqual(c.log, [("type", CMD), ("enter",)])
+
+    def test_text_typed_between_the_two_captures_gets_no_keys(self):
+        c = Ctl([screen("idle"), screen("typed-input")])
+        self.assertEqual(run(c), NOT_QUIET)
+        self.assertEqual(c.log, [])
+
+    def test_a_working_pane_in_the_second_capture_gets_no_keys(self):
+        c = Ctl([screen("idle"), screen("working")])
+        self.assertEqual(run(c), NOT_QUIET)
+        self.assertEqual(c.log, [])
+
+    def test_the_gap_is_slept_between_the_captures(self):
+        c = Ctl([screen("idle")] * 4 + [screen("typed-list")]); slept = []
+        c.sleep = slept.append
+        tw.reconnect(tw.PaneCtl(c.capture, c.type_text, c.enter, c.clear, c.check, c.pane_idle, c.sleep, remove=c.remove), c.has_server, quiet_gap=7, settle=1)
+        self.assertEqual(slept[0], 7)
 
     def test_no_server_after_enter_is_a_failure_without_further_keys(self):
-        c = Ctl([screen("idle"), screen("idle"), screen("typed-list")], server_after_enter=False)
-        r = tw.reconnect(tw.PaneCtl(c.capture, c.type_text, c.enter, c.clear, c.check, c.pane_idle, c.sleep), c.has_server, settle=1)
+        c = Ctl([screen("idle")] * 4 + [screen("typed-list")], server_after_enter=False)
+        r = tw.reconnect(tw.PaneCtl(c.capture, c.type_text, c.enter, c.clear, c.check, c.pane_idle, c.sleep, remove=c.remove), c.has_server, settle=1)
         self.assertEqual(r, "no server after reconnect")
         self.assertEqual(c.log, [("type", CMD), ("enter",)])
 
