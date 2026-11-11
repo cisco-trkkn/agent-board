@@ -149,7 +149,7 @@ class RestartOrchestratorTest(unittest.TestCase):
         msg = self.run_act(fake)
         self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", self.root))
         sk = fake.find("send-keys")
-        self.assertEqual(sk[0], ("send-keys", "-t", "%7", "-l", "--", shlex.quote(relay.orchestrator())))
+        self.assertEqual(sk[0], ("send-keys", "-t", "%7", "-l", "--", relay.launch_line(self.root)))
         self.assertEqual(sk[1], ("send-keys", "-t", "%7", "Enter"))
         self.assertLess(fake.names().index("respawn-pane"), fake.names().index("send-keys"))
         self.assertEqual(msg, "restarted the orchestrator in proj:claude")
@@ -170,7 +170,7 @@ class RestartOrchestratorTest(unittest.TestCase):
         self.assertEqual([r[3] for r in fake.find("respawn-pane")], ["%9"])
         self.assertIn("-P", nw)
         self.assertEqual(nw[nw.index("-F") + 1], "#{pane_id}")
-        self.assertEqual(fake.find("send-keys"), [("send-keys", "-t", "%9", "-l", "--", shlex.quote(relay.orchestrator())),
+        self.assertEqual(fake.find("send-keys"), [("send-keys", "-t", "%9", "-l", "--", relay.launch_line(self.root)),
                                                   ("send-keys", "-t", "%9", "Enter")])
         self.assertEqual(len(fake.find("move-window")), 1)  # index 1 is free
         self.assertEqual(msg, "started an orchestrator in proj:claude")
