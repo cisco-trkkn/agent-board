@@ -126,7 +126,7 @@ Spec section 2: every job must be safe to run concurrently with every other unde
 | skill/docs-compose | tests/ read fixtures in the skill dir, tmp dirs only | none needed | no |
 | skill/docs-report | tests/ read fixtures in the skill dir, tmp dirs only | none needed | no |
 | statusline | tmp dirs only | none needed | no |
-| hooks/test-context-size-guard.sh | reads $HOME/.claude/projects/*/48822fd2*.jsonl (read-only, skips if absent); leak check counts files in the real ~/.local/state/agent-board/context-guard before/after, so a live Claude session writing there during the run would fail it | left as is: a live session writes there only on its own context events; noted as the one real-state dependency | no |
+| hooks/test-context-size-guard.sh | reads $HOME/.claude/projects/*/48822fd2*.jsonl (read-only, skips if absent); its leak check counted files in the real ~/.local/state/agent-board/context-guard, which a live Claude session writing there mid-run would change | every hook run now has HOME pointed at a temp dir and the leak check counts that dir's default state root (the hook already honours CLAUDE_CONTEXT_GUARD_STATE, which the test sets); 36 checks before and after | no |
 | hooks/test-revise-claude-md-nudge.sh | runs $HOME/.claude/hooks/revise-claude-md-nudge.py (read-only) | none needed | no |
 | hooks/test-spawn-record.sh | leak check on the real ~/.local/state/agent-board/spawns.jsonl: skipped when it already existed, so a live spawn cannot fail it | none needed | no |
 | hooks/test-superpowers-hook.sh | mktemp -d; state env pointed into it | none needed | no |
