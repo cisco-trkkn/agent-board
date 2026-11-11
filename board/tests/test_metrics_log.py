@@ -186,10 +186,11 @@ class CommandsTest(Base):
         self.assertEqual((d["kind"], d["spec"], d["what"]), ("defect", "s1.md", "broke it"))
         self.assertRegex(d["date"], r"^\d{4}-\d{2}-\d{2}$")
 
-    def test_not_implemented_one_line(self):
-        for sub in ("backfill",):
-            rc, _, err = self.run_main(sub)
-            self.assertEqual((rc, err), (1, f"metrics: {sub}: not implemented\n"))
+    def test_no_subcommand_is_a_one_line_usage_error(self):
+        rc, _, err = self.run_main()
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(err.splitlines()), 1)
+        self.assertTrue(err.startswith("metrics: metrics: usage: metrics <"))
 
     def test_missing_config_one_line_error(self):
         rc, out, err = self.run_main("batch", "start", "--config", "ghost", "s1.md")

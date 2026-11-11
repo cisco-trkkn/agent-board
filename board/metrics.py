@@ -41,8 +41,11 @@ def repo_root(repo_arg=None):
     return Path(_git(repo_arg or ".", "rev-parse", "--show-toplevel"))
 
 
+LOG_OVERRIDE = None   # `backfill --log PATH` (tests, dry runs): read and write this file instead of the repo's run log
+
+
 def log_path(repo):
-    return Path(repo) / METRICS_DIR / "runs.jsonl"
+    return Path(LOG_OVERRIDE) if LOG_OVERRIDE else Path(repo) / METRICS_DIR / "runs.jsonl"
 
 
 def read_log(repo):
@@ -340,7 +343,7 @@ def stale_base(repo, base, batch_base, head):
     return None
 
 
-def build_record_static(repo, spec, batch, outcome, now, branch=None):
+def build_record_static(repo, spec, batch, outcome, now, branch=None, plan=None, merge=None, batch_base=None):
     """The `run` line fields that come from git, the plan and the ledger. Missing sources are null and named in `missing`."""
     repo = Path(repo)
     lines, _ = read_log(repo)
@@ -358,7 +361,7 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
     if not start:
         missing.append("started_at")
 
-    plan = find_plan(repo, spec)
+    plan = plan or find_plan(repo, spec)
     plan_path = plan_ref = None
     if plan:
         plan_path, _, plan_ref = plan
@@ -367,8 +370,7 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
         missing.append("plan")
     plan_commit, plan_ts = _first_commit(repo, plan_path) if plan else (None, None)
 
-    merge = None
-    if plan_commit:
+    if merge is None and plan_commit:
         since = _epoch(start["at"]) if start else plan_ts
         slug = re.sub(r"^\d{4}-\d\d-\d\d-", "", Path(plan_path).name[:-3])
         merge = find_merge(repo, plan_commit, since, slug)
@@ -447,7 +449,8 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None):
     else:
         null(*LEDGER_KEYS)
 
-    sb = stale_base(repo, base, batch_line["base"], head) if base and head and batch_line and batch_line.get("base") else None
+    bb = batch_base or (batch_line or {}).get("base")
+    sb = stale_base(repo, base, bb, head) if base and head and bb else None
     rec["stale_base"] = sb
     if sb is None:
         missing.append("stale_base")
@@ -630,14 +633,15 @@ def _other_windows(lines, batch, spec, now):
     return out
 
 
-def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, project=None, window=None):
+def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, project=None, window=None, plan=None, merge=None,
+                 batch_base=None, backfilled=False):
     """The whole `run` line: build_record_static plus the usage half. `window` = (start_ts, end_ts, kind) overrides
     the stamped window (backfill)."""
     repo = Path(repo)
     lines, _ = read_log(repo)
     batch_line = next((d for d in reversed(lines) if d.get("kind") == "batch" and d.get("batch") == batch), None)
     start = next((d for d in reversed(lines) if d.get("kind") == "start" and d.get("batch") == batch and d.get("spec") == spec), None)
-    rec = build_record_static(repo, spec, batch, outcome, now, branch=branch)
+    rec = build_record_static(repo, spec, batch, outcome, now, branch=branch, plan=plan, merge=merge, batch_base=batch_base)
     missing = rec["missing"]
     if window:
         lo, hi, kind = window
@@ -650,7 +654,7 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
         lo, hi, kind = _epoch(batch_line["at"]) if batch_line else now, _epoch(rec["ended_at"]), "derived"
         if batch_line:
             rec["started_at"] = batch_line["at"]
-    rec["window"], rec["backfilled"] = kind, False
+    rec["window"], rec["backfilled"] = kind, bool(backfilled)
     assign_cfg = (batch_line or {}).get("assignment") or {}
     rec["config"] = "seq-sdd" if batch == "backfill" else assign_cfg.get(spec)
     root = main_root(repo)
@@ -995,8 +999,13 @@ def _parser():
     gp = sp.add_parser("gate", parents=[common])
     gp.add_argument("id")
     sp.add_parser("status", parents=[common])
-    for name in ("backfill",):
-        sp.add_parser(name, parents=[common], add_help=False).add_argument("rest", nargs="*")
+    bf = sp.add_parser("backfill", parents=[common])
+    bf.add_argument("--since")
+    bf.add_argument("--until")
+    bf.add_argument("--log")
+    bf.add_argument("--project")
+    bf.add_argument("--usage-db")
+    bf.add_argument("--no-ingest", action="store_true")
     return ap
 
 
@@ -1359,6 +1368,105 @@ def cmd_status(repo, args):
         print(line)
 
 
+# ---- backfill ----------------------------------------------------------------------------------------------------
+
+SPEC_LINE = re.compile(r"\*\*Spec:\*\*\s*`?([^\s`]+\.md(?:#part-\d+)?)`?")
+
+
+def _plan_for_merge(repo, m):
+    """The plan .md of a merge: one a branch commit added, else (plan already on main) one whose basename without its
+    date prefix the merge's branch name ends with. None when neither."""
+    rc, out = _git_try(repo, "log", "--diff-filter=A", "--name-only", "--format=", f"{m['first']}..{m['second']}",
+                       "--", "docs/superpowers/plans/")
+    added = sorted({l for l in out.splitlines() if l.endswith(".md")}) if rc == 0 else []
+    if added:
+        return added[0]
+    mt = re.match(r"Merge branch '([^']+)'", m["subject"])
+    if not mt:
+        return None
+    rc, names = _git_try(repo, "ls-tree", "--name-only", m["first"], "docs/superpowers/plans/")
+    for n in sorted(names.split()) if rc == 0 else []:
+        slug = re.sub(r"^\d{4}-\d\d-\d\d-", "", Path(n).name[:-3]) if n.endswith(".md") else None
+        if slug and mt.group(1).endswith(slug):
+            return n
+    return None
+
+
+def _spec_of_plan(repo, m, plan_path):
+    """The plan's `**Spec:**` path; the plan path itself when the plan names none."""
+    for ref in (m["second"], m["first"]):
+        rc, text = _git_try(repo, "show", f"{ref}:{plan_path}")
+        if rc == 0:
+            for line in text.splitlines()[:40]:
+                hit = SPEC_LINE.search(line)
+                if hit:
+                    return hit.group(1)
+            break
+    return plan_path
+
+
+def _parse_when(text, end=False):
+    if re.fullmatch(r"\d{4}-\d\d-\d\d", text):
+        return _epoch(text + "T00:00:00Z") + (86400 if end else 0)
+    return _epoch(text)
+
+
+def backfill_runs(repo, since, until, conn, project=None, now=None):
+    """Run lines for every first-parent merge on main in [since, until] whose branch has a plan, with derived windows:
+    from the previous such merge (the first: the plan's first commit) to the merge. A spec that already has a run line
+    in any batch is skipped (it still anchors the next window)."""
+    repo = Path(repo)
+    now = now or time.time()
+    have = {d.get("spec") for d in read_log(repo)[0] if d.get("kind") == "run"}
+    rc, out = _git_try(repo, "log", "--first-parent", "--merges", "--reverse", "main", "--format=%H%x09%P%x09%ct%x09%s")
+    merges = []
+    for line in out.splitlines() if rc == 0 else []:
+        sha, parents, ct, subject = (line.split("\t", 3) + [""])[:4]
+        ps = parents.split()
+        if len(ps) >= 2 and since <= int(ct) <= (until if until is not None else float("inf")):
+            merges.append({"sha": sha, "first": ps[0], "second": ps[1], "ct": int(ct), "subject": subject})
+    written, prev_ct = [], None
+    for m in merges:
+        plan_path = _plan_for_merge(repo, m)
+        if not plan_path:
+            continue
+        spec = _spec_of_plan(repo, m, plan_path)
+        start_ts = prev_ct
+        if start_ts is None:
+            _, start_ts = _first_commit(repo, plan_path)
+        prev_ct = m["ct"]
+        if spec in have:
+            continue
+        rec = build_record(repo, spec, "backfill", "merged", now, conn=conn, project=project,
+                           window=(start_ts if start_ts is not None else m["ct"], m["ct"], "derived"),
+                           plan=(plan_path, "", m["second"]), merge=m, batch_base=m["first"], backfilled=True)
+        append(repo, rec)
+        have.add(spec)
+        written.append(rec)
+    return written
+
+
+def cmd_backfill(repo, args):
+    global LOG_OVERRIDE
+    LOG_OVERRIDE = args.log
+    try:
+        conn = usage.connect(args.usage_db or usage.db_path())
+        try:
+            if not args.no_ingest:
+                ingest_project(conn, main_root(repo))
+            since = _parse_when(args.since or "2026-11-04")
+            until = _parse_when(args.until, end=True) if args.until else None
+            recs = backfill_runs(repo, since, until, conn, project=args.project)
+        finally:
+            conn.close()
+        for r in recs:
+            print(f"backfilled {r['spec']}: {r['tasks'] if r['tasks'] is not None else '?'} tasks, "
+                  f"{r['tokens']['total'] / 1e6:.2f}M tokens, {r['active_min']} active min, {r['handoffs']} handoffs")
+        print(f"backfilled {len(recs)} specs")
+    finally:
+        LOG_OVERRIDE = None
+
+
 def _log_error(repo, sub, exc):
     """Append a kind:error line when the repo resolved (a failing repo lookup has nowhere to write)."""
     if repo is None:
@@ -1391,12 +1499,10 @@ def main(argv=None):
                 raise MetricsError("usage: metrics batch start --config C [--group a,b] <spec>...")
         if not args.sub:
             raise MetricsError("usage: metrics <" + "|".join(SUBS) + "> ...")
-        if args.sub in ("backfill",):
-            raise MetricsError("not implemented")
         repo = None
         repo = repo_root(getattr(args, "repo", None))
         rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
-              "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status}[args.sub](repo, args)
+              "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill}[args.sub](repo, args)
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
