@@ -261,10 +261,12 @@ class StopWaitsForExit(BoardBase):
     def test_no_wait_when_everything_is_already_gone(self):
         self.die(self.shell)
         self.die(self.claude)
-        t = time.monotonic()
-        with mock.patch.object(server, "WORKER_EXIT_WAIT", 5):
+        # the wait polls with time.sleep(0.2) between looks; "no wait" means it never slept, whatever the load did to
+        # the wall clock of the rest of stop_agent (git calls in the sweep)
+        with mock.patch.object(server, "WORKER_EXIT_WAIT", 5), \
+                mock.patch.object(server.time, "sleep", wraps=time.sleep) as slept:
             self.stop(lambda: None)
-        self.assertLess(time.monotonic() - t, 3)
+        slept.assert_not_called()
 
 
 class LastSweep(BoardBase):
