@@ -36,6 +36,7 @@ Spec section 2: every job must be safe to run concurrently with every other unde
 | board/test_ideas_switch | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
 | board/test_ideas | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
 | board/test_metrics_backfill | reads the real usage snapshot ~/.local/state/agent-board/metrics/usage-snapshot-*.sqlite and copies it first (read-only; skips if absent); PrivacySweep reads $HOME only to assert it is absent from output | none needed | no |
+| board/test_metrics_backfill_privacy | runs the other test_metrics_* files (one subprocess each, all at once) with their own `TMPDIR`-based scratch dirs and a tmp sink; reads the committed docs/superpowers/metrics/runs.jsonl read-only; solo 46-51 s under load 5-9 (inherent: it re-runs six sibling files, ~90 s of CPU) | none needed; sweeps print `checked 14 lines` and `checked 509 lines`, equal before and after the split | no |
 | board/test_metrics_decide | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
 | board/test_metrics_fixwave | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
 | board/test_metrics_log | tmp dirs (tempfile), env patched with mock.patch.dict, no fixed port/socket/path found by grep | none needed | no |
@@ -145,11 +146,11 @@ Spec section 2: every job must be safe to run concurrently with every other unde
 
 ## Part A runs (non-zsh suites: board, tools, skills, statusline, hooks; 65 jobs)
 
-| run | verdict | wall |
-| --- | --- | --- |
-| `--serial` | ALL PASS 65 jobs | 12m6s (rc=4, over the 5 min budget) |
-| parallel 1 (after ad973bd) | ALL PASS 65 jobs | 5m35s (rc=4) |
-| parallel 2 | ALL PASS 65 jobs | 6m57s (rc=4) |
-| parallel, before ad973bd (twice) | FAIL 1/65: board/test_worktree_board_remove | n/a |
+- `--serial`: ALL PASS 65 jobs, 12m6s (rc=4, over the 5 min budget).
+- parallel 1 (after ad973bd): ALL PASS 65 jobs, 5m35s (rc=4).
+- parallel 2: ALL PASS 65 jobs, 6m57s (rc=4).
+- parallel, before ad973bd (twice): FAIL 1/65, board/test_worktree_board_remove.
+
+(These runs predate the split of the backfill privacy sweep, so they count 65 non-zsh jobs; the list now has one more.)
 
 The machine was loaded by other work during every run (load average 5-8), so the wall times are upper bounds. Slowest jobs: `board/test_metrics_backfill` (157 s serial), `board/test_metrics_record_git` (49 s), `board/test_metrics_record_usage` (48 s), `board/test_metrics_decide` (35 s), `board/test_metrics_report` (about 160 s under parallel load); none is covered by Tasks 4-5.
