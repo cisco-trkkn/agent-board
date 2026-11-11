@@ -22,6 +22,7 @@ while (( $# )); do
     *) print -u2 "usage: all.zsh [--suite board|zsh|tools|skills|statusline|hooks]… [--serial] [-j N] [--list]"; exit 2 ;;
   esac
 done
+[[ -z $jn || $jn == <1-> ]] || { print -u2 "all.zsh: -j needs a positive number, got '$jn'"; exit 2 }
 for s in $suites; do
   [[ $s == (board|zsh|tools|skills|statusline|hooks) ]] || { print -u2 "all.zsh: unknown suite '$s'"; exit 2 }
 done
@@ -61,7 +62,7 @@ done
 if (( serial )); then order=($par)
 else
   lines=(); for i in $par; do lines+=("${tm[$J_name[$i]]:-1000000000}"$'\t'"$i"); done
-  order=(${${(f)"$(print -rl -- $lines | sort -t$'\t' -k1,1gr -k2,2n)"}##*$'\t'})
+  order=(${${(f)"$(print -rl -- $lines | LC_ALL=C sort -t$'\t' -k1,1gr -k2,2n)"}##*$'\t'})
 fi
 
 rundir="$(mktemp -d "${TMPDIR:-/tmp}/tc-all.XXXXXX")"; rundir="${rundir:A}"
@@ -71,21 +72,59 @@ run_job() {   # run_job <index>: log, then <name>.res = "rc seconds" (written la
   local i=$1 name=$J_name[$i] jt t0 rc
   jt="$rundir/tmp/${name//\//_}"; mkdir -p "$jt/state" "$rundir/${name:h}"
   t0=$EPOCHREALTIME
-  env TMPDIR="$jt" TC_STATE="$jt/state" sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1; rc=$?
+  if (( $+commands[perl] )); then
+    env TMPDIR="$jt" TC_STATE="$jt/state" perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
+  else
+    env TMPDIR="$jt" TC_STATE="$jt/state" sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
+  fi
+  print -r -- $! > "$rundir/$name.pid"
+  wait $!; rc=$?
   print -r -- "$rc $(( EPOCHREALTIME - t0 ))" > "$rundir/$name.res.tmp" && mv "$rundir/$name.res.tmp" "$rundir/$name.res"
 }
-running=()
-reap() { local k; local -a still; for k in $running; do [[ -e "$rundir/$J_name[$k].res" ]] || still+=$k; done; running=($still) }
-trap 'kill $(jobs -p) 2>/dev/null; print -u2 "all.zsh: interrupted, run dir $rundir"; exit 130' INT TERM
+typeset -A jpid
+running=(); polls=0
+reap() {
+  local k st; local -a still
+  (( polls++ ))
+  for k in $running; do
+    [[ -e "$rundir/$J_name[$k].res" ]] && continue
+    # a job subshell that died without writing its .res (SIGKILL, OOM) would be waited for forever: count it as failed.
+    # Checked about once a second; a finished child that is not yet waited for shows as a zombie (Z).
+    if (( polls % 20 == 0 )); then
+      st="$(ps -o stat= -p ${jpid[$k]} 2>/dev/null)"
+      if [[ -z $st || $st == Z* ]]; then
+        [[ -e "$rundir/$J_name[$k].res" ]] || print -r -- "137 0" > "$rundir/$J_name[$k].res"
+        continue
+      fi
+    fi
+    still+=$k
+  done
+  running=($still)
+}
+# each job's command runs in its own session (setsid via perl; pgid = its pid, in <name>.pid), so an interrupt kills the whole
+# tree (sh, the test, its tmux and board servers) and not only the job subshell
+killjobs() {
+  local k p; local -a pids=()
+  for k in ${(k)jpid}; do kill -TERM ${jpid[$k]} 2>/dev/null; p="$(<"$rundir/$J_name[$k].pid" 2>/dev/null)"; [[ -n $p ]] && pids+=$p; done
+  for p in $pids; do kill -TERM -- -$p 2>/dev/null; done
+  sleep 0.3
+  for p in $pids; do kill -KILL -- -$p 2>/dev/null; done
+}
+trap 'killjobs; print -u2 "all.zsh: interrupted, run dir $rundir"; exit 130' INT TERM
 
 for i in $order; do
   while (( ${#running} >= jn )); do sleep 0.05; reap; done
   run_job $i &
+  jp=$!; jpid[$i]=$jp
   running+=$i
 done
 while (( ${#running} )); do sleep 0.05; reap; done
 wait
-for i in $ser; do run_job $i; done
+for i in $ser; do
+  run_job $i &
+  jp=$!; jpid[$i]=$jp
+  wait $jpid[$i]
+done
 
 # summary
 failed=(); rows=()
@@ -99,7 +138,7 @@ for (( i=1; i<=n; i++ )); do
   fi
 done
 print "slowest:"
-for r in ${(f)"$(print -rl -- $rows | sort -t$'\t' -k1,1gr | head -5)"}; do print -r -- "  ${r#*$'\t'} $(( int(${r%%$'\t'*}) ))s"; done
+for r in ${(f)"$(print -rl -- $rows | LC_ALL=C sort -t$'\t' -k1,1gr | head -5)"}; do print -r -- "  ${r#*$'\t'} $(( int(${r%%$'\t'*}) ))s"; done
 
 if (( ${#suites} == 0 )); then   # full run: rewrite the timings
   mkdir -p "${tfile:h}" && { for r in $rows; do print -r -- "${r#*$'\t'}"$'\t'"${r%%$'\t'*}"; done > "$tfile.tmp" && mv "$tfile.tmp" "$tfile" }

@@ -180,4 +180,58 @@ dk=$(sed -n 's/^run dir kept: //p' <<<"$out")
 check "fail: run dir kept and its path printed" [ -n "$dk" -a -d "$dk" -a -f "$dk/zsh/test_bad.zsh.log" ]
 rm -rf $SCR/tc-all.*(N)
 
+# --- M2: a non-numeric -j is a usage error
+run zsh $ALL -j abc
+# mutation: ignore a bad -j (fall back to the cpu count) → rc 0 and the jobs run
+check "-j abc: usage error, exit 2, nothing ran" [ $rc -eq 2 -a ! -s "$STUB_LOG" ]
+
+# --- M5: nproc fallback, with sysctl failing and nproc printing 1 (PATH stubs): concurrency must be 1
+mkdir -p $SCR/bin; printf '#!/bin/sh\nexit 1\n' > $SCR/bin/sysctl; printf '#!/bin/sh\necho 1\n' > $SCR/bin/nproc; chmod +x $SCR/bin/*
+: > "$STUB_LOG"; out=$(env PATH="$SCR/bin:$PATH" TC_TEST_ROOT="$ROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL 2>&1); rc=$?
+maxc=$(awk '$1=="S"{r++; if(r>m)m=r} $1=="E"{r--} END{print m+0}' "$STUB_LOG")
+# mutation: drop the nproc fallback (or ignore the sysctl failure) → the default job count is 4 and the max is above 1
+check "nproc fallback: sysctl fails, nproc says 1 → one job at a time" [ $maxc -eq 1 -a $rc -eq 0 ]
+rm -rf $SCR/tc-all.*(N)
+
+# --- Important 1: TERM to the runner kills every job's whole process tree
+KROOT="$SCR/kroot"; mkdir -p $KROOT/tools/tests
+for n in 1 2 3; do cat > $KROOT/tools/tests/test_hang$n.zsh <<STUBEND
+echo \$\$ >> "$SCR/pids"
+sleep 60 &
+echo \$! >> "$SCR/pids"
+wait
+STUBEND
+done
+: > $SCR/pids
+env TC_TEST_ROOT="$KROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 3 > $SCR/term.out 2>&1 &
+rp=$!
+pids_n() { [ "$(wc -l < $SCR/pids | tr -d ' ')" -ge 6 ] }
+tt_wait 10 pids_n
+kill -TERM $rp; wait $rp 2>/dev/null
+sleep 0.5
+alive=0; for p in $(<$SCR/pids); do kill -0 $p 2>/dev/null && { alive=$((alive+1)); kill $p 2>/dev/null }; done   # by PID: only processes this test started
+# mutation: kill only the job subshells (kill $(jobs -p)) → the stub shells and their sleep children stay alive
+check "TERM to the runner: no job process (shell or child) is left alive" [ "$(wc -l < $SCR/pids | tr -d ' ')" -ge 6 -a $alive -eq 0 ]
+rm -rf $SCR/tc-all.*(N)
+
+# --- M1: a job subshell killed without writing its .res must not hang the runner
+DROOT="$SCR/droot"; mkdir -p $DROOT/tools/tests
+cat > $DROOT/tools/tests/test_die.zsh <<STUBEND
+sleep 0.3
+rd=\${TMPDIR%/tmp/*}
+cp=\$(cat \$rd/zsh/test_die.zsh.pid)
+kill -9 \$(ps -o ppid= -p \$cp)
+sleep 2
+STUBEND
+env TC_TEST_ROOT="$DROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL > $SCR/die.out 2>&1 &
+dp=$!
+gone() { ! kill -0 $dp 2>/dev/null }
+tt_wait 20 gone
+if kill -0 $dp 2>/dev/null; then dead=0; kill $dp; else dead=1; fi
+wait $dp 2>/dev/null; drc=$?
+# mutation: drop the dead-PID check in reap → the runner waits forever (killed here after 20 s)
+dieok() { [ $dead -eq 1 -a $drc -eq 1 ] && grep -q '^FAIL 1/1: zsh/test_die.zsh$' $SCR/die.out }
+check "dead job subshell: runner finishes and reports FAIL 1/1" dieok
+rm -rf $SCR/tc-all.*(N)
+
 tt_done
