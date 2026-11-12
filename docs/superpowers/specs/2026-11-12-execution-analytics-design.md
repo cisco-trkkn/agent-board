@@ -4,9 +4,14 @@ Date: 2026-11-12 · Decided with the user over Discord, 2026-11-12 (near-term it
 review: observe → understand → optimize)
 Builds on: `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` (merged: `board/metrics.py`,
 `docs/superpowers/metrics/runs.jsonl`, `tmux-ctl metrics …`).
-Needs merged: `2026-11-11-discord-bridge-visibility-design.md` (outbox `post`, tiers) and
-`2026-11-11-discord-controls-design.md` (buttons, audit). Posts to #command-center once
-`2026-11-12-discord-ops-bot-design.md` has merged, else to each project's home channel.
+**Runs in two parts** (user, 2026-11-12), so per-task records start as early as possible and every later spec,
+including the PCEE baseline runs, is recorded in full:
+- **Part 1** (`#part-1`): §1 per-task records, §2 `metrics analyze`, §3 `metrics recommend`, plus
+  `tmux-ctl metrics weekly --dry-run` printing the report to stdout. No Discord dependency; runs right after the
+  spinner-rule spec.
+- **Part 2** (`#part-2`): §4 the scheduled weekly Discord post and its buttons. Needs merged:
+  `2026-11-11-discord-bridge-visibility-design.md` (outbox `post`, tiers), `2026-11-11-discord-controls-design.md`
+  (buttons, audit) and `2026-11-12-discord-ops-bot-design.md` (#command-center).
 
 ## Problem
 
