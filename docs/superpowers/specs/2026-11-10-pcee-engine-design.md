@@ -248,3 +248,13 @@ mode runs as before this stage.
   lead's task list; the lead mirrors the queue's `Plan & run:` tasks from the `[Engine]` lines).
 - Engine-run planning: plans and the cross-plan pass stay with stage 2's planners under the lead.
 - Batching several small tasks into one implement job.
+
+## Addition (user, 2026-11-12): publish to the feed
+
+Every event the engine appends to its `events` table is also appended, in the same transaction's aftermath (after
+commit, best effort, never failing the job), as one line of `${TC_STATE}/feed/<project>.jsonl` in the feed schema of
+`docs/superpowers/specs/2026-11-11-discord-bridge-visibility-design.md` §11, with `tier` from this map: `fail_spec`,
+`engine_error` → critical; a job or ruling that needs the user → decision; job done, review verdict, merge → progress;
+everything else → routine. When the engine runs a spec, the board stops deriving that spec's progress events from task
+lists (the engine is the source), so nothing is posted twice. If the Discord specs have not merged when this runs,
+write the file anyway; it has no reader yet.

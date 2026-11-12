@@ -127,3 +127,42 @@ progress or alerts yourself (the bridge does); reply to what the user wrote. App
 
 - Buttons and reactions (controls spec), files (files spec), voice.
 - A shared bot across projects.
+
+## Additions (user, 2026-11-12, from the review of an outside architecture write-up)
+
+### 8. Notification tiers
+
+Every outbox `post` carries `tier`: `critical`, `decision`, `progress` or `routine`. The feed assigns it; the bridge
+acts on it:
+
+| Tier | Examples | Where | Ping |
+| --- | --- | --- | --- |
+| critical | spec failed, `failing`, `stuck`, a lead crashed or down | home channel (and `#command-center` once the ops spec lands) | @mention |
+| decision | needs-you, a permission prompt, a question from the lead | home channel (and `#approvals` later) | @mention |
+| progress | task done, plan written, review verdict, spec merged | the spec's thread | none |
+| routine | usage, context, idle | the status card only, no post | none |
+
+`notify.py` kinds map: `needs_you` → decision; `test_failed`, `failing`, `stuck` → critical; `plan_done` → progress;
+`lead_idle`, `context`, `usage` → routine (card line, no post). This replaces §6's mention rule.
+
+### 9. Deep links
+
+Every post that refers to another Discord object ends with its link
+(`https://discord.com/channels/<guild>/<channel or thread>/<message>`): an alert links to the spec's thread, the
+card's "waiting on you" lines link to the prompt or question post. The bridge fills `<guild>` from the channel; the
+feed passes thread keys and the bridge resolves them from `bridge-state.json`.
+
+### 10. Audit log
+
+Every inbound action the bridge accepts (button, reaction, slash command later) is appended to
+`<dir>/audit.jsonl`: `{ts, user, action, target, result}`, written by the board when it acts on the event (the result
+is known there). Rejected (unauthorized) attempts are logged too, with `result: "rejected"`. Never a token, never a
+message body beyond 80 characters. `tmux-ctl discord audit [--since <ISO>]` prints it.
+
+### 11. The feed event contract (PCEE alignment)
+
+`board/discord_feed.py` reads events from one documented source, `${TC_STATE}/feed/<project>.jsonl`, one JSON object
+per line: `{ts, project, spec, kind, tier, text, refs: {task?, thread_key?, run?, file?}}`. In this spec the board
+itself appends to it from what it derives (task lists, ledger, notify events), so the Discord side has one input.
+The PCEE engine appends its own events to the same file when it lands (see the engine spec's addition), and Discord
+needs no change. The schema is written down in `docs/ARCHITECTURE.md` § Feed events.

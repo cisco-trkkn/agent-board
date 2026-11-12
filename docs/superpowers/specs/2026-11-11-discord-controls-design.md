@@ -91,3 +91,8 @@ lead reacts 💡 to that message with the plugin's `react` tool after `tmux-ctl 
 
 - The lead's own prompts (plugin DMs).
 - "Always allow" buttons.
+
+## Additions (user, 2026-11-12)
+
+- Every button and reaction the board acts on is written to the audit log (bridge spec §10).
+- Permission-prompt posts are tier `decision`; their outcome edits are not re-posted.
