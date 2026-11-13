@@ -27,6 +27,14 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
 - **Split queues** until K2 is decided: half the specs under the lead, half under the engine, assigned by code,
   one spec at a time.
 - **One spec, two plans in sequence:** part 1 `engine run <spec>` (one spec end to end), part 2 the queue runner.
+- **Durable execution, Temporal-shaped, in our own code** (user, 2026-11-13; sections 10 and 11): heartbeat and
+  progress timeouts, retry policies as data, durable waits (`awaiting_you` parking, signals, timers), an
+  intent/result journal for every side effect, a policy version per spec, and a replay check of the event log. No
+  Temporal server or SDK: the same SQLite file, standard library only, Temporal's names and shapes so a later move
+  to Temporal (stage 4 or 5) is a mapping, not a redesign.
+- **Park, don't fail** (user, 2026-11-13): a case the engine may not decide alone parks the spec as `awaiting_you`
+  and the queue moves on; an answered parked spec resumes before the next queued spec; still unanswered at the end
+  of the queue, it fails as before.
 - **Control tokens** (the lead plus architect jobs) are counted together, so judgment moved into a job does not
   flatter the lead share.
 - Concurrency stays 1. No locks, no merge queue, no change packages (stages 4 and 5).
@@ -68,8 +76,12 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
     pane, base and head commits, start and end times.
   - `events`: append-only: time, spec, job, kind, detail. This is the ledger; `Ruling:` lines are events of kind
     `ruling`.
-- Spec states: `queued`, `planning`, `running`, `final_review`, `integrating`, `done`. Job states: `pending`,
-  `running`, `done`, `failed`, `escalated`.
+  - `steps`, `timers`, `signals`, `waits`, `retry_policies`: section 10.
+  - `specs` also stores `policy_version` and `policy_hash` (section 10.5).
+- Spec states: `queued`, `planning`, `running`, `final_review`, `integrating`, `awaiting_you`, `done`. Job states:
+  `pending`, `running`, `backoff`, `done`, `failed`, `escalated`.
+- Every event that changes a row carries that row's new values in `detail` (JSON), so the tables can be rebuilt from
+  the events alone (section 10.6).
 - Briefs, reports and review packages are files under the spec's git-ignored workspace
   (`<worktree>/.superpowers/engine/`), as SDD's are today.
 
@@ -90,9 +102,13 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
   already writes it). State `ready` with a valid report: the job is done and the engine kills that window by the
   pane id it started. `ready` with no valid report: one line typed with `tmux-ctl tell` naming the report path;
   a second `ready` without it fails the attempt. A window that is gone without a report fails the attempt.
-- **Waiting on the user.** A worker in `needs-you` is left alone (the board shows it). After 10 minutes the spec
-  fails with `blocked on a permission prompt in <window>`, as Queue mode says today.
-- A failed attempt is run once more with a fresh worker; a second failure goes to an architect job.
+- **Waiting on the user.** A worker in `needs-you` is left alone (the board shows it) and every timeout clock of
+  its job stops. After 10 minutes the spec parks as `awaiting_you` (section 10.3) with the question
+  `permission prompt in <window>`; the window stays open, and a worker that goes busy again (the user answered the
+  prompt in the window) un-parks the spec without a signal.
+- A failed attempt is retried by its job kind's retry policy (section 10.2); the default is one retry with a fresh
+  worker, then an architect job.
+- **Liveness and progress** of a running job are watched through the same agent-status file (section 10.1).
 
 #### 3. The job graph and its policy
 
@@ -129,9 +145,12 @@ into jobs. Policy is code; it mirrors `subagent-driven-development` with the ext
 - Cases, and nothing else: fix rounds exhausted; an implementer reporting `blocked`; a verify command red after
   two bounces; residual findings after the re-review; tests red after the merge; a job that failed twice.
 - Decisions: `proceed` (go on as if passed, with the finding parked), `retry_higher_tier` (re-run the job one
-  tier up, once per job), `park`, `fail_spec`. Each is stored as a `ruling` event with what it costs if wrong.
+  tier up, once per job), `park` (the spec goes to `awaiting_you` with the architect's ruling as the question),
+  `fail_spec`. Each is stored as a `ruling` event with what it costs if wrong.
 - Not an architect case: anything destructive, a push to a shared branch, a security-sensitive action, a side
-  effect outside the worktree. Those fail the spec with the reason, as SDD's four stop classes do in Queue mode.
+  effect outside the worktree. Those park the spec as `awaiting_you` (section 10.3) with the reason as the
+  question, instead of failing it; unanswered at the end of the queue, they fail as SDD's four stop classes do in
+  Queue mode today.
 - Tests red after the merge with `fail_spec`: the engine reverts its own merge commit on `main` (a revert commit,
   never a reset) and keeps the branch.
 
@@ -143,6 +162,9 @@ into jobs. Policy is code; it mirrors `subagent-driven-development` with the ext
 | `tmux-ctl engine status [<spec>]` | Specs and their states; with a spec, its jobs and last events. |
 | `tmux-ctl engine events <spec>` | The spec's event log. |
 | `tmux-ctl engine resume` | Continues every unfinished spec from the database (section 9). |
+| `tmux-ctl engine status --waiting` | Specs in `awaiting_you`: question, options, asked at, and the command to answer. |
+| `tmux-ctl engine signal <spec> approve\|deny\|fail [--note "<text>"]` | Answers a parked spec (section 10.3). |
+| `tmux-ctl engine rebuild --check\|--apply` | Replays the events into a scratch database and diffs it with the live tables; `--apply` repairs the tables from the events (section 10.6). |
 
 Part 1 is done when `engine run` takes one small real spec from a committed plan to a merged result on a scratch
 clone, with no lead turn in between.
@@ -163,8 +185,10 @@ clone, with no lead turn in between.
 - A spec with an entry gate is enqueued with `--gate <id>`; the engine runs `metrics gate` at its turn and, on
   any exit but 0, completes it as `failed — gate <id>: …`. Gated specs run under the lead.
 - The lead ends its turn after `engine start`. Lines the engine types into the lead's window:
-  `[Engine] your turn: <spec>`, `[Engine] queue finished: <report path>`, `[Engine] stopped: <reason>`. A lead
-  rule says what each means; none asks the lead to judge a task.
+  `[Engine] your turn: <spec>`, `[Engine] queue finished: <report path>`, `[Engine] stopped: <reason>`,
+  `[Engine] paused: usage limit until <time>`, `[Engine] awaiting you: <spec>: <question>` (section 10.3; the lead
+  relays it to the user when remote and never answers it itself). A lead rule says what each means; none asks the
+  lead to judge a task.
 
 #### 7. Morning report and metrics
 
@@ -189,7 +213,7 @@ clone, with no lead turn in between.
 #### 8. Lead rules
 
 Queue mode in `claude/orchestrator.md` (carrying the user's uncommitted edit as its own rule says): enqueue and
-start (section 6); what the three `[Engine]` lines mean; `engine done` after a lead-run spec; the lead no longer
+start (section 6); what the five `[Engine]` lines mean; `engine done` after a lead-run spec; the lead no longer
 writes the morning report when an engine runs the queue. With `TC_ENGINE=0`, or when `engine start` fails, Queue
 mode runs as before this stage.
 
@@ -198,12 +222,140 @@ mode runs as before this stage.
 #### 9. Recovery
 
 - A restarted engine (`engine resume`, or `engine start` finding unfinished specs) continues from the database.
-  A job marked `running` whose window still exists is watched again; one whose window is gone is finished from
-  its report when that is valid, else run again as a new attempt.
+  In order: every `steps` row left at `intent` is reconciled by its check (section 10.4); timers already due fire
+  once each, oldest first; unread signals are applied; each spec's policy version is compared (section 10.5).
+  Then a job marked `running` whose window still exists is watched again; one whose window is gone is finished
+  from its report when that is valid, else run again as a new attempt under its retry policy.
 - The engine process holds a lock file with its pid; a second `engine start` for the same project refuses.
 - Handoffs of the lead do not touch the engine: it is not the lead's child. The handoff doc's State of the work
   says `Engine: running` and lists `engine status`.
 - The awake hold of Queue mode stays armed by the lead at queue start; the engine turns it off after the report.
+
+#### 10. Durable execution (Part 1)
+
+Added 2026-11-13 from a brainstorm on Temporal's ideas (the user chose: amend this spec before it runs; a small
+layer in our own code, not a Temporal server). Names follow Temporal's: a job is an activity, a spec run is a
+workflow, a user answer is a signal.
+
+The engine loop, one tick every 5 seconds: fire due timers → apply unread signals → check running jobs'
+heartbeats and timeouts → advance each spec's state → dispatch the next job. Every step of the tick is one
+transaction with its event, as section 1 requires.
+
+##### 10.1 Heartbeat and progress timeouts
+
+The heartbeat is the worker pane's agent-status file (the mod writes `updatedAt` every few seconds while the
+process lives, and `state`, `tool`, `lastToolAt`, `turnStartedAt`). Per running job, each tick:
+
+| Timeout | Fires when | Then |
+| --- | --- | --- |
+| heartbeat (2 min) | `updatedAt` older than 2 min, or no status file for the pane 2 min after start | the attempt fails (`heartbeat_timeout`) |
+| no progress (15 min) | `state` busy, `tool` null, and `max(lastToolAt, turnStartedAt)` older than 15 min | one `tmux-ctl tell` nudge naming the report path; still true 5 min later: the attempt fails (`no_progress`) |
+| tool (limit + 5 min) | one tool running longer than its own limit plus 5 min (Bash: 10 min, so 15 min; other tools: 15 min) | the attempt fails (`tool_timeout`) |
+| job (per kind) | the job's wall time exceeds its policy's `timeout_min` | the attempt fails (`job_timeout`) |
+
+- A job in `needs-you` stops every clock above (its time there is subtracted); after 10 minutes it parks (section 2).
+- Deadlines are rows in `timers` (kind `deadline`), so a restart keeps them; a deadline that passed while the engine
+  was down fires once on resume, after the heartbeat is re-read (a live, progressing worker cancels it).
+- A failed attempt's window is closed by the pane id the engine started (a `steps` row, kind `close_window`); the
+  pane's last 200 lines are saved to `<workspace>/logs/<job>-<attempt>.log` first.
+
+##### 10.2 Retry policies
+
+`retry_policies` has one row per job kind: `kind`, `max_attempts`, `backoff_s` (a list, one per retry), `timeout_min`,
+`no_retry_on` (a list of failure reasons), `on_exhausted` (`architect`, `park` or `fail_spec`). Loaded at engine
+start from `docs/superpowers/engine.json` key `retry` (`{"<kind>": {…}}`), each key overriding the defaults:
+
+| kind | max_attempts | backoff_s | timeout_min | no_retry_on | on_exhausted |
+| --- | --- | --- | --- | --- | --- |
+| implement, fix, refresh | 2 | 30 | 90 | blocked, usage_limit | architect |
+| review | 2 | 30 | 45 | usage_limit | architect |
+| final_review | 2 | 60 | 90 | usage_limit | architect |
+| architect | 2 | 60 | 30 | usage_limit | park |
+| bounce (red verifyCommand) | 3 | 0 | — | — | architect |
+| fix_round | 5 | 0 | — | — | architect |
+
+- The two-bounce and five-round rules of section 3 are the `bounce` and `fix_round` rows: a red verifyCommand is a
+  failed `bounce` attempt; the third red exhausts it. Section 3's numbers are the defaults; the table is the source.
+- `blocked` (an implementer's report) skips retries and goes straight to `on_exhausted`.
+- `usage_limit` skips retries and sets a `usage_reset` timer (section 10.3).
+- `model_limit` (the Fable limit in a pane) is retried once on Opus outside the count, as an event `model_fallback`.
+- Between attempts the job sits in `backoff` with a `timers` row (kind `retry`).
+
+##### 10.3 Durable waits: parking, signals, timers
+
+- **`waits`:** `spec`, `step` (the state and job to resume at), `question`, `options` (default
+  `approve|deny|fail`), `asked_at`, `answered_at`, `answer`, `note`. One open wait per spec.
+- **Parking** sets the spec to `awaiting_you` and writes the wait, on: a stop-class case (section 4), a worker in
+  `needs-you` for 10 minutes (section 2), an architect `park`, a policy-version change (10.5), a step check that
+  cannot tell (10.4), and a plan task marked as a user gate. Under `engine run` (one spec) the engine waits for the
+  answer; under the queue runner the queue moves on (section 11).
+- **Signals:** `tmux-ctl engine signal <spec> approve|deny|fail [--note …]` writes a `signals` row and exits; it
+  refuses (exit 2, `no open wait for <spec>`) when the spec is not `awaiting_you`. The engine applies it on its
+  next tick: `approve` resumes at the stored step (a stop-class step then runs); `deny` skips that step and goes on
+  when the policy has a path without it (a skipped push, a skipped side effect), else fails the spec with
+  `denied: <question>`; `fail` fails the spec with the note. Each answer is a `ruling` event (`by: user`).
+- **Feed:** entering `awaiting_you` appends a `decision`-tier feed line (Addition below) with the question and the
+  exact signal command; the answer appends a `progress` line.
+- **`timers`:** `id`, `spec`, `job`, `kind` (`deadline`, `retry`, `usage_reset`), `due_at`, `payload`, `fired_at`.
+  `usage_reset` is due at the reset time the status-line tap reports for the window that hit 100% (5-hour or
+  7-day), else in one hour; when it fires the engine dispatches again. A usage limit no longer stops the engine
+  (Error handling).
+
+##### 10.4 Side effects: intent, result, check
+
+Every action outside the database is a `steps` row: `key` (unique, e.g. `merge:<branch>@<base sha>`), `spec`,
+`kind`, `state` (`intent`, `done`, `failed`), `result`, times. The engine writes `intent` (and commits), acts, then
+writes `done` with the result. Kinds and their checks, run on resume for every row left at `intent`:
+
+| kind | check: already done when |
+| --- | --- |
+| `start_worker` | a window named for the job exists in the session (then its pane id is adopted) |
+| `close_window` | the pane is gone |
+| `merge` | the branch head is an ancestor of the integration target |
+| `revert`, `commit_report`, `commit_ledger` | a commit on the target carries the trailer `Engine-Step: <key>` |
+| `metrics_start`, `metrics_record` | `runs.jsonl` has the record for the spec id and batch |
+| `push` | the remote ref equals the recorded local sha (`git ls-remote`) |
+| `worktree_remove` | the worktree path is gone from `git worktree list` |
+
+- Done: mark `done`, continue. Not done: run the action again. Check fails or is ambiguous (a remote unreachable):
+  park with the question `could not tell whether <key> ran`.
+- Every commit the engine makes carries `Engine-Step: <key>` as a trailer.
+
+##### 10.5 Policy version
+
+- `engine.py` holds `POLICY_VERSION` (an integer, raised whenever section 3's or 10's behaviour changes); `policy_hash`
+  is the sha256 of the loaded `engine.json` (or of `{}` without the file). Both are stored on the spec when it
+  starts running.
+- On resume, a spec whose stored version or hash differs from the current one parks with the question
+  `engine rules changed (<old>→<new>): continue under the new rules?` `approve` re-stamps it and continues; `deny`
+  or `fail` fails it with `policy changed`.
+
+##### 10.6 Replay check
+
+- `engine rebuild --check` creates a scratch database, replays every event's `detail` into fresh tables in event
+  order, and diffs every table except `events` with the live one; differences are printed and exit 1.
+- `engine rebuild --apply` stops if the engine's lock is held, then replaces the live tables with the rebuilt ones
+  (the old database is kept as `<project>.sqlite.bak-<epoch>`).
+
+#### 11. Durable execution across the queue (Part 2)
+
+- **Parked specs don't stop the queue.** The runner takes the next queued spec when the current one parks. After
+  each spec reaches `done` (or parks), any parked spec whose wait has an answer resumes first, oldest answer first,
+  before the next queued spec starts. Concurrency stays 1: one spec runs at a time.
+- **End of queue:** a spec still `awaiting_you` when nothing else is runnable is completed as
+  `failed — awaiting you: <question>`, but its wait, worktree and state are kept: `engine signal` on it later
+  resumes it (`engine resume` picks it up), and its outcome is re-recorded then.
+- **Morning report:** a section "Awaiting you" lists every such spec with its question and the exact signal
+  command; the engine waits to write the report until no spec is runnable.
+- **After a Mac restart** (adds to `docs/superpowers/specs/2026-11-10-restart-recovery-design.md`, queued before
+  this spec): the board's restore action runs `tmux-ctl engine resume` for a restored project whose engine
+  database has unfinished specs. When the board starts at login (that spec's opt-in LaunchAgent) and a project's
+  engine database has unfinished specs from a queue that was running (`specs` not `done`, and the engine's last
+  event is not `queue_finished`), the board creates the project's `<project>-bg` session if needed and runs
+  `engine resume` there without restoring the lead or waiting for a click, then re-arms the awake hold
+  (`tmux-ctl awake on --lid`) and shows it in the restore banner as `engine resumed`. This needs a logged-in user
+  session, as any LaunchAgent does (FileVault). Where restart-recovery has not merged, this item is skipped and
+  recorded as a `Ruling:`.
 
 ## Error handling
 
@@ -214,10 +366,11 @@ mode runs as before this stage.
 - A plan without a `.tasks.json`, or a task without a `verifyCommand`: the spec is not run by the engine; it is
   handed to the lead (`[Engine] your turn: <spec>`) and recorded as lead-run.
 - A model limit error in a worker's pane (the Fable limit): the job is run again on Opus, once, with an event
-  saying so.
+  saying so (`model_limit`, section 10.2).
 - A usage limit reached (a worker's pane shows the limit message, or the status-line tap reads 100% for the
-  5-hour or 7-day window): the engine stops dispatching, types `[Engine] stopped: usage limit`, and continues on
-  `engine resume`. Pacing against the limit is stage 6.
+  5-hour or 7-day window): the engine stops dispatching, sets a `usage_reset` timer (section 10.3), types
+  `[Engine] paused: usage limit until <time>` into the lead's window, and dispatches again when the timer fires.
+  Pacing against the limit is stage 6.
 - Nothing in the engine answers a permission prompt.
 
 ## Testing
@@ -229,11 +382,27 @@ mode runs as before this stage.
 - **Finish detection:** fixture agent-status files for `ready` with and without a report, `needs-you` past
   10 minutes, a vanished window.
 - **Crash and resume:** the engine killed (by pid) at each transition of a fake-worker run resumes to the same
-  final state and event sequence, with no job run twice when its report was valid.
+  final state and event sequence, with no job run twice when its report was valid. After every resume,
+  `engine rebuild --check` exits 0.
+- **Durability (section 10):** a fake worker that hangs with a fresh heartbeat and no tool (no-progress: nudge,
+  then fail), one that stops writing its status file (heartbeat timeout), one with a tool running past its limit;
+  retry policies from a fixture `engine.json` overriding a default (attempts, backoff timer, `no_retry_on`,
+  `on_exhausted` each path); the engine killed between `intent` and `done` for every `steps` kind, the action
+  observed as done or not done, resuming without running it twice (one merge commit, one record line) and parking
+  when the check cannot tell; a signal written before and after a restart; a signal for a spec that is not
+  waiting (exit 2); a `deadline` and a `usage_reset` timer due while the engine was down, each firing once; a
+  policy-version change parking the spec, `approve` and `deny` paths; `rebuild --apply` refusing while the lock
+  is held.
+- **Parking across the queue (section 11):** a three-spec queue whose first spec parks: the second runs, an
+  answer arriving during it resumes the first before the third; an unanswered wait at the end fails the spec, and a
+  later signal plus `engine resume` completes it and re-records the outcome; the report's "Awaiting you" section.
+- **Restart (section 11):** the board's restore action and its login start, against a fixture engine database
+  with and without unfinished specs, on a scratch tmux server: `engine resume` started in `<project>-bg` only when
+  unfinished, never a lead.
 - **Isolation:** every test uses `TC_ENGINE_DIR` in a temporary directory and a scratch tmux server started with
   `-f /dev/null`; a leak check confirms the real engine directory and the real tmux server are untouched.
 - **Queue runner (part 2):** a queue of three fixture specs (engine, lead, gated) with fake workers and a fake
-  lead window: order, the three `[Engine]` lines, `engine done`, the gate failure, the report file's sections.
+  lead window: order, the five `[Engine]` lines, `engine done`, the gate failure, the report file's sections.
 - **Real run, part 1:** one small real spec with a committed plan on a scratch clone of this repo, real workers,
   `--integration keep`: a merged-quality branch with every job's window opened and closed, and the event log,
   as the plan's e2e record.
@@ -248,6 +417,8 @@ mode runs as before this stage.
   lead's task list; the lead mirrors the queue's `Plan & run:` tasks from the `[Engine]` lines).
 - Engine-run planning: plans and the cross-plan pass stay with stage 2's planners under the lead.
 - Batching several small tasks into one implement job.
+- A Temporal server or SDK, its web UI, child workflows, and full event sourcing (tables derived only from events);
+  section 10 keeps Temporal's shapes so a later stage can move to it.
 
 ## Addition (user, 2026-11-12): publish to the feed
 
