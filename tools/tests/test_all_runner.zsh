@@ -317,6 +317,65 @@ for p in $(<$SCR/spids); do kill -KILL $p 2>/dev/null; done
 check "interrupt: a job that winds down within the grace period is not KILLed early" [ -s $SCR/sclean ]
 rm -rf $SCR/tc-all.*(N)
 
+# --- scratch tmux servers: each job gets TMUX_TMPDIR=<per-run socket root>/<n>; an interrupt sweeps the servers under that root
+# and sends TERM only (INT is ignored by jobs and was useless). tmux ignores TMPDIR, so the root is its own short /tmp dir.
+OUTD="$(mktemp -d /tmp/tcso.XXXXXX)"   # short path: a unix socket path is limited to 104 bytes, $SCR is under a long TMPDIR
+# the stub's server is killed by its socket (never by a name pattern: that could match other sessions' processes)
+trap 'tmux -S "$sk" kill-server 2>/dev/null; tmux -S "$OUTD/outside.sock" kill-server 2>/dev/null; rm -rf "$SCR" "$OUTD"; tt_teardown' EXIT INT TERM
+WROOT="$SCR/wroot"; mkdir -p $WROOT/tools/tests
+cat > $WROOT/tools/tests/test_sweep.zsh <<STUBEND
+tmux -f /dev/null -L stub new-session -d 'sleep 600'
+tmux -L stub display -p '#{socket_path}' > "$SCR/sweep.sock"
+trap 'echo TERM >> "$SCR/sweep.sigs"; exit 143' TERM
+trap '' INT
+while :; do sleep 0.2; done
+STUBEND
+tmux -f /dev/null -S "$OUTD/outside.sock" new-session -d 'sleep 60'
+rm -f $SCR/sweep.sock; : > $SCR/sweep.sigs
+env TC_TEST_ROOT="$WROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 1 > $SCR/sweep.out 2>&1 &
+wp=$!
+sock_up() { [ -s $SCR/sweep.sock ] }
+tt_wait 10 sock_up
+sk="$(<$SCR/sweep.sock)"
+tmux -S "$sk" has-session 2>/dev/null && sw_before=1 || sw_before=0
+kill -TERM $wp; wait $wp 2>/dev/null; wrc=$?
+sk_gone() { ! tmux -S "$sk" has-session 2>/dev/null }
+tt_wait 5 sk_gone
+sk_gone && sw_gone=1 || sw_gone=0
+tmux -S "$OUTD/outside.sock" has-session 2>/dev/null && out_alive=1 || out_alive=0
+sleep 0.3
+sw_procs=$(pgrep -f 'tmux -f /dev/null -L stub' | wc -l | tr -d ' ')
+# mutation: remove the kill-server sweep from the trap → the stub's server survives
+check "sweep: the job's scratch tmux server was running before the interrupt" [ $sw_before -eq 1 ]
+check "sweep: within 5 s of TERM the scratch server is gone, runner exits 130" [ $sw_gone -eq 1 -a $wrc -eq 130 ]
+check "sweep: no tmux process for the stub socket remains" [ "$sw_procs" = 0 ]
+# mutation: sweep every tmux server on the box (not only the socket root) → the outside server dies
+check "scope: a scratch server outside the socket root survives the interrupt" [ $out_alive -eq 1 ]
+tmux -S "$OUTD/outside.sock" kill-server 2>/dev/null
+# mutation: put back "for p in $pids; do kill -INT -- -$p; done" in killjobs → the source check fails
+# (INT is not observable inside a job: jobs inherit SIGINT ignored, so the no-INT half is a source check)
+check "no-INT: the job's TERM trap ran exactly once" [ "$(grep -c '^TERM$' $SCR/sweep.sigs)" = 1 ]
+kj_int=$(awk '/^killjobs\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$ALL" | grep -c -- '-INT')
+kj_len=$(awk '/^killjobs\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$ALL" | wc -l | tr -d ' ')
+check "no-INT: killjobs body (found, $kj_len lines) has no -INT" [ $kj_len -gt 5 -a $kj_int -eq 0 ]
+rm -rf $SCR/tc-all.*(N)
+
+# env case: the job's TMUX_TMPDIR is /tmp/tcs.*/<n>, an existing directory, and a normal run leaves no root behind
+EROOT="$SCR/eroot"; mkdir -p $EROOT/tools/tests
+cat > $EROOT/tools/tests/test_envt.zsh <<STUBEND
+echo "\$TMUX_TMPDIR" > "$SCR/env.tt"
+[ -d "\$TMUX_TMPDIR" ] && echo dir > "$SCR/env.dir"
+exit 0
+STUBEND
+rm -f $SCR/env.tt $SCR/env.dir; before_tcs=(/tmp/tcs.*(N))
+env TC_TEST_ROOT="$EROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 1 > $SCR/env.out 2>&1; erc=$?
+after_tcs=(/tmp/tcs.*(N)); new_tcs=(${after_tcs:|before_tcs})
+# mutation: leave TMUX_TMPDIR unset, or put it under TMPDIR → pattern fails; skip the final rm -rf of the root → a new /tmp/tcs.* stays
+envpat() { [[ "$(<$SCR/env.tt)" == /tmp/tcs.*/<1-> && -f $SCR/env.dir ]] }
+check "env: job TMUX_TMPDIR is /tmp/tcs.*/<n> and exists" envpat
+check "env: normal run exits 0 and removes its socket root" [ $erc -eq 0 -a ${#new_tcs} -eq 0 ]
+rm -rf $SCR/tc-all.*(N)
+
 # --- M1: a job subshell killed without writing its .res must not hang the runner
 DROOT="$SCR/droot"; mkdir -p $DROOT/tools/tests
 cat > $DROOT/tools/tests/test_die.zsh <<STUBEND

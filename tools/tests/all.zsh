@@ -66,17 +66,20 @@ else
 fi
 
 rundir="$(mktemp -d "${TMPDIR:-/tmp}/tc-all.XXXXXX")"; rundir="${rundir:A}"
+# scratch tmux servers: tmux ignores TMPDIR (it uses TMUX_TMPDIR), and a socket path is limited to 104 bytes, so each job gets
+# its own TMUX_TMPDIR under one short per-run root; an interrupt sweeps the servers under it, a normal end removes it
+sockroot="$(mktemp -d /tmp/tcs.XXXXXX)"
 T0=$EPOCHREALTIME
 
 run_job() {   # run_job <index>: log, then <name>.res = "rc seconds" (written last, so its existence means done)
   local i=$1 name=$J_name[$i] jt t0 rc
   # short dir name: a unix socket path under TMPDIR is limited to 104 bytes on macOS
-  jt="$rundir/tmp/$i"; mkdir -p "$jt/state" "$rundir/${name:h}"
+  jt="$rundir/tmp/$i"; mkdir -p "$jt/state" "$rundir/${name:h}" "$sockroot/$i"
   t0=$EPOCHREALTIME
   if (( $+commands[perl] )); then
-    env TMPDIR="$jt" TC_STATE="$jt/state" perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
+    env TMPDIR="$jt" TMUX_TMPDIR="$sockroot/$i" TC_STATE="$jt/state" perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
   else
-    env TMPDIR="$jt" TC_STATE="$jt/state" sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
+    env TMPDIR="$jt" TMUX_TMPDIR="$sockroot/$i" TC_STATE="$jt/state" sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
   fi
   print -r -- $! > "$rundir/$name.pid"
   wait $!; rc=$?
@@ -104,8 +107,9 @@ reap() {
 }
 # each job's command runs in its own session (setsid via perl; pgid = its pid, in <name>.pid), so an interrupt kills the whole
 # tree (sh, the test, its tmux and board servers) and not only the job subshell
-# Only jobs still running are signalled (no .res yet): a finished job's pid may be reused. INT then TERM to each live group,
-# up to 3 s for them to go, then KILL what is left.
+# Only jobs still running are signalled (no .res yet): a finished job's pid may be reused. TERM to each live group (jobs
+# inherit SIGINT ignored, so INT would do nothing), up to 3 s for them to go, then KILL what is left; then kill every scratch
+# tmux server under $sockroot (each kill-server bounded to 2 s) and remove the root.
 killjobs() {
   local k p i; local -a pids=() left=()
   for k in ${(k)jpid}; do
@@ -113,8 +117,6 @@ killjobs() {
     kill -TERM ${jpid[$k]} 2>/dev/null
     p="$(<"$rundir/$J_name[$k].pid" 2>/dev/null)"; [[ -n $p ]] && pids+=$p
   done
-  for p in $pids; do kill -INT -- -$p 2>/dev/null; done
-  sleep 0.2
   for p in $pids; do kill -TERM -- -$p 2>/dev/null; done
   for (( i=0; i<30; i++ )); do
     left=(); for p in $pids; do kill -0 -- -$p 2>/dev/null && left+=$p; done
@@ -122,6 +124,12 @@ killjobs() {
     sleep 0.1
   done
   for p in $left; do kill -KILL -- -$p 2>/dev/null; done
+  local s
+  for s in ${(f)"$(find "$sockroot" -type s 2>/dev/null)"}; do
+    [[ -n $s ]] || continue
+    if (( $+commands[timeout] )); then timeout 2 tmux -S "$s" kill-server; else perl -e 'alarm 2; exec @ARGV' tmux -S "$s" kill-server; fi 2>/dev/null
+  done
+  rm -rf "$sockroot"
 }
 trap 'killjobs; print -u2 "all.zsh: interrupted, run dir $rundir"; exit 130' INT TERM
 
@@ -163,12 +171,13 @@ fi
 total=$(( EPOCHREALTIME - T0 )); ts=$(( int(total) ))
 fmt="$(( ts / 60 ))m$(( ts % 60 ))s"
 if (( ${#failed} )); then
+  rm -rf "$sockroot"
   print "run dir kept: $rundir"
   fnames=(); for i in $failed; do fnames+=$J_name[$i]; done   # not J_name[$failed]: with two failures the subscript is "22 33" (arithmetic)
   print -r -- "FAIL ${#failed}/$n: ${(j:, :)fnames}"
   exit 1
 fi
-rm -rf "$rundir"
+rm -rf "$rundir" "$sockroot"
 print "ALL PASS $n jobs in $fmt"
 if (( total > budget )); then
   (( budget == 300 )) && bl="5 min" || bl="${budget}s"
