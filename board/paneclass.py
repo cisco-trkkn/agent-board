@@ -23,8 +23,8 @@ WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
 WORKING_RE = re.compile(r"esc to interrupt", re.I)   # Claude Code before 2.1.316
 # 2.1.316+: `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`; the whole line, so prose quoting one does not match
 SPINNER_RE = re.compile(r"^[·✢✳✶✻✽*]\s+\S.*…\s*\((?:[^()]*·\s*)?\d+\s*[hms]\b[^)]*\)?\s*$")   # the bracket may start with hook text: `(running Stop hooks… 0/4 · 2s`
-SPINNER_WRAP_HEAD_RE = re.compile(r"^[·✢✳✶✻✽*]\s+\S.*…\s*\([^)]*·\s*$")   # a spinner whose bracket wrapped after the hook text's `·`
-SPINNER_WRAP_TAIL_RE = re.compile(r"^\d+\s*[hms]\b[^)]*\)\s*$")   # the wrapped rest at column 0: `4s · ↓ 9 tokens)`
+WRAP_TAIL_STOP_RE = re.compile(r"^(?:[·✢✳✶✻✽*⏺⎿│╭╰─━]|\s)")   # a row starting with these (or blank/indented) is not the rest of a wrapped spinner row
+SPINNER_GLYPHS = "·✢✳✶✻✽*"
 SPINNER_FIRST_RE = re.compile(r"^[·✢✳✶✻✽*]\s+\S.*…\s*$")   # first frame of a turn, before the "(elapsed" part appears
 TIP_RE = re.compile(r"^\s*⎿\s+Tip:")   # the tip row a turn starts with, under a first-frame spinner
 TASKLIST_RE = re.compile(r"^\s+(?:⎿\s*\xa0?\s*[◼◻✔☐☒]|[◼◻✔☐☒]|…\s+\+\d)")   # task-list rows under a task-label spinner: `  ⎿  ◼ …`, `     ◻ …`, `      … +13 pending`
@@ -102,12 +102,18 @@ def spinner_live(rows):
     (`✢ Thinking…`, no parenthesis) is live only when the rows before the rule are blank, `⎿ Tip:` rows, a tip's
     indented continuation lines directly after it, or task-list rows; the `busy N · ready N` teammate row is skipped for both forms; any other indented row means it is transcript."""
     for n in range(len(rows) - 1, -1, -1):
-        first = bool(SPINNER_FIRST_RE.match(rows[n]))
-        wrapped = n + 1 < len(rows) and bool(SPINNER_WRAP_HEAD_RE.match(rows[n])) and bool(SPINNER_WRAP_TAIL_RE.match(rows[n + 1]))
-        if not (first or wrapped or SPINNER_RE.match(rows[n])):
+        row, skip = rows[n], 1
+        if row[:1] in SPINNER_GLYPHS and (row.count("(") > row.count(")") or not (SPINNER_FIRST_RE.match(row) or SPINNER_RE.match(row))) \
+                and n + 1 < len(rows) and rows[n + 1] and not WRAP_TAIL_STOP_RE.match(rows[n + 1]):
+            for joined in (row + " " + rows[n + 1], row + rows[n + 1]):   # a spinner row wrapped by the pane width, at any break
+                if SPINNER_FIRST_RE.match(joined) or SPINNER_RE.match(joined):
+                    row, skip = joined, 2
+                    break
+        first = bool(SPINNER_FIRST_RE.match(row))
+        if not (first or SPINNER_RE.match(row)):
             continue
         in_tip = False   # the previous non-blank row was a tip row or its wrapped continuation
-        for below in rows[n + (2 if wrapped else 1):]:
+        for below in rows[n + skip:]:
             if RULE_RE.match(below):
                 return True
             if not below.strip():
@@ -125,7 +131,7 @@ def spinner_live(rows):
                 return False
             if not below[0].isspace():
                 return False
-        return not any(r.strip() for r in rows[n + (2 if wrapped else 1):])   # no rule in view (a short capture): spinner at the bottom
+        return not any(r.strip() for r in rows[n + skip:])   # no rule in view (a short capture): spinner at the bottom
     return False
 
 

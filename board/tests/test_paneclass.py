@@ -164,6 +164,20 @@ class SpinnerLayoutsTest(unittest.TestCase):
             with self.subTest(row=row):
                 self.assertEqual(self.cls([row, "", self.RULE] + self.INPUT), ("claude", "working"))
 
+    def test_wrapped_spinner_joins_at_any_break_point(self):
+        for head, tail in (("✢ X… (running hook · 4s ·", "↓ 9 tokens)"),
+                           ("✶ Plan & run: docs/superpowers/specs/", "x-design.md… (3s · ↓ 1 tokens)")):
+            with self.subTest(head=head):
+                self.assertEqual(self.cls([head, tail, "", self.RULE] + self.INPUT), ("claude", "working"))
+
+    def test_first_frame_split_across_rows_is_working(self):
+        rows = ["✶ Plan & run: docs/superpowers/", "x.md…", "  ⎿  ◼ Plan & run: x.md", "", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "working"))
+
+    def test_wrapped_head_with_glyph_tail_is_ready(self):
+        rows = ["✢ X… (running hook ·", "⏺ 4s later)", "", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
     def test_wrapped_pair_then_column0_output_is_ready(self):
         rows = ["✢ Plan & run: x.md… (running PostToolUse hook ·", "⏺ done", "", self.RULE] + self.INPUT
         self.assertEqual(self.cls(rows), ("claude", "ready"))
