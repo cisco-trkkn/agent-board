@@ -277,3 +277,34 @@ git commit -m "fix(telegram-watch): shared spinner rule and module-level send_re
 ```json:metadata
 {"files": ["docs/superpowers/notes/2026-11-15-turn-start-spinner-real-check.md", "tools/tests/fixtures/telegram-watch/turn-start-live.txt", "tools/tests/fixtures/telegram-watch/README.md"], "verifyCommand": "grep -c '^- ' docs/superpowers/notes/2026-11-15-turn-start-spinner-real-check.md && python3 -m unittest discover -s tools/tests -p 'test_telegram_watch.py'", "acceptanceCriteria": ["capture loop <=0.25 s for >=20 s on the lead pane during a turn the executor triggered by message", "earliest first-frame capture named and quoted", "worktree paneclass classify (mod None) gives working; main's result recorded", "ephemeral 7710 board /api/state status recorded with mod-state note", "fixture added only if shape differs; agreement test passes", "nothing typed; board stopped and PID gone"], "modelTier": "standard"}
 ```
+
+---
+
+### Task 4: paneclass — task-label spinners, task-list rows and the teammate status row
+
+Added 2026-11-15 after Task 3's live run: on Claude Code 2.1.325, a lead with an in-progress task shows that task's subject as the spinner label (`✶ Plan & run: docs/…/x.md…`, later `… (2s · ↓ 7 tokens)`), the task list under it (`  ⎿  ◼ …`, `     ◻ …`, `      … +13 pending, 5 completed`), and, with teammates, a column-0 row `busy 1 · ready 1   …   [-]` right above the input rule. Both `main` and Tasks 1–2 classify those frames `ready`.
+
+**Goal:** `classify` returns `("claude", "working")` for the real fixtures `turn-start-task-label.txt` and `turn-start-task-label-elapsed.txt`, and `("claude", "ready")` for `idle-with-teammates.txt`, with every earlier verdict unchanged.
+
+**Files:**
+- Modify: `board/paneclass.py` (`SPINNER_RE`, `SPINNER_FIRST_RE`, `spinner_live`; new `TASKLIST_RE`, `TEAM_ROW_RE`)
+- Test: `board/tests/test_paneclass.py`, `tools/tests/test_telegram_watch.py`
+
+**Constraints:**
+- Spinner label: any text, may contain spaces, ending in `…`, after a leading spinner glyph from the set `·✢✳✶✻✽*` (the glyphs used in this repo's tests and real fixtures). `⏺`, `⎿` and box characters never start a spinner, so `⏺ Let me check…` in transcript is never a spinner. The elapsed form keeps `\(\d+\s*[hms]\b[^)]*\)?` after the `…`.
+- Under a first-frame spinner, task-list rows count like tip rows: an indented row whose first non-space characters are `⎿` followed by a task glyph (`◼`, `◻`, `✔`, `☐`, `☒`), an indented row starting with a task glyph, and an indented `… +N …` summary row.
+- The teammate status row (`^busy \d+ · ready \d+`, column 0, as captured) is skipped wherever it sits between a spinner and the rule, for both forms. Write the regex from the fixture bytes; no other column-0 row is skipped.
+- Everything Tasks 1–2 pinned stays: `["✢ Thinking…", "  some indented output", RULE]` → `ready`; tip then `⏺ done` → `ready`; `working.txt` → `working`; every watchdog fixture keeps its verdict (`idle-with-teammates` joins the idle list in `Screens.test_idle_screens_are_idle`).
+
+**Acceptance Criteria:**
+- [ ] New paneclass tests over the three real fixtures give `working`, `working`, `ready`; RED on the code before this task for the two `working` cases.
+- [ ] New synthetic tests: `["⏺ Let me check…", "", RULE]` → `ready`; `["✶ Plan & run: x.md…", "  ⎿  ◼ Plan & run: x.md", "     ◻ Task 2", "", RULE]` → `working`; the same with a column-0 `"⏺ done"` before the rule → `ready`; `["✻ Thinking… (3s · ↓ 1 tokens)", "busy 1 · ready 1   [-]", RULE]` → `working`.
+- [ ] Mutations, each run once and recorded: (1) drop the team-row skip → the elapsed fixture test fails; (2) restrict the label back to `[\w-]+` → the first-frame fixture test fails; (3) drop the task-list branch → the first-frame fixture test fails.
+- [ ] `idle-with-teammates` is idle in the watchdog; the agreement test passes and now counts ≥ 3 live fixtures (raise its `live >= 1` to `live >= 3`).
+- [ ] Both suites pass.
+
+**Verify:** `python3 -m unittest discover -s board/tests -p 'test_paneclass*.py' && python3 -m unittest discover -s tools/tests -p 'test_telegram_watch.py'`
+
+```json:metadata
+{"files": ["board/paneclass.py", "board/tests/test_paneclass.py", "tools/tests/test_telegram_watch.py"], "verifyCommand": "python3 -m unittest discover -s board/tests -p 'test_paneclass*.py' && python3 -m unittest discover -s tools/tests -p 'test_telegram_watch.py'", "acceptanceCriteria": ["real fixtures: task-label working, task-label-elapsed working, idle-with-teammates ready; RED before for the two working", "synthetic: ⏺ Let me check… ready; task label + task rows working; + column-0 ⏺ done ready; elapsed + busy row working", "three mutations each fail the named test", "idle-with-teammates idle in watchdog; agreement test live >= 3", "both suites pass"], "modelTier": "standard"}
+```
