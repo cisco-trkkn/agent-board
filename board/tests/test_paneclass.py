@@ -139,6 +139,38 @@ class SpinnerLayoutsTest(unittest.TestCase):
             rows.pop()
         self.assertEqual(paneclass.classify("2.1.322", rows, False), ("claude", "working"))
 
+    def fixture_rows(self, name):
+        fx = HERE.parent / "tools" / "tests" / "fixtures" / "telegram-watch" / name
+        rows = fx.read_text().splitlines()
+        while rows and not rows[-1].strip():
+            rows.pop()
+        return rows
+
+    def test_real_task_label_first_frame_is_working(self):   # real 2.1.325 lead, multi-word task subject, task list, busy row
+        self.assertEqual(paneclass.classify("2.1.325", self.fixture_rows("turn-start-task-label.txt"), False), ("claude", "working"))
+
+    def test_real_task_label_with_elapsed_is_working(self):
+        self.assertEqual(paneclass.classify("2.1.325", self.fixture_rows("turn-start-task-label-elapsed.txt"), False), ("claude", "working"))
+
+    def test_real_idle_lead_with_teammates_is_ready(self):
+        self.assertEqual(paneclass.classify("2.1.325", self.fixture_rows("idle-with-teammates.txt"), False), ("claude", "ready"))
+
+    def test_assistant_line_ending_in_ellipsis_is_not_a_spinner(self):
+        rows = ["⏺ Let me check…", "", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
+    def test_task_label_with_task_rows_is_working(self):
+        rows = ["✶ Plan & run: x.md…", "  ⎿  ◼ Plan & run: x.md", "     ◻ Task 2", "", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "working"))
+
+    def test_task_label_then_column0_output_is_ready(self):
+        rows = ["✶ Plan & run: x.md…", "  ⎿  ◼ Plan & run: x.md", "     ◻ Task 2", "⏺ done", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
+    def test_teammate_row_between_elapsed_spinner_and_rule_is_skipped(self):
+        rows = ["✻ Thinking… (3s · ↓ 1 tokens)", "busy 1 · ready 1   [-]", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "working"))
+
     def test_tip_then_column0_output_is_ready(self):
         rows = ["✢ Thinking…", "  ⎿  Tip: x", "⏺ done", self.RULE] + self.INPUT
         self.assertEqual(self.cls(rows), ("claude", "ready"))

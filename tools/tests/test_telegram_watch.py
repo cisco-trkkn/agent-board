@@ -143,6 +143,13 @@ class Screens(unittest.TestCase):
                 self.assertTrue(tw.idle_at_prompt("claude", screen(name), None))
                 self.assertEqual(tw.input_text(screen(name)), "")
 
+    def test_idle_lead_with_teammates_is_ready_and_has_no_live_spinner(self):
+        # real 2.1.325 capture; the pane has typed text on its input line, so it is ready but not "idle" for the watchdog
+        rows = screen("idle-with-teammates")
+        self.assertEqual(tw.paneclass.classify("claude", rows, False), ("claude", "ready"))
+        self.assertFalse(tw.paneclass.spinner_live(rows[-30:]))
+        self.assertEqual(tw.input_text(rows), "keep going with the queue")
+
     def test_typed_input_is_not_idle_and_is_read_back_exactly(self):
         self.assertFalse(tw.idle_at_prompt("claude", screen("typed-input"), None))
         self.assertEqual(tw.input_text(screen("typed-input")), "half a sentence")
@@ -222,7 +229,7 @@ class SharedSpinnerRule(unittest.TestCase):
                     live += 1
                     self.assertFalse(tw.idle_at_prompt("claude", rows, None))
                     self.assertFalse(tw.idle_at_prompt("claude", rows, "ready"))   # a fresh mod state that says ready
-        self.assertGreaterEqual(live, 1)   # working.txt at least
+        self.assertGreaterEqual(live, 3)   # working.txt and the two task-label fixtures
 
 
 class SendRemove(unittest.TestCase):

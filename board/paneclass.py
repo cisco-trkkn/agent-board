@@ -22,9 +22,11 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")
 WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
 WORKING_RE = re.compile(r"esc to interrupt", re.I)   # Claude Code before 2.1.316
 # 2.1.316+: `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`; the whole line, so prose quoting one does not match
-SPINNER_RE = re.compile(r"^\s*\S\s+[\w-]+…\s*\(\d+\s*[hms]\b[^)]*\)?\s*$")
-SPINNER_FIRST_RE = re.compile(r"^\s*\S\s+[\w-]+…\s*$")   # first frame of a turn, before the "(elapsed" part appears
+SPINNER_RE = re.compile(r"^\s*[·✢✳✶✻✽*]\s+\S.*…\s*\(\d+\s*[hms]\b[^)]*\)?\s*$")
+SPINNER_FIRST_RE = re.compile(r"^\s*[·✢✳✶✻✽*]\s+\S.*…\s*$")   # first frame of a turn, before the "(elapsed" part appears
 TIP_RE = re.compile(r"^\s*⎿\s+Tip:")   # the tip row a turn starts with, under a first-frame spinner
+TASKLIST_RE = re.compile(r"^\s+(?:⎿\s*\xa0?\s*[◼◻✔☐☒]|[◼◻✔☐☒]|…\s+\+\d)")   # task-list rows under a task-label spinner: `  ⎿  ◼ …`, `     ◻ …`, `      … +13 pending`
+TEAM_ROW_RE = re.compile(r"^busy \d+ · ready \d+")   # the teammate status row, at column 0, above the input rule
 SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 
@@ -95,8 +97,8 @@ def spinner_live(rows):
 
     Rows between the spinner and the rule may be blank or indented (a tip, its wrapped line, a task list); a row at
     column 0 (a finished line, `⏺` output, an open prompt) means the spinner is transcript. The first-frame form
-    (`✢ Thinking…`, no parenthesis) is live only when the rows before the rule are blank, `⎿ Tip:` rows, or a tip's
-    indented continuation lines directly after it; any other indented row means it is transcript."""
+    (`✢ Thinking…`, no parenthesis) is live only when the rows before the rule are blank, `⎿ Tip:` rows, a tip's
+    indented continuation lines directly after it, or task-list rows; the `busy N · ready N` teammate row is skipped for both forms; any other indented row means it is transcript."""
     for n in range(len(rows) - 1, -1, -1):
         first = bool(SPINNER_FIRST_RE.match(rows[n]))
         if not (first or SPINNER_RE.match(rows[n])):
@@ -108,9 +110,11 @@ def spinner_live(rows):
             if not below.strip():
                 in_tip = False
                 continue
+            if TEAM_ROW_RE.match(below):
+                continue
             if first:
-                if TIP_RE.match(below):
-                    in_tip = True
+                if TIP_RE.match(below) or TASKLIST_RE.match(below):
+                    in_tip = TIP_RE.match(below) is not None
                     continue
                 if in_tip and below[0].isspace():
                     continue
