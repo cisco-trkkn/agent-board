@@ -69,6 +69,7 @@ rundir="$(mktemp -d "${TMPDIR:-/tmp}/tc-all.XXXXXX")"; rundir="${rundir:A}"
 # scratch tmux servers: tmux ignores TMPDIR (it uses TMUX_TMPDIR), and a socket path is limited to 104 bytes, so each job gets
 # its own TMUX_TMPDIR under one short per-run root; an interrupt sweeps the servers under it, a normal end removes it
 sockroot="$(mktemp -d /tmp/tcs.XXXXXX)"
+real_tmx="${TMUX_TMPDIR:-/tmp}"   # where the real tmux sockets live, captured before any job gets its own TMUX_TMPDIR
 T0=$EPOCHREALTIME
 
 run_job() {   # run_job <index>: log, then <name>.res = "rc seconds" (written last, so its existence means done)
@@ -77,9 +78,9 @@ run_job() {   # run_job <index>: log, then <name>.res = "rc seconds" (written la
   jt="$rundir/tmp/$i"; mkdir -p "$jt/state" "$rundir/${name:h}" "$sockroot/$i"
   t0=$EPOCHREALTIME
   if (( $+commands[perl] )); then
-    env TMPDIR="$jt" TMUX_TMPDIR="$sockroot/$i" TC_STATE="$jt/state" perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
+    env TMPDIR="$jt" TMUX_TMPDIR="$sockroot/$i" TC_REAL_TMUX_TMPDIR="$real_tmx" TC_STATE="$jt/state" perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
   else
-    env TMPDIR="$jt" TMUX_TMPDIR="$sockroot/$i" TC_STATE="$jt/state" sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
+    env TMPDIR="$jt" TMUX_TMPDIR="$sockroot/$i" TC_REAL_TMUX_TMPDIR="$real_tmx" TC_STATE="$jt/state" sh -c "$J_cmd[$i]" > "$rundir/$name.log" 2>&1 &
   fi
   print -r -- $! > "$rundir/$name.pid"
   wait $!; rc=$?
@@ -110,7 +111,8 @@ reap() {
 # Only jobs still running are signalled (no .res yet): a finished job's pid may be reused. TERM to each live group (jobs
 # inherit SIGINT ignored, so INT would do nothing), up to 3 s for them to go, then KILL what is left; then kill every scratch
 # tmux server under $sockroot (each kill-server bounded to 2 s) and remove the root.
-# Limit: a test that sets its own TMUX_TMPDIR (e.g. test_fresh_path.zsh) puts its servers outside $sockroot; they are not swept.
+# Limit: a test that sets its own TMUX_TMPDIR (e.g. test_fresh_path.zsh) puts its servers outside $sockroot; they are not swept. TC_REAL_TMUX_TMPDIR (the TMUX_TMPDIR all.zsh itself inherited, default /tmp) tells a test where the real
+# sockets live, e.g. test_e2e_isolation.zsh's check that the real agent-board server is untouched.
 killjobs() {
   local k p i; local -a pids=() left=()
   for k in ${(k)jpid}; do

@@ -5,7 +5,7 @@
 # ~/.tmux.conf and ~/.local are never started, written or (outside the leak check's hashes) read.
 # TMUX_TMPDIR is a scratch dir before any tmux call: a plain `tmux` (no -L/-S) would land on a scratch "default" socket,
 # not the real default server, and the check at the end fails the test if that socket exists.
-ORIG_TMPDIR="${TMUX_TMPDIR:-/tmp}"   # where the REAL tmux sockets live, captured before the scratch export
+ORIG_TMPDIR="${TC_REAL_TMUX_TMPDIR:-${TMUX_TMPDIR:-/tmp}}"   # where the REAL tmux sockets live, captured before the scratch export
 TMX="$(mktemp -d /tmp/abx.XXXXXX)"; export TMUX_TMPDIR="$TMX"
 source "${0:A:h}/lib.zsh"
 R="$TT_REPO"; F="${0:A:h}/fixtures"
