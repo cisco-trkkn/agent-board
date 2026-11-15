@@ -170,22 +170,11 @@ class State:
 
 # ---- the pane
 
-def _spinner_above_input(rows, span=8):
-    """True when a spinner line (`✽ Actioning…`, `✻ Thinking… (3s …)`) sits in the few rows above the input box. Stricter than
-    paneclass: its first-frame rule ignores a spinner followed by a `⎿ Tip:` row, which is how a turn starts (real 2.1.322
-    capture in fixtures/telegram-watch/working.txt); calling that idle would type into a working lead."""
-    tail = rows[-30:]
-    for n in range(len(tail) - 1, 0, -1):
-        if paneclass.INPUT_RE.match(tail[n]) and paneclass.RULE_RE.match(tail[n - 1]):
-            return any(paneclass.SPINNER_RE.match(r) or paneclass.SPINNER_FIRST_RE.match(r) for r in tail[max(0, n - 1 - span):n - 1])
-    return False
-
-
 def idle_at_prompt(cmd, rows, mod):
     """A claude pane that is ready (no spinner, no dialog) and whose input line is empty."""
     if paneclass.classify(cmd, rows, False, mod) != ("claude", "ready"):
         return False
-    return not paneclass.input_has_text(rows) and not _spinner_above_input(rows)
+    return not paneclass.input_has_text(rows) and not paneclass.spinner_live(rows[-30:])   # a fresh mod state can say ready over a live spinner
 
 
 COMMAND = "/mcp reconnect plugin:telegram:telegram"
@@ -445,6 +434,12 @@ def _pane_idle(pane):
     return idle_at_prompt("claude", _rows(pane), paneclass.mod_states().get(pane))
 
 
+def send_remove(t, pane, back, count):
+    """Delete `count` characters that end `back` characters before the end of the input line: End, Left×back, BSpace×count."""
+    keys = ["End"] + ["Left"] * back + ["BSpace"] * count
+    t("send-keys", "-t", pane, *keys)
+
+
 def _do_reconnect(pane):
     t = _tmux()
 
@@ -467,15 +462,12 @@ def _do_reconnect(pane):
         tbl, lead = leads()
         return bool(lead) and all(has_server(p, tbl) for p in lead)
 
-    def remove(back, count):
-        keys = ["End"] + ["Left"] * back + ["BSpace"] * count
-        t("send-keys", "-t", pane, *keys)
-
     ctl = PaneCtl(lambda: _rows(pane),
                   lambda text: t("send-keys", "-t", pane, "-l", text),
                   lambda: t("send-keys", "-t", pane, "Enter"),
                   lambda: t("send-keys", "-t", pane, "C-u"),
-                  check, lambda: _pane_idle(pane), remove=remove)
+                  check, lambda: _pane_idle(pane),
+                  remove=lambda back, count: send_remove(t, pane, back, count))
     return reconnect(ctl, server, quiet_gap=quiet_gap())
 
 

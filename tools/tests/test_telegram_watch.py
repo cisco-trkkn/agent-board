@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -205,6 +206,60 @@ class Screens(unittest.TestCase):
 
     def test_no_input_line_reads_as_none(self):
         self.assertIsNone(tw.input_text(["$ ls", "file"]))
+
+
+class SharedSpinnerRule(unittest.TestCase):
+    """The watchdog and the board read a spinner with one rule (paneclass.spinner_live)."""
+
+    def test_watchdog_never_idle_where_the_board_sees_a_live_spinner(self):
+        names = sorted(p.stem for p in FX.glob("*.txt"))
+        self.assertGreaterEqual(len(names), 10)   # every .txt capture in the fixture dir is checked
+        live = 0
+        for name in names:
+            rows = screen(name)
+            with self.subTest(name):
+                if tw.paneclass.spinner_live(rows[-30:]):
+                    live += 1
+                    self.assertFalse(tw.idle_at_prompt("claude", rows, None))
+                    self.assertFalse(tw.idle_at_prompt("claude", rows, "ready"))   # a fresh mod state that says ready
+        self.assertGreaterEqual(live, 1)   # working.txt at least
+
+
+class SendRemove(unittest.TestCase):
+    def test_argv(self):
+        calls = []
+        tw.send_remove(lambda *a: calls.append(a), "%7", 2, 3)
+        self.assertEqual(calls, [("send-keys", "-t", "%7", "End", "Left", "Left", "BSpace", "BSpace", "BSpace")])
+
+    def test_argv_nothing_after(self):
+        calls = []
+        tw.send_remove(lambda *a: calls.append(a), "%7", 0, 2)
+        self.assertEqual(calls, [("send-keys", "-t", "%7", "End", "BSpace", "BSpace")])
+
+    def test_real_pane(self):
+        """send_remove against a scratch tmux server: a bash --norc line editor honours End/Left/BSpace (cat does not)."""
+        tmux = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
+        sock = f"tw-remove-{os.getpid()}"
+
+        def t(*args):
+            return subprocess.run([tmux, "-L", sock, "-f", "/dev/null", *args], capture_output=True, text=True, check=True).stdout
+
+        try:
+            t("new-session", "-d", "-x", "80", "-y", "6", "env PS1='$ ' /bin/bash --norc --noprofile")
+            pane = t("display", "-p", "-t", "0", "#{pane_id}").strip()
+            time.sleep(0.5)
+            t("send-keys", "-t", pane, "-l", "abcXYZdef")
+            time.sleep(0.2)
+            tw.send_remove(t, pane, 3, 3)
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                line = [r for r in t("capture-pane", "-p", "-t", pane).splitlines() if r.strip()][-1]
+                if line.endswith("abcdef"):
+                    break
+                time.sleep(0.1)
+            self.assertEqual(line, "$ abcdef")
+        finally:
+            subprocess.run([tmux, "-L", sock, "-f", "/dev/null", "kill-server"], capture_output=True)
 
 
 class Safe(unittest.TestCase):
