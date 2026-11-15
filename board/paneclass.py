@@ -22,8 +22,8 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")
 WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
 WORKING_RE = re.compile(r"esc to interrupt", re.I)   # Claude Code before 2.1.316
 # 2.1.316+: `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`; the whole line, so prose quoting one does not match
-SPINNER_RE = re.compile(r"^[·✢✳✶✻✽]\s+\S.*…\s*\(\d+\s*[hms]\b[^)]*\)?\s*$")
-SPINNER_FIRST_RE = re.compile(r"^[·✢✳✶✻✽]\s+\S.*…\s*$")   # first frame of a turn, before the "(elapsed" part appears
+SPINNER_RE = re.compile(r"^[·✢✳✶✻✽*]\s+\S.*…\s*\(\d+\s*[hms]\b[^)]*\)?\s*$")
+SPINNER_FIRST_RE = re.compile(r"^[·✢✳✶✻✽*]\s+\S.*…\s*$")   # first frame of a turn, before the "(elapsed" part appears
 TIP_RE = re.compile(r"^\s*⎿\s+Tip:")   # the tip row a turn starts with, under a first-frame spinner
 TASKLIST_RE = re.compile(r"^\s+(?:⎿\s*\xa0?\s*[◼◻✔☐☒]|[◼◻✔☐☒]|…\s+\+\d)")   # task-list rows under a task-label spinner: `  ⎿  ◼ …`, `     ◻ …`, `      … +13 pending`
 TEAM_ROW_RE = re.compile(r"^busy \d+ · ready \d+")   # the teammate status row, at column 0, above the input rule
