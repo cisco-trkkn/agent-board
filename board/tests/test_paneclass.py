@@ -131,6 +131,18 @@ class SpinnerLayoutsTest(unittest.TestCase):
         rows = ["✢ Thinking…", "  some indented output", self.RULE] + self.INPUT
         self.assertEqual(self.cls(rows), ("claude", "ready"))
 
+    def test_real_turn_start_with_tip_row_is_working(self):
+        # real Claude Code 2.1.322 capture: `✽ Actioning…` then `  ⎿  Tip: …` then a right-aligned `Ctrl+Y …` row
+        fx = HERE.parent / "tools" / "tests" / "fixtures" / "telegram-watch" / "working.txt"
+        rows = fx.read_text().splitlines()
+        while rows and not rows[-1].strip():
+            rows.pop()
+        self.assertEqual(paneclass.classify("2.1.322", rows, False), ("claude", "working"))
+
+    def test_tip_then_column0_output_is_ready(self):
+        rows = ["✢ Thinking…", "  ⎿  Tip: x", "⏺ done", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
     def test_open_prompt_below_spinner_is_waiting(self):
         rows = ["· Spelunking… (6m 56s · ↓ 25.0k tokens)", "  tip row", "Do you want to proceed?", "❯ 1. Yes", "  2. No"]
         self.assertEqual(self.cls(rows), ("claude", "waiting"))

@@ -24,6 +24,7 @@ WORKING_RE = re.compile(r"esc to interrupt", re.I)   # Claude Code before 2.1.31
 # 2.1.316+: `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`; the whole line, so prose quoting one does not match
 SPINNER_RE = re.compile(r"^\s*\S\s+[\w-]+…\s*\(\d+\s*[hms]\b[^)]*\)?\s*$")
 SPINNER_FIRST_RE = re.compile(r"^\s*\S\s+[\w-]+…\s*$")   # first frame of a turn, before the "(elapsed" part appears
+TIP_RE = re.compile(r"^\s*⎿\s+Tip:")   # the tip row a turn starts with, under a first-frame spinner
 SEP = "~|~"   # printable: tmux 3.4 on Linux prints control characters as octal escapes (\037) in list output
 
 
@@ -94,15 +95,27 @@ def spinner_live(rows):
 
     Rows between the spinner and the rule may be blank or indented (a tip, its wrapped line, a task list); a row at
     column 0 (a finished line, `⏺` output, an open prompt) means the spinner is transcript. The first-frame form
-    (`✢ Thinking…`, no parenthesis) is only live with nothing but blank rows before the rule."""
+    (`✢ Thinking…`, no parenthesis) is live only when the rows before the rule are blank, `⎿ Tip:` rows, or a tip's
+    indented continuation lines directly after it; any other indented row means it is transcript."""
     for n in range(len(rows) - 1, -1, -1):
         first = bool(SPINNER_FIRST_RE.match(rows[n]))
         if not (first or SPINNER_RE.match(rows[n])):
             continue
+        in_tip = False   # the previous non-blank row was a tip row or its wrapped continuation
         for below in rows[n + 1:]:
             if RULE_RE.match(below):
                 return True
-            if below.strip() and (first or not below[0].isspace()):
+            if not below.strip():
+                in_tip = False
+                continue
+            if first:
+                if TIP_RE.match(below):
+                    in_tip = True
+                    continue
+                if in_tip and below[0].isspace():
+                    continue
+                return False
+            if not below[0].isspace():
                 return False
         return not any(r.strip() for r in rows[n + 1:])   # no rule in view (a short capture): spinner at the bottom
     return False
