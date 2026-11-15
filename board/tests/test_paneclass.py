@@ -152,6 +152,26 @@ class SpinnerLayoutsTest(unittest.TestCase):
     def test_real_task_label_with_elapsed_is_working(self):
         self.assertEqual(paneclass.classify("2.1.325", self.fixture_rows("turn-start-task-label-elapsed.txt"), False), ("claude", "working"))
 
+    def test_real_wrapped_posttooluse_hook_spinner_is_working(self):   # real 2.1.325 capture, 111 columns, bracket wraps
+        self.assertEqual(paneclass.classify("2.1.325", self.fixture_rows("turn-wrapped-posttooluse.txt"), False), ("claude", "working"))
+
+    def test_real_wrapped_stop_hooks_spinner_is_working(self):
+        self.assertEqual(paneclass.classify("2.1.325", self.fixture_rows("turn-wrapped-stop-hooks.txt"), False), ("claude", "working"))
+
+    def test_joined_hook_suffix_spinners_are_working(self):   # the same frames as one row (tmux capture -J)
+        for row in ("✢ Plan & run: x.md… (running PostToolUse hook · 4s · ↓ 9 tokens)",
+                    "· Plan & run: x.md… (running Stop hooks… 0/4 · 2s · ↓ 28 tokens)"):
+            with self.subTest(row=row):
+                self.assertEqual(self.cls([row, "", self.RULE] + self.INPUT), ("claude", "working"))
+
+    def test_wrapped_pair_then_column0_output_is_ready(self):
+        rows = ["✢ Plan & run: x.md… (running PostToolUse hook ·", "⏺ done", "", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
+    def test_wrapped_looking_pair_without_glyph_is_ready(self):
+        rows = ["⏺ answer (see below ·", "4s · ↓ 9 tokens)", "", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "ready"))
+
     def test_real_idle_lead_with_teammates_is_ready(self):
         self.assertEqual(paneclass.classify("2.1.325", self.fixture_rows("idle-with-teammates.txt"), False), ("claude", "ready"))
 
