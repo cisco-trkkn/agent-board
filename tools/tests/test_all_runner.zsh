@@ -321,7 +321,7 @@ rm -rf $SCR/tc-all.*(N)
 # and sends TERM only (INT is ignored by jobs and was useless). tmux ignores TMPDIR, so the root is its own short /tmp dir.
 OUTD="$(mktemp -d /tmp/tcso.XXXXXX)"   # short path: a unix socket path is limited to 104 bytes, $SCR is under a long TMPDIR
 # the stub's server is killed by its socket (never by a name pattern: that could match other sessions' processes)
-trap 'tmux -S "$sk" kill-server 2>/dev/null; tmux -S "$OUTD/outside.sock" kill-server 2>/dev/null; rm -rf "$SCR" "$OUTD"; tt_teardown' EXIT INT TERM
+trap '[ -n "$sk" ] && tmux -S "$sk" kill-server 2>/dev/null; tmux -S "$OUTD/outside.sock" kill-server 2>/dev/null; rm -rf "$SCR" "$OUTD"; tt_teardown' EXIT INT TERM
 WROOT="$SCR/wroot"; mkdir -p $WROOT/tools/tests
 cat > $WROOT/tools/tests/test_sweep.zsh <<STUBEND
 tmux -f /dev/null -L stub new-session -d 'sleep 600'
@@ -367,13 +367,13 @@ echo "\$TMUX_TMPDIR" > "$SCR/env.tt"
 [ -d "\$TMUX_TMPDIR" ] && echo dir > "$SCR/env.dir"
 exit 0
 STUBEND
-rm -f $SCR/env.tt $SCR/env.dir; before_tcs=(/tmp/tcs.*(N))
+rm -f $SCR/env.tt $SCR/env.dir
 env TC_TEST_ROOT="$EROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 1 > $SCR/env.out 2>&1; erc=$?
-after_tcs=(/tmp/tcs.*(N)); new_tcs=(${after_tcs:|before_tcs})
+envroot="$(<$SCR/env.tt)"; envroot="${envroot:h}"   # this run's own root: other runs' /tmp/tcs.* dirs are not ours to judge
 # mutation: leave TMUX_TMPDIR unset, or put it under TMPDIR → pattern fails; skip the final rm -rf of the root → a new /tmp/tcs.* stays
 envpat() { [[ "$(<$SCR/env.tt)" == /tmp/tcs.*/<1-> && -f $SCR/env.dir ]] }
 check "env: job TMUX_TMPDIR is /tmp/tcs.*/<n> and exists" envpat
-check "env: normal run exits 0 and removes its socket root" [ $erc -eq 0 -a ${#new_tcs} -eq 0 ]
+check "env: normal run exits 0 and removes its socket root" [ $erc -eq 0 -a -n "$envroot" -a ! -e "$envroot" ]
 rm -rf $SCR/tc-all.*(N)
 
 # --- M1: a job subshell killed without writing its .res must not hang the runner

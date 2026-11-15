@@ -110,6 +110,7 @@ reap() {
 # Only jobs still running are signalled (no .res yet): a finished job's pid may be reused. TERM to each live group (jobs
 # inherit SIGINT ignored, so INT would do nothing), up to 3 s for them to go, then KILL what is left; then kill every scratch
 # tmux server under $sockroot (each kill-server bounded to 2 s) and remove the root.
+# Limit: a test that sets its own TMUX_TMPDIR (e.g. test_fresh_path.zsh) puts its servers outside $sockroot; they are not swept.
 killjobs() {
   local k p i; local -a pids=() left=()
   for k in ${(k)jpid}; do
