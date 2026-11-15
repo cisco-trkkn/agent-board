@@ -174,6 +174,19 @@ done
 check "env: every job (zsh, sh and python stubs) has its own TMPDIR, TC_STATE=\$TMPDIR/state, cwd = root" [ $bad -eq 0 -a ${#envs} -eq 12 ]
 rm -rf $SCR/tc-all.*(N)
 
+# --- TC_REAL_TMUX_TMPDIR: the TMUX_TMPDIR the runner inherited (where the real tmux sockets live), since every job gets its own
+RROOT="$SCR/rroot"; mkdir -p $RROOT/tools/tests
+cat > $RROOT/tools/tests/test_real.zsh <<'STUBEND'
+printf '%s\n' "${TC_REAL_TMUX_TMPDIR-UNSET}" > "$STUB_REAL"
+STUBEND
+export STUB_REAL="$SCR/real.out"
+env TC_TEST_ROOT="$RROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" TMUX_TMPDIR=/tmp/inherited-x zsh $ALL -j 1 >/dev/null 2>&1
+# mutation: drop TC_REAL_TMUX_TMPDIR from the job env → UNSET
+check "real tmpdir: a job sees the TMUX_TMPDIR the runner inherited" [ "$(<$STUB_REAL)" = /tmp/inherited-x ]
+env -u TMUX_TMPDIR TC_TEST_ROOT="$RROOT" TMPDIR="$SCR" TC_STATE="$SCR/st" zsh $ALL -j 1 >/dev/null 2>&1
+check "real tmpdir: with none inherited a job sees /tmp" [ "$(<$STUB_REAL)" = /tmp ]
+rm -rf $SCR/tc-all.*(N)
+
 # --- budget: rc 4 and SLOW line
 run env TC_TEST_BUDGET=0 zsh $ALL -j 4
 # mutation: ignore TC_TEST_BUDGET → rc 0
@@ -324,8 +337,8 @@ OUTD="$(mktemp -d /tmp/tcso.XXXXXX)"   # short path: a unix socket path is limit
 trap '[ -n "$sk" ] && tmux -S "$sk" kill-server 2>/dev/null; tmux -S "$OUTD/outside.sock" kill-server 2>/dev/null; rm -rf "$SCR" "$OUTD"; tt_teardown' EXIT INT TERM
 WROOT="$SCR/wroot"; mkdir -p $WROOT/tools/tests
 cat > $WROOT/tools/tests/test_sweep.zsh <<STUBEND
-tmux -f /dev/null -L stub new-session -d 'sleep 600'
-tmux -L stub display -p '#{socket_path}' > "$SCR/sweep.sock"
+tmux -f /dev/null -L stub-$$ new-session -d 'sleep 600'
+tmux -L stub-$$ display -p '#{socket_path}' > "$SCR/sweep.sock"
 trap 'echo TERM >> "$SCR/sweep.sigs"; exit 143' TERM
 trap '' INT
 while :; do sleep 0.2; done
@@ -344,7 +357,7 @@ tt_wait 5 sk_gone
 sk_gone && sw_gone=1 || sw_gone=0
 tmux -S "$OUTD/outside.sock" has-session 2>/dev/null && out_alive=1 || out_alive=0
 sleep 0.3
-sw_procs=$(pgrep -f 'tmux -f /dev/null -L stub' | wc -l | tr -d ' ')
+sw_procs=$(pgrep -f "tmux -f /dev/null -L stub-$$ " | wc -l | tr -d ' ')
 # mutation: remove the kill-server sweep from the trap → the stub's server survives
 check "sweep: the job's scratch tmux server was running before the interrupt" [ $sw_before -eq 1 ]
 check "sweep: within 5 s of TERM the scratch server is gone, runner exits 130" [ $sw_gone -eq 1 -a $wrc -eq 130 ]
