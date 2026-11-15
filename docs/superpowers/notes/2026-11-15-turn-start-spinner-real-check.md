@@ -48,7 +48,7 @@ busy 1 · ready 1                                                               
 
 ## After Task 4
 
-Run2 on commit e76e40c (Task 4), same pane `%8`, mod=None classification with this worktree's `board/paneclass.py`.
+Run2 was captured while the worktree was at e76e40c (Task 4). Task 4 changed afterwards (b30f0f4 anchors the spinner glyph at column 0, a78275e keeps `*` in the set), so every classification below was re-run offline with the paneclass at a78275e; the verdicts are the same as at e76e40c (ready, working, working; 130 of 130 single-row frames working; the 16 wrapped frames still ready). Same pane `%8`, mod=None classification with this worktree's `board/paneclass.py`.
 
 - Method: a capture loop (`capture-pane -p -t %8`, 0.1 s sleep) and a separate board poll loop (`/api/state`, same ephemeral 7710 board method, token from `TMUX_DASH_TOKEN`), 60 s, 281 captures from 1794711222.323 to 1794711280.865: median gap 0.19 s, max 0.92 s. Trigger: the probe message to the lead, which arrived at about 1794711227.5. The board (PID 61991) was stopped afterwards: `ps` says gone, port 7710 has no listener. Nothing was typed into any pane.
 - Last pre-turn frame, 1794711227.210: `classify` gives `('claude', 'ready')` (expected); the board read `ready`.
