@@ -308,3 +308,33 @@ Added 2026-11-15 after Task 3's live run: on Claude Code 2.1.325, a lead with an
 ```json:metadata
 {"files": ["board/paneclass.py", "board/tests/test_paneclass.py", "tools/tests/test_telegram_watch.py"], "verifyCommand": "python3 -m unittest discover -s board/tests -p 'test_paneclass*.py' && python3 -m unittest discover -s tools/tests -p 'test_telegram_watch.py'", "acceptanceCriteria": ["real fixtures: task-label working, task-label-elapsed working, idle-with-teammates ready; RED before for the two working", "synthetic: ⏺ Let me check… ready; task label + task rows working; + column-0 ⏺ done ready; elapsed + busy row working", "three mutations each fail the named test", "idle-with-teammates idle in watchdog; agreement test live >= 3", "both suites pass"], "modelTier": "standard"}
 ```
+
+---
+
+### Task 5: paneclass — spinners with a hook suffix, joined or wrapped
+
+Added 2026-11-15 after Task 3's second live run (281 captures on Claude Code 2.1.325, 111-column pane): while a hook runs, the spinner's bracket starts with the hook text, `✢ <label>… (running PostToolUse hook · 4s · ↓ 9 tokens)` or `· <label>… (running Stop hooks… 0/4 · 2s · ↓ 28 tokens)`, and at that width the row wraps so `4s · ↓ 9 tokens)` sits at column 0 on the next row. 16 of 146 spinner frames classified `ready` at a78275e. The board and watchdog capture with `-J`; whether `-J` joins these rows is not known, so both shapes must work.
+
+**Goal:** `classify` returns `("claude", "working")` for the two real wrapped fixtures `turn-wrapped-posttooluse.txt` and `turn-wrapped-stop-hooks.txt`, and for the same frames joined into one row, with every earlier verdict unchanged.
+
+**Files:**
+- Modify: `board/paneclass.py` (`SPINNER_RE`, `spinner_live`)
+- Test: `board/tests/test_paneclass.py`
+
+**Constraints:**
+- Elapsed form: inside the bracket, optional text ending in `·` may come before the elapsed time: `\((?:[^()]*·\s*)?\d+\s*[hms]\b[^)]*\)?`. The column-0 glyph anchor and the glyph set `·✢✳✶✻✽*` stay.
+- Wrapped form: a spinner row (column-0 glyph, label ending `…`, then ` (` and bracket text with no `)`, ending in `·`) directly followed by a column-0 row matching `^\d+\s*[hms]\b[^)]*\)\s*$` is one spinner. The continuation row is not a "column-0 row" that ends the spinner. Only the row directly after counts.
+- Everything Tasks 1–4 pinned keeps its verdict.
+
+**Acceptance Criteria:**
+- [ ] Two real-fixture tests (`turn-wrapped-posttooluse.txt`, `turn-wrapped-stop-hooks.txt`) → `working`; RED at a78275e.
+- [ ] Joined-row synthetic tests: `["✢ Plan & run: x.md… (running PostToolUse hook · 4s · ↓ 9 tokens)", "", RULE] + INPUT` and the `Stop hooks… 0/4 ·` variant → `working`; RED at a78275e.
+- [ ] Negative synthetic: a wrapped-looking pair where the next row is `⏺ done` → `ready`; `["⏺ answer (see below ·", "4s · ↓ 9 tokens)", "", RULE] + INPUT` → `ready` (no spinner glyph).
+- [ ] Mutations, each recorded: (1) drop the wrapped-pair branch → the wrapped fixture tests fail; (2) drop the `(?:[^()]*·\s*)?` group → the joined tests fail.
+- [ ] Both suites pass; the watchdog agreement test still passes with the new fixtures.
+
+**Verify:** `python3 -m unittest discover -s board/tests -p 'test_paneclass*.py' && python3 -m unittest discover -s tools/tests -p 'test_telegram_watch.py'`
+
+```json:metadata
+{"files": ["board/paneclass.py", "board/tests/test_paneclass.py"], "verifyCommand": "python3 -m unittest discover -s board/tests -p 'test_paneclass*.py' && python3 -m unittest discover -s tools/tests -p 'test_telegram_watch.py'", "acceptanceCriteria": ["wrapped real fixtures working; RED at a78275e", "joined synthetic PostToolUse and Stop hooks rows working; RED at a78275e", "negatives: wrapped pair then ⏺ done ready; no-glyph pair ready", "mutations: wrapped branch and bracket-prefix group each fail named tests", "both suites pass incl. agreement test"], "modelTier": "standard"}
+```
