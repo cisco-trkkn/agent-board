@@ -12,7 +12,7 @@ Finding: on the real lead pane, the first frames of a turn classify as `ready` w
 
 ## Earliest first frame
 
-- Last `ready` capture: 1794710786.286 (fixture `idle-with-teammates.txt`). First `working` per `/api/state`: 1794710786.616 (fixture `turn-start-task-label.txt`).
+- Last idle capture: 1794710785.280 (fixture `idle-with-teammates.txt`): no spinner line, `busy/ready` row present. The turn's first spinner frame is 1794710785.559 (the `› Message from @spin-check` row and an animated spinner, `✢` then `✶` then `✽`), about 1.06 s before the board's mod-driven `working` at 1794710786.616. First `working` per `/api/state`: 1794710786.616 (fixture `turn-start-task-label.txt`); the board still read `ready` at 785.559 and 786.286 because the mod state lagged.
 - That capture is not the `✢ Thinking…` shape `SPINNER_FIRST_RE` expects. Rows from the spinner to the input rule, verbatim:
 
 ```
@@ -39,12 +39,12 @@ busy 1 · ready 1                                                               
 
 ## Board
 
-- `/api/state` for `%8` read `ready` up to 1794710786.286 and `working` from 1794710786.616 on, through the turn.
+- `/api/state` for `%8` read `ready` up to 1794710786.286 (a spinner was already on screen from 785.559) and `working` from 1794710786.616 on, through the turn.
 - A mod state drove it: the board prefers a fresh agent-status state over pane text, and the offline pane-text result above is `ready` at the same epochs. So the live board hid the gap, and `mod_states()` read afterwards gave `%8: ready`.
 
 ## Fixtures
 
-- `turn-start-task-label.txt`, `turn-start-task-label-elapsed.txt` and `idle-with-teammates.txt` are verbatim copies of run1 captures 1794710786.616, 1794710788.519 and 1794710786.286, each with a line in the fixtures README. They differ in shape from `working.txt` (task list and teammate row instead of a tip), so they are added.
+- `turn-start-task-label.txt`, `turn-start-task-label-elapsed.txt` and `idle-with-teammates.txt` are verbatim copies of run1 captures 1794710786.616, 1794710788.519 and 1794710785.280, each with a line in the fixtures README. They differ in shape from `working.txt` (task list and teammate row instead of a tip), so they are added.
 
 ## After Task 4
 
