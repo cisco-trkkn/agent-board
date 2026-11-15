@@ -167,6 +167,17 @@ class SpinnerLayoutsTest(unittest.TestCase):
         rows = ["✶ Plan & run: x.md…", "  ⎿  ◼ Plan & run: x.md", "     ◻ Task 2", "⏺ done", self.RULE] + self.INPUT
         self.assertEqual(self.cls(rows), ("claude", "ready"))
 
+    def test_indented_glyph_prose_is_not_a_spinner(self):
+        for rows in (["⏺ answer", "  * Next steps…", "", self.RULE], ["  · see the docs…", "", self.RULE],
+                     ["* foo bar…", "", self.RULE]):
+            with self.subTest(rows=rows):
+                self.assertEqual(self.cls(rows + self.INPUT), ("claude", "ready"))
+
+    def test_team_row_before_a_task_row_keeps_the_first_frame_live(self):
+        # the team row is skipped wherever it sits, and the task-list rule does not need continuity across it
+        rows = ["✶ Plan & run: x.md…", "  ⎿  ◼ Plan & run: x.md", "busy 1 · ready 1   [-]", "     ◻ Task 2", self.RULE] + self.INPUT
+        self.assertEqual(self.cls(rows), ("claude", "working"))
+
     def test_teammate_row_between_elapsed_spinner_and_rule_is_skipped(self):
         rows = ["✻ Thinking… (3s · ↓ 1 tokens)", "busy 1 · ready 1   [-]", self.RULE] + self.INPUT
         self.assertEqual(self.cls(rows), ("claude", "working"))
