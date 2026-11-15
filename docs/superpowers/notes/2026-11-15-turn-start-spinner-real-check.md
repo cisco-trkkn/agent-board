@@ -48,3 +48,27 @@ busy 1 · ready 1                                                               
 
 ## After Task 4
 
+Run2 on commit e76e40c (Task 4), same pane `%8`, mod=None classification with this worktree's `board/paneclass.py`.
+
+- Method: a capture loop (`capture-pane -p -t %8`, 0.1 s sleep) and a separate board poll loop (`/api/state`, same ephemeral 7710 board method, token from `TMUX_DASH_TOKEN`), 60 s, 281 captures from 1794711222.323 to 1794711280.865: median gap 0.19 s, max 0.92 s. Trigger: the probe message to the lead, which arrived at about 1794711227.5. The board (PID 61991) was stopped afterwards: `ps` says gone, port 7710 has no listener. Nothing was typed into any pane.
+- Last pre-turn frame, 1794711227.210: `classify` gives `('claude', 'ready')` (expected); the board read `ready`.
+- First spinner frame, 1794711227.740 (the `› Message from @spin-check` row and `✶ Plan & run…`): `classify` gives `('claude', 'working')` (expected). The board still read `ready` (poll at 1794711227.233); it read `working` from 1794711227.843. So the pane-text rule is about 0.1 s ahead of the mod state here.
+- Elapsed frame, 1794711230.704 (`✳ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md… (3s · ↓ 4 tokens)`): `classify` gives `('claude', 'working')`; the board read `working` (a mod state drove it: it prefers a fresh mod state over pane text).
+- Rows of the first frame, spinner to input rule, verbatim (capture 1794711227.740; the later frame 1794711227.988 is identical with `✽`):
+
+```
+✶ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md…
+  ⎿  ◼ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md › blocked by #23, #24
+     ◼ S2 Task 3: real-state turn-start check › blocked by #24
+     ◼ S2 Task 4: task-label spinners + teammate row
+     ◻ Plan & run: docs/superpowers/specs/2026-11-12-execution-analytics-design.md#part-1 › blocked by #2
+     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-replaces-telegram-design.md › blocked by #3
+      … +14 pending, 5 completed
+busy 2 · ready 1                                                                                           [-]
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+```
+
+- Result: the three expected outcomes hold (ready, working, working). Over all 146 run2 frames that have a task-label spinner, the 130 single-row ones all classify `working`.
+- Gap found: the 16 other frames (11% of them) classify `ready` while the board said `working`. They are frames where the spinner line wraps onto two rows, e.g. `✢ Plan & run: …design.md… (running PostToolUse hook ·` then `4s · ↓ 9 tokens)` at column 0 (captures 1794711231.512, 1794711234.491, 1794711266.287, 1794711270.990). The wrapped `running Stop hooks… N/4` and `running PostToolUse hook` suffixes make the line longer than the 111-column pane. The glyph row does not end with `…` or `)`, so neither spinner regex matches it, and the column-0 continuation row would also be rejected. Mid-turn the board's mod state hides it; for a pane-text-only reader (the watchdog) it is a false `ready`.
+
