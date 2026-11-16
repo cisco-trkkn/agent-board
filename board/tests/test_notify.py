@@ -148,12 +148,47 @@ class NotifierTest(unittest.TestCase):
         self.assertEqual(n.observe(ov(project(), project("q", needs_you=[{"window": "a", "pane": "%1", "kind": "claude"}]))), [])
         self.assertEqual(len(n.observe(ov(project(), project("q", needs_you=[{"window": "a", "pane": "%1", "kind": "claude"}, {"window": "b", "pane": "%2", "kind": "claude"}])))), 1)
 
-    def test_tc_notify_off_sends_nothing(self):
-        n = notify.Notifier(runner=self.calls.append, enabled=False, now=self.clock)
+    def test_tc_notify_off_sends_no_banner_but_still_runs_sinks(self):
+        sunk = []
+        n = notify.Notifier(runner=self.calls.append, enabled=False, now=self.clock, sinks=[sunk.append])
         n.observe(ov(project()))
-        self.assertEqual(n.observe(ov(project(needs_you=[{"window": "a", "pane": "%1", "kind": "claude"}]))), [])
+        ev = n.observe(ov(project(needs_you=[{"window": "a", "pane": "%1", "kind": "claude"}])))
         self.assertEqual(self.calls, [])
-        self.assertEqual(n.recent(), [])
+        self.assertEqual(sunk, ev)
+        self.assertEqual(len(ev), 1)
+
+    def test_sinks_seed_and_rate_limit_like_banners(self):
+        sunk = []
+        n = notify.Notifier(runner=self.calls.append, enabled=True, now=self.clock, sinks=[sunk.append])
+        need = lambda w: project(needs_you=[{"window": w, "pane": "%" + w, "kind": "claude"}])
+        n.observe(ov(need("1")))                      # the first overview only seeds the latch
+        self.assertEqual(sunk, [])
+        n.observe(ov(need("1"), ))
+        n.observe(ov(need("1"), ))
+        self.assertEqual(sunk, [])
+        n.observe(ov(project(needs_you=[{"window": "1", "pane": "%1", "kind": "claude"}, {"window": "2", "pane": "%2", "kind": "claude"}])))
+        self.assertEqual(len(sunk), 1)
+        n.observe(ov(project(needs_you=[{"window": "1", "pane": "%1", "kind": "claude"}, {"window": "2", "pane": "%2", "kind": "claude"}, {"window": "3", "pane": "%3", "kind": "claude"}])))
+        self.assertEqual(len(sunk), 1)                # same kind inside RATE_S: held
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_failing_sink_does_not_stop_the_next(self):
+        def boom(ev):
+            raise RuntimeError("x")
+        sunk = []
+        n = notify.Notifier(runner=self.calls.append, enabled=True, now=self.clock, sinks=[boom, sunk.append])
+        n.observe(ov(project()))
+        n.observe(ov(project(needs_you=[{"window": "a", "pane": "%1", "kind": "claude"}])))
+        self.assertEqual(len(sunk), 1)
+
+    def test_default_sinks_follow_tc_discord_alerts(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"TC_DISCORD_ALERTS": "0"}):
+            self.assertEqual(notify.Notifier(runner=self.calls.append).sinks, [])
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("TC_DISCORD_ALERTS", None)
+            self.assertEqual(notify.Notifier(runner=self.calls.append).sinks, [notify.discord_sink])
 
     def test_enabled_reads_env(self):
         import os

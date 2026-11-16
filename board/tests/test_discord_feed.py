@@ -65,6 +65,27 @@ class OutboxTest(Base):
         texts = [json.loads((self.dir / "outbox" / n).read_text())["text"] for n in self.names()]
         self.assertEqual(texts, [str(i) for i in range(5)])
 
+    def test_two_threads_distinct_names_in_order_per_thread(self):
+        import threading
+        names = {0: [], 1: []}
+
+        def work(k):
+            for i in range(200):
+                names[k].append(df.outbox_write(self.dir, post(f"{k}-{i}")).name)
+        # the cap would delete files; read names from the return values only
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)   # make a thread switch inside the name generation likely
+        self.addCleanup(sys.setswitchinterval, old)
+        with mock.patch.object(df, "CAP", 10 ** 6), mock.patch.object(df.time, "time", side_effect=lambda: 1700000000.0):
+            ts = [threading.Thread(target=work, args=(k,)) for k in (0, 1)]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+        allnames = names[0] + names[1]
+        self.assertEqual(len(set(allnames)), 400)
+        self.assertEqual(len({n.split("-")[0] for n in allnames}), 400)   # distinct ms: order never rests on the random hex
+        for k in (0, 1):
+            self.assertEqual(names[k], sorted(names[k]))
+
     def test_validation(self):
         bad = [{"op": "nope"}, {"op": "card", "text": "t", "extra": 1}, {"op": "card"},
                post(tier="routine"), post(tier="loud"), {"op": "thread", "key": "k"},
@@ -482,7 +503,7 @@ class TickTest(DeriveBase):
         self.prime = [fx("1.json", status="pending")]   # a non-empty list primes; an empty one does not
 
     def tick(self, tasks, now=NOW, record=None):
-        return df.tick("proj", record or rec(), self.root, self.tmp.name, now, lead_tasks=tasks)
+        return df.tick("proj", record or rec(), self.root, now, lead_tasks=tasks)
 
     def outbox(self):
         box = tc_env.discord_dir("proj") / "outbox"

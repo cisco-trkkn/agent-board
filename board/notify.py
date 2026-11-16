@@ -3,7 +3,7 @@
 Rules (spec 2026-10-28-overseer-design.md): an event fires once when its condition first appears, not again while it
 holds, again after it clears and comes back; at most one event of a kind per project every RATE_S seconds; the first
 overview, and a project's first appearance, only seed the latch (nothing "appears" at startup). TC_NOTIFY=0 turns
-delivery off. The osascript call goes through an injected runner. Pure except for the runner and the clock.
+banners off only; the events list and the sinks (the discord feed, TC_DISCORD_ALERTS=0 turns it off) still run. The osascript call goes through an injected runner. Pure except for the runner and the clock.
 """
 import os
 import subprocess
@@ -66,9 +66,20 @@ def osascript_runner(argv):
     subprocess.run(argv, capture_output=True, text=True, timeout=10, check=True)
 
 
+def discord_sink(ev):
+    """Append the event to the project's discord feed (tier per kind, the running spec's thread when known), only when the
+    project has a bridge.json channel. Never raises."""
+    try:
+        import discord_feed
+        discord_feed.sink_event(ev)
+    except Exception as e:   # noqa: BLE001
+        print(f"notify: discord sink failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
 class Notifier:
-    def __init__(self, runner=None, enabled=None, now=time.time, rate_s=RATE_S, keep=100):
+    def __init__(self, runner=None, enabled=None, now=time.time, rate_s=RATE_S, keep=100, sinks=None):
         self.runner = runner or osascript_runner
+        self.sinks = ([] if os.environ.get("TC_DISCORD_ALERTS") == "0" else [discord_sink]) if sinks is None else list(sinks)
         self.enabled = (os.environ.get("TC_NOTIFY") != "0") if enabled is None else enabled
         self.now, self.rate_s = now, rate_s
         self.events = deque(maxlen=keep)
@@ -94,11 +105,15 @@ class Notifier:
             events.append({"id": self._seq, "ts": now, **c})
         self._active = set(cur)
         self._projects = {p["project"] for p in ov.get("projects") or []}
-        if not self.enabled:
-            return []
         for ev in events:
             self.events.append(ev)
-            self.banner(ev)
+            if self.enabled:
+                self.banner(ev)
+            for sink in self.sinks:
+                try:
+                    sink(ev)
+                except Exception as e:   # noqa: BLE001 - one failing sink never blocks the next or the banner
+                    print(f"notify: sink failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         return events
 
     def banner(self, ev):

@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, gitlab_sync, ideas, notify, overview, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_feed, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 
@@ -452,6 +452,47 @@ def ensure_overseer():
         print(f"tmux-dash: overseer ensure failed: {e}", file=sys.stderr, flush=True)
 
 
+_discord_checked = {}   # project -> time.monotonic() of the last bridge ensure
+DISCORD_RECHECK_S = 60
+
+
+def ensure_discord_bridges(records):
+    """For each project with a bot token (<dir>/.env) and a bridge.json channel, run `tmux-ctl discord bridge start` at most
+    once per DISCORD_RECHECK_S (the script is a no-op when the bridge runs). TC_DISCORD_BRIDGE=0: never."""
+    if os.environ.get("TC_DISCORD_BRIDGE") == "0":
+        return
+    for r in records:
+        p = r["project"]
+        try:
+            if not ((tc_env.discord_dir(p) / ".env").is_file() and discord_feed.channel_of(p)):
+                continue
+            now = time.monotonic()
+            last = _discord_checked.get(p)
+            if last is not None and now - last < DISCORD_RECHECK_S:
+                continue
+            _discord_checked[p] = now
+            run_script([str(BIN / "tmux-ctl"), "discord", "bridge", "start", "--project", p], timeout=20)
+        except Exception as e:   # noqa: BLE001 - never on the request path's error budget
+            print(f"tmux-dash: discord bridge ensure failed ({p}): {e}", file=sys.stderr, flush=True)
+
+
+def feed_tick(records, now):
+    """The discord feed for each project with a channel: tick (derive, spool, card), then the inbound-events stub.
+    A failure in one project is logged and never breaks the overview or the next project."""
+    home = HOME / ".claude"
+    for r in records:
+        p = r["project"]
+        try:
+            if not discord_feed.channel_of(p):
+                continue
+            sid, pid, started = planview.lead_entry(p, home, tmux)
+            list_id, tasks = planview.raw_live_list(home, sid, pid, started)
+            discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id)
+            discord_feed.read_inbound(tc_env.discord_dir(p))
+        except Exception as e:   # noqa: BLE001
+            print(f"tmux-dash: discord feed failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
 def build_overview(now=None):
     now = now or time.time()
     st = state()
@@ -471,6 +512,8 @@ def overview_payload():
         value = {**ov, "events": NOTIFIER.recent(), "overseer": overseer_info()}
         _overview_cache.update(at=time.monotonic(), value=value)
     ensure_overseer()   # once per fresh build, outside the lock: its run_script can take up to 20 s and must not stall /api/overview
+    ensure_discord_bridges(ov["projects"])
+    feed_tick(ov["projects"], ov["generated"])
     return value
 
 

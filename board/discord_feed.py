@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +22,7 @@ TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
 _POST_OPT = {"thread_key": str, "link_thread_key": str, "files": list}
 _last_ms = 0
+_ms_lock = threading.Lock()   # the overview thread and the notifier sink both write
 
 
 def _check(op):
@@ -52,11 +54,12 @@ def _check(op):
 def _next_ms():
     """Strictly increasing epoch ms within the process, so names sort in write order."""
     global _last_ms
-    ms = int(time.time() * 1000)
-    if ms <= _last_ms:
-        ms = _last_ms + 1
-    _last_ms = ms
-    return ms
+    with _ms_lock:
+        ms = int(time.time() * 1000)
+        if ms <= _last_ms:
+            ms = _last_ms + 1
+        _last_ms = ms
+        return ms
 
 
 def _enforce_cap(box):
@@ -368,11 +371,11 @@ def _load(p):
         return {}
 
 
-def tick(project, record, root, home, now, lead_tasks=None, list_id=""):
+def tick(project, record, root, now, lead_tasks=None, list_id=""):
     """One feed pass for a project under flock(<dir>/feed-state.lock); None when another tick holds it.
     derive -> append events to the feed file -> read every feed event since state["feed_offset"] (so events appended by
     other writers flow through too) -> outbox ops -> the card op when due -> feed-state.json.
-    `lead_tasks` are the raw lead task dicts (planview.raw_live_tasks); `home` is kept for the caller's session lookup."""
+    `lead_tasks` are the raw lead task dicts and `list_id` their task-list directory name (planview.raw_live_list)."""
     import tc_env
     d = tc_env.discord_dir(project)
     d.mkdir(parents=True, exist_ok=True)
@@ -414,3 +417,49 @@ def tick(project, record, root, home, now, lead_tasks=None, list_id=""):
         os.replace(tmp, sp)
         return {"events": len(flow), "ops": written}
 
+
+# ---- board wiring: the notifier's sink, the channel check, the inbound stub ----
+NOTIFY_TIERS = {"needs_you": "decision", "test_failed": "critical", "failing": "critical", "stuck": "critical",
+                "plan_done": "progress", "lead_idle": "routine", "context": "routine", "usage": "routine"}
+
+
+def channel_of(project):
+    """The project's home channel id from <dir>/bridge.json, or ''."""
+    import tc_env
+    v = _load(tc_env.discord_dir(project) / "bridge.json").get("channel")
+    return str(v) if v else ""
+
+
+def sink_event(ev):
+    """Notifier event -> one feed line. Quiet when the project has no channel. Raises on I/O errors (notify.discord_sink logs)."""
+    import tc_env
+    project = ev["project"]
+    if not channel_of(project):
+        return
+    thread = _load(tc_env.discord_dir(project) / "feed-state.json").get("running_thread_key") or ""
+    append_event(project, {"ts": ev.get("ts") or time.time(), "project": project, "spec": "", "kind": ev["kind"],
+                           "tier": NOTIFY_TIERS.get(ev["kind"], "routine"), "text": f"{ev.get('title', '')}: {ev.get('text', '')}".strip(": "),
+                           "refs": {"thread_key": thread} if thread else {}})
+
+
+def read_inbound(dir):
+    """The events stub: every <dir>/events/*.json in name order gets one audit line (result "ignored"; "rejected" for a
+    user missing from access.json allowFrom or an unreadable file), then is deleted. Returns how many it handled."""
+    d = Path(dir)
+    allow = _load(d / "access.json").get("allowFrom")
+    allow = {str(a) for a in allow} if isinstance(allow, list) else set()
+    n = 0
+    for f in sorted((d / "events").glob("*.json")):
+        try:
+            ev = json.loads(f.read_text(encoding="utf-8"))
+            ev = ev if isinstance(ev, dict) else {}
+        except (OSError, ValueError):
+            ev = {}
+        user = str(ev.get("user") or "")
+        audit_append(d, user, "inbound", str(ev.get("custom_id") or ""), "ignored" if user and user in allow else "rejected")
+        try:
+            f.unlink()
+        except OSError:
+            continue
+        n += 1
+    return n
