@@ -8,7 +8,11 @@ Related: `docs/superpowers/specs/2026-11-05-queue-keep-awake-design.md` (spec 9)
 
 1. **Lead stalls after shutdown_requests (110).** A teammate that approves its shutdown just exits; nothing re-invokes
    the lead. A lead that ends its turn "waiting for confirmations" (handoff step 1, teardown before relay) idles
-   forever. Seen 2026-11-09 in the interiors overnight queue: session ff88723d idle 22:22–01:43Z (3h20m).
+   forever. Seen 2026-11-09 in the interiors overnight queue: session ff88723d idle 22:22–01:43Z (3h20m). Seen again
+   2026-11-15 in the agent-board 18-spec queue: session e2030087 (a self-started handoff, doc written) sent three
+   shutdown_requests at 03:04:22Z, ended its turn with "I'll relay once they confirm", and idled until the user asked
+   at 2026-11-16T15:04Z (35h; an idle compaction at 03:59Z did not wake it). Both §1's rule and §3's handoff marker
+   would have caught it.
 2. **The awake hold dies with one claude process (111).** `awake on` runs `caffeinate -i -s -w <pid>` on the nearest
    claude ancestor of the caller (`tools/lib/awake.zsh` `_aw_claude_pid`). A relay kills that lead (the 01:43Z hold
    died at relay); a non-lead claude that ran `on` binds the hold to itself (21:13:36Z, pid 37993). `_aw_current`
