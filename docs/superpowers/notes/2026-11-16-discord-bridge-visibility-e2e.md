@@ -1,6 +1,6 @@
 # Discord bridge visibility: real-state end-to-end (2026-11-16)
 
-Every piece ran once against the user's real long-lived state with a scratch `TC_STATE`. Code under test: this worktree (branch `queue/discord-bridge-visibility`, HEAD `d73ad79`). The live board on :7700 was not touched; `board/server.py` was imported as a module (`deliver_comments` patched out, no indexer) only to build the real overview record from the real tmux state, read-only. Harness scripts: `harness.py`, `fill.py`, `drain.js` in the scratchpad `e2e/` folder.
+Every piece ran once against the user's real long-lived state with a scratch `TC_STATE`. Code under test: this worktree (branch `queue/discord-bridge-visibility`, HEAD `ad600e5`). The live board on :7700 was not touched; `board/server.py` was imported as a module (`deliver_comments` patched out, no indexer) only to build the real overview record from the real tmux state, read-only. Harness scripts: `harness.py`, `fill.py`, `drain.js` in the scratchpad `e2e/` folder.
 
 ## 1. Real dirs, before (file count printed)
 
@@ -38,18 +38,26 @@ tick1: {'events': 2, 'ops': 4} ops by (op,tier): {('card', '-'): 1, ('post', 'pr
 CARD-BEGIN
 ```
 queue: running 2026-11-11-discord-bridge-visibility-design (2/15)
-teammates: claude idle, ✦ bv-zsh busy, ✦ bv-py busy, ✦ bv-rev idle
+✓ BV Task 1: discord channel/bridge/audit subs  (bv-zsh)
+✓ BV Task 2: node bridge  (bv-node)
+✓ BV Task 3: feed core (spool, feed file, card)  (bv-py)
+✓ BV Task 4: feed derivation  (bv-py)
+✓ BV Task 5: board wiring (sink, keeper, tick)  (bv-py)
+✓ BV Task 6: docs, lead rules, install step  (bv-zsh)
+▶ BV Task 7: real-state e2e note  (bv-py standard)
+· BV Task 8: USER GATE real run with the bot  (mechanical)
+teammates: claude idle, ✦ bv-py busy, ✦ bv-rev idle
 waiting on you: none
-updated 16:41
+updated 16:43
 ```
-CARD-END 175
+CARD-END 568
 feed events: 2
-{"ts": 1794865319.9860249, "project": "agent-board", "spec": "2026-11-11-discord-bridge-visibility-design", "kind": "spec_started", "tier": "progress", "text": "spec started: 2026-11-11-discord-bridge-visibility-design", "refs": {"thread_key": "session-0d19924a:3"}}
-{"ts": 1794865319.9860249, "project": "agent-board", "spec": "2026-11-11-discord-bridge-visibility-design", "kind": "plan_written", "tier": "progress", "text": "plan written: 8 tasks", "refs": {"thread_key": "session-0d19924a:3"}}
+{"ts": 1794865397.5794728, "project": "agent-board", "spec": "2026-11-11-discord-bridge-visibility-design", "kind": "spec_started", "tier": "progress", "text": "spec started: 2026-11-11-discord-bridge-visibility-design", "refs": {"thread_key": "session-0d19924a:3"}}
+{"ts": 1794865397.5794728, "project": "agent-board", "spec": "2026-11-11-discord-bridge-visibility-design", "kind": "plan_written", "tier": "progress", "text": "plan written: 8 tasks", "refs": {"thread_key": "session-0d19924a:3"}}
 tick2: {'events': 0, 'ops': 0} new outbox files: 0 new feed events: 0
 ````
 
-(Rerun after fix round 3, commit `d73ad79`: the card shows only the running spec's tasks, the cap keeps `thread`/`archive` ops. The first run's card listed 9 task lines, including the unrelated `#2 EA part 1: final-review fix wave`; see Finding 1.)
+(Rerun after fix rounds 3 and 4, commits `d73ad79` and `ad600e5`: the card shows only the running spec's tasks, the cap keeps `thread`/`archive` ops. The first run's card listed 9 task lines, including the unrelated `#2 EA part 1: final-review fix wave`; see Finding 1.)
 
 The first tick baselines the history (the live ledger `.superpowers/sdd/2026-11-16-discord-bridge-visibility/progress.md` and the completed tasks) and announces only the running spec: 2 feed events (all there are, so "the first 10" is these 2), 4 ops: 1 thread, 2 progress posts, 1 card. The second tick wrote 0 ops and 0 events (dedupe on real data).
 
@@ -58,7 +66,7 @@ The first tick baselines the history (the live ledger `.superpowers/sdd/2026-11-
 The first tick baselines history, so to exercise the review lines each of the 30 real ledger dirs (`docs/superpowers/ledgers/*` plus this branch's live `.superpowers/sdd/*`, symlinked read-only into a scratch root) was derived as the ledger of a synthetic in-progress run on a primed state:
 
 ```
-archived/live ledgers: 30 review events total: 408 longest text: 300 second derive per ledger: 0 events
+archived/live ledgers: 30 review events total: 413 longest text: 300 second derive per ledger: 0 events
 ```
 
 Per ledger the counts run from 3 to 40 review lines (`2026-10-28-overseer` 40, `2026-10-29-retire-plan-window` 4, `2026-11-16-discord-bridge-visibility` 21, `2026-11-16-queue-reliability` 21). No text exceeded the 300-character cap, and a second derive over each ledger emitted 0 events.
@@ -66,15 +74,15 @@ Per ledger the counts run from 3 to 40 review lines (`2026-10-28-overseer` 40, `
 ### Findings on real data
 
 1. Fixed (d73ad79): the first run's card listed every non-`Plan & run:` lead task, so `✓ EA part 1: final-review fix wave` (task #2, from before the spec) appeared as part of the running spec. The card now shows tasks above the spec's floor (`feed-state.json` `spec_floor`, `{'session-0d19924a:3': 24}` here).
-2. Open consequence of the floor rule: the floor is the highest task id when the feed first sees the running spec. On this real list the board saw `#3` in progress only after the lead had already created `#17`–`#24`, so the floor is 24 and the card above shows **no task lines at all**, not even the eight BV tasks. A feed that starts with the spec (the normal case: `spec_started` then tasks created) gets the right floor; a board started mid-spec does not. Needs a ruling: for a spec first seen already running (baseline), either no floor (the not-completed rule applies) or a floor taken from something that survives a board restart.
+2. Fixed (ad600e5): the first fix gave floor 24 here (the board saw `#3` running after `#17`–`#24` existed) and an empty task list. A spec first seen already running now takes its plan's task count n (8, from `metadata.plan`) and shows the n highest-id non-`Plan & run:` tasks: floor 16, so the card above shows #17–#24 and not #2 (`spec_floor` `{'session-0d19924a:3': 16}`). Without `metadata.plan` the card shows only tasks that are not completed.
 3. Fixed (d73ad79): the 200 cap used to drop the `thread` op and the spec-started post under a flood. It now never drops `thread`/`archive` ops (section 4 shows the thread op survived: `createThread: 1`).
 
 ## 4. Node bridge with the fake client on the scratch outbox
 
-The 408 review ops were written with `ops_for_events` + `outbox_write` into the same scratch outbox as the tick (`discord_feed.outbox_write`), the scratch dir got a fake `.env` (`DISCORD_BOT_TOKEN=FAKE.e2e-token.NOTAREALTOKEN123`), and `createBridge` from `tools/discord-bridge/bridge.js` drained it with `FakeClient` from `test/fake-client.js` (a controllable clock, no network).
+The 413 review ops were written with `ops_for_events` + `outbox_write` into the same scratch outbox as the tick (`discord_feed.outbox_write`), the scratch dir got a fake `.env` (`DISCORD_BOT_TOKEN=FAKE.e2e-token.NOTAREALTOKEN123`), and `createBridge` from `tools/discord-bridge/bridge.js` drained it with `FakeClient` from `test/fake-client.js` (a controllable clock, no network).
 
 ```
-outbox files before: 4 ops written: 408 files after (cap 200): 200
+outbox files before: 4 ops written: 413 files after (cap 200): 200
 outbox files at start: 200 | remaining: 0 | failed/: 0
 calls: {"send":199,"edit":0,"pin":0,"startThread":0,"createThread":1} all methods: fetchChannel,createThread,send
 post sends: 199 | sent in outbox name order (subsequence check): true
