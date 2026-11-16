@@ -191,6 +191,7 @@ check "lead rules: wait-gone after shutdown_requests, in the same turn" grep -qF
 check "lead rules: never end a turn waiting for shutdown confirmations" grep -qF 'Never end a turn waiting for shutdown confirmations' "$O"
 check "lead rules: team shutdown, board shutdown and stalled-teammate lines name wait-gone" test "$(grep -c 'tmux-ctl wait-gone' "$O")" -ge 5
 check "lead rules: no line waits for a termination notice" zsh -c '! grep -q "wait for its termination notice" "$1"' _ "$O"
+check "lead rules: a stalled subagent's replacement waits for the subagent's termination notice" grep -qF "subagent's termination notice" "$O"
 check "lead rules: queue holds use awake on --queue --lid (handoff start, step 1, step 2)" test "$(grep -o 'tmux-ctl awake on --queue --lid' "$O" | wc -l | tr -d ' ')" -eq 3
 check "lead and handoff rules: no awake on --lid without --queue" zsh -c '! grep -q "awake on --lid" "$1" "$2"' _ "$O" "$P/skills/handoff/SKILL.md"
 check "lead rules: queue step 2 re-arms the hold at each Plan & run task" zsh -c 'grep "^  2\. \*\*Run each spec in order:\*\*" "$1" | grep -qF "run \`tmux-ctl awake status\` and, when it is off, \`tmux-ctl awake on --queue --lid\`"' _ "$O"

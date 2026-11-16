@@ -302,8 +302,9 @@ are never covered):
 - Send a teammate its brief before you set a task's `owner`: setting `owner` dispatches, and the
   teammate starts from the task's short native description. One published a doc before reading the
   brief that told it to wait for a relayed confirm.
-- Replacing a stalled teammate or subagent: send the shutdown, then run `tmux-ctl wait-gone <name>` in the
-  same turn before you respawn it (a termination notice may never reach you). Idle at its prompt is not dead; a queued message can revive it. Give every dispatch its own
+- Replacing a stalled teammate or subagent: a teammate (it has a `✦` window) gets the shutdown, then
+  `tmux-ctl wait-gone <name>` in the same turn before you respawn it (a termination notice may never reach you).
+  A subagent (no `✦` window) is not seen by `wait-gone`, which would report it gone at once, so wait for the subagent's termination notice before you respawn it. Idle at its prompt is not dead; a queued message can revive it. Give every dispatch its own
   output path (`<deliverable>.<agent-name>.md`) and promote one to the canonical name yourself, so two
   writers never share a file. Snapshot an artefact before downstream agents start reading it by ID.
 - Write briefs and prompts (teammate prompts, brief files, review prompts) with the Write tool. To
