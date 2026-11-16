@@ -48,7 +48,7 @@ busy 1 · ready 1                                                               
 
 ## After Task 4
 
-Run2 was captured while the worktree was at e76e40c (Task 4). Task 4 changed afterwards (b30f0f4 anchors the spinner glyph at column 0, a78275e keeps `*` in the set), so every classification below was re-run offline with the paneclass at a78275e; the verdicts are the same as at e76e40c (ready, working, working; 130 of 130 single-row frames working; the 16 wrapped frames still ready). Same pane `%8`, mod=None classification with this worktree's `board/paneclass.py`.
+Run2 was captured while the worktree was at e76e40c (Task 4). Task 4 changed afterwards (b30f0f4 anchors the spinner glyph at column 0, a78275e keeps `*` in the set), so every classification below was re-run offline with the paneclass at a78275e; the verdicts are the same as at e76e40c (ready, working, working; 130 of 130 single-row frames working; the 16 wrapped frames still ready). At the final HEAD ae58ae1 (Task 5 fix round 1, general wrap join) the same three frames still give ready, working, working, the 130 single-row frames are working, and the 16 wrapped frames are now working too (re-run offline, mod=None); the "still ready" and "Gap found" statements below describe a78275e and are fixed by Task 5. Same pane `%8`, mod=None classification with this worktree's `board/paneclass.py`.
 
 - Method: a capture loop (`capture-pane -p -t %8`, 0.1 s sleep) and a separate board poll loop (`/api/state`, same ephemeral 7710 board method, token from `TMUX_DASH_TOKEN`), 60 s, 281 captures from 1794711222.323 to 1794711280.865: median gap 0.19 s, max 0.92 s. Trigger: the probe message to the lead, which arrived at about 1794711227.5. The board (PID 61991) was stopped afterwards: `ps` says gone, port 7710 has no listener. Nothing was typed into any pane.
 - Last pre-turn frame, 1794711227.210: `classify` gives `('claude', 'ready')` (expected); the board read `ready`.
@@ -70,7 +70,7 @@ busy 2 · ready 1                                                               
 ```
 
 - Result: the three expected outcomes hold (ready, working, working). Over all 146 run2 frames that have a task-label spinner, the 130 single-row ones all classify `working`.
-- Gap found: the 16 other frames (11% of them) classify `ready` while the board said `working`. They are frames where the spinner line wraps onto two rows, e.g. `✢ Plan & run: …design.md… (running PostToolUse hook ·` then `4s · ↓ 9 tokens)` at column 0 (captures 1794711231.512, 1794711234.491, 1794711266.287, 1794711270.990). The wrapped `running Stop hooks… N/4` and `running PostToolUse hook` suffixes make the line longer than the 111-column pane. The glyph row does not end with `…` or `)`, so neither spinner regex matches it, and the column-0 continuation row would also be rejected. Mid-turn the board's mod state hides it; for a pane-text-only reader (the watchdog) it is a false `ready`.
+- Gap found: the 16 other frames (11% of them) classify `ready` while the board said `working`. They are frames where the spinner line wraps onto two rows, e.g. `✢ Plan & run: …design.md… (running PostToolUse hook ·` then `4s · ↓ 9 tokens)` at column 0 (captures 1794711231.512, 1794711234.491, 1794711266.287, 1794711270.990). The wrapped `running Stop hooks… N/4` and `running PostToolUse hook` suffixes make the line longer than the 111-column pane. The glyph row does not end with `…` or `)`, so neither spinner regex matches it, and the column-0 continuation row would also be rejected. Mid-turn the board's mod state hides it; for a pane-text-only reader (the watchdog) it was a false `ready` at a78275e (fixed at ae58ae1).
 - Open question: run2's captures were plain `capture-pane -p`, while the board and the watchdog read with `-J`, so it is not yet known whether `-J` joins the wrapped hook-suffix rows into one. The wrapped frames are stored as fixtures `turn-wrapped-posttooluse.txt` (1794711231.512) and `turn-wrapped-stop-hooks.txt` (1794711270.990), both plain `-p`.
 
 ## Run 3 (-J)
@@ -80,5 +80,15 @@ busy 2 · ready 1                                                               
 - `-J` does not join them: in all 24 `-J` captures the spinner row still ends in the cut-off suffix and the `Ns · ↓ N tokens)` part is the next row, for example `✻ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md… (running Stop hooks… 0/4 · ` then `14s · ↓ 682 tokens)` (1794711635.903, `-J`). In the plain captures 23 of the same 24 passes are wrapped too; the 24th differs only because the plain and `-J` calls of one pass are separate tmux calls and the frame changed between them.
 - The `-e -J -S -40` capture is wrapped the same way (1794711635.903: `…14s · ↓` then `707 tokens)` on the next row). The wrap is drawn by Claude itself at the pane width, not a terminal soft wrap, so `-J` has nothing to join.
 - Because `-J` does not join them, no `turn-joined-hook.txt` fixture was added. `turn-wrapped-posttooluse.txt` and `turn-wrapped-stop-hooks.txt` are the shape the board and watchdog see.
-- Classification of run3's `-J` frames at Task 5's HEAD is still to do.
+- Classification at the final HEAD ae58ae1 (Task 5 fix round 1), `paneclass.classify("2.1.325", rows, False, None)` with the worktree's `board/paneclass.py`, over all 391 `.J` and all 391 `.p` frames of run3 (trailing blank rows dropped):
+
+  | capture | working | ready | other |
+  |---|---|---|---|
+  | `-J` (`.J`) | 195 | 196 | 0 |
+  | plain (`.p`) | 195 | 196 | 0 |
+
+- Disagreements between the `-J` and the plain frame of the same pass: 0 of 391.
+- Live-turn frames that classify `ready`: none. All 195 frames with a column-0 spinner glyph row classify `working` in both modes, including the 24 `-J` and 23 plain frames whose glyph row has an unclosed `(` (the wrapped hook-suffix shape, e.g. `✻ Plan & run: …design.md… (running Stop hooks… 0/4 · ` then `14s · ↓ 682 tokens)`). Ready frames have no glyph row at all: the transitions are working from 1794711635.163, ready from .637.111 (frame shows the idle prompt with the queued `❯ keep going with the queue` input and the lead's "Still waiting on" text), working from .640.023, ready from .649.964, working from .666.118, ready from .691.482: the lead's turn ended each time and the next probe message restarted it.
+- Count of plain frames with a glyph row holding an unclosed `(` followed by a column-0 row starting with `·` (a wrap landing right before `· Ns`): 0 of 391. Run3 has no such tail, so the deferred minor is not exercised by any real capture here (run2's wrapped frames, `turn-wrapped-*.txt`, break after `·` or `↓`, not before it).
+- No new fixture: the wrapped shapes are already covered by `turn-wrapped-posttooluse.txt` and `turn-wrapped-stop-hooks.txt`.
 
