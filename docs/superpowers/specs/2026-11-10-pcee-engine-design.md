@@ -38,6 +38,11 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
 - **Control tokens** (the lead plus architect jobs) are counted together, so judgment moved into a job does not
   flatter the lead share.
 - Concurrency stays 1. No locks, no merge queue, no change packages (stages 4 and 5).
+- **Always-on shape** (user, 2026-11-16, from Anthropic's "Building always-on agents"; sections 12 to 14): one
+  durable **inbox** that every wake-up source writes to and only the engine drains; **approval holds** that deny a
+  stop-class tool call in a worker, park the spec, and resume the worker's session with a one-time pass when the
+  user approves; **schedules** as rows in `timers`, fired by one launchd heartbeat (`engine wake`). The engine stays
+  a queue runner, not a process that runs all the time.
 
 ## How Queue mode runs this spec
 
@@ -76,7 +81,7 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
     pane, base and head commits, start and end times.
   - `events`: append-only: time, spec, job, kind, detail. This is the ledger; `Ruling:` lines are events of kind
     `ruling`.
-  - `steps`, `timers`, `signals`, `waits`, `retry_policies`: section 10.
+  - `steps`, `timers`, `waits`, `retry_policies`: section 10; `inbox`: section 12; `holds`: section 13.
   - `specs` also stores `policy_version` and `policy_hash` (section 10.5).
 - Spec states: `queued`, `planning`, `running`, `final_review`, `integrating`, `awaiting_you`, `done`. Job states:
   `pending`, `running`, `backoff`, `done`, `failed`, `escalated`.
@@ -223,7 +228,7 @@ mode runs as before this stage.
 
 - A restarted engine (`engine resume`, or `engine start` finding unfinished specs) continues from the database.
   In order: every `steps` row left at `intent` is reconciled by its check (section 10.4); timers already due fire
-  once each, oldest first; unread signals are applied; each spec's policy version is compared (section 10.5).
+  once each, oldest first; the inbox is drained (section 12); each spec's policy version is compared (section 10.5).
   Then a job marked `running` whose window still exists is watched again; one whose window is gone is finished
   from its report when that is valid, else run again as a new attempt under its retry policy.
 - The engine process holds a lock file with its pid; a second `engine start` for the same project refuses.
@@ -237,7 +242,8 @@ Added 2026-11-13 from a brainstorm on Temporal's ideas (the user chose: amend th
 layer in our own code, not a Temporal server). Names follow Temporal's: a job is an activity, a spec run is a
 workflow, a user answer is a signal.
 
-The engine loop, one tick every 5 seconds: fire due timers → apply unread signals → check running jobs'
+The engine loop, one tick every 5 seconds: move due timers and worker status changes into the inbox → drain
+the inbox (section 12) → check running jobs'
 heartbeats and timeouts → advance each spec's state → dispatch the next job. Every step of the tick is one
 transaction with its event, as section 1 requires.
 
@@ -289,7 +295,7 @@ start from `docs/superpowers/engine.json` key `retry` (`{"<kind>": {…}}`), eac
   `needs-you` for 10 minutes (section 2), an architect `park`, a policy-version change (10.5), a step check that
   cannot tell (10.4), and a plan task marked as a user gate. Under `engine run` (one spec) the engine waits for the
   answer; under the queue runner the queue moves on (section 11).
-- **Signals:** `tmux-ctl engine signal <spec> approve|deny|fail [--note …]` writes a `signals` row and exits; it
+- **Signals:** `tmux-ctl engine signal <spec> approve|deny|fail [--note …]` writes an `inbox` row (source `user`, section 12) and exits; it
   refuses (exit 2, `no open wait for <spec>`) when the spec is not `awaiting_you`. The engine applies it on its
   next tick: `approve` resumes at the stored step (a stop-class step then runs); `deny` skips that step and goes on
   when the policy has a path without it (a skipped push, a skipped side effect), else fails the spec with
@@ -357,6 +363,85 @@ writes `done` with the result. Kinds and their checks, run on resume for every r
   session, as any LaunchAgent does (FileVault). Where restart-recovery has not merged, this item is skipped and
   recorded as a `Ruling:`.
 
+#### 12. The inbox (Part 1)
+
+Added 2026-11-16 (Decisions, "Always-on shape"). Every wake-up reaches the engine as a row in one durable table; the
+engine is its only reader. This replaces the `signals` table.
+
+- **`inbox`:** `id`, `source` (`user`, `timer`, `worker`, `approval`, `schedule`), `source_id`, `spec`, `job`, `kind`,
+  `payload` (JSON), `received_at`, `state` (`new`, `done`, `dropped`), `handled_at`. `(source, source_id)` is unique;
+  writers use `INSERT OR IGNORE`, so a repeated event is one row.
+- **Writers** insert one row and exit; none calls the engine or writes another table:
+  - `user`: `tmux-ctl engine signal …` (`source_id` a fresh uuid) and the Discord controls' buttons (`source_id` the
+    interaction id, so a double tap counts once). Section 10.3's signal rules are unchanged; they now apply when the
+    row is drained.
+  - `timer`: the tick moves each due `timers` row in, `source_id` `<timer id>@<due_at>`.
+  - `worker`: the tick reads each running job's agent-status file and inserts one row per change of `state`, or when
+    the file goes stale or the window goes away, `source_id` `<pane>:<state>:<updatedAt>`. Sections 2 and 10.1 act on
+    these rows instead of reading the files themselves.
+  - `approval`: the hold hook (section 13).
+  - `schedule`: `engine wake` (section 14).
+- **Drain:** each tick, after the timer and worker rows are in, every `new` row is handled oldest first, each in one
+  transaction that sets it `done` (or `dropped`, with the reason, when it no longer applies: an answer for a spec that
+  is not waiting, a status change for a job already finished) and appends its event. Rows that arrive during a job wait
+  for the next tick and are handled together; nothing interrupts a running job.
+- Rows are written to `events` when drained (with their payload), so `rebuild --check` covers them; `new` rows survive a
+  restart and are drained on resume.
+
+#### 13. Approval holds (Part 1)
+
+Added 2026-11-16. Claude Code's `defer` decision for `PreToolUse` only works in `claude -p` with one tool call per turn
+(hooks reference), and engine workers are visible interactive windows, so a held call is denied and later retried
+under a one-time pass.
+
+- **Hook:** `claude/hooks/engine-hold.sh`, a `PreToolUse` hook that does nothing unless `ENGINE_JOB` is set (the engine
+  sets it, with `ENGINE_DIR`, for every worker it starts). It matches the call against `engine.json` key `holds`, a list
+  of `{"tool": "<name>", "pattern": "<regex on the command or path>", "outside_worktree": true|false}`. Defaults: Bash
+  `git push`; Bash `git reset --hard`, `git branch -D`, `git clean`; Bash `rm -r…` on a path outside the worktree;
+  Write or Edit on a path outside the worktree; Bash `glab mr merge` / `gh pr merge`.
+- **No pass:** the hook inserts an `approval` inbox row (`source_id` the hold id, a fresh uuid; payload: tool name,
+  input, the job, the worker's session id from its agent-status file) and returns `deny` with the reason
+  `held for approval <hold id>: report status blocked with the concern "awaiting approval <hold id>", then stop`.
+- **Engine:** drains the row, closes the window once the report is written (or on the next `ready`), sets the job to
+  `escalated`, and parks the spec (section 10.3) with the exact call as the question and options `approve|deny|fail`.
+  The feed's `decision` line carries the call, so the Discord card shows exactly what will run.
+- **Approve:** the engine writes a `holds` row (`hold_id`, `job`, `call_hash` = sha256 of the tool name and its
+  canonical JSON input, `expires_at` = now + 1 h, `used_at`), then resumes the worker's session with
+  `claude --resume <session id>` in a new window for the job, typing `approval <hold id> granted: retry the held call
+  exactly as before`. The hook finds an unused, unexpired pass whose hash matches, sets `used_at` and returns `allow`.
+  Any other call, or the same call a second time, is held again.
+- **Deny:** the session is resumed with `denied: <note>. Continue without it, or report blocked.`; `fail` fails the
+  spec as section 10.3 says.
+- **Session not resumable** (no session id, or `--resume` exits): a fresh worker gets the brief, the report and the
+  answer (for `approve` the pass still applies, as it is bound to the call, not the session).
+- Prompts the hook does not catch keep section 2's rule: a worker in `needs-you` for 10 minutes parks the spec.
+- The hook never answers a permission prompt and never allows a call it did not hold.
+
+#### 14. Schedules (Part 2)
+
+Added 2026-11-16. Recurring jobs live in the engine's `timers` table and are fired by one launchd heartbeat; the
+engine still runs only for a queue or a short pass.
+
+- **Rows:** `timers` kind `schedule`, payload `{"name", "command", "rule", "skip_if_weekly_usage"}`. Rules:
+  `daily HH:MM`, `weekly <Mon…Sun> HH:MM`, `every <n>m` (local time). `skip_if_weekly_usage` (default 85) skips the run
+  when the weekly usage the status-line tap reports is at or over it, logged as a `schedule_skipped` event.
+- **Commands:** `tmux-ctl engine schedule add <name> --rule "<rule>" -- <command…>`, `schedule list`,
+  `schedule rm <name>`, `schedule run-now <name>`.
+- **Heartbeat:** launchd `com.user.agent-board-engine-wake` runs `tmux-ctl engine wake` every 15 minutes
+  (`StartInterval` 900) and at load (after sleep or login). For every project with an engine database: each due
+  schedule row is moved to its next future occurrence (missed occurrences collapse into one run) and an inbox row is
+  inserted (`source` `schedule`, `source_id` `<name>@<due_at>`). A timer never runs a job by itself.
+- **Who runs it:** when the engine's lock is held (a queue is running), the running engine drains the row on its tick.
+  Otherwise `engine wake` runs a short pass: it takes the lock, drains only `schedule` rows, runs each command in a
+  window `sched·<name>` of `<project>-bg` (creating the session if needed), records `schedule_ran` with its exit code,
+  releases the lock and exits. Scheduled jobs do not count toward the queue's concurrency of 1.
+- **Migration:** `tmux-ctl engine schedule migrate` turns the launchd jobs added by the specs that ran before this one
+  (memory consolidation's nightly run, opportunity discovery's `discover nightly`, trend scout's `scout poll` and
+  `scout weekly`, the ops bot's daily digest), where installed, into schedule rows with the same times and commands,
+  then unloads and removes their plists (each removal a `steps` row, kind `plist_remove`, check: the plist is gone and
+  `launchctl list` does not show the label). Part 2's finishing step runs it once; the stored Queue mode answer is the
+  user's approval. Specs that add a recurring job after this one add a schedule row instead of a plist.
+
 ## Error handling
 
 - On an internal error (an exception, a database it cannot write, a git command failing outside a job) the
@@ -408,6 +493,19 @@ writes `done` with the result. Kinds and their checks, run on resume for every r
   as the plan's e2e record.
 - **Real run, part 2:** a user gate: the next real queue is split, and its morning report is the one the engine
   wrote.
+- **Inbox (section 12):** the same source id inserted twice is one row; rows from every source drained oldest
+  first in one tick; three user answers arriving during a job handled together on the next tick; an inbox writer
+  (`engine signal`) never writing any table but `inbox`; the engine killed mid-drain resumes without handling a row
+  twice; `rebuild --check` exits 0 after a drain.
+- **Holds (section 13):** a fake worker making each default hold pattern's call is denied with the hold id and the
+  spec parks with the exact call as its question; a call inside the worktree is not held; `approve` resumes the
+  session (a fake `claude --resume` records its arguments) and the hook allows exactly that call once, then denies a
+  second identical call; a pass older than 1 h is refused; `deny` resumes with the note; an unresumable session gets
+  a fresh worker with the answer; the hook does nothing outside an engine worker (`ENGINE_JOB` unset).
+- **Schedules (section 14):** each rule form's next occurrence (including across a DST change); a wake after a missed
+  day fires once and moves to the next future occurrence; `skip_if_weekly_usage` skips and logs; a wake while the
+  engine lock is held only inserts the inbox row; a wake with no lock runs the job in a scratch `<project>-bg` and
+  exits; `schedule migrate` against fixture plists in a temporary `LaunchAgents` directory (never the real one).
 - **Suites:** no new failures on the project's suites.
 
 ## Out of scope
