@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import time
 from pathlib import Path
 
@@ -211,7 +212,7 @@ def card_op_due(state, text, now):
 def audit_append(dir, user, action, target, result):
     d = Path(dir)
     d.mkdir(parents=True, exist_ok=True)
-    line = {"ts": time.time(), "user": user, "action": action, "target": str(target)[:80], "result": result}
+    line = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "user": user, "action": action, "target": str(target)[:80], "result": result}
     with open(d / "audit.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
@@ -265,11 +266,13 @@ def _report_summary(path):
     return path.name
 
 
-def derive(project, root, lead_tasks, state, now):
+def derive(project, root, lead_tasks, state, now, list_id=""):
     """(events, new_state). Each event is emitted once: its key goes into state["seen"] (newest 2000 kept).
     The first call on a fresh state (no "primed") records the history already there (completed tasks, ledger lines,
     outcomes, reports) as seen without emitting, so an old ledger is not replayed; spec_started and plan_written
-    of a run already in progress are still emitted. Does not mutate `state`."""
+    of a run already in progress are still emitted. An empty task list does not prime (the lead's task directory may not
+    be resolved yet at board start). Task ids restart at 1 in a new lead session, so dedupe keys and thread keys are
+    `<list_id>:<task id>` (list_id = the task-list directory name) when list_id is given. Does not mutate `state`."""
     st = copy.deepcopy(state or {})
     first = not st.get("primed")
     seen = list(st.get("seen") or [])
@@ -284,12 +287,15 @@ def derive(project, root, lead_tasks, state, now):
         if not (first and history):
             out.append(ev)
 
+    def tk(i):
+        return f"{list_id}:{i}" if list_id else str(i)
+
     tasks = [t for t in (lead_tasks or []) if isinstance(t, dict)]
     runs = sorted((t for t in tasks if str(t.get("subject", "")).startswith(_PLAN_RUN)), key=_tid)
     running = next((t for t in runs if t.get("status") == "in_progress"), None)
-    st["running_thread_key"] = str(running["id"]) if running else ""
+    st["running_thread_key"] = tk(running["id"]) if running else ""
     if running:
-        rid, spec = str(running["id"]), _spec_name(running["subject"])
+        rid, spec = tk(running["id"]), _spec_name(running["subject"])
         emit(f"started:{rid}", _ev(project, spec, "spec_started", "progress", f"spec started: {spec}", now, thread_key=rid))
         meta = running.get("metadata") if isinstance(running.get("metadata"), dict) else {}
         plan = meta.get("plan")
@@ -305,22 +311,23 @@ def derive(project, root, lead_tasks, state, now):
     for t in sorted((t for t in tasks if t not in runs), key=_tid):
         if t.get("status") == "completed":
             if running:
-                emit(f"done:{t.get('id')}", _ev(project, _spec_name(running["subject"]), "task_done", "progress",
-                                                f"✓ {t.get('subject', '')}", now, task=str(t.get("id")), thread_key=str(running["id"])), history=True)
-            elif f"done:{t.get('id')}" not in have:
-                have.add(f"done:{t.get('id')}")   # finished with no spec running: history, never replayed later
-                seen.append(f"done:{t.get('id')}")
+                emit(f"done:{tk(t.get('id'))}", _ev(project, _spec_name(running["subject"]), "task_done", "progress",
+                                                     f"✓ {t.get('subject', '')}", now, task=str(t.get("id")), thread_key=tk(running["id"])), history=True)
+            elif f"done:{tk(t.get('id'))}" not in have:
+                have.add(f"done:{tk(t.get('id'))}")   # finished with no spec running: history, never replayed later
+                seen.append(f"done:{tk(t.get('id'))}")
     for t in runs:
         if t.get("status") == "completed":
             meta = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
             outcome = str(meta.get("outcome") or "completed")
             tier = "critical" if outcome.startswith("failed") else "progress"
-            rid = str(t["id"])
+            rid = tk(t["id"])
             emit(f"outcome:{rid}", _ev(project, _spec_name(t["subject"]), "spec_outcome", tier, outcome, now, thread_key=rid), history=True)
     for p in sorted(glob.glob(os.path.join(glob.escape(str(root)), "docs", "superpowers", "reports", "*-queue.md"))):
         name = os.path.basename(p)
         emit(f"report:{name}", _ev(project, "", "report_written", "progress", f"queue report: {_report_summary(Path(p))}", now, file=name), history=True)
-    st["primed"] = True
+    if tasks:
+        st["primed"] = True
     st["seen"] = seen[-SEEN_CAP:]
     return out, st
 
@@ -361,7 +368,7 @@ def _load(p):
         return {}
 
 
-def tick(project, record, root, home, now, lead_tasks=None):
+def tick(project, record, root, home, now, lead_tasks=None, list_id=""):
     """One feed pass for a project under flock(<dir>/feed-state.lock); None when another tick holds it.
     derive -> append events to the feed file -> read every feed event since state["feed_offset"] (so events appended by
     other writers flow through too) -> outbox ops -> the card op when due -> feed-state.json.
@@ -379,20 +386,31 @@ def tick(project, record, root, home, now, lead_tasks=None):
         if "feed_offset" not in st:
             fp = tc_env.feed_path(project)
             st["feed_offset"] = fp.stat().st_size if fp.exists() and not st.get("primed") else 0
-        events, st = derive(project, root, lead_tasks or [], st, now)
+        events, st = derive(project, root, lead_tasks or [], st, now, list_id)
         for ev in events:
             append_event(project, ev)
         flow, st["feed_offset"] = read_events(project, st["feed_offset"])
-        ops = ops_for_events(flow, st)
+        ops = []
+        for ev in flow:   # one malformed foreign event is logged and skipped; the offset still moves past it
+            try:
+                ops.extend(ops_for_events([ev], st))
+            except Exception as e:   # noqa: BLE001
+                print(f"discord_feed: skipped bad feed event ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         text = render_card(record, lead_tasks or [], now)
         card = card_op_due(st, text, now)
         if card:
             ops.append(card)
+        written = 0
         for op in ops:
-            outbox_write(d, op)
+            try:
+                outbox_write(d, op)
+                written += 1
+            except ValueError as e:
+                print(f"discord_feed: skipped bad op ({project}): {e}", file=sys.stderr, flush=True)
         if card:
             st["card_text"], st["card_ts"] = text, now
         tmp = sp.with_name(sp.name + ".tmp")
         tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, sp)
-        return {"events": len(flow), "ops": len(ops)}
+        return {"events": len(flow), "ops": written}
+

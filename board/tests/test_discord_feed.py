@@ -235,6 +235,7 @@ class AuditTest(Base):
         line = json.loads((self.dir / "audit.jsonl").read_text().splitlines()[0])
         self.assertEqual(set(line), {"ts", "user", "action", "target", "result"})
         self.assertEqual(len(line["target"]), 80)
+        self.assertRegex(line["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual((line["user"], line["action"], line["result"]), ("u1", "pause", "ok"))
         df.audit_append(self.dir, "u1", "a", "t", "r")
         self.assertEqual(len((self.dir / "audit.jsonl").read_text().splitlines()), 2)
@@ -412,6 +413,30 @@ class TriggerTest(DeriveBase):
 
 
 class DedupeTest(DeriveBase):
+    def test_empty_task_list_does_not_prime(self):
+        # a board that starts before the lead's task dir resolves reads []; the next poll must still baseline history
+        self.ledger("ea1")
+        evs, st = self.derive([], {})
+        self.assertEqual(evs, [])
+        self.assertFalse(st.get("primed"))
+        evs, st = self.derive([self.run_task, self.sub, fx("1.json")], st)
+        self.assertEqual([e["kind"] for e in evs], ["spec_started", "plan_written"])
+        self.assertTrue(st["primed"])
+
+    def test_same_task_ids_from_two_lists_both_emit(self):
+        st = primed()
+        a, st = df.derive("proj", self.root, [self.run_task], st, NOW, "session-aaaaaaaa")
+        self.assertEqual(a[0]["refs"]["thread_key"], "session-aaaaaaaa:3")
+        self.assertEqual(st["running_thread_key"], "session-aaaaaaaa:3")
+        b, st = df.derive("proj", self.root, [self.run_task], st, NOW, "session-bbbbbbbb")
+        self.assertEqual(b[0]["refs"]["thread_key"], "session-bbbbbbbb:3")
+        self.assertEqual([e["kind"] for e in b], ["spec_started", "plan_written"])   # a new list is a new spec thread
+        done = fx("1.json")
+        c, st = df.derive("proj", self.root, [done], st, NOW, "session-aaaaaaaa")
+        d, st = df.derive("proj", self.root, [done], st, NOW, "session-bbbbbbbb")
+        self.assertEqual((len(c), len(d)), (1, 1))
+        self.assertEqual(df.ops_for_events(d, st)[-1], {"op": "archive", "key": "session-bbbbbbbb:1"})
+
     def test_seen_cap(self):
         st = {"primed": True, "seen": [f"k{i}" for i in range(2000)]}
         evs, st = self.derive([self.run_task], st)
@@ -452,6 +477,10 @@ class OpsTest(Base):
 
 
 class TickTest(DeriveBase):
+    def setUp(self):
+        super().setUp()
+        self.prime = [fx("1.json", status="pending")]   # a non-empty list primes; an empty one does not
+
     def tick(self, tasks, now=NOW, record=None):
         return df.tick("proj", record or rec(), self.root, self.tmp.name, now, lead_tasks=tasks)
 
@@ -460,7 +489,7 @@ class TickTest(DeriveBase):
         return [json.loads(p.read_text()) for p in sorted(box.glob("*.json"))] if box.exists() else []
 
     def test_tick_writes_feed_outbox_card(self):
-        self.tick([])  # primes
+        self.tick(self.prime)  # primes
         self.tick([self.run_task, self.sub], now=NOW + 100)
         ev, _ = df.read_events("proj", 0)
         self.assertEqual([e["kind"] for e in ev], ["spec_started", "plan_written", "task_done"])
@@ -473,7 +502,7 @@ class TickTest(DeriveBase):
         self.assertIn("card_text", st)
 
     def test_events_from_others_flow_through(self):
-        self.tick([])
+        self.tick(self.prime)
         df.append_event("proj", {"ts": 5.0, "project": "proj", "spec": "", "kind": "needs_you", "tier": "decision", "text": "lead waits", "refs": {}})
         self.tick([], now=NOW + 100)
         posts = [o for o in self.outbox() if o["op"] == "post"]
@@ -484,7 +513,7 @@ class TickTest(DeriveBase):
 
     def test_restart_emits_nothing(self):
         global df
-        self.tick([])
+        self.tick(self.prime)
         self.tick([self.run_task, self.sub], now=NOW + 100)
         n_feed = len(df.read_events("proj", 0)[0])
         n_out = len([o for o in self.outbox() if o["op"] != "card"])   # a card op may follow: "updated HH:MM" moves
@@ -492,6 +521,25 @@ class TickTest(DeriveBase):
         self.tick([self.run_task, self.sub], now=NOW + 200)
         self.assertEqual(len(df.read_events("proj", 0)[0]), n_feed)
         self.assertEqual(len([o for o in self.outbox() if o["op"] != "card"]), n_out)
+
+    def test_malformed_foreign_event_is_skipped_and_offset_moves(self):
+        self.tick(self.prime)
+        f = tc_env.feed_path("proj")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        with open(f, "a") as fh:
+            fh.write(json.dumps({"ts": 1.0, "kind": "needs_you", "tier": "decision"}) + "\n")   # no text
+            fh.write(json.dumps([1, 2]) + "\n")
+            fh.write(json.dumps({"ts": 2.0, "project": "proj", "spec": "", "kind": "needs_you", "tier": "decision", "text": "ok", "refs": {}}) + "\n")
+        with mock.patch("sys.stderr"):
+            self.tick([self.run_task], now=NOW + 100)
+        posts = [o for o in self.outbox() if o["op"] == "post"]
+        self.assertIn("ok", [p["text"] for p in posts])
+        n = len(self.outbox())
+        feed_n = len(df.read_events("proj", 0)[0])
+        with mock.patch("sys.stderr"):
+            self.tick([self.run_task], now=NOW + 200)
+        self.assertEqual(len(df.read_events("proj", 0)[0]), feed_n)   # nothing re-derived or re-appended
+        self.assertEqual(len([o for o in self.outbox() if o["op"] != "card"]), len([o for o in self.outbox()[:n] if o["op"] != "card"]))
 
     def test_held_lock_skips_tick(self):
         d = tc_env.discord_dir("proj")

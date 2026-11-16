@@ -409,6 +409,8 @@ class RawLiveTasksTest(unittest.TestCase):
             self.assertEqual(planview.raw_live_tasks(td, SID1), [t])
             self.assertEqual([x["id"] for x in planview.live_tasks(td, SID1)], ["3"])
             self.assertEqual(planview.raw_live_tasks(td, ""), [])
+            self.assertEqual(planview.raw_live_list(td, SID1)[0], "session-11111111")
+            self.assertEqual(planview.raw_live_list(td, ""), ("", []))
 
     def test_raw_team_fallback(self):
         with tempfile.TemporaryDirectory() as td:
@@ -417,3 +419,4 @@ class RawLiveTasksTest(unittest.TestCase):
             (Path(td) / "teams" / "team-x").mkdir(parents=True)
             (Path(td) / "teams" / "team-x" / "config.json").write_text(json.dumps({"name": "team-x", "leadSessionId": SID2}))
             self.assertEqual([x["id"] for x in planview.raw_live_tasks(td, SID2)], ["1"])
+            self.assertEqual(planview.raw_live_list(td, SID2)[0], "team-x")

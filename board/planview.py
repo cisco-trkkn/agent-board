@@ -139,16 +139,23 @@ def _raw_dir(d):
     return tasks
 
 
-def raw_live_tasks(home, sid, pid=0, started=0):
-    """The task dicts exactly as the lead wrote them (metadata, description kept), from the directory live_tasks resolves."""
+def raw_live_list(home, sid, pid=0, started=0):
+    """(list name, task dicts as the lead wrote them) from the directory live_tasks resolves; name is that directory's
+    name (session-<id8> or the team), '' when there is none. Task ids restart in a new session: the name keeps them apart."""
     if not sid:
-        return []
-    tasks = _raw_dir(Path(home) / "tasks" / f"session-{sid[:8]}")
+        return "", []
+    name = f"session-{sid[:8]}"
+    tasks = _raw_dir(Path(home) / "tasks" / name)
     if not tasks:
         team = team_name(home, sid, pid, started)
         if team:
-            tasks = _raw_dir(Path(home) / "tasks" / team)
-    return tasks
+            name, tasks = team, _raw_dir(Path(home) / "tasks" / team)
+    return (name if tasks else ""), tasks
+
+
+def raw_live_tasks(home, sid, pid=0, started=0):
+    """The task dicts exactly as the lead wrote them (metadata, description kept), from the directory live_tasks resolves."""
+    return raw_live_list(home, sid, pid, started)[1]
 
 
 def _read_dir(d):
