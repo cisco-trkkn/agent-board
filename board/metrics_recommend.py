@@ -5,6 +5,7 @@ Imports nothing from `metrics` (lookup comes from metrics_analyze). The claude b
 """
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,10 @@ PROMPT = Path(__file__).resolve().parent.parent / "claude" / "analytics.md"
 TIMEOUT_S = 600
 ASKED = 3
 FIELDS = ("title", "change", "expected_effect", "evidence", "risk")
+PROSE = ("title", "change", "expected_effect")   # numbers in these must be cited by the item's own evidence
+# a number not part of a token (key path, model name, p90): nothing word-like, `.`, `|`, `,` or `-` before it or after it
+NUMBER = re.compile(r"(?<![\w.|,\-])-?\d+(?:\.\d+)?%?(?![\w|])")
+LIST_MARK = re.compile(r"^\s*\d+[.)]\s")
 ARGV = ["-p", "--model", "sonnet", "--effort", "medium", "--tools", "Read", "--allowedTools", "Read", "--permission-mode",
         "dontAsk", "--no-session-persistence", "--strict-mcp-config", "--output-format", "json"]
 
@@ -24,7 +29,7 @@ class Unavailable(Exception):
 
 def run_claude(stats_path):
     """The model's `result` text. Raises Unavailable(reason) on a timeout, a non-zero exit or an unreadable answer."""
-    stats_path = Path(stats_path)
+    stats_path = Path(stats_path).resolve()
     prompt = PROMPT.read_text().rstrip("\n") + f"\n\nStats file: {stats_path}\n"
     try:
         p = subprocess.run([os.environ.get("TC_CLAUDE_BIN") or "claude", *ARGV], input=prompt, capture_output=True, text=True,
@@ -45,15 +50,14 @@ def run_claude(stats_path):
 
 
 def _items_of(v):
-    if isinstance(v, list):
-        return v
-    if isinstance(v, dict) and isinstance(v.get("items"), list):
-        return v["items"]
-    return None
+    """A list of objects, or the `items` list of an object; None for anything else (so prose like `[1]` never wins)."""
+    items = v if isinstance(v, list) else v.get("items") if isinstance(v, dict) else None
+    return items if isinstance(items, list) and all(isinstance(i, dict) for i in items) else None
 
 
 def parse_items(text):
-    """The first fenced json block's list or {"items": [...]}, else the first [..] or {..} span of the text that is one."""
+    """The first fenced json block's list, else the first list of objects or {"items": [...]} in the text. An empty list
+    counts only when nothing better is found."""
     dec = json.JSONDecoder()
     spans = []
     fence = text.find("```json")
@@ -63,16 +67,26 @@ def parse_items(text):
         if end > start:
             spans.append(text[start:end])
     spans.append(text)
+    empty = None
     for s in spans:
-        for i, ch in enumerate(s):
-            if ch in "[{":
+        i = 0
+        while i < len(s):
+            if s[i] in "[{":
                 try:
-                    v, _ = dec.raw_decode(s[i:])
+                    v, n = dec.raw_decode(s[i:])
                 except ValueError:
+                    i += 1
                     continue
                 items = _items_of(v)
-                if items is not None:
+                if items:
                     return items
+                if items is not None and empty is None:
+                    empty = items
+                i += n
+            else:
+                i += 1
+    if empty is not None:
+        return empty
     raise Unavailable("no JSON result")
 
 
@@ -98,6 +112,20 @@ def _matches(model, actual):
     return type(model) is type(actual) and model == actual
 
 
+def _cited(text, actuals):
+    """Whether a number written in prose (`3.46`, `33%`) equals one of the item's stats values: after rounding to the
+    stats value's decimals, a percent against the ratio it stands for."""
+    n = float(text.rstrip("%"))
+    for a in actuals:
+        if text.endswith("%"):
+            d = len(text.rstrip("%").split(".")[1]) if "." in text else 0
+            if round(a * 100, d) == n:
+                return True
+        elif _matches(n, a):
+            return True
+    return False
+
+
 def check_item(item, stats):
     """None when the item passes, else the reason it is dropped."""
     if not isinstance(item, dict):
@@ -117,12 +145,21 @@ def check_item(item, stats):
             return f"unknown key {e['key']}"
         if not _matches(e["value"], actual):
             return f"{e['key']} is {json.dumps(actual)}, not {json.dumps(e['value'])}"
+    actuals = [metrics_analyze.lookup(stats, e["key"]) for e in ev]
+    actuals = [a for a in actuals if _num(a)]
+    for field in PROSE:
+        text = item[field] if isinstance(item[field], str) else ""
+        text = LIST_MARK.sub("", text, count=1)
+        for m in NUMBER.finditer(text):
+            if not _cited(m.group(0), actuals):
+                return f"uncited number {m.group(0)} in {field}"
     return None
 
 
 def recommend(stats_path):
     """The recommend.json content: {items, dropped, passed, asked}, or {items: [], unavailable}."""
-    stats = json.loads(Path(stats_path).read_text())
+    stats_path = Path(stats_path).resolve()
+    stats = json.loads(stats_path.read_text())
     try:
         parsed = parse_items(run_claude(stats_path))
     except Unavailable as e:

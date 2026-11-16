@@ -20,5 +20,6 @@ Rules:
   `trends.median_usd_per_spec.current`; a list step is its index, for example `flags.overpowered.0.model_used`;
   `by_tier_model` keys contain `|`, for example `by_tier_model.standard|sonnet.tasks`. Copy the value as it is written in the
   file. Every cited key and value is checked by code against stats.json, and an item with one wrong is dropped.
+- Every number in the title, change or expected effect must also appear in that item's evidence (a percent matches a ratio).
 - Cite at least one key per item. Do not cite a number you computed yourself.
 - If `coverage` shows few tasks with cost data, say so in `risk` and prefer changes that need no cost data.

@@ -160,6 +160,55 @@ class EvidenceCheckTest(Base):
         self.assertEqual(out.splitlines()[0], "- one")
 
 
+class ProseNumbersTest(Base):
+    def kept(self, **fields):
+        """Titles kept and the dropped list for one item citing escalation_rate 0.3333 and median_usd current 3.46."""
+        it = item("t", ("by_tier_model.standard|sonnet.escalation_rate", 0.3333), ("trends.median_usd_per_spec.current", 3.46))
+        it.update(fields)
+        self.answer([it])
+        self.run_stats()
+        r = self.result()
+        return [i["title"] for i in r["items"]], r["dropped"]
+
+    def test_uncited_number_in_prose_dropped(self):
+        # mutation: skip the prose check, or check only `change`, and these survive
+        for field in ("title", "change", "expected_effect"):
+            with self.subTest(field):
+                kept, dropped = self.kept(**{field: "cuts the cost to 4 per spec"} if field != "title" else {"title": "cut cost to 4"})
+                self.assertEqual(kept, [])
+                self.assertEqual(dropped[0]["reason"], f"uncited number 4 in {field}")
+
+    def test_stderr_line_names_the_uncited_number(self):
+        it = item("t", ("trends.specs_run.current", 4), change="run 9 specs")
+        self.answer([it])
+        rc, out, err = self.run_stats()
+        self.assertEqual(err.strip(), 'metrics: recommend: dropped "t": uncited number 9 in change')
+
+    def test_cited_numbers_in_prose_kept(self):
+        kept, dropped = self.kept(change="median cost 3.46 per spec; escalation is 0.3333", expected_effect="3.46 falls")
+        self.assertEqual((kept, dropped), (["t"], []))
+
+    def test_cited_number_matches_after_rounding_to_the_stats_decimals(self):
+        kept, dropped = self.kept(change="escalation 0.33333 and 3.460 per spec")
+        self.assertEqual(kept, ["t"])
+        kept, dropped = self.kept(change="cost 3.5 per spec")
+        self.assertEqual(kept, [])
+
+    def test_percent_matches_a_stats_ratio(self):
+        self.assertEqual(self.kept(change="escalation of 33% on standard")[0], ["t"])
+        self.assertEqual(self.kept(change="escalation of 33.3% on standard")[0], ["t"])
+        kept, dropped = self.kept(change="escalation of 50% on standard")          # mutation: match any percent
+        self.assertEqual((kept, dropped[0]["reason"]), ([], "uncited number 50% in change"))
+
+    def test_key_tokens_model_names_and_list_numbers_are_not_numbers(self):
+        kept, dropped = self.kept(title="Move by_tier_model.standard|sonnet.tasks to claude-opus-5-5 or sonnet-5 (p90 cost)",
+                                  change="1. watch trends.specs_run.current.0 and flags.overpowered.0.model_used")
+        self.assertEqual((len(kept), dropped), (1, []))
+
+    def test_non_string_prose_fields_are_ignored(self):
+        self.assertEqual(self.kept(risk="a risk of 7 percent")[0], ["t"])            # risk is not checked
+
+
 class ParsingTest(Base):
     def test_accepts_fence_bare_list_and_items_object(self):
         for wrap in ("fence", "bare", "items"):
@@ -168,6 +217,16 @@ class ParsingTest(Base):
                 self.assertEqual(self.run_stats()[0], 0)
                 self.assertEqual(self.result()["passed"], 3)
                 self.rec.unlink()
+
+    def test_prose_brackets_before_the_array_do_not_win(self):
+        # mutation: take the first decodable list, and [1] (or [2, 3]) is returned
+        text = "See [1] and [2, 3] for background.\n" + json.dumps(GOOD)
+        out = self.t / "out.json"
+        out.write_text(json.dumps({"result": text}))
+        os.environ["FAKE_RECOMMEND_OUT"] = str(out)
+        self.addCleanup(os.environ.pop, "FAKE_RECOMMEND_OUT", None)
+        self.assertEqual(self.run_stats()[0], 0)
+        self.assertEqual(self.result()["passed"], 3)
 
     def test_unparseable_answer_is_unavailable(self):
         self.answer([], wrap="garbage")
@@ -224,6 +283,26 @@ class RunTest(Base):
         self.assertTrue(stdin.startswith((CHECKOUT / "claude/analytics.md").read_text()))
         self.assertEqual((self.t / "cwd").read_text().strip(), str(self.stats.parent))
 
+    def test_relative_stats_path_is_resolved(self):
+        # mutation: use the path as given: cwd becomes the parent but the prompt line stays relative
+        self.answer(GOOD)
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(self.t)
+        self.assertEqual(self.cli("--stats", "an/stats.json")[0], 0)
+        last = (self.t / "stdin").read_text().rstrip("\n").splitlines()[-1]
+        self.assertEqual(last, f"Stats file: {self.stats}")
+        self.assertTrue(Path(last.split(": ", 1)[1]).is_absolute() and Path(last.split(": ", 1)[1]).exists())
+        self.assertEqual(self.result()["passed"], 3)                                  # recommend.json beside the real file
+
+    def test_recommend_function_with_a_relative_path(self):
+        self.answer(GOOD)
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(self.t)
+        self.assertEqual(metrics_recommend.recommend("an/stats.json")["passed"], 3)
+        self.assertEqual((self.t / "stdin").read_text().rstrip("\n").splitlines()[-1], f"Stats file: {self.stats}")
+
     def test_without_stats_it_runs_analyze_first(self):
         self.answer(GOOD)
         with mock.patch.object(metrics_analyze, "overview_projects", side_effect=OSError("down")):
@@ -246,7 +325,7 @@ class PromptTest(unittest.TestCase):
         text = (CHECKOUT / "claude/analytics.md").read_text().lower()
         for phrase in ("routing", "plan granularity", "review setup", "team shape", "workflow rules", "small", "testable",
                        "never recommend editing the orchestrator", "its own prompt", "next week", "stats.json", "exact values",
-                       "exactly three", "evidence", "expected_effect", "title", "change", "risk"):
+                       "exactly three", "must also appear in that item's evidence", "evidence", "expected_effect", "title", "change", "risk"):
             self.assertIn(phrase, text, phrase)
 
 

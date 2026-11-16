@@ -1663,7 +1663,7 @@ def cmd_recommend(repo, args):
     evidence matches, write recommend.json beside the stats file."""
     import metrics_recommend   # lazy: it imports metrics_analyze, never metrics
     if args.stats:
-        stats_path = Path(args.stats)
+        stats_path = Path(args.stats).resolve()
         if not stats_path.is_file():
             raise MetricsError(f"stats file not found: {stats_path.name}")
     else:
