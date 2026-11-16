@@ -1,6 +1,8 @@
 # awake.zsh — sourced by tmux-ctl for `tmux-ctl awake …` (spec 2026-11-05-queue-keep-awake §1).
 # Holds `caffeinate -i -s -w <claude pid>` so an overnight queue is not cut short by idle sleep.
 # State: $TC_STATE_DIR/awake.json = {"pid", "caffeinatePid", "since"} plus "lid": true, "watchdogPid" in lid mode (spec §1b).
+# `on --queue` watches the tmux server instead (a relay replaces the lead, not the server) and records "queue": true;
+# a plain `on` over a live plain hold that watches another pid re-points it (spec 2026-11-10-queue-reliability §4).
 # TC_AWAKE_ANCESTOR (tests): the command-name substring that marks the claude ancestor (default: claude).
 
 _aw_file() { print -r -- "$TC_STATE_DIR/awake.json" }
@@ -28,6 +30,7 @@ _aw_edit() {   # _aw_edit <jq filter>: rewrite awake.json in place (no-op when a
   local f="$(_aw_file)"; [[ -f "$f" ]] || return 0
   jq "$1" "$f" > "$f.$$" 2>/dev/null && mv "$f.$$" "$f" || rm -f "$f.$$"
 }
+_aw_queue_recorded() { [[ "$(jq -r '.queue // false' "$(_aw_file)" 2>/dev/null)" == true ]] }
 _aw_lid_recorded() { [[ "$(jq -r '.lid // false' "$(_aw_file)" 2>/dev/null)" == true ]] }
 _aw_is_watchdog() { [[ -n "$1" && "$(ps -o args= -p "$1" 2>/dev/null)" == *"tmux-ctl awake _watchdog"* ]] }
 _aw_stale_warn() { _aw_sleepdisabled && ! _aw_lid_recorded && print -r -- "awake: stale lid hold: SleepDisabled is 1 with no owner; run tmux-ctl awake off"; return 0 }
@@ -85,23 +88,42 @@ awake_cmd() {
   local f="$(_aw_file)" cur cp since
   case "$sub" in
     on)
-      local pid="" lid=0
+      local pid="" lid=0 queue=0 old="" usage="usage: tmux-ctl awake on [--queue | --pid N] [--lid]"
       while (( $# )); do
-        case "$1" in --pid) pid="$2"; shift 2 ;; --lid) lid=1; shift ;; *) print -u2 "usage: tmux-ctl awake on [--pid N] [--lid]"; return 2 ;; esac
+        case "$1" in --pid) pid="$2"; shift 2 ;; --lid) lid=1; shift ;; --queue) queue=1; shift ;; *) print -u2 -r -- "$usage"; return 2 ;; esac
       done
+      (( queue )) && [[ -n "$pid" ]] && { print -u2 -r -- "$usage"; return 2 }
+      if (( queue )); then   # the tmux server outlives every lead of the queue
+        pid="$(tc_tmux display -p '#{pid}' 2>/dev/null)"
+        [[ "$pid" == <-> ]] || { print -r -- "awake: no tmux server; run on without --queue"; return 1 }
+      fi
       if cur="$(_aw_current)"; then
         local -a c=("${(@ps:\t:)cur}")
-        print -r -- "awake: already on (pid $c[1], since $c[3])"
-        (( lid )) && _aw_lid_on
-        _aw_stale_warn; return 0
+        if _aw_queue_recorded; then   # a queue hold is never re-pointed
+          print -r -- "awake: already on (queue)"
+          (( lid )) && _aw_lid_on
+          _aw_stale_warn; return 0
+        fi
+        [[ -n "$pid" ]] || pid="$(_aw_claude_pid)"   # no claude ancestor: the caller is unknown, so the hold is kept
+        if (( ! queue )) && [[ -z "$pid" || "$pid" == "$c[2]" ]]; then
+          print -r -- "awake: already on (pid $c[1], since $c[3])"
+          (( lid )) && _aw_lid_on
+          _aw_stale_warn; return 0
+        fi
+        kill "$c[1]" 2>/dev/null; old="$c[2]"   # re-point: the hold watched another pid
       fi
       [[ -n "$pid" ]] || pid="$(_aw_claude_pid)" || { print -r -- "awake: no claude ancestor; pass --pid"; return 1 }
       caffeinate -i -s -w "$pid" >/dev/null 2>&1 </dev/null &!
       cp=$!
       since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      jq -n --argjson pid "$pid" --argjson cp "$cp" --arg since "$since" '{pid:$pid, caffeinatePid:$cp, since:$since}' > "$f"
+      if [[ -n "$old" ]]; then   # keep lid and watchdogPid as they are; the watchdog reads .pid each tick
+        _aw_edit ".pid = $pid | .caffeinatePid = $cp | .since = \"$since\" | $( (( queue )) && print -r -- '.queue = true' || print -r -- 'del(.queue)' )"
+      else
+        jq -n --argjson pid "$pid" --argjson cp "$cp" --arg since "$since" --argjson q "$queue" '{pid:$pid, caffeinatePid:$cp, since:$since} + (if $q == 1 then {queue:true} else {} end)' > "$f"
+      fi
       _aw_on_battery && print -r -- "awake: on battery: idle sleep is held, but a closed lid still sleeps; plug in for the night"
-      print -r -- "awake: on (pid $cp, watching $pid)"
+      if [[ -n "$old" ]]; then print -r -- "awake: on (re-pointed from $old to $pid)"
+      else print -r -- "awake: on (pid $cp, watching $pid)"; fi
       (( lid )) && _aw_lid_on
       _aw_stale_warn; return 0 ;;
     off)
@@ -126,6 +148,7 @@ awake_cmd() {
       if cur="$(_aw_current)"; then
         local -a c=("${(@ps:\t:)cur}")
         print -r -- "on (pid $c[1], watching $c[2], since $c[3])"
+        _aw_queue_recorded && print -r -- "queue: on"
       else print -r -- "off"; fi
       if _aw_lid_recorded; then print -r -- "lid: on"; else print -r -- "lid: off"; fi
       _aw_stale_warn
@@ -136,13 +159,14 @@ awake_cmd() {
       print -r -- "Install it with:  sudo visudo -f /etc/sudoers.d/agent-board-awake"
       return 0 ;;
     _watchdog)   # detached by `on --lid`: releases the lid hold when the lead dies or the battery drops below 15%
-      local lead="$1" tick="${TC_AWAKE_TICK:-60}" pct wp
+      local lead="$1" tick="${TC_AWAKE_TICK:-60}" pct wp fl
       zmodload zsh/zselect 2>/dev/null
       while :; do
         zselect -t $(( tick * 100 )) 2>/dev/null
         if [[ -f "$f" ]]; then   # a newer hold owns the file: not ours to release
           wp="$(jq -r '.watchdogPid // empty' "$f" 2>/dev/null)"
           [[ -n "$wp" && "$wp" != "$$" ]] && return 0
+          fl="$(jq -r '.pid // empty' "$f" 2>/dev/null)"; [[ "$fl" == <-> ]] && lead="$fl"   # a re-pointed hold: follow its watched pid
         fi
         if ! kill -0 "$lead" 2>/dev/null; then
           if _aw_release; then _aw_edit 'del(.lid, .watchdogPid)'; return 0; fi
@@ -172,6 +196,6 @@ awake_cmd() {
         print -r -- "$lt $ty $reason"
       done
       return 0 ;;
-    *) print -u2 "usage: tmux-ctl awake on [--pid N] [--lid] | off | status | sleeps <since> | lid-setup"; return 2 ;;
+    *) print -u2 "usage: tmux-ctl awake on [--queue | --pid N] [--lid] | off | status | sleeps <since> | lid-setup"; return 2 ;;
   esac
 }

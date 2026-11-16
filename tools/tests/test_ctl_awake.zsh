@@ -291,6 +291,69 @@ out="$($C awake status)"
 check "stale cleared: no warning"              zsh -c '[[ $1 != *"stale lid hold"* ]]' _ "$out"
 deny
 
+# --- queue holds (spec 2026-11-10-queue-reliability §4): bound to the tmux server, so a relay does not end them
+allow; $C awake off >/dev/null; rm -f "$S/caffeinate.args" "$S/sudo.args"
+SRV="$(tt display -p '#{pid}')"   # the scratch tmux server: what `tmux display -p '#{pid}'` prints (probed on tmux 3.8)
+out="$($C awake on --queue)"; rc=$?
+cpq="$(lidfile .caffeinatePid)"
+check "queue on: watches the tmux server pid"   test "$out" = "awake: on (pid $cpq, watching $SRV)" -a $rc -eq 0
+check "queue on: caffeinate -i -s -w <server pid>"  test "$(<$S/caffeinate.args)" = "-i -s -w $SRV"
+check "queue on: awake.json has queue true and the server pid"  test "$(lidfile .queue)" = true -a "$(lidfile .pid)" = "$SRV"
+out="$($C awake status)"
+check "status: queue line for a queue hold"     zsh -c '[[ $1 == "on (pid $2, watching $3, since "*$'"'"'\nqueue: on\nlid: off\n'"'"'* ]]' _ "$out" $cpq $SRV
+out="$($C awake on --pid $W)"
+check "non-queue on over a queue hold: already on (queue)"  test "$out" = "awake: already on (queue)"
+out="$("$S/real/claude-fake" -c "$C awake on; true")"
+check "a claude's own on over a queue hold: already on (queue)"  test "$out" = "awake: already on (queue)"
+out="$($C awake on --queue)"
+check "queue on twice: already on (queue)"      test "$out" = "awake: already on (queue)"
+check "queue hold unchanged by all three"       test "$(lidfile .pid)" = "$SRV" -a "$(lidfile .caffeinatePid)" = "$cpq" -a "$(nstub)" = 1
+out="$($C awake on --queue --pid $W 2>&1)"; rc=$?
+check "--queue with --pid: usage, exit 2"       test $rc -eq 2 -a "$out" = "usage: tmux-ctl awake on [--queue | --pid N] [--lid]"
+check "--queue with --pid: hold unchanged"      test "$(lidfile .caffeinatePid)" = "$cpq"
+$C awake off >/dev/null
+out="$(TMUX="$S/no-such-socket,1,0" $C awake on --queue 2>/dev/null)"; rc=$?
+check "--queue with no tmux server: message, exit 1"  test "$out" = "awake: no tmux server; run on without --queue" -a $rc -eq 1
+check "--queue with no tmux server: nothing started"  test "$(nstub)" = 0 -a ! -e "$AF"
+
+# --- re-point: a live non-queue hold watching another pid moves to the caller
+sleep 300 & foreign=$!
+$C awake on --pid $foreign >/dev/null; cpf="$(lidfile .caffeinatePid)"
+out="$($C awake status)"
+check "status: no queue line for a plain hold"  zsh -c '[[ $1 != *queue* ]]' _ "$out"
+out="$(TC_AWAKE_ANCESTOR=zz-no-such-name $C awake on)"
+check "caller with no claude ancestor: the foreign hold is kept"  zsh -c '[[ $1 == "awake: already on (pid $2, since "*")" ]]' _ "$out" $cpf
+out="$("$S/real/claude-fake" -c "$C awake on; true")"
+me="$(lidfile .pid)"
+check "re-point: message names old and new pid" test "$out" = "awake: on (re-pointed from $foreign to $me)"
+check "re-point: the new pid is the caller's claude ancestor, not the foreign pid"  test -n "$me" -a "$me" != "$foreign" -a "$me" != "$W"
+check "re-point: old caffeinate killed, one running"  zsh -c '! kill -0 $1 2>/dev/null && [[ $2 == 1 ]]' _ $cpf "$(nstub)"
+check "re-point: awake.json points at the new caffeinate, no queue"  test "$(lidfile .caffeinatePid)" != "$cpf" -a "$(lidfile '.queue // false')" = false
+check "re-point: the recorded pid is a caffeinate"  test "$(basename "$(ps -o comm= -p "$(lidfile .caffeinatePid)")")" = caffeinate
+out="$($C awake on --pid $W)"
+check "re-point with --pid: to that pid"        test "$out" = "awake: on (re-pointed from $me to $W)" -a "$(lidfile .pid)" = "$W"
+out="$($C awake on --pid $W)"
+check "same owner again: already on, no re-point"  zsh -c '[[ $1 == "awake: already on (pid "* ]]' _ "$out"
+$C awake off >/dev/null
+
+# --- re-point keeps lid and watchdogPid; the watchdog follows the re-pointed pid
+rm -f "$S/sudo.args"
+$C awake on --lid --pid $foreign >/dev/null; wdr="$(lidfile .watchdogPid)"; WDS+=($wdr)
+out="$($C awake on --queue --lid)"
+check "queue on over a plain hold: re-pointed to the tmux server"  test "$(print -r -- "$out" | head -1)" = "awake: on (re-pointed from $foreign to $SRV)"
+check "queue re-point: queue true"              test "$(lidfile .queue)" = true -a "$(lidfile .pid)" = "$SRV"
+check "queue re-point: lid and watchdogPid kept"  test "$(lidfile .lid)" = true -a "$(lidfile .watchdogPid)" = "$wdr"
+check "queue re-point: disablesleep 1 not called again"  test "$(ndis 1)" = 1
+kill $foreign; sleep 2.5   # two watchdog ticks after the first owner died
+check "watchdog follows the re-pointed pid: lid hold still on"  test -e "$S/sleepdisabled" -a "$(lidfile .lid)" = true
+check "watchdog follows the re-pointed pid: still running"  wdalive "$wdr"
+$C awake off >/dev/null
+check "off ends a queue hold"                   test ! -e "$AF" -a "$(nstub)" = 0 -a ! -e "$S/sleepdisabled"
+$C awake on --queue --lid >/dev/null; wdq="$(lidfile .watchdogPid)"; WDS+=($wdq)
+check "queue + lid: the watchdog's lead pid is the tmux server"  zsh -c '[[ "$(ps -o args= -p $1)" == *"awake _watchdog $2" ]]' _ "$wdq" "$SRV"
+$C awake off >/dev/null
+deny
+
 # --- unsupported: a PATH without caffeinate (resp. pmset)
 mkdir -p "$S/nocaff" "$S/nopm"
 for tool in zsh sh env jq tmux python3 git ps date sed awk grep cat kill mkdir rm dirname basename xargs tr sort head tail wc sleep readlink uname id ls; do
