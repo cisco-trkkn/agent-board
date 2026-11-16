@@ -56,8 +56,22 @@ _ap_prompt() {
 }
 
 approve_cmd() {
-  local win="$1" act="$2" expect="" have_expect=0 pane block again line digit want u="usage: tmux-ctl approve <win> once|deny --expect <text>"
+  local win="$1" act="$2" expect="" have_expect=0 pane block again line digit want got u="usage: tmux-ctl approve <win> once|deny --expect <text>"
   shift 2 2>/dev/null
+  if [[ "$act" == show ]]; then   # read-only: print the prompt's tool (T:) and its --expect lines (P:); sends no keys
+    [[ -n "$win" && $# -eq 0 ]] || die "usage: tmux-ctl approve <win> show"
+    use_win "$win"; exists "$win"
+    pane="$(target "$win")"
+    block="$(_ap_screen "$pane" | _ap_prompt)"
+    [[ -n "$block" ]] || { print -u2 "approve: no permission prompt in $win"; return 1 }
+    if print -r -- "$block" | grep -aq '^X:ambiguous$'; then print -u2 "approve: ambiguous prompt in $win"; return 1; fi
+    got="$(print -r -- "$block" | grep -a '^P:')"
+    [[ -n "$got" ]] || { print -u2 "approve: no expect lines in $win"; return 1 }
+    line="$(print -r -- "$block" | grep -a '^B:' | sed -n '2p' | sed -e 's/^B://' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    print -r -- "T:$line"
+    print -r -- "$got"
+    return 0
+  fi
   while (( $# )); do
     case "$1" in
       --expect) (( $# >= 2 )) || die "$u"; expect="$2"; have_expect=1; shift 2 ;;
@@ -72,7 +86,7 @@ approve_cmd() {
   block="$(_ap_screen "$pane" | _ap_prompt)"
   [[ -n "$block" ]] || { print -u2 "approve: no permission prompt in $win"; return 1 }
   # the preview's P: lines must equal the --expect lines (trimmed, empty ones dropped), same count and order; an ambiguous prompt has no P: lines, so it never matches
-  local got want_lines
+  local want_lines
   got="$(print -r -- "$block" | grep -a '^P:' | sed -e 's/^P://')"
   want_lines="$(print -r -- "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$')"
   if [[ "$got" != "$want_lines" || -z "$got" ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
