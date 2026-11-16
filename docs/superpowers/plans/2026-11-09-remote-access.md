@@ -1,3 +1,5 @@
+Superseded by 2026-11-11-discord-replaces-telegram-design.md
+
 # Remote access (Telegram channel per dev lead) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

@@ -1,3 +1,5 @@
+Superseded by 2026-11-11-discord-replaces-telegram-design.md
+
 # Remote access: a Telegram channel per dev lead
 
 Date: 2026-11-09 · Status: approved design (user, 2026-11-09)

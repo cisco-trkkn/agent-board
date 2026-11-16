@@ -53,6 +53,6 @@ ap nosuchwin once; check "no such window: exit 2"  test $rc -eq 2
 # --- help lists approve and still ends at the header
 h="$($C help)"
 check "help: approve line"        test -n "$(print -r -- "$h" | grep 'tmux-ctl approve')"
-check "help: telegram line kept"  test -n "$(print -r -- "$h" | grep 'tmux-ctl telegram')"
+check "help: discord line kept"  test -n "$(print -r -- "$h" | grep 'tmux-ctl discord')"
 check "help: nothing after the header"  test -z "$(print -r -- "$h" | grep 'send/run only type')"
 tt_done
