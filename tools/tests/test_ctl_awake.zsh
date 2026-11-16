@@ -363,6 +363,11 @@ out="$($C awake on --pid $W)"
 check "re-point with --pid: to that pid"        test "$out" = "awake: on (re-pointed from $me to $W)" -a "$(lidfile .pid)" = "$W"
 out="$($C awake on --pid $W)"
 check "same owner again: already on, no re-point"  zsh -c '[[ $1 == "awake: already on (pid "* ]]' _ "$out"
+before="$(<"$AF")"; cpb="$(lidfile .caffeinatePid)"
+out="$($C awake on --pid abc 2>&1 >/dev/null)"; rc=$?
+check "on --pid abc over a live hold: usage on stderr, exit 2"  test "$out" = "usage: tmux-ctl awake on [--queue | --pid N] [--lid]" -a $rc -eq 2
+check "on --pid abc: awake.json byte-identical"  test "$(<"$AF")" = "$before"
+check "on --pid abc: the live caffeinate is not killed"  kill -0 $cpb
 $C awake off >/dev/null
 
 # --- re-point keeps lid and watchdogPid; the watchdog follows the re-pointed pid

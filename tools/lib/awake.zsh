@@ -26,9 +26,9 @@ _aw_ctl() { print -r -- "${TC_SELF:-${${(%):-%x}:A:h:h:h}/bin/tmux-ctl}" }
 _aw_rule() { local o; o="$(sudo -n -l /usr/bin/pmset -a disablesleep "$1" 2>/dev/null)"; [[ $'\n'"$o"$'\n' == *$'\n'"/usr/bin/pmset -a disablesleep $1"$'\n'* ]] }
 _aw_release() { sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 }   # returns sudo's status: callers must not drop the record on failure
 _AW_RELFAIL="awake: lid hold release failed (run: sudo pmset -a disablesleep 0)"
-_aw_edit() {   # _aw_edit <jq filter>: rewrite awake.json in place (no-op when absent)
-  local f="$(_aw_file)"; [[ -f "$f" ]] || return 0
-  jq "$1" "$f" > "$f.$$" 2>/dev/null && mv "$f.$$" "$f" || rm -f "$f.$$"
+_aw_edit() {   # _aw_edit <jq filter> [jq args…]: rewrite awake.json in place (no-op when absent)
+  local f="$(_aw_file)" prog="$1"; [[ -f "$f" ]] || return 0; shift
+  jq "$@" "$prog" "$f" > "$f.$$" 2>/dev/null && mv "$f.$$" "$f" || rm -f "$f.$$"
 }
 _aw_queue_recorded() { [[ "$(jq -r '.queue // false' "$(_aw_file)" 2>/dev/null)" == true ]] }
 _aw_lid_recorded() { [[ "$(jq -r '.lid // false' "$(_aw_file)" 2>/dev/null)" == true ]] }
@@ -97,6 +97,7 @@ awake_cmd() {
         case "$1" in --pid) pid="$2"; shift 2 ;; --lid) lid=1; shift ;; --queue) queue=1; shift ;; *) print -u2 -r -- "$usage"; return 2 ;; esac
       done
       (( queue )) && [[ -n "$pid" ]] && { print -u2 -r -- "$usage"; return 2 }
+      [[ -z "$pid" || "$pid" == <-> ]] || { print -u2 -r -- "$usage"; return 2 }   # before anything is killed or written
       if (( queue )); then   # the tmux server outlives every lead of the queue
         pid="$(tc_tmux display -p '#{pid}' 2>/dev/null)"
         [[ "$pid" == <-> ]] || { print -r -- "awake: no tmux server; run on without --queue"; return 1 }
@@ -121,7 +122,7 @@ awake_cmd() {
       cp=$!
       since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       if [[ -n "$old" ]]; then   # keep lid and watchdogPid as they are; the watchdog reads .pid each tick
-        _aw_edit ".pid = $pid | .caffeinatePid = $cp | .since = \"$since\" | $( (( queue )) && print -r -- '.queue = true' || print -r -- 'del(.queue)' )"
+        _aw_edit ".pid = \$pid | .caffeinatePid = \$cp | .since = \$since | $( (( queue )) && print -r -- '.queue = true' || print -r -- 'del(.queue)' )" --argjson pid "$pid" --argjson cp "$cp" --arg since "$since"
       else
         jq -n --argjson pid "$pid" --argjson cp "$cp" --arg since "$since" --argjson q "$queue" '{pid:$pid, caffeinatePid:$cp, since:$since} + (if $q == 1 then {queue:true} else {} end)' > "$f"
       fi
