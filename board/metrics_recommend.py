@@ -147,9 +147,13 @@ def check_item(item, stats):
             return f"{e['key']} is {json.dumps(actual)}, not {json.dumps(e['value'])}"
     actuals = [metrics_analyze.lookup(stats, e["key"]) for e in ev]
     actuals = [a for a in actuals if _num(a)]
+    # a number inside a cited string value ('Task 5: …', a dated spec name) is part of that cited string, not an uncited number
+    cited_strings = sorted({e["value"] for e in ev if isinstance(e["value"], str) and e["value"]}, key=len, reverse=True)
     for field in PROSE:
         text = item[field] if isinstance(item[field], str) else ""
         text = LIST_MARK.sub("", text, count=1)
+        for cs in cited_strings:
+            text = text.replace(cs, " ")
         for m in NUMBER.finditer(text):
             if not _cited(m.group(0), actuals):
                 return f"uncited number {m.group(0)} in {field}"
@@ -169,7 +173,7 @@ def recommend(stats_path):
         title = it.get("title") if isinstance(it, dict) and isinstance(it.get("title"), str) else f"item {n + 1}"
         reason = "beyond three" if n >= ASKED else check_item(it, stats)
         if reason:
-            dropped.append({"title": title, "reason": reason})
+            dropped.append({"title": title, "reason": reason, "item": it})
         else:
             kept.append(it)
     return {"items": kept, "dropped": dropped, "passed": len(kept), "asked": ASKED}

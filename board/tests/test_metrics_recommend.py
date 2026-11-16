@@ -150,7 +150,14 @@ class EvidenceCheckTest(Base):
         self.answer(GOOD + [item("four", ("trends.specs_run.current", 4))])
         self.run_stats()
         r = self.result()
-        self.assertEqual(([i["title"] for i in r["items"]], r["dropped"]), (["one", "two", "three"], [{"title": "four", "reason": "beyond three"}]))
+        self.assertEqual(([i["title"] for i in r["items"]], r["dropped"]), (["one", "two", "three"],
+                         [{"title": "four", "reason": "beyond three", "item": item("four", ("trends.specs_run.current", 4))}]))
+
+    def test_dropped_entry_keeps_the_full_item(self):
+        bad = item("ghost", ("nope", 1), change="the whole text")
+        self.answer(GOOD[:1] + [bad])
+        self.run_stats()
+        self.assertEqual(self.result()["dropped"], [{"title": "ghost", "reason": "unknown key nope", "item": bad}])
 
     def test_count_line(self):
         # mutation: print the count of asked items, or put the line before the item lines
@@ -207,6 +214,43 @@ class ProseNumbersTest(Base):
 
     def test_non_string_prose_fields_are_ignored(self):
         self.assertEqual(self.kept(risk="a risk of 7 percent")[0], ["t"])            # risk is not checked
+
+
+# The second item of the real stream-json run (docs/superpowers/notes/2026-11-16-execution-analytics-e2e.md §3), verbatim; it was
+# dropped with `uncited number 5 in change` because the quoted `Task 5: …` subjects are cited string evidence.
+REAL_SUBJECT_ITEM = {
+    "title": "Split the largest plan tasks so no single task is a costly step",
+    "change": "In plans for test-suite and tooling work, split any task that bundles several files or an audit plus fixes into smaller tasks, each with a complete spec. The two costliest steps were 'Task 5: Speed up the three slow zsh files' and 'Task 6: Parallel-safety audit and fixes'. Split each into one task per file or per audit area.",
+    "expected_effect": "The costly_steps list shrinks, and the p90 cost per spec falls from 42.46 USD. Median fix rounds per spec stay at or below 3.5.",
+    "evidence": [
+        {"key": "flags.costly_steps.0.usd", "value": 6.82},
+        {"key": "flags.costly_steps.0.subject", "value": "Task 5: Speed up the three slow zsh files"},
+        {"key": "flags.costly_steps.1.usd", "value": 5.92},
+        {"key": "flags.costly_steps.1.subject", "value": "Task 6: Parallel-safety audit and fixes"},
+        {"key": "trends.p90_usd_per_spec.current", "value": 42.46},
+        {"key": "trends.median_fix_rounds_per_spec.current", "value": 3.5}],
+    "risk": "Cost data covers only 43 of 90 tasks (coverage.with_cost, coverage.tasks), so the costly-step list may miss expensive tasks. Smaller tasks add dispatch and review overhead, which could raise the lead share of cost."}
+REAL_STATS = {"trends": {"p90_usd_per_spec": {"current": 42.46, "previous": None, "change": None},
+                         "median_fix_rounds_per_spec": {"current": 3.5, "previous": None, "change": None}},
+              "flags": {"costly_steps": [
+                  {"project": "agent-board", "spec": "docs/superpowers/specs/2026-11-10-fast-test-suite-design.md", "task_id": 5,
+                   "subject": "Task 5: Speed up the three slow zsh files", "usd": 6.82},
+                  {"project": "agent-board", "spec": "docs/superpowers/specs/2026-11-10-fast-test-suite-design.md", "task_id": 6,
+                   "subject": "Task 6: Parallel-safety audit and fixes", "usd": 5.92}]}}
+
+
+class CitedStringTest(unittest.TestCase):
+    def test_numbers_inside_cited_strings_are_not_uncited(self):
+        self.assertIsNone(metrics_recommend.check_item(REAL_SUBJECT_ITEM, REAL_STATS))
+
+    def test_a_number_outside_the_cited_string_still_drops(self):
+        it = dict(REAL_SUBJECT_ITEM, change=REAL_SUBJECT_ITEM["change"] + " Aim for 7 tasks.")
+        self.assertEqual(metrics_recommend.check_item(it, REAL_STATS), "uncited number 7 in change")
+
+    def test_uncited_string_does_not_hide_numbers(self):
+        # the quote is not in the item's evidence: its `5` stays uncited
+        it = dict(REAL_SUBJECT_ITEM, evidence=[e for e in REAL_SUBJECT_ITEM["evidence"] if not e["key"].endswith("0.subject")])
+        self.assertEqual(metrics_recommend.check_item(it, REAL_STATS), "uncited number 5 in change")
 
 
 class ParsingTest(Base):
