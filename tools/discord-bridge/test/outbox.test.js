@@ -39,7 +39,7 @@ test('moveToFailed moves the file and writes <name>.err with the reason', () => 
 
 test('state.write is atomic (tmp + rename) and state.read defaults when absent', () => {
   const d = tmp();
-  assert.deepStrictEqual(state.read(d), { card_message_id: null, threads: {}, guild_id: null, connected: false });
+  assert.deepStrictEqual(state.read(d), { card_message_id: null, threads: {}, guild_id: null, connected: false, prompts: {} });
   state.write(d, { card_message_id: 'm1', threads: { k: 't1' }, guild_id: 'G', connected: true }, 123);
   const s = JSON.parse(fs.readFileSync(path.join(d, 'bridge-state.json'), 'utf8'));
   assert.strictEqual(s.card_message_id, 'm1'); assert.strictEqual(s.ts, 123);

@@ -12,8 +12,19 @@ What it does:
 - Keeps the pinned status card (`card` op, at most one edit per 30 s), one public thread per key
   (`thread`, `archive`), and posts (`post`, with optional mention, deep link and files).
 - Writes `<dir>/bridge-state.json` atomically (`card_message_id`, `threads`, `guild_id`, `connected`, `ts`).
-- Turns component clicks whose `customId` starts with `ab:` into `<dir>/events/<ts>-<id>.json` and
-  acknowledges them. Every other component and every message is ignored.
+- Ops added for the controls: `prompt` `{key, window, tool, lines, mention_user}` posts
+  `<@user> 🔐 <window> wants to run <tool>` with the lines in a code block and `Allow once` / `Deny` buttons
+  (`ab:perm:<key>:allow|deny`; over 1500 characters the text is cut and only `Deny` stays) and keeps
+  `bridge-state.json` `prompts[key] = message id` (newest 200). `edit` `{key, text}` rewrites that post and
+  removes its buttons; an unknown key or a deleted message is dropped with a log line, not failed.
+- Turns component clicks whose `customId` starts with `ab:` into `<dir>/events/<ts>-<id>.json`. The user must be in
+  `<dir>/access.json` `allowFrom` (re-read on every click; missing file = nobody); otherwise the reply is an
+  ephemeral `Not authorized.` and nothing is written. Allowed clicks are deferred first, then written:
+  `{type:"perm", key, choice, user, message_id, ts}` for `ab:perm:`, else
+  `{type:"click", custom_id, user, message_id, channel_id, ts}`. Other components are ignored.
+- Reactions (`messageReactionAdd`, partials enabled) from an allowlisted non-bot user on a bot message in the home
+  channel or one of its threads, with `✅ ❌ 🛑 ▶️ ⏭️`, write `{type:"react", emoji, message_id, excerpt, user, ts}`
+  (excerpt = first 80 characters) and the bot adds 👀 once. Messages are otherwise ignored.
 - Token comes only from `<dir>/.env` (`DISCORD_BOT_TOKEN=`). The log (`<dir>/bridge.log`) never holds it
   nor more than 80 characters of a message body. `<dir>/bridge.pid` exists while it runs; SIGTERM exits.
 
