@@ -70,7 +70,9 @@ check "stub is never a holder"            test -z "$(dc_holder "$S/state/stub")"
 C="$TT_REPO/bin/tmux-ctl"
 SDH="$TC_STATE/discord/hp"
 REALPANE="$(tt list-panes -a -F '#{pane_id}' | head -1)"
-WANT="$(tt display -p -t "$REALPANE" '#{session_name}:#{window_name}')"
+tt new-session -d -s _web-view -t tt -c "$TT_DIR"   # a grouped view: status must name the group
+WANT="$(tt display -p -t "$REALPANE" '#{?session_group,#{session_group},#{session_name}}:#{window_name}')"
+check "sanity: the grouped label names the group, not the view" test "${WANT%%:*}" = tt
 check "status held by: nobody when no holder"  test "$($C discord status --project hp | grep '^held')" = "held by: nobody"
 spawn "$SDH" attached "$REALPANE"; HP=$CP
 check "status held by: <session>:<window> pid <n>"  test "$($C discord status --project hp | grep '^held')" = "held by: $WANT pid $HP"

@@ -87,6 +87,11 @@ check "pair: second time (gone) exits 1"  test $rc -eq 1
 run "" $C discord pair old000
 check "pair: expired code exits 1"        test $rc -eq 1
 check "pair: expired: nobody added, no approved file" test "$(jq -c .allowFrom $A)" = '["1","42"]' -a ! -e $D/tt/approved/43
+# a senderId that is not all digits is refused (it becomes a file name under approved/)
+seed; jq --argjson n "$(( $(now_ms) + 3600000 ))" '.pending.bad111 = {senderId:"../x",chatId:"1",createdAt:1,expiresAt:$n,replies:1}' $A > $A.x && mv $A.x $A; cp $A $S/before_pair
+run "" $C discord pair bad111
+check "pair: bad senderId: exit 1 and the message" test $rc -eq 1 -a "$out" = "discord: pending entry has a bad senderId"
+check "pair: bad senderId: access.json byte-identical, nothing approved" cmp -s $A $S/before_pair && test ! -e $D/tt/approved/..x -a ! -e $D/tt/x
 run "" $C discord pair nope99
 check "pair: unknown code exits 1"        test $rc -eq 1
 seed; run "" $C discord pair abc123; run "" $C discord pair abc123

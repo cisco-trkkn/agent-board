@@ -48,9 +48,10 @@ if [[ "${TC_DISCORD-1}" != 0 ]]; then
       DC_HPANE="${DC_HOLD#* }"
       if [[ -n "$DC_HOLD" && "$DC_HPANE" != "$TMUX_PANE" ]]; then
         DC_WHO=
-        [[ "$DC_HPANE" != - ]] && DC_WHO="$(tc_tmux display -p -t "$DC_HPANE" '#{pane_id} #{session_name}:#{window_name}' 2>/dev/null)"
+        [[ "$DC_HPANE" != - ]] && DC_WHO="$(tc_tmux display -p -t "$DC_HPANE" '#{pane_id} #{?session_group,#{session_group},#{session_name}}:#{window_name}' 2>/dev/null)"
         [[ "${DC_WHO%% *}" == "$DC_HPANE" ]] && DC_WHO="the lead in ${DC_WHO#* }" || DC_WHO="another process"
         print -u2 "discord: $DC_PROJECT's bot is held by $DC_WHO (pid ${DC_HOLD%% *}); this lead starts without it"
+        CH=("${(@)CH:#plugin:discord@claude-plugins-official}")   # a caller-named entry too: this lead must not connect the held bot
       else
         export DISCORD_STATE_DIR="$DC_DIR"
         CH+=(plugin:discord@claude-plugins-official); DC_ADDED=1

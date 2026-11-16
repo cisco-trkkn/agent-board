@@ -16,15 +16,17 @@ STUB
 cat > "$S/bin/claude" <<STUB
 #!/bin/sh
 echo "\$@" >> "$S/claude.argv"
-[ -f "$S/plugin.enabled" ]
+exit \$(cat "$S/claude.rc" 2>/dev/null || echo 0)
 STUB
 chmod +x "$S/bin/launchctl" "$S/bin/claude"
 export PATH="$S/bin:$PATH"
 trap 'rm -rf "$S"; tt_teardown' EXIT INT TERM
+CFGD="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; mkdir -p "$CFGD"
+settings() { print -r -- "{\"enabledPlugins\":{\"telegram@claude-plugins-official\":$1}}" > "$CFGD/settings.json" }
 PL="$HOME/Library/LaunchAgents/com.user.agent-board-telegram-watch.plist"
 run() { $C discord migrate > "$S/out" 2>&1; rc=$?; out="$(<$S/out)" }
 
-touch "$S/watch.loaded" "$S/plugin.enabled"; print x > "$PL"; mkdir -p "$TC_STATE/telegram/p"
+touch "$S/watch.loaded"; settings true; print x > "$PL"; mkdir -p "$TC_STATE/telegram/p"
 run
 check "migrate: exit 0"                   test $rc -eq 0
 check "migrate: booted out"               test -n "$(grep -Fx 'telegram watch: booted out' $S/out)"
@@ -35,7 +37,20 @@ check "migrate: plugin disabled (line)"   test -n "$(grep -Fx 'telegram plugin: 
 check "migrate: disable argv"             test -n "$(grep -Fx 'plugin disable telegram@claude-plugins-official' $S/claude.argv)"
 check "migrate: token-dir notice"         test -n "$(grep -Fx "telegram: token dirs kept in $TC_STATE/telegram (delete them by hand when done)" $S/out)"
 check "migrate: token dirs really kept"   test -d "$TC_STATE/telegram/p"
-rm -f "$S/watch.loaded" "$S/plugin.enabled"; rm -rf "$TC_STATE/telegram"
+# enabled, but the disable fails: said so, still exit 0
+settings true; print 1 > "$S/claude.rc"; rm -f "$S/claude.argv"
+run
+check "disable fails: could not disable (rc 1)" test -n "$(grep -Fx 'telegram plugin: could not disable (rc 1)' $S/out)" -a $rc -eq 0
+check "disable fails: no 'disabled' line"      test -z "$(grep -Fx 'telegram plugin: disabled' $S/out)"
+# not enabled (false, missing or unreadable settings): never calls claude
+for how in false missing bad; do
+  rm -f "$S/claude.argv"; print 0 > "$S/claude.rc"
+  case $how in false) settings false ;; missing) rm -f "$CFGD/settings.json" ;; bad) print -r -- 'not json{' > "$CFGD/settings.json" ;; esac
+  run
+  check "not enabled ($how): line"             test -n "$(grep -Fx 'telegram plugin: not enabled' $S/out)" -a $rc -eq 0
+  check "not enabled ($how): claude not called" test ! -e "$S/claude.argv"
+done
+rm -f "$S/watch.loaded"; rm -rf "$TC_STATE/telegram"; settings false
 run
 check "second run: exit 0"                test $rc -eq 0
 check "second run: not loaded"            test -n "$(grep -Fx 'telegram watch: not loaded' $S/out)"

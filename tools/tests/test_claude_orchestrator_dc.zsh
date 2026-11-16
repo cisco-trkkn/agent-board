@@ -108,12 +108,17 @@ FC
   release() { local p; for p in $HPIDS; do kill $p 2>/dev/null; done; HPIDS=(); sleep 0.3 }
   trap 'release; tt_teardown' EXIT INT TERM
   OTHER="$(tt new-window -d -P -F '#{pane_id}' -t '=tt:' -n holderwin -c "$TT_DIR")"
+  # a grouped view of the session (the board's _web-* sessions): the line must name the group, never the view
+  tt new-session -d -s _web-view -t tt -c "$TT_DIR"
   hold "$OTHER"
   run "$L" --continue
   check "held elsewhere: no --channels"     test "$(nch)" = 0
   check "held elsewhere: state dir unset"   test "$(<$S/dsd)" = UNSET
   check "held elsewhere: claude still started" grep -qx -- '--continue' $S/argv
-  check "held elsewhere: exactly one stderr line, naming session:window and pid" test "$(<$S/err)" = "discord: tt's bot is held by the lead in tt:holderwin (pid $HP); this lead starts without it"
+  check "held elsewhere (grouped view exists): exactly one stderr line, naming group:window and pid" test "$(<$S/err)" = "discord: tt's bot is held by the lead in tt:holderwin (pid $HP); this lead starts without it"
+  run "$L" --channels $DCH plugin:x "do it"
+  check "held elsewhere + caller names discord: only plugin:x is passed" test "$(nch)" = 1 -a "$(grep -c -x -- "$DCH" $S/argv)" = 0 -a "$(grep -A1 -x -- '--channels' $S/argv | tail -1)" = plugin:x -a "$(tail -1 $S/argv)" = "do it"
+  tt kill-session -t '=_web-view'
   release
   hold %9999
   run "$L" --continue

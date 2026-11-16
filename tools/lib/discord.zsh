@@ -88,6 +88,7 @@ _dc_pair() {   # _dc_pair <dir> <code>
   sid="$(jq -r --arg c "$code" --argjson n "$now" '.pending[$c] | select(. != null and .expiresAt >= $n) | .senderId' "$live")"
   cid="$(jq -r --arg c "$code" '.pending[$c].chatId // empty' "$live")"
   [[ -n "$sid" ]] || { print -u2 "discord: no pending pairing for that code (unknown or expired)"; return 1 }
+  [[ "$sid" =~ '^[0-9]+$' ]] || { print -u2 "discord: pending entry has a bad senderId"; return 1 }
   _dc_write "$dir" '.allowFrom = ((.allowFrom // []) + [$s] | unique) | del(.pending[$c])' --arg s "$sid" --arg c "$code" || return 1
   ( umask 077; mkdir -p -m 700 "$dir/approved" && print -rn -- "$cid" > "$dir/approved/$sid" ) || { print -u2 "discord: could not write the approval"; return 1 }
   print -r -- "discord: paired $sid"
@@ -115,7 +116,8 @@ _dc_status() {
   else
     hpid="${hold%% *}"; hpane="${hold#* }"
     [[ "$hpane" != - ]] && {   # an unknown pane id makes display answer for the current pane: require the id to echo back
-      hname="$("${TC_TMUX:-tmux}" display -p -t "$hpane" '#{pane_id} #{session_name}:#{window_name}' 2>/dev/null)"
+      (( $+functions[tc_tmux] )) || source "$_DC_TOOLS/../bin/_tc_bins.zsh" 2>/dev/null
+      hname="$(tc_tmux display -p -t "$hpane" '#{pane_id} #{?session_group,#{session_group},#{session_name}}:#{window_name}' 2>/dev/null)"
       [[ "${hname%% *}" == "$hpane" ]] && hname="${hname#* }" || hname=
     }
     if [[ -n "$hname" ]]; then print -r -- "held by: $hname pid $hpid"; else print -r -- "held by: another process pid $hpid"; fi
@@ -162,6 +164,7 @@ dc_holder() {
     while [[ -n "${par[$p]}" && $p -gt 1 && $n -lt 64 ]]; do
       (( n++ ))
       args="${nm[$p]}"
+      # version-named processes (2.1.325 …) are teammates and deliberately do not count as a lead
       if [[ "${${args%% *}:t}" == claude || "$args" == "claude "* ]]; then
         [[ "${par[$p]}" == 1 ]] && break
         e="$(ps -Eww -o command= -p $p 2>/dev/null) "
@@ -179,7 +182,14 @@ _dc_migrate() {
   local label=com.user.agent-board-telegram-watch plist="$HOME/Library/LaunchAgents/com.user.agent-board-telegram-watch.plist" tg="${TC_STATE:-$HOME/.local/state/agent-board}/telegram"
   if launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1; then print -r -- "telegram watch: booted out"; else print -r -- "telegram watch: not loaded"; fi
   if [[ -e "$plist" ]]; then rm -f "$plist" && print -r -- "telegram watch: plist removed"; else print -r -- "telegram watch: no plist"; fi
-  if claude plugin disable telegram@claude-plugins-official >/dev/null 2>&1; then print -r -- "telegram plugin: disabled"; else print -r -- "telegram plugin: not enabled"; fi
+  # only an enabled plugin is disabled: a failing `claude plugin disable` must not read as "not enabled" (the user gate checks this line)
+  local rc
+  if (( $+commands[jq] )) && jq -e '.enabledPlugins["telegram@claude-plugins-official"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; then
+    claude plugin disable telegram@claude-plugins-official >/dev/null 2>&1; rc=$?
+    if (( rc == 0 )); then print -r -- "telegram plugin: disabled"; else print -r -- "telegram plugin: could not disable (rc $rc)"; fi
+  else
+    print -r -- "telegram plugin: not enabled"
+  fi
   [[ -d "$tg" ]] && print -r -- "telegram: token dirs kept in $tg (delete them by hand when done)"
   return 0
 }
