@@ -5,10 +5,12 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 import metrics_tasks  # noqa: E402
 
-# Fixture lines are copied from the real ledgers
+# Fixture lines are copied verbatim from real ledgers, none edited:
 #   docs/superpowers/ledgers/2026-11-16-discord-replaces-telegram/progress.md  (DISCORD: dc-launch did Tasks 1 and 2)
-#   docs/superpowers/ledgers/2026-11-11-queue-metrics/progress.md               (QM: fix rounds, re-review)
-# The one `Important:` line is copied from docs/superpowers/ledgers/2026-10-28-overseer/progress.md.
+#   docs/superpowers/ledgers/2026-11-11-queue-metrics/progress.md               (QM, FRESH, MULTI, and the two minor lines in FINDINGS)
+# FINDINGS also holds two Important lines the queue-metrics ledger lacks, verbatim from
+#   docs/superpowers/ledgers/2026-10-28-overseer/progress.md                    (Task 10: Important: ...)
+#   docs/superpowers/ledgers/2026-10-28-shared-project-context/progress.md      (Task 1: fix round 1/5 dispatched (Important: ...)
 DISCORD = """\
 Task 1: dispatched dc-launch (sonnet, base 22b8f60)
 Task 1: green check ok; review dispatched dc-review (4e9d2cf..28b98dd)
@@ -26,14 +28,30 @@ Task 1: review dispatched to qm-rev (sonnet/standard), package review-12862a6..2
 Task 1: complete (commits 12862a6..23b2afb, review clean)
 Task 2: dispatched qm-impl, base 23b2afb
 Task 2: review dispatched to qm-rev, package review-23b2afb..5e8e5b2.diff
+Task 2: review spec ❌ — 1 Important (merge stored as {commit,at}, spec §3: commit or null)
 Task 2: minor (deferred): dead code (plan_text, if/pass, inline import, setUp loop)
 Task 2: minor (deferred): branch --contains picks first non-main branch arbitrarily
-Task 2: Important: overseer read-only claim unsupported — --settings merges with ~/.claude/settings.json
 Task 2: fix round 1/5 dispatched to qm-impl (FIX_BASE 5e8e5b2)
-Task 2: fix round 1/5 dispatched (Important: _insert newline fusion; plus stale _locked() comment), FIX_BASE 08c21c6
-Task 2: fix round 1/5 — commits 5e8e5b2..a5a9a9e; scoped re-review dispatched to qm-rev
+Task 2: fix commit a5a9a9e (16 OK rc=0; board 6 known FAIL); scoped re-review dispatched to qm-rev
+Task 2: fix round 1/5 (3 addressed, 1 new open — branch --contains guess picks another spec's branch when plan is on main; commits 5e8e5b2..a5a9a9e)
+Task 2: fix round 2/5 dispatched to qm-impl (FIX_BASE a5a9a9e)
+Task 2: fix commits fe86c0d+539ddfc (17 OK rc=0); scoped re-review round 2 dispatched to qm-rev
+Task 2: fix round 2/5 (1 addressed, 0 open; commits 3a29282..539ddfc)
 Task 2: complete (commits 23b2afb..539ddfc excl. 3a29282, review clean)
+Task 3: dispatched qm-impl, base a5a9a9e (T2 re-review in parallel)
+Task 3: review dispatched to qm-rev, package review-a5a9a9e..3a29282.diff
+Task 3: complete (commits a5a9a9e..3a29282, review clean)
 """
+
+FINDINGS = """\
+Task 10: Important: overseer read-only claim unsupported — --settings merges with ~/.claude/settings.json, whose allow list has Bash(tmux-ctl:*) (and any other user allows), so undenied tmux-ctl subcommands (_append writes an arbitrary file at bin/tmux-ctl:321, _done, _relay_failed) are allowed and the bare-overview probe proves nothing
+Task 1: fix round 1/5 dispatched (Important: _insert newline fusion; plus stale _locked() comment), FIX_BASE 08c21c6
+Task 2: minor (deferred): dead code (plan_text, if/pass, inline import, setUp loop)
+Task 2: minor (deferred): branch --contains picks first non-main branch arbitrarily
+"""
+
+FRESH = 'Task 6: fix round 1/5 dispatched to fresh qm-fix (sonnet/standard; qm-impl shut down) (FIX_BASE 5fa3176)'
+MULTI = 'Task 4: fix round 1/5 (3 addressed, 0 open; commits 00574a4..b9ef776 + 2e39ac9..518d841)'
 
 PRICES = {"default_context": 200000, "models": {
     "claude-sonnet-5": {"input": 3, "output": 15, "cache_read": 0.3, "cache_write_5m": 3.75, "cache_write_1h": 6, "context": 200000},
@@ -65,11 +83,15 @@ def build(progress, tasks, rows, ends=None, run_end=None):
 class TestParseLedger(unittest.TestCase):
     def test_fix_rounds_max_not_count(self):
         t = metrics_tasks.parse_ledger(QM)[2]
-        self.assertEqual(t["fix_rounds"], 1)  # 3 lines name round 1; counting lines would give 3
+        self.assertEqual(t["fix_rounds"], 2)  # rounds 1 and 2, each named on 2-3 lines; counting lines would give 6
 
     def test_findings_counts(self):
-        t = metrics_tasks.parse_ledger(QM)[2]
-        self.assertEqual(t["findings"], {"critical": 0, "important": 2, "minor": 2})
+        led = metrics_tasks.parse_ledger(FINDINGS)
+        self.assertEqual(led[10]["findings"], {"critical": 0, "important": 1, "minor": 0})  # `Important:` line
+        self.assertEqual(led[1]["findings"], {"critical": 0, "important": 1, "minor": 0})  # fix dispatch (Important: ...)
+        self.assertEqual(led[2]["findings"], {"critical": 0, "important": 0, "minor": 2})
+        # the prose "review spec - 1 Important (...)" line in QM is not a finding line
+        self.assertEqual(metrics_tasks.parse_ledger(QM)[2]["findings"]["important"], 0)
 
     def test_owners_models_commit_end_complete(self):
         led = metrics_tasks.parse_ledger(DISCORD)
@@ -81,13 +103,25 @@ class TestParseLedger(unittest.TestCase):
         q = metrics_tasks.parse_ledger(QM)
         self.assertEqual(q[2]["owners"], ["qm-impl"])
         self.assertEqual(q[2]["dispatch_models"], [])  # "dispatched qm-impl, base" names no model
-        self.assertEqual(q[2]["commit_end"], "539ddfc")
-        self.assertEqual(q[2]["review_rounds"], 2)  # review dispatched + the re-review line
+        self.assertEqual(q[2]["commit_end"], "539ddfc")  # review lines' A..B ranges are not commits
+        self.assertEqual(q[2]["review_rounds"], 3)  # review dispatched + 2 scoped re-review dispatches
 
     def test_fix_dispatch_group_limited(self):
         led = metrics_tasks.parse_ledger("Task 3: fix round 1/5 dispatched to ovr-fix (fresh, standard)\n")
         self.assertEqual(led[3]["owners"], ["ovr-fix"])
         self.assertEqual(led[3]["dispatch_models"], [])
+
+    def test_fresh_word_skipped_in_owner(self):
+        t = metrics_tasks.parse_ledger(FRESH)[6]
+        self.assertEqual(t["owners"], ["qm-fix"])
+        self.assertEqual(t["dispatch_models"], ["sonnet"])
+
+    def test_commit_end_is_last_range_on_line(self):
+        self.assertEqual(metrics_tasks.parse_ledger(MULTI)[4]["commit_end"], "518d841")
+
+    def test_review_ranges_recorded(self):
+        t = metrics_tasks.parse_ledger(QM)[2]
+        self.assertEqual(t["review_ends"], ["5e8e5b2"])
 
 
 class TestBuild(unittest.TestCase):
@@ -110,6 +144,16 @@ class TestBuild(unittest.TestCase):
         self.assertEqual(r[1]["review_tokens"], 700)
         self.assertAlmostEqual(r[0]["review_usd"], 500 * 15 / 1e6)
         self.assertAlmostEqual(r[0]["usd"], 1000 * 15 / 1e6)
+
+    def test_shared_reviewer_rows_follow_review_dispatch(self):
+        # qm-rev reviews Tasks 1-3; Task 2's review (range end 5e8e5b2) ran before Task 2's final fix commit 539ddfc
+        tasks = tasks_json(("Task 1: a", "standard", ""), ("Task 2: b", "standard", ""), ("Task 3: c", "standard", ""))
+        ends = {"23b2afb": 1000, "5e8e5b2": 1500, "3a29282": 2500, "539ddfc": 3000}
+        rows = [row(1100, "qm-rev", out=100), row(1600, "qm-rev", out=200),
+                row(2000, "qm-rev", out=400), row(2600, "qm-rev", out=800)]
+        r = build(QM, tasks, rows, ends=ends)
+        self.assertEqual([t["review_tokens"] for t in r], [100, 600, 800])
+        self.assertTrue(all(t["tokens"] is None for t in r))
 
     def test_no_rows_partial(self):
         r = build(DISCORD, self.two(), [], ends={})

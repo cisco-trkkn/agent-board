@@ -9,10 +9,11 @@ import metrics
 import usage
 
 TASK = re.compile(r"^Task (\d+): (.*)$")
-DISPATCH = re.compile(r"^(?:fix round \d+(?:/\d+)? )?dispatched (?:to )?([A-Za-z0-9_-]+)(?: \((haiku|sonnet|opus|fable|inherit)\b)?")
+DISPATCH = re.compile(r"^(?:fix round \d+(?:/\d+)? )?dispatched (?:to )?(?:fresh )?([A-Za-z0-9_-]+)(?: \((haiku|sonnet|opus|fable|inherit)\b)?")
 REVIEW = re.compile(r"review dispatched (?:to )?([A-Za-z0-9_-]+)")
 FIX = re.compile(r"fix round (\d+)")
-COMMITS = re.compile(r"commits ([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})")
+COMMITS = re.compile(r"commits (.*)")
+RANGE = re.compile(r"([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})")
 FIX_FINDING = re.compile(r"fix round \d+(?:/\d+)? dispatched.*?\((Critical|Important):")
 FAMILIES = ("haiku", "sonnet", "opus", "fable")
 TOKEN_COLS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
@@ -27,7 +28,7 @@ def family(model):
 
 
 def _blank():
-    return {"owners": [], "dispatch_models": [], "reviewers": [], "fix_rounds": 0,
+    return {"owners": [], "dispatch_models": [], "reviewers": [], "review_ends": [], "fix_rounds": 0,
             "findings": {"critical": 0, "important": 0, "minor": 0},
             "review_rounds": 0, "complete": False, "commit_end": None, "complete_at": None}
 
@@ -50,13 +51,16 @@ def parse_ledger(progress):
         for r in REVIEW.finditer(rest):
             if r.group(1) not in t["reviewers"]:
                 t["reviewers"].append(r.group(1))
+            rng = RANGE.findall(rest[r.end():])  # the reviewed range: `(A..B)` or `package review-A..B.diff`
+            if rng:
+                t["review_ends"].append(rng[-1][1])
         if "review dispatched" in rest or "re-review" in rest:
             t["review_rounds"] += 1
         for f in FIX.finditer(rest):
             t["fix_rounds"] = max(t["fix_rounds"], int(f.group(1)))
-        c = list(COMMITS.finditer(rest))
-        if c:
-            t["commit_end"] = c[-1].group(2)
+        c = COMMITS.search(rest)
+        if c and RANGE.findall(c.group(1)):
+            t["commit_end"] = RANGE.findall(c.group(1))[-1][1]
         if rest.startswith("complete"):
             t["complete"] = True
             t["complete_at"] = i
@@ -137,17 +141,24 @@ def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_ti
             if o not in reviewers:
                 by_owner.setdefault(o, []).append((end_of(n), n))
         for o in ledger[n]["reviewers"]:
-            by_reviewer.setdefault(o, []).append((end_of(n), n))
-    for lst in by_reviewer.values():
+            by_reviewer.setdefault(o, [])
+        for sha in ledger[n]["review_ends"]:
+            t = commit_time(sha)
+            for o in ledger[n]["reviewers"]:
+                by_reviewer[o].append((t if t is not None else end_of(n), n))
+    for o, lst in by_reviewer.items():
+        if not lst:  # reviewer named without a range: fall back to the task ends
+            lst.extend((end_of(n), n) for n in sorted(ledger, key=order) if o in ledger[n]["reviewers"])
         lst.sort(key=lambda p: p[0])
 
     mine, theirs = {}, {}
     for r in rows:
         a = r["agent_name"]
         if a in by_reviewer:
-            # a review follows the end of the task it reviews: the last task whose end <= ts, else the first
+            # a row belongs to the task whose review dispatch is the latest at or before the row (a dispatch's
+            # time is the commit time of its reviewed range end), else the earliest dispatch
             lst = by_reviewer[a]
-            n = next((num for end, num in reversed(lst) if end <= r["ts"]), lst[0][1])
+            n = next((num for t, num in reversed(lst) if t <= r["ts"]), lst[0][1])
             theirs.setdefault(n, []).append(r)
         elif a in by_owner:
             mine.setdefault(_pick(by_owner[a], r["ts"]), []).append(r)
