@@ -467,6 +467,41 @@ class DedupeTest(DeriveBase):
         self.assertEqual([e["kind"] for e in evs], ["spec_started", "plan_written"])
         self.assertTrue(st["primed"])
 
+    def real_list(self):
+        t = [fx("1.json"), fx("19.json", id="2", status="completed", subject="EA fix wave"), self.run_task]
+        t += [fx("19.json", id=str(i), status="completed" if i < 20 else "pending", subject=f"BV Task {i - 16}") for i in range(17, 25)]
+        return t
+
+    def test_floor_for_a_spec_first_seen_already_running_uses_the_plan_task_count(self):
+        lead = self.real_list()   # plan file has 3 "### Task" headings in this fixture root
+        _, st = self.derive(lead, {})
+        self.assertEqual(st["spec_floor"], {"3": 21})   # the 3 highest ids: 22, 23, 24
+        card = df.render_card(rec(), lead, NOW, st["spec_floor"]["3"])
+        self.assertNotIn("EA fix wave", card)
+        self.assertIn("BV Task 7", card)
+        self.assertNotIn("BV Task 1\n", card)
+        _, st2 = self.derive(lead + [fx("19.json", id="30")], st)
+        self.assertEqual(st2["spec_floor"], {"3": 21})   # stable afterwards
+
+    def test_floor_eight_task_plan_shows_17_to_24_not_2(self):
+        (self.root / PLAN).write_text("".join(f"### Task {i}: x\n" for i in range(1, 9)))
+        lead = self.real_list()
+        _, st = self.derive(lead, {})
+        self.assertEqual(st["spec_floor"], {"3": 16})
+        card = df.render_card(rec(), lead, NOW, 16)
+        self.assertNotIn("EA fix wave", card)
+        self.assertEqual(card.count("BV Task"), 8)
+
+    def test_no_plan_metadata_means_no_floor_on_first_sight(self):
+        lead = self.real_list()
+        lead[2]["metadata"].pop("plan")
+        _, st = self.derive(lead, {})
+        self.assertEqual(st["spec_floor"], {"3": None})
+        card = df.render_card(rec(), lead, NOW, None)
+        self.assertNotIn("EA fix wave", card)
+        _, st = self.derive(lead, st)
+        self.assertEqual(st["spec_floor"], {"3": None})   # not replaced by a max-id floor later
+
     def test_spec_floor_recorded_once_per_spec(self):
         tasks = [self.run_task, fx("19.json", id="19"), fx("1.json", id="2", status="completed", subject="old fix wave")]
         _, st = self.derive(tasks, primed())

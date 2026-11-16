@@ -311,9 +311,17 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
     running = next((t for t in runs if t.get("status") == "in_progress"), None)
     st["running_thread_key"] = tk(running["id"]) if running else ""
     floors = dict(st.get("spec_floor") or {})
-    if running and st["running_thread_key"] not in floors:   # the card shows only the tasks created after the spec started
-        ids = [n for n in (_num(t.get("id")) for t in tasks) if n is not None]
-        floors[st["running_thread_key"]] = max(ids) if ids else 0
+    if running and st["running_thread_key"] not in floors:
+        # the card shows only the running spec's tasks. Seen as it starts: everything after the highest id now. Seen
+        # already running (first poll of this list): its tasks exist, so take the plan's task count n and the n highest
+        # ids; no readable plan -> None (the card then shows only tasks that are not completed).
+        ids = sorted(n for n in (_num(t.get("id")) for t in tasks if t not in runs) if n is not None)
+        if not first:
+            floors[st["running_thread_key"]] = max([_num(t.get("id")) or 0 for t in tasks] or [0])
+        else:
+            plan = (running.get("metadata") or {}).get("plan") if isinstance(running.get("metadata"), dict) else None
+            n = _plan_task_count(root, plan) if isinstance(plan, str) and plan else None
+            floors[st["running_thread_key"]] = (ids[-n:][0] - 1 if ids[-n:] else 0) if n else None
     st["spec_floor"] = dict(list(floors.items())[-50:])
     if running:
         rid, spec = tk(running["id"]), _spec_name(running["subject"])
