@@ -242,3 +242,267 @@ class AuditTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- Task 4: derivation, dedupe, ops, tick ----
+import copy  # noqa: E402
+import fcntl  # noqa: E402
+import importlib  # noqa: E402
+
+FIX = Path(__file__).resolve().parent / "fixtures" / "discord_feed"
+PLAN = "docs/superpowers/plans/2026-11-16-discord-bridge-visibility.md"
+PBASE = "2026-11-16-discord-bridge-visibility"
+SPEC = "2026-11-11-discord-bridge-visibility-design"
+
+
+def fx(name, **over):
+    d = json.loads((FIX / "tasks" / name).read_text())
+    d.update(over)
+    return d
+
+
+def primed():
+    return {"primed": True, "seen": []}
+
+
+class DeriveBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.root = Path(self.tmp.name) / "repo"
+        (self.root / "docs/superpowers/plans").mkdir(parents=True)
+        (self.root / PLAN).write_text("# P\n### Task 1: a\n### Task 2: b\n### Task 3: c\nnot ### Task 4\n")
+        self.run_task = fx("3.json")
+        self.sub = fx("19.json", status="completed")
+
+    def derive(self, tasks, state, now=NOW):
+        return df.derive("proj", self.root, tasks, state, now)
+
+    def ledger(self, src, plan_base=PBASE):
+        d = self.root / ".superpowers" / "sdd" / plan_base
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "progress.md").write_text((FIX / "ledgers" / src / "progress.md").read_text())
+
+
+class TriggerTest(DeriveBase):
+    def kinds(self, evs):
+        return [e["kind"] for e in evs]
+
+    def test_spec_started_and_plan_written(self):
+        evs, st = self.derive([self.run_task], primed())
+        self.assertEqual(self.kinds(evs), ["spec_started", "plan_written"])
+        self.assertEqual(evs[0]["refs"]["thread_key"], "3")
+        self.assertEqual(evs[0]["spec"], SPEC)
+        self.assertEqual(evs[0]["tier"], "progress")
+        self.assertEqual(evs[1]["text"], "plan written: 3 tasks")
+        self.assertEqual(set(evs[0]), set(df.EVENT_KEYS))
+        self.assertEqual(st["running_thread_key"], "3")
+        ops = df.ops_for_events(evs, st)
+        self.assertEqual(ops[0], {"op": "thread", "key": "3", "title": SPEC})
+        self.assertEqual([o["op"] for o in ops], ["thread", "post", "post"])
+        self.assertTrue(all(o["thread_key"] == "3" and o["mention_user"] is False for o in ops[1:]))
+
+    def test_part_suffix_kept(self):
+        t = fx("1.json", status="in_progress")
+        evs, _ = self.derive([t], primed())
+        self.assertEqual(evs[0]["spec"], "2026-11-12-execution-analytics-design#part-1")
+        self.assertEqual(df.ops_for_events(evs, {})[0]["title"], "2026-11-12-execution-analytics-design#part-1")
+
+    def test_plan_in_worktree_and_late_file(self):
+        (self.root / PLAN).unlink()
+        evs, st = self.derive([self.run_task], primed())
+        self.assertEqual(self.kinds(evs), ["spec_started"])
+        wt = self.root / ".claude/worktrees/w1" / PLAN
+        wt.parent.mkdir(parents=True)
+        wt.write_text("### Task 1: a\n### Task 2: b\n")
+        evs, st = self.derive([self.run_task], st)
+        self.assertEqual([e["text"] for e in evs], ["plan written: 2 tasks"])
+
+    def test_no_plan_metadata_no_plan_written(self):
+        t = self.run_task
+        t["metadata"].pop("plan")
+        evs, _ = self.derive([t], primed())
+        self.assertEqual(self.kinds(evs), ["spec_started"])
+
+    def test_task_done_only_while_run_in_progress(self):
+        evs, st = self.derive([self.sub], primed())
+        self.assertEqual(evs, [])
+        evs, st = self.derive([self.run_task, self.sub], primed())
+        done = [e for e in evs if e["kind"] == "task_done"]
+        self.assertEqual([e["text"] for e in done], ["✓ BV Task 3: feed core (spool, feed file, card)"])
+        self.assertEqual(done[0]["refs"]["task"], "19")
+        self.assertEqual(done[0]["refs"]["thread_key"], "3")
+
+    def test_out_of_order_completed_first_emits_once(self):
+        st = primed()
+        evs, st = self.derive([self.run_task, self.sub], st)
+        self.assertEqual(sum(e["kind"] == "task_done" for e in evs), 1)
+        for _ in range(3):
+            evs, st = self.derive([self.run_task, self.sub], st)
+            self.assertEqual(evs, [])
+        # and the usual order: seen in_progress, later completed
+        st = primed()
+        run = self.run_task
+        ip = fx("19.json", status="in_progress")
+        _, st = self.derive([run, ip], st)
+        evs, st = self.derive([run, self.sub], st)
+        self.assertEqual(sum(e["kind"] == "task_done" for e in evs), 1)
+
+    def test_review_lines_real_ledgers(self):
+        for src, n, line in (("ea1", 17, "Task 1: complete (commits b869c53..1bf9a9a, review clean)"),
+                             ("drt", 14, "Task 7: complete (commits 22b8f60..4e9d2cf, review clean)")):
+            with self.subTest(src):
+                self.ledger(src)
+                st = primed()
+                evs, st = self.derive([self.run_task], st)
+                rev = [e for e in evs if e["kind"] == "review"]
+                self.assertEqual(len(rev), n)
+                self.assertIn("review: " + line, [e["text"] for e in rev])
+                self.assertTrue(all(e["text"].startswith("review: ") and len(e["text"]) <= 300 for e in rev))
+                self.assertEqual(self.derive([self.run_task], st)[0], [])
+
+    def test_review_ledger_in_worktree_and_long_line(self):
+        d = self.root / ".claude/worktrees/w9/.superpowers/sdd" / PBASE
+        d.mkdir(parents=True)
+        (d / "progress.md").write_text("Task 9: complete " + "x" * 500 + "\nTask 9: dispatched\nbatch noise\n")
+        evs, _ = self.derive([self.run_task], primed())
+        rev = [e for e in evs if e["kind"] == "review"]
+        self.assertEqual(len(rev), 1)
+        self.assertEqual(len(rev[0]["text"]), 300)
+
+    def test_outcome_merged_archives(self):
+        done = fx("1.json")
+        evs, st = self.derive([done], primed())
+        self.assertEqual(self.kinds(evs), ["spec_outcome"])
+        self.assertEqual(evs[0]["text"], "merged 1e3772f")
+        self.assertEqual(evs[0]["tier"], "progress")
+        ops = df.ops_for_events(evs, st)
+        self.assertEqual([o["op"] for o in ops], ["post", "archive"])
+        self.assertEqual(ops[0]["thread_key"], "1")
+        self.assertEqual(ops[1]["key"], "1")
+
+    def test_outcome_failed_is_critical_home_with_mention(self):
+        done = fx("1.json")
+        done["metadata"]["outcome"] = "failed — tests red"
+        evs, st = self.derive([done], primed())
+        self.assertEqual(evs[0]["tier"], "critical")
+        ops = df.ops_for_events(evs, st)
+        self.assertEqual(ops[0], {"op": "post", "text": "failed — tests red", "tier": "critical", "mention_user": True, "link_thread_key": "1"})
+        self.assertEqual(ops[1], {"op": "archive", "key": "1"})
+
+    def test_report_written_home_channel(self):
+        r = self.root / "docs/superpowers/reports"
+        r.mkdir(parents=True)
+        (r / "2026-11-16-queue.md").write_text("# Queue report 2026-11-16\n\nbody\n")
+        evs, st = self.derive([], primed())
+        self.assertEqual(self.kinds(evs), ["report_written"])
+        self.assertIn("Queue report 2026-11-16", evs[0]["text"])
+        op = df.ops_for_events(evs, {"running_thread_key": "3"})[0]
+        self.assertNotIn("thread_key", op)
+        self.assertEqual(self.derive([], st)[0], [])
+
+    def test_first_run_baselines_history(self):
+        self.ledger("ea1")
+        r = self.root / "docs/superpowers/reports"
+        r.mkdir(parents=True)
+        (r / "old-queue.md").write_text("# old\n")
+        evs, st = self.derive([self.run_task, self.sub, fx("1.json")], {})
+        self.assertEqual(self.kinds(evs), ["spec_started", "plan_written"])
+        self.assertTrue(st["primed"])
+        self.assertEqual(self.derive([self.run_task, self.sub, fx("1.json")], st)[0], [])
+
+
+class DedupeTest(DeriveBase):
+    def test_seen_cap(self):
+        st = {"primed": True, "seen": [f"k{i}" for i in range(2000)]}
+        evs, st = self.derive([self.run_task], st)
+        self.assertEqual(len(evs), 2)
+        self.assertEqual(len(st["seen"]), 2000)
+        self.assertNotIn("k0", st["seen"])
+        self.assertIn("k1999", st["seen"])
+
+    def test_derive_does_not_mutate_input_state(self):
+        st = primed()
+        before = copy.deepcopy(st)
+        self.derive([self.run_task], st)
+        self.assertEqual(st, before)
+
+
+class OpsTest(Base):
+    def ev(self, kind, tier, refs=None, text="t"):
+        return {"ts": 1.0, "project": "p", "spec": "s", "kind": kind, "tier": tier, "text": text, "refs": refs or {}}
+
+    def test_tier_table(self):
+        st = {"running_thread_key": "7"}
+        ops = df.ops_for_events([self.ev("task_done", "progress"), self.ev("needs_you", "decision"),
+                                 self.ev("test_failed", "critical"), self.ev("usage", "routine"),
+                                 self.ev("spec_outcome", "progress", text="failed — x")], st)
+        self.assertEqual(ops[0], {"op": "post", "thread_key": "7", "text": "t", "tier": "progress", "mention_user": False})
+        self.assertEqual(ops[1], {"op": "post", "text": "t", "tier": "decision", "mention_user": True, "link_thread_key": "7"})
+        self.assertEqual(ops[2]["tier"], "critical")
+        self.assertTrue(ops[2]["mention_user"])
+        self.assertEqual(len(ops), 4)  # routine: no op
+        self.assertEqual(ops[3]["tier"], "critical")  # failed outcome forced critical
+        for o in ops:
+            df._check(o)
+
+    def test_no_running_spec(self):
+        ops = df.ops_for_events([self.ev("task_done", "progress"), self.ev("needs_you", "decision")], {})
+        self.assertNotIn("thread_key", ops[0])
+        self.assertNotIn("link_thread_key", ops[1])
+
+
+class TickTest(DeriveBase):
+    def tick(self, tasks, now=NOW, record=None):
+        return df.tick("proj", record or rec(), self.root, self.tmp.name, now, lead_tasks=tasks)
+
+    def outbox(self):
+        box = tc_env.discord_dir("proj") / "outbox"
+        return [json.loads(p.read_text()) for p in sorted(box.glob("*.json"))] if box.exists() else []
+
+    def test_tick_writes_feed_outbox_card(self):
+        self.tick([])  # primes
+        self.tick([self.run_task, self.sub], now=NOW + 100)
+        ev, _ = df.read_events("proj", 0)
+        self.assertEqual([e["kind"] for e in ev], ["spec_started", "plan_written", "task_done"])
+        ops = self.outbox()
+        self.assertEqual([o["op"] for o in ops].count("thread"), 1)
+        self.assertEqual([o["op"] for o in ops].count("post"), 3)
+        self.assertGreaterEqual([o["op"] for o in ops].count("card"), 1)
+        st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
+        self.assertEqual(st["running_thread_key"], "3")
+        self.assertIn("card_text", st)
+
+    def test_events_from_others_flow_through(self):
+        self.tick([])
+        df.append_event("proj", {"ts": 5.0, "project": "proj", "spec": "", "kind": "needs_you", "tier": "decision", "text": "lead waits", "refs": {}})
+        self.tick([], now=NOW + 100)
+        posts = [o for o in self.outbox() if o["op"] == "post"]
+        self.assertEqual([p["text"] for p in posts], ["lead waits"])
+        self.assertTrue(posts[0]["mention_user"])
+        self.tick([], now=NOW + 200)
+        self.assertEqual(len([o for o in self.outbox() if o["op"] == "post"]), 1)
+
+    def test_restart_emits_nothing(self):
+        global df
+        self.tick([])
+        self.tick([self.run_task, self.sub], now=NOW + 100)
+        n_feed = len(df.read_events("proj", 0)[0])
+        n_out = len([o for o in self.outbox() if o["op"] != "card"])   # a card op may follow: "updated HH:MM" moves
+        df = importlib.reload(df)  # a fresh process: nothing but feed-state.json survives
+        self.tick([self.run_task, self.sub], now=NOW + 200)
+        self.assertEqual(len(df.read_events("proj", 0)[0]), n_feed)
+        self.assertEqual(len([o for o in self.outbox() if o["op"] != "card"]), n_out)
+
+    def test_held_lock_skips_tick(self):
+        d = tc_env.discord_dir("proj")
+        d.mkdir(parents=True)
+        fh = open(d / "feed-state.lock", "w")
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            self.assertIsNone(self.tick([self.run_task]))
+            self.assertFalse((d / "feed-state.json").exists())
+            self.assertEqual(self.outbox(), [])
+        finally:
+            fh.close()
+        self.assertIsNotNone(self.tick([self.run_task]))
+        self.assertTrue((d / "feed-state.json").exists())

@@ -394,3 +394,26 @@ class TierAndBlockersTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RawLiveTasksTest(unittest.TestCase):
+    """raw_live_tasks: the same directory live_tasks resolves, tasks left as the lead wrote them (metadata kept)."""
+
+    def test_raw_matches_live_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "tasks" / "session-11111111"
+            d.mkdir(parents=True)
+            t = {"id": "3", "subject": "Plan & run: s.md", "status": "in_progress", "blockedBy": ["1"], "metadata": {"plan": "p.md"}}
+            (d / "3.json").write_text(json.dumps(t))
+            (d / "bad.json").write_text("{")
+            self.assertEqual(planview.raw_live_tasks(td, SID1), [t])
+            self.assertEqual([x["id"] for x in planview.live_tasks(td, SID1)], ["3"])
+            self.assertEqual(planview.raw_live_tasks(td, ""), [])
+
+    def test_raw_team_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "tasks" / "team-x").mkdir(parents=True)
+            (Path(td) / "tasks" / "team-x" / "1.json").write_text(json.dumps({"id": "1", "subject": "a", "status": "pending"}))
+            (Path(td) / "teams" / "team-x").mkdir(parents=True)
+            (Path(td) / "teams" / "team-x" / "config.json").write_text(json.dumps({"name": "team-x", "leadSessionId": SID2}))
+            self.assertEqual([x["id"] for x in planview.raw_live_tasks(td, SID2)], ["1"])

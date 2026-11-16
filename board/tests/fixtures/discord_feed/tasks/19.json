@@ -1,0 +1,11 @@
+{
+  "id": "19",
+  "subject": "BV Task 3: feed core (spool, feed file, card)",
+  "description": "**Goal:** `board/discord_feed.py` spool writer, feed file, card renderer and throttle; tc_env helpers. Complete — see ledger.",
+  "owner": "bv-py",
+  "status": "completed",
+  "blocks": [
+    "20"
+  ],
+  "blockedBy": []
+}

@@ -127,6 +127,30 @@ def live_tasks(home, sid, pid=0, started=0):
     return _finish(tasks)
 
 
+def _raw_dir(d):
+    tasks = []
+    for f in d.glob("*.json"):
+        try:
+            t = json.loads(f.read_text())
+            if isinstance(t, dict):
+                tasks.append(t)
+        except (ERRORS + (AttributeError, TypeError)):
+            continue
+    return tasks
+
+
+def raw_live_tasks(home, sid, pid=0, started=0):
+    """The task dicts exactly as the lead wrote them (metadata, description kept), from the directory live_tasks resolves."""
+    if not sid:
+        return []
+    tasks = _raw_dir(Path(home) / "tasks" / f"session-{sid[:8]}")
+    if not tasks:
+        team = team_name(home, sid, pid, started)
+        if team:
+            tasks = _raw_dir(Path(home) / "tasks" / team)
+    return tasks
+
+
 def _read_dir(d):
     tasks = []
     for f in d.glob("*.json"):

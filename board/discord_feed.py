@@ -2,6 +2,10 @@
 
 Spool writer (outbox, 200 cap), feed-event file (spec §11), status card renderer and throttle, audit log.
 Paths come from tc_env (agent_base, discord_dir, feed_path). Test: tests/test_discord_feed.py."""
+import copy
+import fcntl
+import glob
+import hashlib
 import json
 import os
 import re
@@ -149,12 +153,17 @@ def _tid(t):
     return (0, int(s), s) if s.isdigit() else (1, 0, s)
 
 
+def _spec_name(subject):
+    """`Plan & run: docs/superpowers/specs/<name>.md#part-1` -> `<name>#part-1`."""
+    path, hashsep, frag = str(subject)[len(_PLAN_RUN):].strip().partition("#")
+    return os.path.basename(path).removesuffix(".md") + hashsep + frag
+
+
 def _queue(lead_tasks):
     runs = sorted((t for t in lead_tasks if str(t.get("subject", "")).startswith(_PLAN_RUN)), key=_tid)
     for k, t in enumerate(runs, 1):
         if t.get("status") == "in_progress":
-            spec = os.path.basename(str(t["subject"])[len(_PLAN_RUN):].strip()).removesuffix(".md")
-            return f"queue: running {spec} ({k}/{len(runs)})"
+            return f"queue: running {_spec_name(t['subject'])} ({k}/{len(runs)})"
     if any(t.get("status") == "pending" for t in runs):
         return "queue: paused"
     return "queue: idle"
@@ -205,3 +214,185 @@ def audit_append(dir, user, action, target, result):
     line = {"ts": time.time(), "user": user, "action": action, "target": str(target)[:80], "result": result}
     with open(d / "audit.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+# ---- derivation: lead tasks, plan file, ledger, reports -> feed events -> outbox ops ----
+SEEN_CAP = 2000
+REVIEW_RE = re.compile(r"^(Final (re-)?review|Final fix wave|Task [0-9]+: (complete|re-review|fix round)|Batch [0-9-]+: review)")
+TEXT_MAX = 300
+
+
+def _glob_root(root, rel):
+    """root/<rel> and root/.claude/worktrees/*/<rel>, in that order."""
+    root = str(root)
+    return [Path(p) for p in [os.path.join(root, rel)] + sorted(glob.glob(os.path.join(glob.escape(root), ".claude", "worktrees", "*", rel)))]
+
+
+def _cut(text):
+    return text if len(text) <= TEXT_MAX else text[:TEXT_MAX]
+
+
+def _ev(project, spec, kind, tier, text, now, **refs):
+    return {"ts": now, "project": project, "spec": spec, "kind": kind, "tier": tier, "text": _cut(text),
+            "refs": {k: v for k, v in refs.items() if v}}
+
+
+def _plan_task_count(root, plan):
+    for p in _glob_root(root, plan):
+        try:
+            return sum(1 for l in p.read_text(encoding="utf-8").splitlines() if l.startswith("### Task "))
+        except OSError:
+            continue
+    return None
+
+
+def _ledger_lines(root, plan_base):
+    for p in _glob_root(root, f".superpowers/sdd/{plan_base}/progress.md"):
+        try:
+            return [l.rstrip() for l in p.read_text(encoding="utf-8").splitlines() if REVIEW_RE.match(l)]
+        except OSError:
+            continue
+    return []
+
+
+def _report_summary(path):
+    try:
+        for l in path.read_text(encoding="utf-8").splitlines():
+            if l.strip():
+                return l.lstrip("# ").strip()
+    except OSError:
+        pass
+    return path.name
+
+
+def derive(project, root, lead_tasks, state, now):
+    """(events, new_state). Each event is emitted once: its key goes into state["seen"] (newest 2000 kept).
+    The first call on a fresh state (no "primed") records the history already there (completed tasks, ledger lines,
+    outcomes, reports) as seen without emitting, so an old ledger is not replayed; spec_started and plan_written
+    of a run already in progress are still emitted. Does not mutate `state`."""
+    st = copy.deepcopy(state or {})
+    first = not st.get("primed")
+    seen = list(st.get("seen") or [])
+    have = set(seen)
+    out = []
+
+    def emit(key, ev, history=False):
+        if key in have:
+            return
+        have.add(key)
+        seen.append(key)
+        if not (first and history):
+            out.append(ev)
+
+    tasks = [t for t in (lead_tasks or []) if isinstance(t, dict)]
+    runs = sorted((t for t in tasks if str(t.get("subject", "")).startswith(_PLAN_RUN)), key=_tid)
+    running = next((t for t in runs if t.get("status") == "in_progress"), None)
+    st["running_thread_key"] = str(running["id"]) if running else ""
+    if running:
+        rid, spec = str(running["id"]), _spec_name(running["subject"])
+        emit(f"started:{rid}", _ev(project, spec, "spec_started", "progress", f"spec started: {spec}", now, thread_key=rid))
+        meta = running.get("metadata") if isinstance(running.get("metadata"), dict) else {}
+        plan = meta.get("plan")
+        if isinstance(plan, str) and plan:
+            if f"plan:{rid}" not in have:
+                n = _plan_task_count(root, plan)
+                if n is not None:
+                    emit(f"plan:{rid}", _ev(project, spec, "plan_written", "progress", f"plan written: {n} tasks", now, thread_key=rid))
+            base = os.path.basename(plan).removesuffix(".md")
+            for line in _ledger_lines(root, base):
+                emit(f"rev:{base}:{hashlib.sha1(line.encode()).hexdigest()[:12]}",
+                     _ev(project, spec, "review", "progress", "review: " + line, now, thread_key=rid), history=True)
+    for t in sorted((t for t in tasks if t not in runs), key=_tid):
+        if t.get("status") == "completed":
+            if running:
+                emit(f"done:{t.get('id')}", _ev(project, _spec_name(running["subject"]), "task_done", "progress",
+                                                f"✓ {t.get('subject', '')}", now, task=str(t.get("id")), thread_key=str(running["id"])), history=True)
+            elif f"done:{t.get('id')}" not in have:
+                have.add(f"done:{t.get('id')}")   # finished with no spec running: history, never replayed later
+                seen.append(f"done:{t.get('id')}")
+    for t in runs:
+        if t.get("status") == "completed":
+            meta = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
+            outcome = str(meta.get("outcome") or "completed")
+            tier = "critical" if outcome.startswith("failed") else "progress"
+            rid = str(t["id"])
+            emit(f"outcome:{rid}", _ev(project, _spec_name(t["subject"]), "spec_outcome", tier, outcome, now, thread_key=rid), history=True)
+    for p in sorted(glob.glob(os.path.join(glob.escape(str(root)), "docs", "superpowers", "reports", "*-queue.md"))):
+        name = os.path.basename(p)
+        emit(f"report:{name}", _ev(project, "", "report_written", "progress", f"queue report: {_report_summary(Path(p))}", now, file=name), history=True)
+    st["primed"] = True
+    st["seen"] = seen[-SEEN_CAP:]
+    return out, st
+
+
+def ops_for_events(events, state):
+    """Outbox ops by tier: progress -> post in the spec thread (home for a report or when no spec runs); critical and
+    decision -> home post with mention_user and a link to the running spec's thread; routine -> nothing (card only)."""
+    running = (state or {}).get("running_thread_key") or ""
+    ops = []
+    for ev in events:
+        kind, tier, refs = ev.get("kind"), ev.get("tier"), ev.get("refs") or {}
+        thread = refs.get("thread_key") or running
+        if kind == "spec_outcome" and str(ev.get("text", "")).startswith("failed"):
+            tier = "critical"
+        if tier == "routine":
+            continue
+        if kind == "spec_started" and refs.get("thread_key"):
+            ops.append({"op": "thread", "key": refs["thread_key"], "title": ev.get("spec") or refs["thread_key"]})
+        if tier in ("critical", "decision"):
+            op = {"op": "post", "text": ev["text"], "tier": tier, "mention_user": True}
+            if thread:
+                op["link_thread_key"] = thread
+        else:
+            op = {"op": "post", "text": ev["text"], "tier": "progress", "mention_user": False}
+            if thread and kind != "report_written":
+                op["thread_key"] = thread
+        ops.append(op)
+        if kind == "spec_outcome" and refs.get("thread_key"):
+            ops.append({"op": "archive", "key": refs["thread_key"]})
+    return ops
+
+
+def _load(p):
+    try:
+        v = json.loads(Path(p).read_text(encoding="utf-8"))
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def tick(project, record, root, home, now, lead_tasks=None):
+    """One feed pass for a project under flock(<dir>/feed-state.lock); None when another tick holds it.
+    derive -> append events to the feed file -> read every feed event since state["feed_offset"] (so events appended by
+    other writers flow through too) -> outbox ops -> the card op when due -> feed-state.json.
+    `lead_tasks` are the raw lead task dicts (planview.raw_live_tasks); `home` is kept for the caller's session lookup."""
+    import tc_env
+    d = tc_env.discord_dir(project)
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "feed-state.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return None
+        sp = d / "feed-state.json"
+        st = _load(sp)
+        if "feed_offset" not in st:
+            fp = tc_env.feed_path(project)
+            st["feed_offset"] = fp.stat().st_size if fp.exists() and not st.get("primed") else 0
+        events, st = derive(project, root, lead_tasks or [], st, now)
+        for ev in events:
+            append_event(project, ev)
+        flow, st["feed_offset"] = read_events(project, st["feed_offset"])
+        ops = ops_for_events(flow, st)
+        text = render_card(record, lead_tasks or [], now)
+        card = card_op_due(st, text, now)
+        if card:
+            ops.append(card)
+        for op in ops:
+            outbox_write(d, op)
+        if card:
+            st["card_text"], st["card_ts"] = text, now
+        tmp = sp.with_name(sp.name + ".tmp")
+        tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, sp)
+        return {"events": len(flow), "ops": len(ops)}
