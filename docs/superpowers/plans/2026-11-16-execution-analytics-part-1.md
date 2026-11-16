@@ -261,7 +261,7 @@ def family(model):
 
 ### Task 5: `metrics weekly --dry-run` report text and docs
 
-**Goal:** `tmux-ctl metrics weekly --dry-run [--since 7d]` runs analyze and recommend and prints the weekly report to stdout. The help and docs name the new subcommands.
+**Goal:** `tmux-ctl metrics weekly --dry-run [--since 7d] [--tasks-log PATH]` runs analyze (passing `--tasks-log` through) and recommend and prints the weekly report to stdout. The help and docs name the new subcommands.
 
 **Files:**
 - Modify: `board/metrics_recommend.py` (adds `weekly_text(stats, rec)`), `board/metrics.py` (`weekly` subcommand), `bin/tmux-ctl` (help comment under `metrics`), `docs/superpowers/metrics/README.md` if it exists, else the metrics section of `README.md`
@@ -308,7 +308,7 @@ def family(model):
 **Acceptance Criteria:**
 - [ ] `tmux-ctl metrics backfill-tasks --log <scratch>/tasks.jsonl` runs on the real repo with the real usage index. The note quotes its summary line, gives the count of lines with `partial: true`, and quotes three sample lines (privacy checked: run `grep -c /Users/` on the file and give the count, which must be 0).
 - [ ] `tmux-ctl metrics analyze --since 30d --out <scratch>/stats.json --tasks-log <scratch>/tasks.jsonl` runs against the real `runs.jsonl` plus the scratch `tasks.jsonl`. The note quotes the summary line, the coverage numbers and every flag's row count.
-- [ ] `tmux-ctl metrics weekly --dry-run --since 30d` runs once with the real `claude`. This is the one real model run. The note pastes the whole output and says how many of 3 items passed.
+- [ ] `tmux-ctl metrics weekly --dry-run --since 30d --tasks-log <scratch>/tasks.jsonl` runs once with the real `claude`. This is the one real model run. The note pastes the whole output and says how many of 3 items passed.
 - [ ] Afterwards, `git -C <main checkout> status --short docs/superpowers/metrics/` is empty: the real logs were not touched.
 
 **Verify:** `test -s docs/superpowers/notes/2026-11-16-execution-analytics-e2e.md && grep -c 'passed the evidence check\|recommendations unavailable' docs/superpowers/notes/2026-11-16-execution-analytics-e2e.md`. The count must be at least 1.
