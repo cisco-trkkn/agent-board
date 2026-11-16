@@ -48,6 +48,13 @@ out="$($C wait-gone a --timeout 2 2>&1)"; rc=$?
 check "other session: its window does not count"  test $rc -eq 0 -a "$out" = "wait-gone: all gone"
 check "other session: its window is left alone"   has other '✦ a'
 
+# a tmux error is never read as "no windows": the listing fails (no session `nosuch`), so the name is not gone
+t0=$EPOCHSECONDS
+out="$(TC_SESSION=nosuch $C wait-gone a --timeout 2 2>&1)"; rc=$?
+check "listing fails: exit 3, not all gone"        test $rc -eq 3 -a "$out" != "wait-gone: all gone"
+check "listing fails: prints could not kill"       test "$out" = "wait-gone: could not kill a"
+check "listing fails: waited for the timeout"      test $(( EPOCHSECONDS - t0 )) -ge 2
+
 # usage
 out="$(env -u TMUX -u TMUX_PANE $C wait-gone a 2>&1)"; rc=$?
 check "outside tmux: exit 2"                      test $rc -eq 2

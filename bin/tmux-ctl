@@ -537,16 +537,24 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     wg_start=$EPOCHSECONDS
     while :; do
       # exact names only, and the window id for the kill: a `-t "=sess:✦ a"` target also matches `✦ a-2` by prefix when `✦ a` is gone
+      # a failed listing is not "no windows": nothing is read from it, and the names stay unconfirmed until a listing succeeds
       typeset -A wg_ids=()
-      for wg_l in ${(f)"$(t list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)"}; do
-        wg_ids[${wg_l#* }]="${wg_l%% *}"
-      done
-      wg_left=()
-      for wg_n in $wg_names; do (( ${+wg_ids[✦ $wg_n]} )) && wg_left+=("$wg_n"); done
-      if (( ! $#wg_left )); then print -r -- "wait-gone: all gone"; exit 0; fi
+      wg_raw="$(t list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)" && wg_listed=1 || wg_listed=0
+      if (( wg_listed )); then
+        for wg_l in ${(f)wg_raw}; do
+          wg_ids[${wg_l#* }]="${wg_l%% *}"
+        done
+        wg_left=()
+        for wg_n in $wg_names; do (( ${+wg_ids[✦ $wg_n]} )) && wg_left+=("$wg_n"); done
+        if (( ! $#wg_left )); then print -r -- "wait-gone: all gone"; exit 0; fi
+      fi
       (( EPOCHSECONDS - wg_start >= wg_to )) && break
       sleep $(( wg_to - (EPOCHSECONDS - wg_start) < 2 ? wg_to - (EPOCHSECONDS - wg_start) : 2 ))
     done
+    if (( ! wg_listed )); then
+      for wg_n in $wg_names; do print -r -- "wait-gone: could not kill $wg_n"; done
+      exit 3
+    fi
     for wg_n in $wg_left; do
       t kill-window -t "${wg_ids[✦ $wg_n]}" 2>/dev/null || print -r -- "wait-gone: could not kill $wg_n"
     done
