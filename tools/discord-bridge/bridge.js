@@ -30,6 +30,7 @@ const NET_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 
 function isRetryable(e) {
   const s = statusOf(e);
   if (s !== undefined) return s >= 500 || s === 429;
+  if (['AbortError', 'TimeoutError'].includes(e?.name) || ['AbortError', 'TimeoutError'].includes(e?.cause?.name)) return true;
   const c = e?.code ?? e?.cause?.code;
   if (typeof c === 'string' && (NET_CODES.has(c) || c.startsWith('UND_ERR'))) return true;
   return /socket hang up|fetch failed|network|timed? ?out/i.test(String(e?.message));

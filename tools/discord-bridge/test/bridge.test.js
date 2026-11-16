@@ -108,6 +108,15 @@ test('retryable: 429, 503 and each named network code retry; ENOENT code does no
   assert.deepStrictEqual(s.sleeps, []); assert.strictEqual(s.failed().length, 2);
 });
 
+test('a request timeout (AbortError/TimeoutError, on the error or its cause) is retried, not failed', async () => {
+  for (const f of [{ plain: true, name: 'AbortError', message: 'This operation was aborted' }, { plain: true, name: 'TimeoutError', message: 'x' },
+    { plain: true, message: 'boom', cause: Object.assign(new Error('c'), { name: 'AbortError' }) }]) {
+    const s = setup(); s.put(post('x')); s.client.failNext('send', f);
+    await s.bridge.tick();
+    assert.deepStrictEqual(s.sleeps, [1000], JSON.stringify(f)); assert.deepStrictEqual(s.failed(), []);
+  }
+});
+
 test('a missing bridge.json channel fails the op instead of retrying forever', async () => {
   const s = setup();
   fs.writeFileSync(path.join(s.dir, 'bridge.json'), '{}');
