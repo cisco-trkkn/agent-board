@@ -285,7 +285,18 @@ def last_sweep(max_bytes=65536):
             "stale": sum(1 for r in run if r[1] == "stale")}
 
 
-TG_FLAG = "--channels plugin:telegram"
+DC_PLUGIN = "plugin:discord@claude-plugins-official"
+
+
+def has_discord_channel(args):
+    """True when argv lists the Discord plugin after a --channels token, or has --channels=<plugin>."""
+    seen = False
+    for tok in args.split():
+        if tok == "--channels":
+            seen = True
+        elif tok == "--channels=" + DC_PLUGIN or (seen and tok == DC_PLUGIN):
+            return True
+    return False
 
 
 def proc_table():
@@ -302,8 +313,8 @@ def proc_table():
     return table
 
 
-def telegram_leads(leads):
-    """Set of pane ids, from [(pane id, pane_pid)], whose process tree runs claude with the Telegram channel flag."""
+def discord_leads(leads):
+    """Set of pane ids, from [(pane id, pane_pid)], whose process tree runs claude with the Discord channel."""
     table = proc_table()
     kids = {}
     for pid, (ppid, _) in table.items():
@@ -316,7 +327,7 @@ def telegram_leads(leads):
             if pid in seen:
                 continue
             seen.add(pid)
-            if TG_FLAG in table.get(pid, (0, ""))[1]:
+            if has_discord_channel(table.get(pid, (0, ""))[1]):
                 on.add(pane_id)
                 break
             todo.extend(kids.get(pid, ()))
@@ -359,16 +370,16 @@ def build_state():
         kind, status = classify(cmd, rows, bell == "1", mods.get(pid))
         w["panes"].append({
             "id": pid, "index": int(pidx), "title": title, "command": cmd, "path": path,
-            "active": pact == "1", "kind": kind, "status": status, "preview": preview(rows), "telegram": False,
+            "active": pact == "1", "kind": kind, "status": status, "preview": preview(rows), "discord": False,
         })
         if wname == "claude" and kind == "claude" and mate != "1" and f[16].isdigit():
             leads.append((pid, int(f[16])))
     if leads:   # one ps per build, never per pane
-        on = telegram_leads(leads)
+        on = discord_leads(leads)
         for s in sessions.values():
             for w in s["windows"].values():
                 for p in w["panes"]:
-                    p["telegram"] = p["id"] in on
+                    p["discord"] = p["id"] in on
     out = list(sessions.values())
     for s in out:  # not on POOL: worktrees() itself waits on POOL jobs
         s["windows"] = sorted(s["windows"].values(), key=lambda w: w["index"])
