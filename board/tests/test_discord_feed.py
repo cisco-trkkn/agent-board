@@ -140,6 +140,28 @@ class OutboxTest(Base):
         self.assertEqual(len(ops), 200)
         self.assertEqual([o["op"] for o in ops if o["op"] in ("thread", "archive")], ["thread", "archive"])
 
+    def test_prompt_and_edit_shapes(self):
+        pr = {"op": "prompt", "key": "%1:ab", "window": "w", "tool": "Bash command", "lines": ["a", "b"], "tier": "decision", "mention_user": True}
+        df.outbox_write(self.dir, pr)
+        df.outbox_write(self.dir, {"op": "edit", "key": "%1:ab", "text": "t"})
+        self.assertEqual(len(self.names()), 2)
+        bad = [{k: v for k, v in pr.items() if k != "tool"}, {**pr, "x": 1}, {**pr, "lines": "a"}, {**pr, "lines": [1]},
+               {**pr, "tier": "loud"}, {**pr, "mention_user": "yes"}, {**pr, "key": 3},
+               {"op": "edit", "key": "k"}, {"op": "edit", "key": "k", "text": "t", "x": 1}, {"op": "edit", "key": "k", "text": 5}]
+        for op in bad:
+            with self.assertRaises(ValueError, msg=str(op)):
+                df.outbox_write(self.dir, op)
+        self.assertEqual(len(self.names()), 2)
+
+    def test_cap_keeps_prompt_and_edit(self):  # mutation: drop them in _enforce_cap -> they vanish
+        df.outbox_write(self.dir, {"op": "prompt", "key": "k", "window": "w", "tool": "t", "lines": ["l"], "tier": "decision", "mention_user": True})
+        df.outbox_write(self.dir, {"op": "edit", "key": "k", "text": "e"})
+        for i in range(205):
+            df.outbox_write(self.dir, post(f"p{i}"))
+        ops = [json.loads((self.dir / "outbox" / n).read_text()) for n in self.names()]
+        self.assertEqual(len(ops), 200)
+        self.assertEqual([o["op"] for o in ops if o["op"] in ("prompt", "edit")], ["prompt", "edit"])
+
     def test_cap_drops_non_mention_after_cards(self):
         for i in range(201):
             df.outbox_write(self.dir, post(f"p{i}"))

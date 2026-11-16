@@ -1,5 +1,4 @@
-"""Board wiring of the discord feed: the bridge keeper, the feed tick in overview_payload, the notifier's discord sink,
-read_inbound. Every test runs on a TC_STATE temp dir; run_script and the clock are faked."""
+"""Board wiring of the discord feed: the bridge keeper, the feed tick in overview_payload, the notifier's discord sink. Every test runs on a TC_STATE temp dir; run_script and the clock are faked."""
 import importlib.util
 import json
 import os
@@ -125,10 +124,8 @@ class FeedTickWiringTest(Base):
         self.assertEqual(value["projects"][0]["project"], "p")
         self.assertIn("feed broke", "".join(c[0][0] for c in err.write.call_args_list))
 
-    def test_tick_passes_raw_lead_tasks_and_reads_inbound(self):
-        d = self.configure("p")
-        (d / "events").mkdir()
-        (d / "events" / "1-a.json").write_text(json.dumps({"user": "u1", "custom_id": "ab:x"}))
+    def test_tick_passes_raw_lead_tasks(self):
+        self.configure("p")
         tasks = [{"id": "1", "subject": "s", "status": "pending"}]
         with mock.patch.object(server.planview, "lead_entry", return_value=("sid", 5, 6)), \
              mock.patch.object(server.planview, "raw_live_list", return_value=("session-sid", tasks)) as raw, \
@@ -136,28 +133,6 @@ class FeedTickWiringTest(Base):
             server.feed_tick([rec("p")], 1000.0)
         raw.assert_called_once_with(server.HOME / ".claude", "sid", 5, 6)
         self.assertEqual(tick.call_args[1], {"lead_tasks": tasks, "list_id": "session-sid"})
-        self.assertFalse(list((d / "events").glob("*.json")))
-
-
-class ReadInboundTest(Base):
-    def test_ignored_rejected_deleted_in_name_order(self):
-        d = self.configure("p")
-        (d / "access.json").write_text(json.dumps({"allowFrom": ["u1"]}))
-        ev = d / "events"
-        ev.mkdir()
-        (ev / "2-b.json").write_text(json.dumps({"user": "stranger", "custom_id": "ab:y"}))
-        (ev / "1-a.json").write_text(json.dumps({"user": "u1", "custom_id": "ab:x"}))
-        (ev / "3-c.json").write_text("{not json")
-        n = discord_feed.read_inbound(d)
-        self.assertEqual(n, 3)
-        self.assertEqual(list(ev.glob("*.json")), [])
-        lines = [json.loads(l) for l in (d / "audit.jsonl").read_text().splitlines()]
-        self.assertEqual([(l["user"], l["target"], l["result"]) for l in lines],
-                         [("u1", "ab:x", "ignored"), ("stranger", "ab:y", "rejected"), ("", "", "rejected")])
-        self.assertTrue(all(l["action"] == "inbound" for l in lines))
-
-    def test_no_events_dir(self):
-        self.assertEqual(discord_feed.read_inbound(tc_env.discord_dir("none")), 0)
 
 
 class SinkTest(Base):

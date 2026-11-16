@@ -477,7 +477,7 @@ def ensure_discord_bridges(records):
 
 
 def feed_tick(records, now):
-    """The discord feed for each project with a channel: tick (derive, spool, card), then the inbound-events stub.
+    """The discord feed for each project with a channel: tick (derive, spool, card), then (Task 4) the controls step.
     A failure in one project is logged and never breaks the overview or the next project."""
     home = HOME / ".claude"
     for r in records:
@@ -488,7 +488,6 @@ def feed_tick(records, now):
             sid, pid, started = planview.lead_entry(p, home, tmux)
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
             discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id)
-            discord_feed.read_inbound(tc_env.discord_dir(p))
         except Exception as e:   # noqa: BLE001
             print(f"tmux-dash: discord feed failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
