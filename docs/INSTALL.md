@@ -251,7 +251,9 @@ Kill switches: `TC_DISCORD_BRIDGE=0` starts no bridge (`bridge start` prints `br
 
 - The lead's own permission prompts reach the phone as buttons; the first answer, phone or terminal, wins.
 - AskUserQuestion is not relayed: while you are remote, the lead asks as a numbered list in Discord.
-- A teammate's or worker's prompt is approved only on your Discord reply `approve n` / `deny n`, through `tmux-ctl approve` (the one-time `Yes` or `No` only). Peer sessions are not covered.
+- A teammate's or worker's prompt is approved only on your Discord reply `approve n` / `deny n`, through `tmux-ctl approve` (the one-time `Yes` or `No` only). Peer sessions are not covered. While the bridge runs, the prompt also posts with two buttons: `Allow once` and `Deny`. There is never an always-allow button. Only users in `access.json` `allowFrom` can press them; anyone else gets `Not authorized.` A prompt too long for one post gets only `Deny`, and the full text is on the board. A press runs the same `approve` as the text reply, and the post is then edited to show the outcome (`✅ allowed by you`, `⛔ denied`, or `answered elsewhere`).
+- Five reactions on the bot's messages control the queue, from allowlisted users only: ✅ and ❌ answer the lead's latest question as yes or no, 🛑 pauses the queue, ▶️ resumes it, and ⏭️ skips the running spec (it is recorded as `failed — skipped by the user`, and its branch is kept). The bridge marks each reaction it acts on with 👀.
+- `tmux-ctl approve <win> show` prints the tool and the `P:` lines of the prompt in window `<win>`, read-only. It exits 1 when there is no prompt or the prompt is ambiguous, and then no post is made. Every press, reaction and rejected click is written to `tmux-ctl discord audit`.
 
 **At the office.** Keep the lid open and the Mac on mains power, and run `tmux-ctl awake on`.
 

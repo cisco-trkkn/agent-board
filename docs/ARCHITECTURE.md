@@ -293,10 +293,12 @@ Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It 
 | `<id>.rc`, `<id>.gone` | `tmux-ctl run`/`_done` (transient) | `tmux-ctl run` |
 | `recent-projects.json` | board `dev` action | Open project dialog |
 | `~/.local/state/agent-board/feed/<p>.jsonl` | board (`discord_feed.append_event`), PCEE | board feed derivation. Persistent: not in the state dir (see [Feed events](#feed-events)) |
-| `~/.local/state/agent-board/discord/<p>/outbox/<ts>-<id>.json`, `outbox/failed/` (+ `.err`) | board (`outbox_write`) | Discord bridge. Persistent |
-| `~/.local/state/agent-board/discord/<p>/bridge-state.json` | bridge | board, `tmux-ctl discord status` |
+| `~/.local/state/agent-board/discord/<p>/outbox/<ts>-<id>.json`, `outbox/failed/` (+ `.err`) | board (`outbox_write`) | Discord bridge. Persistent. Two control ops: `{"op":"prompt","key","window","tool","lines","tier":"decision","mention_user":true}` posts a teammate's or worker's permission prompt with `Allow once` / `Deny` buttons (custom ids `ab:perm:<key>:allow` and `ab:perm:<key>:deny`; `key` = `<pane id>:<sha1 of the lines>`); `{"op":"edit","key","text"}` edits the post made for that prompt key to `text` and removes its buttons. `_check` validates both, and `_enforce_cap` never drops a `prompt` or an `edit` op |
+| `~/.local/state/agent-board/discord/<p>/bridge-state.json` | bridge | board, `tmux-ctl discord status`. Also `prompts: {"<key>": "<message id>"}`, the newest 200 prompt posts |
 | `~/.local/state/agent-board/discord/<p>/feed-state.json` | board (dedupe, card throttle) | board |
-| `~/.local/state/agent-board/discord/<p>/events/<ts>-<id>.json` | bridge | board (inbound stub) |
+| `~/.local/state/agent-board/discord/<p>/controls-state.json` (+ `controls-state.lock`) | board (`discord_controls`, under `flock`, written via `.tmp` + rename) | board. Open prompts: `{"prompts": {"<key>": {"window","pane","tool","lines","ts"}}}`. Kept apart from `feed-state.json` because `discord_feed.tick` rewrites that file whole |
+| `~/.local/state/agent-board/discord/<p>/events/<ts>-<id>.json` | bridge (`.tmp` + rename) | board (inbound). Each file is handled once and deleted. Shapes: `{"type":"perm","key","choice":"allow"\|"deny","user","message_id","ts"}` for a prompt button; `{"type":"click","custom_id","user","message_id","channel_id","ts"}` for any other `ab:` button; `{"type":"react","emoji","message_id","excerpt","user","ts"}` for one of the five reactions (`✅ ❌ 🛑 ▶️ ⏭️`) |
+| `~/.local/state/agent-board/discord/<p>/events/failed/<name>` | board | an event file that does not parse, or is not a JSON object, is moved here |
 | `~/.local/state/agent-board/discord/<p>/bridge.json`, `bridge.pid`, `bridge.log`, `audit.jsonl` | `tmux-ctl discord channel`, bridge, board audit | bridge, `tmux-ctl discord audit` |
 
 Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `context/`, `overseer/`, `worktree-sweep.log`, the transient `sweep-*.lock`). Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
