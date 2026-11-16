@@ -5,7 +5,10 @@ Run log: one JSON object per line, kind in batch|start|run|defect (analysis is r
 kinds). Append-only; readers take the last `run` per (batch, spec); a malformed line is skipped and counted.
 Nothing private goes in a line: no session ids, prompts, agent names, absolute paths.
 
-CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|gate|status> ...
+Task log (docs/superpowers/metrics/tasks.jsonl, same rules): one line per plan task, written by `record` and by
+`backfill-tasks`; readers take the last line per (batch, spec, task_id).
+
+CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|analyze|recommend|weekly|gate|status> ...
 A failing command prints one line `metrics: <sub>: <reason>` to stderr and exits 1. `tmux-ctl metrics` calls this.
 """
 import argparse
@@ -20,11 +23,12 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
+import metrics_tasks  # noqa: E402
 import tc_env  # noqa: E402
 import usage  # noqa: E402
 
 METRICS_DIR = Path("docs/superpowers/metrics")
-SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "gate", "status")
+SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "recommend", "weekly", "gate", "status")
 
 
 class MetricsError(Exception):
@@ -45,6 +49,9 @@ def repo_root(repo_arg=None):
 LOG_OVERRIDE = None   # `backfill --log PATH` (tests, dry runs): read and write this file instead of the repo's run log
 
 
+TASKS_OVERRIDE = None   # `backfill-tasks --log PATH`: read and write this file instead of the repo's tasks.jsonl
+
+
 def mdir(repo):
     """The metrics directory of the MAIN checkout: every worktree of the repo shares its run log, configs, gates and roadmap."""
     return Path(main_root(repo)) / METRICS_DIR
@@ -54,9 +61,11 @@ def log_path(repo):
     return Path(LOG_OVERRIDE) if LOG_OVERRIDE else mdir(repo) / "runs.jsonl"
 
 
-def read_log(repo):
-    """(lines, malformed_count): every parsed JSON object (unknown kinds kept), bad lines counted."""
-    p = log_path(repo)
+def tasks_path(repo):
+    return Path(TASKS_OVERRIDE) if TASKS_OVERRIDE else mdir(repo) / "tasks.jsonl"
+
+
+def _read_jsonl(p):
     if not p.exists():
         return [], 0
     out, bad = [], 0
@@ -75,11 +84,28 @@ def read_log(repo):
     return out, bad
 
 
-def append(repo, obj):
-    p = log_path(repo)
+def read_log(repo):
+    """(lines, malformed_count): every parsed JSON object (unknown kinds kept), bad lines counted."""
+    return _read_jsonl(log_path(repo))
+
+
+def read_tasks(repo):
+    """(lines, malformed_count) of tasks.jsonl, like read_log."""
+    return _read_jsonl(tasks_path(repo))
+
+
+def _append_to(p, obj):
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "a") as f:
         f.write(json.dumps(obj, sort_keys=True) + "\n")
+
+
+def append(repo, obj):
+    _append_to(log_path(repo), obj)
+
+
+def append_task(repo, obj):
+    _append_to(tasks_path(repo), obj)
 
 
 def last_runs(lines):
@@ -693,6 +719,60 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
     return rec
 
 
+def _commit_time(repo):
+    """sha -> committer time (epoch int) or None for an unknown sha; one git call per sha."""
+    seen = {}
+
+    def ct(sha):
+        if sha not in seen:
+            rc, out = _git_try(repo, "show", "-s", "--format=%ct", sha)
+            seen[sha] = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
+        return seen[sha]
+    return ct
+
+
+def task_lines_for_run(repo, run, conn):
+    """The task lines of one `run` line, from its plan's .tasks.json, its ledger and the agent rows in its window that
+    belong to the spec (cwd under the spec's worktrees or the main root). No plan: no lines. Raises MetricsError when the
+    plan has no .tasks.json or the run has no window. A live ledger (.superpowers/sdd/<plan>/progress.md in the spec's worktree) wins over the archived one;
+    with neither, the lines carry no ledger facts."""
+    repo = Path(repo)
+    spec, batch = run["spec"], run["batch"]
+    plan = find_plan(repo, spec)
+    if not plan:
+        return []   # the run line already names the plan in `missing`
+    plan_path, plan_text, plan_ref = plan
+    tasks_text = _read(repo, plan_ref, plan_path + ".tasks.json")
+    if tasks_text is None:
+        raise MetricsError("plan has no .tasks.json")
+    if not run.get("started_at") or not run.get("ended_at"):
+        raise MetricsError("run has no window")
+    lo, hi = _epoch(run["started_at"]), _epoch(run["ended_at"])
+    base = Path(plan_path).name[:-3]
+    root = main_root(repo)
+    wt = worktree_dirs(repo, root, run.get("branch"), conn)
+    progress = None
+    for d in sorted(wt):
+        f = Path(d) / ".superpowers/sdd" / base / "progress.md"
+        if f.is_file():
+            progress = f.read_text()
+            break
+    if progress is None:
+        progress = _read(repo, plan_ref, f"docs/superpowers/ledgers/{base}/progress.md")
+    try:
+        routing = json.loads((Path(root) / "docs/superpowers/model-routing.json").read_text())
+    except (OSError, ValueError):
+        routing = {}
+    # worker rows carry git_branch 'main' as often as the queue branch, and the worktree is gone by `record` time:
+    # select by cwd (main root or any worktree under it); build_task_lines keeps only the ledger's owners/reviewers
+    wt_root = root + "/.claude/worktrees/"
+    rows = [r for r in usage._rows(conn, "select * from calls where ts>=? and ts<=? and agent_name is not null", (lo, hi))
+            if (r["cwd"] or "") == root or (r["cwd"] or "").startswith(wt_root)
+            or any((r["cwd"] or "") == d or (r["cwd"] or "").startswith(d + "/") for d in wt)]
+    return metrics_tasks.build_task_lines(spec, batch, tasks_text, progress or "", routing, rows, _commit_time(repo), hi,
+                                          plan_text=plan_text)
+
+
 def ingest_project(conn, root):
     for d in transcript_dirs(root):
         for f in sorted(d.rglob("*.jsonl")):
@@ -710,9 +790,14 @@ def cmd_record(repo, args):
         if not args.no_ingest:
             ingest_project(conn, main_root(repo))
         rec = build_record(repo, args.spec, args.batch, args.outcome, time.time(), branch=args.branch, conn=conn, project=args.project)
+        append(repo, rec)
+        try:   # the task half never fails the run record
+            for t in task_lines_for_run(repo, rec, conn):
+                append_task(repo, t)
+        except Exception as e:
+            print(f"metrics: record: task lines skipped: {clean_reason(e, repo)}", file=sys.stderr)
     finally:
         conn.close()
-    append(repo, rec)
     tasks = rec["tasks"] if rec["tasks"] is not None else "?"
     print(f"recorded {args.spec} {args.batch}: {tasks} tasks, {rec['tokens']['total'] / 1e6:.2f}M tokens, {rec['active_min']} active min")
 
@@ -1017,6 +1102,23 @@ def _parser():
     gp = sp.add_parser("gate", parents=[common])
     gp.add_argument("id")
     sp.add_parser("status", parents=[common])
+    bt = sp.add_parser("backfill-tasks", parents=[common])
+    bt.add_argument("--log", dest="tasks_log")
+    bt.add_argument("--usage-db")
+    bt.add_argument("--no-ingest", action="store_true")
+    an = sp.add_parser("analyze", parents=[common])
+    an.add_argument("--since", default="7d")
+    an.add_argument("--json", action="store_true")
+    an.add_argument("--out")
+    an.add_argument("--projects", nargs="+")
+    an.add_argument("--tasks-log")
+    rm = sp.add_parser("recommend", parents=[common])
+    rm.add_argument("--since", default="7d")
+    rm.add_argument("--stats")
+    wk = sp.add_parser("weekly", parents=[common])
+    wk.add_argument("--dry-run", action="store_true")
+    wk.add_argument("--since", default="7d")
+    wk.add_argument("--tasks-log")
     bf = sp.add_parser("backfill", parents=[common])
     bf.add_argument("--since")
     bf.add_argument("--until")
@@ -1495,6 +1597,116 @@ def cmd_backfill(repo, args):
         LOG_OVERRIDE = None
 
 
+def cmd_backfill_tasks(repo, args):
+    """Task lines for every run line whose (batch, spec) has none yet. A run whose lines cannot be built is named on stderr."""
+    global TASKS_OVERRIDE
+    TASKS_OVERRIDE = args.tasks_log
+    try:
+        have = {(d.get("batch"), d.get("spec")) for d in read_tasks(repo)[0]}
+        conn = usage.connect(args.usage_db or usage.db_path())
+        specs = tasks = partial = 0
+        try:
+            if not args.no_ingest:
+                ingest_project(conn, main_root(repo))
+            for key, run in last_runs(read_log(repo)[0]).items():
+                if key in have:
+                    continue
+                try:
+                    lines = task_lines_for_run(repo, run, conn)
+                except Exception as e:
+                    print(f"metrics: backfill-tasks: skipped {run.get('spec')}: {clean_reason(e, repo)}", file=sys.stderr)
+                    continue
+                if not lines:
+                    continue
+                for t in lines:
+                    append_task(repo, t)
+                specs += 1
+                tasks += len(lines)
+                partial += sum(1 for t in lines if t["partial"])
+        finally:
+            conn.close()
+        print(f"backfilled tasks for {specs} specs ({tasks} tasks, {partial} partial)")
+    finally:
+        TASKS_OVERRIDE = None
+
+
+def write_stats(repo, since_text, projects=None, tasks_log=None, out=None):
+    """Compute stats.json and write it (R5: `out`, else $TC_STATE/analytics/stats.json). Projects (R4): `projects`, else
+    `overview --json`, else this repo alone. Returns (stats, path)."""
+    import metrics_analyze   # lazy: metrics_analyze imports nothing from here
+    now = int(time.time())
+    m = re.fullmatch(r"(\d+)d", since_text)
+    try:
+        since = now - int(m.group(1)) * 86400 if m else _parse_when(since_text)
+    except ValueError:
+        raise MetricsError(f"bad --since {since_text}: use 7d, 30d, an ISO date or datetime")
+    here = main_root(repo)
+    if projects:
+        projects, source = list(projects), "args"
+    else:
+        try:
+            projects, source = metrics_analyze.overview_projects(), "overview"
+            if here in projects:
+                projects.remove(here)
+                projects.insert(0, here)
+        except Exception:
+            projects, source = [here], "repo-only"
+    stats = metrics_analyze.analyze(projects, since, now, tasks_log=tasks_log, source=source)
+    path = Path(out) if out else tc_env.state_dir() / "analytics" / "stats.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(stats, indent=1) + "\n")
+    return stats, path
+
+
+def cmd_analyze(repo, args):
+    stats, out = write_stats(repo, args.since, args.projects, args.tasks_log, args.out)
+    if args.json:
+        print(json.dumps(stats, indent=1))
+    else:
+        print(f"analyzed {stats['trends']['specs_run']['current']} specs, {stats['coverage']['tasks']} tasks "
+              f"across {len(stats['projects'])} projects → {out}")
+
+
+def _recommend_to_file(stats_path):
+    import metrics_recommend
+    res = metrics_recommend.recommend(stats_path)
+    (Path(stats_path).resolve().parent / "recommend.json").write_text(json.dumps(res, indent=1) + "\n")
+    return res
+
+
+def cmd_weekly(repo, args):
+    """`weekly --dry-run`: analyze, recommend and print the weekly report. Posting is part 2 (the Discord bridge)."""
+    if not args.dry_run:
+        raise MetricsError("posting needs part 2 (discord bridge); use --dry-run")
+    import metrics_recommend
+    stats, path = write_stats(repo, args.since, tasks_log=args.tasks_log)
+    if stats["trends"]["specs_run"]["current"] == 0:
+        print("no runs in the window; nothing to post")
+        return
+    print(metrics_recommend.weekly_text(stats, _recommend_to_file(path), path), end="")
+
+
+def cmd_recommend(repo, args):
+    """Ask the model for three recommendations over stats.json (computed first unless --stats), keep the ones whose
+    evidence matches, write recommend.json beside the stats file."""
+    import metrics_recommend   # lazy: it imports metrics_analyze, never metrics
+    if args.stats:
+        stats_path = Path(args.stats).resolve()
+        if not stats_path.is_file():
+            raise MetricsError(f"stats file not found: {stats_path.name}")
+    else:
+        stats_path = write_stats(repo, args.since)[1]
+    res = _recommend_to_file(stats_path)
+    if "unavailable" in res:
+        print(f"recommendations unavailable: {res['unavailable']}")
+        return
+    for d in res["dropped"]:
+        print(f"metrics: recommend: dropped \"{d['title']}\": {d['reason']}", file=sys.stderr)
+    for it in res["items"]:
+        print(f"- {it['title']}")
+    print(f"({res['passed']} of {res['asked']} passed the evidence check)")
+
+
 def _log_error(repo, sub, exc, log=None):
     """Append a kind:error line: to `log` when the command was given one, else to the run log, but only when the
     repo already has a metrics directory (a repo without metrics files stays clean)."""
@@ -1558,11 +1770,12 @@ def main(argv=None):
         elif hasattr(args, "spec"):
             args.spec = rel_spec(repo, args.spec)
         rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
-              "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill}[args.sub](repo, args)
+              "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill,
+              "backfill-tasks": cmd_backfill_tasks, "analyze": cmd_analyze, "recommend": cmd_recommend, "weekly": cmd_weekly}[args.sub](repo, args)
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
-        _log_error(repo, sub, e, getattr(args, "log", None))
+        _log_error(repo, sub, e, getattr(args, "log", None) or getattr(args, "tasks_log", None))
         return 1
 
 
