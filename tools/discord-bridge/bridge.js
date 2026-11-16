@@ -167,8 +167,8 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
       shown = [...lines.slice(0, n), `… (${lines.length - n} more lines)`];
       cut = true;
     }
-    const body = shown.map((l) => l.split('```').join('`\u200b``')).join('\n');
-    const head = `<@${c.user}> 🔐 ${op.window} wants to run ${op.tool}`;
+    const body = shown.map((l) => l.replace(/`{3,}/g, (m) => `\`\u200b${m.slice(1).match(/`{1,2}/g).join('\u200b')}`)).join('\n');
+    const head = `${c.user ? `<@${c.user}> ` : ''}🔐 ${op.window} wants to run ${op.tool}`;
     const content = `${head}\n\`\`\`\n${body}\n\`\`\`${cut ? '\nOpen on the board to see all of it.' : ''}`;
     const id = (a) => `ab:perm:${op.key}:${a}`;
     const buttons = [];
@@ -177,7 +177,7 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     const ch = await home();
     const msg = await ch.send({
       content: content.slice(0, 2000),
-      allowedMentions: { users: [String(c.user)] },
+      allowedMentions: c.user ? { users: [String(c.user)] } : { parse: [] },
       components: [{ type: 1, components: buttons }],
     });
     st.prompts[op.key] = msg.id;
@@ -288,7 +288,7 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     if (reaction?.partial) reaction = await reaction.fetch();
     if (user?.partial) user = await user.fetch();
     if (!user || user.bot || !allowFrom().has(String(user.id))) return;
-    const emoji = String(reaction.emoji?.name ?? '').replace(/️/g, '');
+    const emoji = String(reaction.emoji?.name ?? '').replace(/\uFE0F/g, '');
     if (!REACT_EMOJI.has(emoji)) return;
     let msg = reaction.message;
     if (msg?.partial) msg = await msg.fetch();
@@ -296,7 +296,7 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     const home = cfg().channel;
     if (!home || (msg.channel?.id !== home && msg.channel?.parentId !== home)) return;
     const excerpt = String(msg.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
-    writeEvent({ type: 'react', emoji: emoji === '▶' || emoji === '⏭' ? `${emoji}️` : emoji, message_id: msg.id, excerpt, user: String(user.id), ts: now() });
+    writeEvent({ type: 'react', emoji: emoji === '▶' || emoji === '⏭' ? `${emoji}\uFE0F` : emoji, message_id: msg.id, excerpt, user: String(user.id), ts: now() });
     say(`react ${emoji}`);
     if (!msg.reactions?.cache?.get('👀')?.me) {
       try { await msg.react('👀'); } catch (e) { say(`react failed: ${snip(e?.message)}`); }

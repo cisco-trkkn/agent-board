@@ -535,3 +535,24 @@ test('main builds the client with the four partials', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'bridge.js'), 'utf8');
   assert.match(src, /partials:\s*\[\s*Partials\.Message,\s*Partials\.Channel,\s*Partials\.Reaction,\s*Partials\.User\s*\]/);
 });
+
+test('runs of 4 and 6 backticks cannot close the block early', async () => {
+  const s = setup();
+  s.put(prompt(['a ```` b', 'c `````` d', 'e']));
+  await s.bridge.tick();
+  const c = s.client.callsOf('send')[0].payload.content;
+  const inner = c.slice(c.indexOf('```\n') + 4, c.lastIndexOf('\n```'));
+  assert.ok(!inner.includes('```'), inner);
+  assert.strictEqual(c.split('```').length - 1, 2, c);
+});
+
+test('prompt without a configured user: no mention prefix and no <@undefined>', async () => {
+  const s = setup();
+  fs.writeFileSync(path.join(s.dir, 'bridge.json'), JSON.stringify({ channel: 'C1' }));
+  s.put(prompt(['x']));
+  await s.bridge.tick();
+  const p = s.client.callsOf('send')[0].payload;
+  assert.ok(p.content.startsWith('🔐 w1 wants to run Bash command'), p.content);
+  assert.ok(!p.content.includes('undefined'));
+  assert.deepStrictEqual(p.allowedMentions, { parse: [] });
+});
