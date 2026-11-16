@@ -220,6 +220,18 @@ class BackfillTasksTest(Base):
         self.assertIsNone(metrics.TASKS_OVERRIDE)
         self.assertIsNone(metrics.LOG_OVERRIDE)
 
+    def test_backfill_tasks_failure_goes_to_the_given_log(self):
+        self.run_line()
+        runs_before = metrics.log_path(self.repo).read_text()
+        out = self.t / "err.jsonl"
+        (self.t / "afile").write_text("x")   # a file where the db's parent directory should be
+        rc, o, e = self.cli("backfill-tasks", "--log", str(out), "--usage-db", str(self.t / "afile" / "u.sqlite"), "--no-ingest")
+        self.assertEqual(rc, 1)
+        self.assertIn("metrics: backfill-tasks:", e)
+        lines = [json.loads(l) for l in out.read_text().splitlines()]
+        self.assertEqual([(l["kind"], l["sub"]) for l in lines], [("error", "backfill-tasks")])
+        self.assertEqual(metrics.log_path(self.repo).read_text(), runs_before)   # the tracked runs.jsonl is untouched
+
     def test_backfill_tasks_default_path_is_main_metrics_dir(self):
         self.run_line()
         self.assertEqual(self.cli("backfill-tasks", "--usage-db", str(self.db), "--no-ingest")[0], 0)

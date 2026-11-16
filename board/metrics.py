@@ -1775,7 +1775,7 @@ def main(argv=None):
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
-        _log_error(repo, sub, e, getattr(args, "log", None))
+        _log_error(repo, sub, e, getattr(args, "log", None) or getattr(args, "tasks_log", None))
         return 1
 
 
