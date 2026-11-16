@@ -3,17 +3,15 @@
 ▝▜██████▀  Opus 5.5 · Claude Max
  ▝▝   ▝▝   /private/tmp/claude-503/-Users-francisco-ruiz-agent-board/6924cb18-d97e-4cb3-b364-0adc7d36bd4c/scratchpad/wd
 
-▎ Channels (experimental) messages from plugin:telegram@claude-plugins-official inject directly in this session · restart without --channels to stop
+▎ Channels (experimental) messages from plugin:discord@claude-plugins-official inject directly in this session · restart without --channels to stop
 
-❯ /mcp reconnect plugin:telegram:telegram
-  ⎿  Successfully reconnected to plugin:telegram:telegram
+❯ /mcp reconnect plugin:discord:discord
+  ⎿  Successfully reconnected to plugin:discord:discord
 
+❯ /mcp reconnect nosuch
+  ⎿  MCP server "nosuch" not found
 
-
-
-
-
-
+❯ Reply with the single word ok
 
 
 
@@ -42,7 +40,9 @@
 
 
 
-                                                                                                                                                                                    ◐ medium · /effort
+✽ Actioning…
+  ⎿  Tip: Name your conversations with /rename to find them easily in /resume later
+                                                                                                                                                                          Ctrl+Y to paste deleted text
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

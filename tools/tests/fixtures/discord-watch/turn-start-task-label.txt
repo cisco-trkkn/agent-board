@@ -31,7 +31,7 @@
   ⎿  ◼ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md › blocked by #23
      ◼ S2 Task 3: real-state turn-start check
      ◻ Plan & run: docs/superpowers/specs/2026-11-12-execution-analytics-design.md#part-1 › blocked by #2
-     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-replaces-telegram-design.md › blocked by #3
+     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-replaces-discord-design.md › blocked by #3
      ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-bridge-visibility-design.md › blocked by #4
       … +13 pending, 5 completed
 busy 1 · ready 1                                                                                           [-]

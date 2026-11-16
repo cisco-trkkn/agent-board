@@ -3,7 +3,7 @@
 ▝▜██████▀  Opus 5.5 · Claude Max
  ▝▝   ▝▝   /private/tmp/claude-503/-Users-francisco-ruiz-agent-board/3adc76bc-6371-4aff-b41d-2c8f8dc8d83d/scratchpad/real/work
 
-▎ Channels (experimental) messages from plugin:telegram@claude-plugins-official inject directly in this session · restart without --channels to stop
+▎ Channels (experimental) messages from plugin:discord@claude-plugins-official inject directly in this session · restart without --channels to stop
 
 
 

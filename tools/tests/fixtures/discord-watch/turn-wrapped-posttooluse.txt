@@ -31,7 +31,7 @@
      ◼ S2 Task 3: real-state turn-start check › blocked by #24
      ◼ S2 Task 4: task-label spinners + teammate row
      ◻ Plan & run: docs/superpowers/specs/2026-11-12-execution-analytics-design.md#part-1 › blocked by #2
-     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-replaces-telegram-design.md › blocked by #3
+     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-replaces-discord-design.md › blocked by #3
       … +14 pending, 5 completed
 busy 2 · ready 1                                                                                           [-]
 

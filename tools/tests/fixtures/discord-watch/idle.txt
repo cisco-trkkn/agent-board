@@ -3,15 +3,7 @@
 ▝▜██████▀  Opus 5.5 · Claude Max
  ▝▝   ▝▝   /private/tmp/claude-503/-Users-francisco-ruiz-agent-board/6924cb18-d97e-4cb3-b364-0adc7d36bd4c/scratchpad/wd
 
-▎ Channels (experimental) messages from plugin:telegram@claude-plugins-official inject directly in this session · restart without --channels to stop
-
-❯ /mcp reconnect plugin:telegram:telegram
-  ⎿  Successfully reconnected to plugin:telegram:telegram
-
-❯ /mcp reconnect nosuch
-  ⎿  MCP server "nosuch" not found
-
-❯ Reply with the single word ok
+▎ Channels (experimental) messages from plugin:discord@claude-plugins-official inject directly in this session · restart without --channels to stop
 
 
 
@@ -40,11 +32,19 @@
 
 
 
-✽ Actioning…
-  ⎿  Tip: Name your conversations with /rename to find them easily in /resume later
-                                                                                                                                                                          Ctrl+Y to paste deleted text
+
+
+
+
+
+
+
+
+
+
+                                                                                                  tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯
+❯ Try "fix lint errors"
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  Opus 5.5 · ctx – · 5h 53%
+  Opus 5.5 · ctx –
   ⏵⏵ auto mode on (shift+tab to cycle)
