@@ -260,10 +260,10 @@ One read-only view across every project (`docs/superpowers/specs/2026-10-28-over
 The board and, later, the PCEE engine write one stream of what happened in a project: `${TC_STATE:-~/.local/state/agent-board}/feed/<project>.jsonl` (`tc_env.feed_path`; persistent, so it survives a reboot, unlike the runtime `TC_STATE_DIR`). One JSON object per line, written by `board/discord_feed.py` `append_event`, read by `read_events`; the Discord side is its only consumer today. `<project>` is the Discord key: the tmux session group, else the session name, `-bg` stripped.
 
 ```json
-{"ts": 1763300000.5, "project": "agent-board", "spec": "2026-11-11-discord-bridge-visibility-design", "kind": "task_done", "tier": "progress", "text": "Task 3 done: feed core", "refs": {"task": "19", "thread_key": "spec:...", "run": "...", "file": "..."}}
+{"ts": 1763300000.5, "project": "agent-board", "spec": "2026-11-11-discord-bridge-visibility-design", "kind": "task_done", "tier": "progress", "text": "✓ Feed core", "refs": {"task": "3", "thread_key": "session-0d19924a:3"}}
 ```
 
-Keys: `ts` (float epoch seconds), `project`, `spec` (spec basename), `kind`, `tier`, `text` (one line, cut at 300 characters) and `refs` (an object; optional keys `task`, `thread_key`, `run`, `file`). A missing key raises `ValueError`; extra keys are dropped. The board derives these events from the lead's task list, the plan ledger and the notifier; the PCEE engine appends its own events to the same file and the Discord side needs no change.
+Keys: `ts` (float epoch seconds), `project`, `spec` (spec basename), `kind`, `tier`, `text` (one line, cut at 300 characters) and `refs` (an object; optional keys `task`, `thread_key`, `run`, `file`; `thread_key` is `<task-list dir>:<task id>` of the running spec, e.g. `session-0d19924a:3`). A missing key raises `ValueError`; extra keys are dropped. The board derives these events from the lead's task list, the plan ledger and the notifier; the PCEE engine appends its own events to the same file and the Discord side needs no change.
 
 | Kind | Tier | Source |
 | --- | --- | --- |
@@ -292,17 +292,12 @@ Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It 
 | `lock-<p>-<win>/` | `tmux-ctl` (transient) | `tmux-ctl` |
 | `<id>.rc`, `<id>.gone` | `tmux-ctl run`/`_done` (transient) | `tmux-ctl run` |
 | `recent-projects.json` | board `dev` action | Open project dialog |
-
-Discord state lives in `~/.local/state/agent-board/discord/<project>/` and `~/.local/state/agent-board/feed/` (persistent, not in `TC_STATE`):
-
-| File | Writer | Reader |
-| --- | --- | --- |
-| `feed/<p>.jsonl` | board (`discord_feed.append_event`), PCEE | board feed derivation |
-| `discord/<p>/outbox/<ts>-<id>.json`, `outbox/failed/` (+ `.err`) | board (`outbox_write`) | bridge |
-| `discord/<p>/bridge-state.json` | bridge | board, `tmux-ctl discord status` |
-| `discord/<p>/feed-state.json` | board (dedupe, card throttle) | board |
-| `discord/<p>/events/<ts>-<id>.json` | bridge | board (inbound stub) |
-| `discord/<p>/bridge.json`, `bridge.pid`, `bridge.log`, `audit.jsonl` | `tmux-ctl discord channel`, bridge, board audit | bridge, `tmux-ctl discord audit` |
+| `~/.local/state/agent-board/feed/<p>.jsonl` | board (`discord_feed.append_event`), PCEE | board feed derivation. Persistent: not in the state dir (see [Feed events](#feed-events)) |
+| `~/.local/state/agent-board/discord/<p>/outbox/<ts>-<id>.json`, `outbox/failed/` (+ `.err`) | board (`outbox_write`) | Discord bridge. Persistent |
+| `~/.local/state/agent-board/discord/<p>/bridge-state.json` | bridge | board, `tmux-ctl discord status` |
+| `~/.local/state/agent-board/discord/<p>/feed-state.json` | board (dedupe, card throttle) | board |
+| `~/.local/state/agent-board/discord/<p>/events/<ts>-<id>.json` | bridge | board (inbound stub) |
+| `~/.local/state/agent-board/discord/<p>/bridge.json`, `bridge.pid`, `bridge.log`, `audit.jsonl` | `tmux-ctl discord channel`, bridge, board audit | bridge, `tmux-ctl discord audit` |
 
 Durable user data is in `~/.local/state/agent-board/` (`ideas/`, `handoffs/`, `context/`, `overseer/`, `worktree-sweep.log`, the transient `sweep-*.lock`). Board process state (`token`, `server.pid`, `ttyd.pid`, `*.log`) lives in `~/.local/state/tmux-dash/`.
 
