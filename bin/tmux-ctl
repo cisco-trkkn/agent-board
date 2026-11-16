@@ -32,6 +32,8 @@
 #                                          hold the Mac awake (caffeinate) while the queue runs; sleeps lists Sleep/Wake lines since a time
 #   tmux-ctl approve <win> once|deny --expect <text>  answer the permission prompt showing in a window: the one-time Yes, or No
 #                                          (never an always/auto-mode row; refuses when there is no prompt or it changed)
+#   tmux-ctl wait-gone <name>... [--timeout S]  after shutdown_requests: wait (default 300 s) until every `✦ <name>` window of this
+#                                          session is gone; at the timeout kill the ones left (exit 3)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)
 #   tmux-ctl overview [project] [--json]   the overseer digest: one line per open project (plan, in-progress
@@ -519,6 +521,36 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     source "${0:A:h:h}/tools/lib/awake.zsh"
     awake_cmd "$@"; exit $? ;;
 
+  wait-gone)   # spec 2026-11-10-queue-reliability §1: the lead never ends a turn waiting for shutdown confirmations
+    wg_usage="usage: tmux-ctl wait-gone <name>... [--timeout <s>]"
+    wg_names=(); wg_to=300
+    while (( $# )); do
+      if [[ "$1" == --timeout ]]; then
+        [[ "$2" == <-> ]] || die "$wg_usage"
+        wg_to="$2"; shift 2
+      else wg_names+=("${1#✦ }"); shift; fi
+    done
+    (( $#wg_names )) || die "$wg_usage"
+    zmodload zsh/datetime
+    wg_start=$EPOCHSECONDS
+    while :; do
+      # exact names only, and the window id for the kill: a `-t "=sess:✦ a"` target also matches `✦ a-2` by prefix when `✦ a` is gone
+      typeset -A wg_ids=()
+      for wg_l in ${(f)"$(t list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)"}; do
+        wg_ids[${wg_l#* }]="${wg_l%% *}"
+      done
+      wg_left=()
+      for wg_n in $wg_names; do (( ${+wg_ids[✦ $wg_n]} )) && wg_left+=("$wg_n"); done
+      if (( ! $#wg_left )); then print -r -- "wait-gone: all gone"; exit 0; fi
+      (( EPOCHSECONDS - wg_start >= wg_to )) && break
+      sleep $(( wg_to - (EPOCHSECONDS - wg_start) < 2 ? wg_to - (EPOCHSECONDS - wg_start) : 2 ))
+    done
+    for wg_n in $wg_left; do
+      t kill-window -t "${wg_ids[✦ $wg_n]}" 2>/dev/null || print -r -- "wait-gone: could not kill $wg_n"
+    done
+    print -r -- "wait-gone: killed ${(j: :)wg_left} after ${wg_to}s"
+    exit 3 ;;
+
   relay)
     [[ -n "$1" ]] || die "usage: tmux-ctl relay <handoff-doc> [--old-session <id>]"
     doc="${1:A}"; shift; old=""
@@ -555,7 +587,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
