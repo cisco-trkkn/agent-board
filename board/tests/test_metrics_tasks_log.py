@@ -123,6 +123,12 @@ class RecordTest(Base):
         self.assertEqual([l["model_mapped"] for l in lines], [None, None])   # no routing file in the repo
         self.assertEqual(len(self.runs()), 1)
 
+    def test_code_in_steps_read_from_the_plan_text(self):
+        self.write(PLAN, f"# Plan A\n\n**Spec:** `{SPEC}`\n\n### Task 1: t1\n\n```python\nx = 1\n```\n\n### Task 2: t2\n\nprose\n")
+        self.row(self.t0 + 50)
+        self.assertEqual(self.record()[0], 0)
+        self.assertEqual([l["code_in_steps"] for l in self.tasks()], [True, False])
+
     def test_routing_file_maps_tier(self):
         self.write("docs/superpowers/model-routing.json", json.dumps({"mechanical": "haiku", "standard": "sonnet"}))
         self.row(self.t0 + 50)

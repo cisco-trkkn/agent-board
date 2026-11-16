@@ -91,19 +91,52 @@ def parse_ledger(progress):
     return out
 
 
-def _code_in_steps(description):
-    open_tag = None
-    for line in (description or "").splitlines():
-        s = line.strip()
-        if not s.startswith("```"):
-            continue
-        if open_tag is None:
-            open_tag = s[3:].strip()
-            if open_tag != "json:metadata":
-                return True
+FENCE = re.compile(r"^\s*(`{3,})(.*)$")
+
+
+def _fences(lines):
+    """Yield (line index, opening tag or None for a closing line, in_fence) walking lines with fence pairing: a fence
+    opened with N backticks closes only on a line of >= N backticks and nothing else."""
+    open_n = None
+    for i, line in enumerate(lines):
+        m = FENCE.match(line)
+        if open_n is None:
+            yield i, (m.group(2).strip() if m else None), False
+            if m:
+                open_n = len(m.group(1))
         else:
-            open_tag = None
-    return False
+            closes = m and len(m.group(1)) >= open_n and not m.group(2).strip()
+            yield i, None, not closes
+            if closes:
+                open_n = None
+
+
+def _has_code(lines):
+    return any(tag is not None and tag != "json:metadata" for _, tag, _ in _fences(lines))
+
+
+def plan_section(plan_text, n):
+    """Lines of the `### Task N:` section of a plan (up to the next `### Task` or `## ` heading outside a fence), or None."""
+    lines = (plan_text or "").splitlines()
+    start = end = None
+    for i, tag, inside in _fences(lines):
+        if inside or tag is not None:
+            continue
+        line = lines[i]
+        if start is None:
+            if re.match(rf"###\s+Task {n}\b[:.]?", line):
+                start = i + 1
+        elif re.match(r"(###\s+Task\b|## )", line):
+            end = i
+            break
+    if start is None:
+        return None
+    return lines[start:end]
+
+
+def _code_in_steps(description, section=None):
+    """True when the plan's task section (else the tasks.json description) holds a fenced block other than json:metadata."""
+    return _has_code(section if section is not None else (description or "").splitlines())
 
 
 def _tokens(r):
@@ -126,7 +159,7 @@ def _pick(tasks, ts):
     return tasks[-1][1]
 
 
-def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_time, run_end, prices=None):
+def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_time, run_end, prices=None, plan_text=None):
     """One dict per plan task. commit_time: sha -> epoch int or None. run_end: epoch int or None (the fallback end)."""
     prices = prices if prices is not None else usage.load_prices()
     plan = json.loads(tasks_text)
@@ -207,7 +240,7 @@ def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_ti
             "fix_rounds": led["fix_rounds"], "findings": dict(led["findings"]),
             "review_rounds": led["review_rounds"],
             "outcome": "complete" if led["complete"] else pt.get("status"),
-            "code_in_steps": _code_in_steps(pt.get("description")),
+            "code_in_steps": _code_in_steps(pt.get("description"), plan_section(plan_text, n) if plan_text else None),
             "partial": not rs,
         })
     return out

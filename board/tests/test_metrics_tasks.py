@@ -56,6 +56,52 @@ Task 3: review spec ✅ quality needs fixes (Important: TERM trap orphans job pr
 Task 4: review spec ❌ — 3 Important (failed-command span drops failed record; union only with --usage-db; limits end by spec path)
 """
 
+# Structure copied from docs/superpowers/plans/2026-10-16-handoff-relay-artifacts-panel.md, Tasks 11-13 (Task 12 is the one
+# plan that opens a four-backtick fence; its body holds ``` fences and `## ` headings); prose trimmed.
+PLAN_SECTIONS = """\
+### Task 11: Board Ideas box and Activity drawer
+
+- [ ] **Step 1: Verify with the grep commands, then report.**
+
+```json:metadata
+{"files": ["board/server.py"]}
+```
+
+---
+
+### Task 12: Handoff skill: checkpoint, Team section, confirm, relay
+
+- [ ] **Step 2: Write `SKILL.md`**
+
+````markdown
+---
+name: handoff
+---
+
+## 1. Checkpoint the team (skip if you have no teammates)
+
+```
+Handoff saved: <absolute path>
+```
+````
+
+- [ ] **Step 4: Verify with the grep commands, then report.**
+
+```json:metadata
+{"files": ["~/.claude/skills/handoff/SKILL.md"]}
+```
+
+---
+
+### Task 13: Prompt and doc updates
+
+## Starting from a handoff
+
+```json:metadata
+{"files": ["x"]}
+```
+"""
+
 FRESH = 'Task 6: fix round 1/5 dispatched to fresh qm-fix (sonnet/standard; qm-impl shut down) (FIX_BASE 5fa3176)'
 MULTI = 'Task 4: fix round 1/5 (3 addressed, 0 open; commits 00574a4..b9ef776 + 2e39ac9..518d841)'
 
@@ -67,7 +113,10 @@ ROUTING = {"mechanical": "haiku", "standard": "sonnet", "frontier": "fable"}
 
 
 def row(ts, agent, model="claude-sonnet-5", out=1000):
-    return {"ts": float(ts), "model": model, "agent_name": agent, "input": 0, "output": out,
+    # real row shape (usage index `calls`): a worktree cwd, git_branch 'main' (not the queue branch), team set
+    return {"request_id": "r", "session_id": "s", "ts": float(ts), "model": model, "effort": "medium", "agent_name": agent,
+            "team_name": "t", "git_branch": "main", "cwd": "/root/.claude/worktrees/gone", "sidechain": 0,
+            "subagent_file": 0, "input": 0, "output": out,
             "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
 
 
@@ -80,10 +129,10 @@ def tasks_json(*specs):
     return json.dumps({"planPath": "p.md", "tasks": ts})
 
 
-def build(progress, tasks, rows, ends=None, run_end=None):
+def build(progress, tasks, rows, ends=None, run_end=None, plan_text=None):
     return metrics_tasks.build_task_lines(
         "docs/superpowers/specs/s.md", "2026-11-16-1", tasks, progress, ROUTING, rows,
-        (ends or {}).get, run_end, prices=PRICES)
+        (ends or {}).get, run_end, prices=PRICES, plan_text=plan_text)
 
 
 class TestParseLedger(unittest.TestCase):
@@ -217,6 +266,23 @@ class TestBuild(unittest.TestCase):
         r = build("", tasks, [])
         self.assertTrue(r[0]["code_in_steps"])
         self.assertFalse(r[1]["code_in_steps"])
+
+    def test_code_in_steps_from_plan_section(self):
+        # R3: the plan .md's `### Task N:` section decides; the tasks.json description (no Steps) is the fallback
+        tasks = tasks_json(("Task 11: a", "standard", ""), ("Task 12: b", "standard", ""), ("Task 13: c", "standard", ""),
+                           ("Task 14: d", "standard", "```python\nx = 1\n```"))
+        r = build("", tasks, [], plan_text=PLAN_SECTIONS)
+        # 11: only the json:metadata fence; 12: a four-backtick fence with ``` and `## ` lines inside; 13: only metadata
+        self.assertEqual([t["code_in_steps"] for t in r], [False, True, False, True])   # 14 has no section: description
+
+    def test_plan_fence_pairing_and_section_end(self):
+        def one(body, nxt="### Task 2: next\n"):
+            return build("", tasks_json(("Task 1: a", "standard", "```python\nx\n```")), [], plan_text="### Task 1: a\n" + body + nxt)[0]["code_in_steps"]
+        self.assertFalse(one("text\n```json:metadata\n{}\n```\n", nxt="### Task 2: n\n```bash\nls\n```\n"))   # next task's fence is not ours
+        self.assertFalse(one("text\n", nxt="## Later\n```bash\nls\n```\n"))                                  # a `## ` heading ends it
+        self.assertTrue(one("````md\n```\n## inner\n```\n````\n"))
+        self.assertFalse(one("````json:metadata\n```x\n```\n{}\n````\n"))   # the ``` inside the 4-fence is text; tag is metadata
+        self.assertTrue(one("```bash\nls\n"))                                  # an unclosed fence still opened code
 
     def test_keys_exact(self):
         r = build(DISCORD, self.two(), [row(900, "dc-launch")])

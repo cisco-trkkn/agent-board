@@ -741,7 +741,7 @@ def task_lines_for_run(repo, run, conn):
     plan = find_plan(repo, spec)
     if not plan:
         return []   # the run line already names the plan in `missing`
-    plan_path, _, plan_ref = plan
+    plan_path, plan_text, plan_ref = plan
     tasks_text = _read(repo, plan_ref, plan_path + ".tasks.json")
     if tasks_text is None:
         raise MetricsError("plan has no .tasks.json")
@@ -769,7 +769,8 @@ def task_lines_for_run(repo, run, conn):
     rows = [r for r in usage._rows(conn, "select * from calls where ts>=? and ts<=? and agent_name is not null", (lo, hi))
             if (r["cwd"] or "") == root or (r["cwd"] or "").startswith(wt_root)
             or any((r["cwd"] or "") == d or (r["cwd"] or "").startswith(d + "/") for d in wt)]
-    return metrics_tasks.build_task_lines(spec, batch, tasks_text, progress or "", routing, rows, _commit_time(repo), hi)
+    return metrics_tasks.build_task_lines(spec, batch, tasks_text, progress or "", routing, rows, _commit_time(repo), hi,
+                                          plan_text=plan_text)
 
 
 def ingest_project(conn, root):
