@@ -75,7 +75,7 @@ def _enforce_cap(box):
             op = {}
         infos.append((f, op))
     for victim in ([f for f, o in infos if o.get("op") == "card"]
-                   + [f for f, o in infos if o.get("op") != "card" and not (o.get("op") == "post" and o.get("mention_user") is True)]):
+                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
         if over <= 0:
             break
         try:
@@ -173,12 +173,23 @@ def _queue(lead_tasks):
     return "queue: idle"
 
 
-def render_card(record, lead_tasks, now):
-    """The status card: one code block, at most CARD_MAX characters, overflow cut with '… <n> more'."""
+def _num(i):
+    s = str(i)
+    return int(s) if s.isdigit() else None
+
+
+def render_card(record, lead_tasks, now, floor=None):
+    """The status card: one code block, at most CARD_MAX characters, overflow cut with '… <n> more'.
+    Task lines are the running spec's: tasks with a numeric id above `floor` (the highest task id when the spec started);
+    with no floor known, only tasks that are not completed."""
     lead_tasks = [t for t in (lead_tasks or []) if isinstance(t, dict)]
     head = [_queue(lead_tasks)]
     body = []
-    for t in sorted((t for t in lead_tasks if not str(t.get("subject", "")).startswith(_PLAN_RUN)), key=_tid):
+    def of_spec(t):
+        n = _num(t.get("id"))
+        return n > floor if floor is not None and n is not None else t.get("status") != "completed"
+
+    for t in sorted((t for t in lead_tasks if not str(t.get("subject", "")).startswith(_PLAN_RUN) and of_spec(t)), key=_tid):
         mark = {"completed": "✓", "in_progress": "▶"}.get(t.get("status"), "·")
         extra = " ".join(x for x in (t.get("owner") or "", _tier(t)) if x)
         body.append(f"{mark} {t.get('subject', '')}" + (f"  ({extra})" if extra else ""))
@@ -299,6 +310,11 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
     runs = sorted((t for t in tasks if str(t.get("subject", "")).startswith(_PLAN_RUN)), key=_tid)
     running = next((t for t in runs if t.get("status") == "in_progress"), None)
     st["running_thread_key"] = tk(running["id"]) if running else ""
+    floors = dict(st.get("spec_floor") or {})
+    if running and st["running_thread_key"] not in floors:   # the card shows only the tasks created after the spec started
+        ids = [n for n in (_num(t.get("id")) for t in tasks) if n is not None]
+        floors[st["running_thread_key"]] = max(ids) if ids else 0
+    st["spec_floor"] = dict(list(floors.items())[-50:])
     if running:
         rid, spec = tk(running["id"]), _spec_name(running["subject"])
         emit(f"started:{rid}", _ev(project, spec, "spec_started", "progress", f"spec started: {spec}", now, thread_key=rid))
@@ -404,7 +420,7 @@ def tick(project, record, root, now, lead_tasks=None, list_id=""):
                 ops.extend(ops_for_events([ev], st))
             except Exception as e:   # noqa: BLE001
                 print(f"discord_feed: skipped bad feed event ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        text = render_card(record, lead_tasks or [], now)
+        text = render_card(record, lead_tasks or [], now, st.get("spec_floor", {}).get(st.get("running_thread_key")))
         card = card_op_due(st, text, now)
         if card:
             ops.append(card)

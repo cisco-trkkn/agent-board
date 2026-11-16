@@ -131,6 +131,15 @@ class OutboxTest(Base):
         self.assertIn("M", texts)
         self.assertNotIn("p0", texts)
 
+    def test_cap_keeps_structural_ops(self):
+        df.outbox_write(self.dir, {"op": "thread", "key": "k", "title": "T"})
+        df.outbox_write(self.dir, {"op": "archive", "key": "old"})
+        for i in range(205):
+            df.outbox_write(self.dir, post(f"p{i}"))
+        ops = [json.loads((self.dir / "outbox" / n).read_text()) for n in self.names()]
+        self.assertEqual(len(ops), 200)
+        self.assertEqual([o["op"] for o in ops if o["op"] in ("thread", "archive")], ["thread", "archive"])
+
     def test_cap_drops_non_mention_after_cards(self):
         for i in range(201):
             df.outbox_write(self.dir, post(f"p{i}"))
@@ -212,7 +221,7 @@ class CardTest(unittest.TestCase):
                 task(4, "Task 1: feed core", "completed", tier="standard"),
                 task(5, "Task 2: node bridge", "in_progress", "bv-node", "frontier"),
                 task(6, "Task 3: docs")]
-        t = df.render_card(rec(), lead, NOW)
+        t = df.render_card(rec(), lead, NOW, floor=0)
         self.assertIn("queue: running 2026-11-16-b (2/3)", t)
         self.assertIn("✓ Task 1: feed core", t)
         self.assertRegex(t, r"▶ Task 2: node bridge .*bv-node.*frontier")
@@ -236,6 +245,20 @@ class CardTest(unittest.TestCase):
         self.assertTrue(t.endswith("\n```"))
         self.assertTrue([l for l in t.split("\n") if __import__("re").fullmatch(r"… \d+ more", l)])
         self.assertIn(f"updated {HHMM}", t)
+
+    def test_floor_limits_task_lines_to_the_running_spec(self):
+        # real-shaped list: #2 completed fix wave from before the spec, #17.. the spec's tasks
+        lead = [task(1, "Plan & run: a.md", "completed"), task(2, "EA part 1: final-review fix wave", "completed"),
+                task(3, "Plan & run: b.md", "in_progress"), task(17, "BV Task 1", "in_progress", "bv-zsh"), task(18, "BV Task 2", "completed"),
+                task(19, "BV Task 3")]
+        t = df.render_card(rec(), lead, NOW, floor=16)
+        self.assertNotIn("EA part 1", t)
+        for s in ("▶ BV Task 1", "✓ BV Task 2", "· BV Task 3"):
+            self.assertIn(s, t)
+        nofloor = df.render_card(rec(), lead, NOW)   # no floor known: only tasks that are not completed
+        self.assertNotIn("EA part 1", nofloor)
+        self.assertNotIn("BV Task 2", nofloor)
+        self.assertIn("BV Task 1", nofloor)
 
     def test_small_not_cut(self):
         self.assertNotIn("more", df.render_card(rec(), [], NOW))
@@ -443,6 +466,14 @@ class DedupeTest(DeriveBase):
         evs, st = self.derive([self.run_task, self.sub, fx("1.json")], st)
         self.assertEqual([e["kind"] for e in evs], ["spec_started", "plan_written"])
         self.assertTrue(st["primed"])
+
+    def test_spec_floor_recorded_once_per_spec(self):
+        tasks = [self.run_task, fx("19.json", id="19"), fx("1.json", id="2", status="completed", subject="old fix wave")]
+        _, st = self.derive(tasks, primed())
+        self.assertEqual(st["spec_floor"], {"3": 19})
+        tasks.append(fx("19.json", id="30"))
+        _, st = self.derive(tasks, st)
+        self.assertEqual(st["spec_floor"], {"3": 19})   # later tasks do not move it
 
     def test_new_list_baselines_its_completed_history(self):
         st = primed()
