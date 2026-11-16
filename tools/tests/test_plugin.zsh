@@ -68,6 +68,19 @@ d = json.load(open(sys.argv[1]))["hooks"]["SessionStart"]
 hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/context-inject.sh\" --scoped")]
 assert len(hit) == 1 and hit[0][0] is None and hit[0][1]["timeout"] == 5, hit
 PY
+check "hooks.json registers shutdown-record on PostToolUse SendMessage, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
+hit = [(e["matcher"], h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/shutdown-record.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] == "SendMessage" and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
+PY
+check "hooks.json registers lead-stop-guard on Stop (no matcher), --scoped, timeout 10, not async" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["Stop"]
+hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/lead-stop-guard.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] is None and hit[0][1]["timeout"] == 10 and not hit[0][1].get("async"), hit
+PY
+check "shutdown-record.sh and lead-stop-guard.sh are executable" test -x "$P/scripts/shutdown-record.sh" -a -x "$P/scripts/lead-stop-guard.sh"
 check "settings.json no longer registers hooks (no double run)" python3 -c 'import json,sys; assert "hooks" not in json.load(open(sys.argv[1]))' "$R/claude/session-settings.json"
 check "legacy hook paths are symlinks into the plugin" zsh -c 'cd "$1/claude/hooks" && for n in kill-guard bash-mirror artifact-register worktree-sweep; do [[ -L $n.sh && $(readlink $n.sh) == ../plugin/scripts/$n.sh && -x $n.sh ]] || exit 1; done' _ "$R"
 check "superpowers-hook.sh stays in claude/hooks (regular file)" test -f "$R/claude/hooks/superpowers-hook.sh" -a ! -L "$R/claude/hooks/superpowers-hook.sh"
