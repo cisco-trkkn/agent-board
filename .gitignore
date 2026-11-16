@@ -8,3 +8,4 @@ __pycache__/
 audit-out/
 claude/plugin/tsconfig.json
 claude/plugin/.claude-plugin/types/
+tools/discord-bridge/node_modules/
