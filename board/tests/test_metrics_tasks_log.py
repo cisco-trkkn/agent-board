@@ -82,9 +82,12 @@ class Base(unittest.TestCase):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
 
-    def row(self, ts, agent="w1", cwd=None, model=SONNET, out=1000, branch=None):
+    def row(self, ts, agent="w1", cwd=None, model=SONNET, out=1000, branch="main"):
+        """Real row shape (usage index, teammate rows): cwd inside a worktree under the main root that no longer
+        exists when `record` runs, git_branch 'main' (not the queue branch), agent_name set."""
         self.n += 1
-        tup = (f"r{self.n}", "sid", float(ts), model, None, agent, None, branch, self.root if cwd is None else cwd, 0, 0, 0, out, 0, 0, 0)
+        tup = (f"r{self.n}", "sid", float(ts), model, "medium", agent, "team", branch,
+               f"{self.root}/.claude/worktrees/gone" if cwd is None else cwd, 0, 0, 0, out, 0, 0, 0)
         self.conn.execute(f"insert into calls ({','.join(usage.COLS)}) values ({','.join('?' * 16)})", tup)
         self.conn.commit()
 
@@ -172,7 +175,7 @@ class RecordTest(Base):
 
     def test_rows_outside_the_spec_are_not_counted(self):
         self.row(self.t0 + 50, cwd="/elsewhere", out=7)                                  # another checkout
-        self.row(self.t0 + 60, cwd=f"{self.root}/.claude/worktrees/other", out=7)       # another worktree
+        self.row(self.t0 + 60, agent="nobody", out=7)                                    # another agent
         self.row(self.t0 - 700, out=7)                                                   # before the window
         self.row(self.t0 + 70, out=1000)
         self.assertEqual(self.record()[0], 0)

@@ -763,8 +763,12 @@ def task_lines_for_run(repo, run, conn):
         routing = json.loads((Path(root) / "docs/superpowers/model-routing.json").read_text())
     except (OSError, ValueError):
         routing = {}
+    # worker rows carry git_branch 'main' as often as the queue branch, and the worktree is gone by `record` time:
+    # select by cwd (main root or any worktree under it); build_task_lines keeps only the ledger's owners/reviewers
+    wt_root = root + "/.claude/worktrees/"
     rows = [r for r in usage._rows(conn, "select * from calls where ts>=? and ts<=? and agent_name is not null", (lo, hi))
-            if (r["cwd"] or "") == root or any((r["cwd"] or "") == d or (r["cwd"] or "").startswith(d + "/") for d in wt)]
+            if (r["cwd"] or "") == root or (r["cwd"] or "").startswith(wt_root)
+            or any((r["cwd"] or "") == d or (r["cwd"] or "").startswith(d + "/") for d in wt)]
     return metrics_tasks.build_task_lines(spec, batch, tasks_text, progress or "", routing, rows, _commit_time(repo), hi)
 
 
