@@ -225,8 +225,19 @@ class PermTest(Base):
         r = Runner({"w1": SHOW})
         self.step(r)
         self.assertEqual(r.presses, [])
-        self.assertEqual(self.ops(), [{"op": "edit", "key": "%9:abc", "text": "⚠️ not pressed: prompt no longer tracked"}])
+        self.assertEqual(self.ops(), [])  # an unknown key writes no edit
         self.assertEqual(self.audit()[-1]["result"], "unknown")
+
+    def test_double_tap_keeps_the_real_outcome(self):  # mutation: edit "not pressed" for an unknown key -> last edit is overwritten
+        self.seed()
+        self.perm("allow", name="1-a.json")
+        self.perm("deny", name="2-b.json")
+        r = Runner({"w1": SHOW})
+        self.step(r)
+        self.assertEqual(len(r.presses), 1)
+        edits = [o for o in self.ops() if o["op"] == "edit"]
+        self.assertEqual(edits, [{"op": "edit", "key": KEY, "text": "🔐 w1 wants to run Bash command: ✅ allowed by you"}])
+        self.assertEqual([a["result"] for a in self.audit() if a["action"] == "perm"], ["allowed", "unknown"])
 
     def test_rejected_user(self):  # mutation: skip allowlist -> runner called
         self.seed()

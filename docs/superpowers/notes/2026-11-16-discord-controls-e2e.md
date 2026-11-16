@@ -19,7 +19,7 @@ After the whole run (10 files): `4dfec913cd1bf0f5a07160008a5feca6`.
 
 | File | Change | Writer |
 | --- | --- | --- |
-| `bridge.pid` | 95257 (at dispatch) → 35881 | The live bridge restarted itself: `bridge.log` has three `connected` lines at 23:10:32Z, and `ps -p 35881` shows it started 18:10:31 local, running `tools/discord-bridge/bridge.js` on the real dir. |
+| `bridge.pid` | 95257 (at dispatch) → 35881 | The live bridge was restarted by the lead (23:10Z and 23:22Z, for the pin-permission fix): `bridge.log` has three `connected` lines at 23:10:32Z, and `ps -p 35881` shows it started 18:10:31 local, running `tools/discord-bridge/bridge.js` on the real dir. |
 | `bridge.log`, `bridge-state.json` | appended / rewritten at 23:10–23:11Z | That bridge: three `connected` lines at 23:10:32Z and one `failed … 403` line at 23:11:12Z were appended after the before-checksum. |
 | `feed-state.json`, `feed-state.lock` | mtime moves every ~40 s | The live board's feed tick. |
 | `outbox/failed/1794867357783-7f56f087.json` (+`.err`) replaced by `1794870670993-18e894ac.json` (+`.err`) | a `card` op failed with `status 403: Missing Permissions` | The live board's card op. Its text is `queue: running 2026-11-11-discord-controls-design (1/13)`, `teammates: claude busy, ✦ dc-e2e busy`, `updated 18:11`: the real queue's card, not any scratch window name (`✦ e2e`). It is the same 403 that the older failed op carries; the bridge's account lacks a permission on the card channel. |

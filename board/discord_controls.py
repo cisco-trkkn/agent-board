@@ -100,8 +100,7 @@ def _perm(d, ev, state, run, user):
     key, prompts = str(ev.get("key") or ""), state["prompts"]
     rec = prompts.get(key)
     if rec is None:
-        discord_feed.outbox_write(d, {"op": "edit", "key": key, "text": "⚠️ not pressed: prompt no longer tracked"})
-        return "unknown"
+        return "unknown"  # already answered (double tap): no edit, the final outcome text stays
     act = {"allow": "once", "deny": "deny"}.get(ev.get("choice"))
     if act is None:
         return "ignored"

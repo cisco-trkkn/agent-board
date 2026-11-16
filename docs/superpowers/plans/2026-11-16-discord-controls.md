@@ -287,7 +287,7 @@ Other:
 
 ### Task 7: User gate: one real tap from the phone
 
-**Goal:** The user taps Allow on a real teammate prompt in `#agent-board` and the command runs. A prompt that changes before the tap shows `not pressed`.
+**Goal:** The user taps Allow on a real teammate prompt in `#agent-board` and the command runs. A prompt answered at the terminal before the tap shows `answered elsewhere`.
 
 > **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it "verified inline", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.
 
@@ -295,12 +295,13 @@ Other:
 
 **Acceptance Criteria:**
 - [ ] After merge and a board restart (asked first), a teammate in a scratch window triggers a Bash prompt. The prompt post appears in `#agent-board` with Allow once / Deny. The user taps Allow, the command runs, and the post reads `✅ allowed by you`.
-- [ ] A second prompt that changes before the tap shows `⚠️ not pressed: …`.
+- [ ] A prompt answered at the terminal before the tap shows `answered elsewhere` and its buttons are gone. `⚠️ not pressed: …` appears only when the prompt changes between the tap and the board's step; try for it once, best effort, and do not fail the gate if it cannot be provoked.
+- [ ] A ✅ reaction on an older lead message that is not in the bot's cache (sent before the bridge's last restart) still reaches the lead as `[Discord] ✅ yes to your message "…"` (the discord.js partials path).
 - [ ] A ✅ reaction on a lead message reaches the lead as `[Discord] ✅ yes to your message "…"`, and the bot reacts 👀.
 - [ ] `tmux-ctl discord audit --project agent-board` shows the `perm` and `react` lines.
 
 **Verify:** see verifyCommand (`tmux-ctl discord audit --project agent-board` shows the perm and react lines), plus the user's Discord confirmation.
 
 ```json:metadata
-{"files": [], "verifyCommand": "tmux-ctl discord audit --project agent-board", "acceptanceCriteria": ["real Allow tap runs the command and edits allowed", "changed prompt shows not pressed", "reaction reaches the lead and bot reacts 👀", "audit shows perm and react lines"], "modelTier": "mechanical", "userGate": true, "tags": ["user-gate"]}
+{"files": [], "verifyCommand": "tmux-ctl discord audit --project agent-board", "acceptanceCriteria": ["real Allow tap runs the command and edits allowed", "prompt answered at the terminal shows answered elsewhere, buttons gone; not pressed only best effort", "reaction on an uncached older lead message reaches the lead", "reaction reaches the lead and bot reacts 👀", "audit shows perm and react lines"], "modelTier": "mechanical", "userGate": true, "tags": ["user-gate"]}
 ```

@@ -259,7 +259,7 @@ While remote:
 **Approval protocol** (a teammate's or worker's permission prompt while the user is remote; peer sessions
 are never covered):
 
-When `tmux-ctl discord status` shows `bridge: running` for the project, the bridge posts a teammate's or worker's prompt with Allow once / Deny buttons and the board presses the answer; do not post `#n` for it. The steps below are the fallback when the bridge is not running.
+When `tmux-ctl discord status` shows `bridge: running` for the project, the bridge posts a teammate's or worker's prompt with Allow once / Deny buttons and the board presses the answer; do not post `#n` for it. The steps below are the fallback when the bridge is not running. They are also the fallback for a waiting prompt that got no 🔐 post (an ambiguous `show`, a timeout, the board down): use the text `#n` protocol for it.
 
 1. Read the agent's window (`tmux-ctl read <window>`). Send in Discord: `#n` (a fresh number), the agent's
    name, the tool, and the command or file path exactly as the prompt shows it, then `reply "approve n" or
