@@ -8,7 +8,7 @@ Nothing private goes in a line: no session ids, prompts, agent names, absolute p
 Task log (docs/superpowers/metrics/tasks.jsonl, same rules): one line per plan task, written by `record` and by
 `backfill-tasks`; readers take the last line per (batch, spec, task_id).
 
-CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|analyze|gate|status> ...
+CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|analyze|recommend|gate|status> ...
 A failing command prints one line `metrics: <sub>: <reason>` to stderr and exits 1. `tmux-ctl metrics` calls this.
 """
 import argparse
@@ -28,7 +28,7 @@ import tc_env  # noqa: E402
 import usage  # noqa: E402
 
 METRICS_DIR = Path("docs/superpowers/metrics")
-SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "gate", "status")
+SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "recommend", "gate", "status")
 
 
 class MetricsError(Exception):
@@ -1107,6 +1107,9 @@ def _parser():
     an.add_argument("--out")
     an.add_argument("--projects", nargs="+")
     an.add_argument("--tasks-log")
+    rm = sp.add_parser("recommend", parents=[common])
+    rm.add_argument("--since", default="7d")
+    rm.add_argument("--stats")
     bf = sp.add_parser("backfill", parents=[common])
     bf.add_argument("--since")
     bf.add_argument("--until")
@@ -1618,19 +1621,19 @@ def cmd_backfill_tasks(repo, args):
         TASKS_OVERRIDE = None
 
 
-def cmd_analyze(repo, args):
-    """Write stats.json (R5: $TC_STATE/analytics/stats.json or --out) from every project's logs (R4: --projects, else
-    `overview --json`, else this repo alone)."""
+def write_stats(repo, since_text, projects=None, tasks_log=None, out=None):
+    """Compute stats.json and write it (R5: `out`, else $TC_STATE/analytics/stats.json). Projects (R4): `projects`, else
+    `overview --json`, else this repo alone. Returns (stats, path)."""
     import metrics_analyze   # lazy: metrics_analyze imports nothing from here
     now = int(time.time())
-    m = re.fullmatch(r"(\d+)d", args.since)
+    m = re.fullmatch(r"(\d+)d", since_text)
     try:
-        since = now - int(m.group(1)) * 86400 if m else _parse_when(args.since)
+        since = now - int(m.group(1)) * 86400 if m else _parse_when(since_text)
     except ValueError:
-        raise MetricsError(f"bad --since {args.since}: use 7d, 30d, an ISO date or datetime")
+        raise MetricsError(f"bad --since {since_text}: use 7d, 30d, an ISO date or datetime")
     here = main_root(repo)
-    if args.projects:
-        projects, source = list(args.projects), "args"
+    if projects:
+        projects, source = list(projects), "args"
     else:
         try:
             projects, source = metrics_analyze.overview_projects(), "overview"
@@ -1639,15 +1642,42 @@ def cmd_analyze(repo, args):
                 projects.insert(0, here)
         except Exception:
             projects, source = [here], "repo-only"
-    stats = metrics_analyze.analyze(projects, since, now, tasks_log=args.tasks_log, source=source)
-    out = Path(args.out) if args.out else tc_env.state_dir() / "analytics" / "stats.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(stats, indent=1, sort_keys=False) + "\n")
+    stats = metrics_analyze.analyze(projects, since, now, tasks_log=tasks_log, source=source)
+    path = Path(out) if out else tc_env.state_dir() / "analytics" / "stats.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(stats, indent=1) + "\n")
+    return stats, path
+
+
+def cmd_analyze(repo, args):
+    stats, out = write_stats(repo, args.since, args.projects, args.tasks_log, args.out)
     if args.json:
         print(json.dumps(stats, indent=1))
     else:
         print(f"analyzed {stats['trends']['specs_run']['current']} specs, {stats['coverage']['tasks']} tasks "
               f"across {len(stats['projects'])} projects → {out}")
+
+
+def cmd_recommend(repo, args):
+    """Ask the model for three recommendations over stats.json (computed first unless --stats), keep the ones whose
+    evidence matches, write recommend.json beside the stats file."""
+    import metrics_recommend   # lazy: it imports metrics_analyze, never metrics
+    if args.stats:
+        stats_path = Path(args.stats)
+        if not stats_path.is_file():
+            raise MetricsError(f"stats file not found: {stats_path.name}")
+    else:
+        stats_path = write_stats(repo, args.since)[1]
+    res = metrics_recommend.recommend(stats_path)
+    (stats_path.parent / "recommend.json").write_text(json.dumps(res, indent=1) + "\n")
+    if "unavailable" in res:
+        print(f"recommendations unavailable: {res['unavailable']}")
+        return
+    for d in res["dropped"]:
+        print(f"metrics: recommend: dropped \"{d['title']}\": {d['reason']}", file=sys.stderr)
+    for it in res["items"]:
+        print(f"- {it['title']}")
+    print(f"({res['passed']} of {res['asked']} passed the evidence check)")
 
 
 def _log_error(repo, sub, exc, log=None):
@@ -1714,7 +1744,7 @@ def main(argv=None):
             args.spec = rel_spec(repo, args.spec)
         rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
               "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill,
-              "backfill-tasks": cmd_backfill_tasks, "analyze": cmd_analyze}[args.sub](repo, args)
+              "backfill-tasks": cmd_backfill_tasks, "analyze": cmd_analyze, "recommend": cmd_recommend}[args.sub](repo, args)
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
