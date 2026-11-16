@@ -36,3 +36,18 @@ def lineage_dir():
 def state_dir():
     """Same rule as tc_state_dir in tc-env.zsh: $TC_STATE, else ${TMPDIR:-/tmp}/tmux-ctl-<uid>."""
     return Path(os.environ.get("TC_STATE") or f"{(os.environ.get('TMPDIR') or '/tmp').rstrip('/')}/tmux-ctl-{os.getuid()}")
+
+
+def agent_base():
+    """Same base as _dc_root in tools/lib/discord.zsh: $TC_STATE, else $HOME/.local/state/agent-board.
+    Deliberately not state_dir(): the discord spool and the feed file must survive a reboot."""
+    env = os.environ
+    return Path(env.get("TC_STATE") or f"{env.get('HOME', '')}/.local/state/agent-board")
+
+
+def discord_dir(project):
+    return agent_base() / "discord" / project
+
+
+def feed_path(project):
+    return agent_base() / "feed" / f"{project}.jsonl"
