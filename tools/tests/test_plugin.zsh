@@ -186,4 +186,15 @@ check "lead rules: answeredAt read from the clock" grep -qF 'date -u +%Y-%m-%dT%
 check "lead rules: ideas are marked when queued" grep -qF 'ideas are marked when queued' "$O"
 check "lead rules: running plan is the first exceptions item" grep -qF '`Running plan: <title>`' "$O"
 check "lead rules: metadata.queue.current shape names the plan" grep -qF 'metadata.queue.current = {"plan": "<plan path>"' "$O"
+# queue reliability (spec 2026-11-10-queue-reliability §2): wait in the same turn, a hold bound to the queue, the handoff mark
+check "lead rules: wait-gone after shutdown_requests, in the same turn" grep -qF 'After sending shutdown_requests, run `tmux-ctl wait-gone <names>` in the same turn' "$O"
+check "lead rules: never end a turn waiting for shutdown confirmations" grep -qF 'Never end a turn waiting for shutdown confirmations' "$O"
+check "lead rules: team shutdown, board shutdown and stalled-teammate lines name wait-gone" test "$(grep -c 'tmux-ctl wait-gone' "$O")" -ge 5
+check "lead rules: no line waits for a termination notice" zsh -c '! grep -q "wait for its termination notice" "$1"' _ "$O"
+check "lead rules: queue holds use awake on --queue --lid (handoff start, step 1, step 2)" test "$(grep -o 'tmux-ctl awake on --queue --lid' "$O" | wc -l | tr -d ' ')" -eq 3
+check "lead and handoff rules: no awake on --lid without --queue" zsh -c '! grep -q "awake on --lid" "$1" "$2"' _ "$O" "$P/skills/handoff/SKILL.md"
+check "lead rules: queue step 2 re-arms the hold at each Plan & run task" zsh -c 'grep "^  2\. \*\*Run each spec in order:\*\*" "$1" | grep -qF "run \`tmux-ctl awake status\` and, when it is off, \`tmux-ctl awake on --queue --lid\`"' _ "$O"
+check "handoff skill: shutdown step waits with wait-gone in the same turn" zsh -c 'awk "/^## 3\. Shut the team down/{f=1;next} /^## /{f=0} f" "$1" | grep -qF "in the same turn, run \`tmux-ctl wait-gone <names>\`"' _ "$P/skills/handoff/SKILL.md"
+check "handoff skill: a self-started handoff runs handoff-mark after writing the doc, a user-started one does not" zsh -c 'awk "/^## 2\. Write the handoff doc/{f=1;next} /^## /{f=0} f" "$1" | grep -F "tmux-ctl handoff-mark" | grep -qF "A user-started handoff does not run it."' _ "$P/skills/handoff/SKILL.md"
+check "handoff skill: teammate mode waits with wait-gone" zsh -c 'awk "/^## Teammate mode/{f=1;next} /^## /{f=0} f" "$1" | grep -qF "tmux-ctl wait-gone <name>"' _ "$P/skills/handoff/SKILL.md"
 tt_done
