@@ -14,6 +14,7 @@ sys.path.insert(0, str(HERE))
 spec = importlib.util.spec_from_file_location("tmux_dash_server_discord", HERE / "server.py")
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
+import discord_controls  # noqa: E402
 import discord_feed  # noqa: E402
 import notify  # noqa: E402
 import tc_env  # noqa: E402
@@ -106,10 +107,11 @@ class FeedTickWiringTest(Base):
              mock.patch.object(server, "ensure_overseer", side_effect=lambda: order.append("overseer")), \
              mock.patch.object(server, "ensure_discord_bridges", side_effect=lambda r: order.append("bridges")), \
              mock.patch.object(server.discord_feed, "tick", side_effect=lambda *a, **k: order.append(("tick", a[0]))), \
+             mock.patch.object(server.discord_controls, "step", side_effect=lambda *a, **k: order.append(("step", a[0]))), \
              mock.patch.object(server.planview, "lead_entry", return_value=("", 0, 0)):
             server._overview_cache.update(at=0.0, value=None)
             server.overview_payload()
-        self.assertEqual(order, ["overseer", "bridges", ("tick", "p")])
+        self.assertEqual(order, ["overseer", "bridges", ("tick", "p"), ("step", "p")])
 
     def test_feed_exception_never_breaks_overview(self):
         ov = {"generated": 1.0, "projects": [rec("p")]}
@@ -117,6 +119,7 @@ class FeedTickWiringTest(Base):
         with mock.patch.object(server, "build_overview", return_value=ov), \
              mock.patch.object(server, "ensure_overseer"), mock.patch.object(server, "ensure_discord_bridges"), \
              mock.patch.object(server.discord_feed, "tick", side_effect=RuntimeError("feed broke")), \
+             mock.patch.object(server.discord_controls, "step"), \
              mock.patch.object(server.planview, "lead_entry", return_value=("", 0, 0)), \
              mock.patch("sys.stderr") as err:
             server._overview_cache.update(at=0.0, value=None)
@@ -129,10 +132,79 @@ class FeedTickWiringTest(Base):
         tasks = [{"id": "1", "subject": "s", "status": "pending"}]
         with mock.patch.object(server.planview, "lead_entry", return_value=("sid", 5, 6)), \
              mock.patch.object(server.planview, "raw_live_list", return_value=("session-sid", tasks)) as raw, \
-             mock.patch.object(server.discord_feed, "tick") as tick:
+             mock.patch.object(server.discord_feed, "tick") as tick, \
+             mock.patch.object(server.discord_controls, "step"):
             server.feed_tick([rec("p")], 1000.0)
         raw.assert_called_once_with(server.HOME / ".claude", "sid", 5, 6)
         self.assertEqual(tick.call_args[1], {"lead_tasks": tasks, "list_id": "session-sid"})
+
+
+class FeedStepWiringTest(Base):
+    """feed_tick runs discord_controls.step after discord_feed.tick, with the real runner and the comment queue."""
+    def setUp(self):
+        super().setUp()
+        server._discord_checked.clear()
+        self.patches = [
+            mock.patch.object(server.planview, "lead_entry", return_value=("sid", 5, 6)),
+            mock.patch.object(server.planview, "raw_live_list", return_value=("session-sid", [])),
+        ]
+        for p in self.patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_step_runs_after_tick_with_runner_and_comments(self):
+        self.configure("p")
+        order = []
+        with mock.patch.object(server.discord_feed, "tick", side_effect=lambda *a, **k: order.append("tick")), \
+             mock.patch.object(server.discord_controls, "step", side_effect=lambda *a, **k: order.append("step")) as step:
+            server.feed_tick([rec("p")], 1000.0)
+        self.assertEqual(order, ["tick", "step"])
+        args, kw = step.call_args
+        self.assertEqual(args[0], "p")
+        self.assertEqual(args[1], rec("p"))
+        self.assertEqual(args[2], 1000.0)
+        self.assertEqual(kw["add_line"], server.COMMENTS.add_line)   # bound methods compare by (self, func)
+        self.assertTrue(callable(kw["run"]))
+
+    def test_step_exception_isolated_per_project(self):
+        self.configure("a")
+        self.configure("b")
+        seen = []
+        def step(project, *a, **k):
+            seen.append(project)
+            if project == "a":
+                raise RuntimeError("controls broke")
+        with mock.patch.object(server.discord_feed, "tick"), \
+             mock.patch.object(server.discord_controls, "step", side_effect=step), \
+             mock.patch("sys.stderr") as err:
+            server.feed_tick([rec("a"), rec("b")], 1000.0)
+        self.assertEqual(seen, ["a", "b"])
+        self.assertIn("controls broke", "".join(c[0][0] for c in err.write.call_args_list))
+
+    def test_no_channel_never_calls_step(self):
+        self.configure("p", channel="")
+        with mock.patch.object(server.discord_feed, "tick"), \
+             mock.patch.object(server.discord_controls, "step") as step:
+            server.feed_tick([rec("p"), rec("q")], 1000.0)
+        step.assert_not_called()
+
+    def test_runner_passes_tc_session_and_timeout(self):
+        self.configure("p")
+        captured = {}
+        def step(project, record, now, run, add_line):
+            captured["run"] = run
+        with mock.patch.object(server.discord_feed, "tick"), \
+             mock.patch.object(server.discord_controls, "step", side_effect=step), \
+             mock.patch.object(server, "run_script", return_value="") as rs:
+            server.feed_tick([rec("p")], 1000.0)
+            captured["run"](["/bin/x", "discord"])
+        rs.assert_called_once()
+        self.assertEqual(rs.call_args[0][0], ["/bin/x", "discord"])
+        self.assertEqual(rs.call_args[1]["extra_env"], {"TC_SESSION": "p"})
+        self.assertEqual(rs.call_args[1]["timeout"], 20)
+
+    def test_discord_controls_bin_is_server_bin(self):
+        self.assertEqual(server.discord_controls.BIN, server.BIN)
 
 
 class SinkTest(Base):

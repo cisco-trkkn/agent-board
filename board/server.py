@@ -32,8 +32,9 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_feed, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_feed, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
+discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
 
 class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
@@ -477,7 +478,7 @@ def ensure_discord_bridges(records):
 
 
 def feed_tick(records, now):
-    """The discord feed for each project with a channel: tick (derive, spool, card), then (Task 4) the controls step.
+    """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (prompt buttons, inbound events).
     A failure in one project is logged and never breaks the overview or the next project."""
     home = HOME / ".claude"
     for r in records:
@@ -488,6 +489,8 @@ def feed_tick(records, now):
             sid, pid, started = planview.lead_entry(p, home, tmux)
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
             discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id)
+            discord_controls.step(p, r, now, run=lambda argv, p=p: run_script(argv, extra_env={"TC_SESSION": p}, timeout=20),
+                                  add_line=COMMENTS.add_line)
         except Exception as e:   # noqa: BLE001
             print(f"tmux-dash: discord feed failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
