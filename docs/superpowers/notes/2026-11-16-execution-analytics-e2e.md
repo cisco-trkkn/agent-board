@@ -95,7 +95,7 @@ Through the zsh exec path of `bin/tmux-ctl` (covers what the unit tests could no
 ```
 Execution analytics, 2026-10-17 → 2026-11-16
 
-```
+````
 metric                     | last week | this week | change
 specs_run                  | 0         | 18        | +18
 specs_merged               | 0         | 18        | +18
@@ -152,7 +152,7 @@ Recommendations:
 (2 of 3 passed the evidence check)
 coverage: 43/90 tasks with cost data
 stats: <scratch>/state/analytics/stats.json
-```
+````
 
 `recommend.json`, `dropped` list: `[{"title": "Add a files-to-touch list to plans for specs with low forecast recall", "reason": "uncited number 4 in expected_effect"}]`.
 
@@ -164,6 +164,45 @@ The second model run below (same prompt, same stats) produced the same three the
   `'Task 5: Speed up the three slow zsh files'` and `'Task 6: Parallel-safety audit and fixes'`; the item cites both subjects as string evidence
   (`flags.costly_steps.0.subject`, `.1.subject`), so the `5` and `6` are part of a cited string. The check reads them as bare numbers. In the first run the same kind of item
   kept its quote without the `Task N:` prefix and passed. A fix would blank out any substring equal to a cited string value (or a quoted span) before scanning the prose.
+
+The dropped item, verbatim from the second run's answer (`stream.jsonl` in the Task 6 scratch; it is the fixture of `REAL_SUBJECT_ITEM` in `board/tests/test_metrics_recommend.py`):
+
+```json
+{
+  "title": "Split the largest plan tasks so no single task is a costly step",
+  "change": "In plans for test-suite and tooling work, split any task that bundles several files or an audit plus fixes into smaller tasks, each with a complete spec. The two costliest steps were 'Task 5: Speed up the three slow zsh files' and 'Task 6: Parallel-safety audit and fixes'. Split each into one task per file or per audit area.",
+  "expected_effect": "The costly_steps list shrinks, and the p90 cost per spec falls from 42.46 USD. Median fix rounds per spec stay at or below 3.5.",
+  "evidence": [
+    {
+      "key": "flags.costly_steps.0.usd",
+      "value": 6.82
+    },
+    {
+      "key": "flags.costly_steps.0.subject",
+      "value": "Task 5: Speed up the three slow zsh files"
+    },
+    {
+      "key": "flags.costly_steps.1.usd",
+      "value": 5.92
+    },
+    {
+      "key": "flags.costly_steps.1.subject",
+      "value": "Task 6: Parallel-safety audit and fixes"
+    },
+    {
+      "key": "trends.p90_usd_per_spec.current",
+      "value": 42.46
+    },
+    {
+      "key": "trends.median_fix_rounds_per_spec.current",
+      "value": 3.5
+    }
+  ],
+  "risk": "Cost data covers only 43 of 90 tasks (coverage.with_cost, coverage.tasks), so the costly-step list may miss expensive tasks. Smaller tasks add dispatch and review overhead, which could raise the lead share of cost."
+}
+```
+
+Fixed after the final review: the check now blanks every cited string value before the scan, and `recommend.json` keeps each dropped item's full text in `dropped[].item`.
 
 ## 4. What the model actually read
 
