@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import discord_feed
@@ -43,10 +44,11 @@ def _key(pane, lines):
 
 
 def _show(run, window):
-    """(tool, lines) of the prompt showing in window; None when it shows none; 'error' for any other failure (ambiguous, gone)."""
+    """(tool, lines) of the prompt showing in window; None when it shows none; 'error' for any other failure (ambiguous, gone,
+    timed out: run_script raises subprocess.TimeoutExpired, which is not a RuntimeError)."""
     try:
         out = run([str(BIN / "tmux-ctl"), "approve", window, "show"])
-    except RuntimeError as e:
+    except Exception as e:  # noqa: BLE001 -- any failure of show is 'error', so one window never aborts the scan
         return None if str(e).startswith(_NO_PROMPT) else "error"
     tool, lines = "", []
     for l in out.split("\n"):
@@ -161,7 +163,10 @@ def step(project, record, now, run, add_line):
         if not isinstance(st.get("prompts"), dict):
             st["prompts"] = {}
         try:
-            scan_prompts(d, record, st, now, run)
+            try:
+                scan_prompts(d, record, st, now, run)
+            except Exception as e:  # noqa: BLE001 -- a failed scan must not skip the queued clicks and reactions
+                print(f"discord_controls: scan failed ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             consume_events(d, project, st, run, add_line)
         finally:
             tmp = sp.with_name(sp.name + ".tmp")

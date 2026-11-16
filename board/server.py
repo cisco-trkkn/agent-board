@@ -489,10 +489,13 @@ def feed_tick(records, now):
             sid, pid, started = planview.lead_entry(p, home, tmux)
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
             discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id)
-            discord_controls.step(p, r, now, run=lambda argv, p=p: run_script(argv, extra_env={"TC_SESSION": p}, timeout=20),
-                                  add_line=COMMENTS.add_line)
         except Exception as e:   # noqa: BLE001
             print(f"tmux-dash: discord feed failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        try:
+            discord_controls.step(p, r, now, run=lambda argv, p=p: run_script(argv, extra_env={"TC_SESSION": p}, timeout=20),
+                                  add_line=COMMENTS.add_line)
+        except Exception as e:   # noqa: BLE001 -- a tick error does not skip the controls step, and vice versa
+            print(f"tmux-dash: discord controls failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
 def build_overview(now=None):

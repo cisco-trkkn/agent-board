@@ -3,6 +3,7 @@ The SHOW text below is the real `_ap_prompt` output (T: second B: line, P: lines
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -129,6 +130,52 @@ class ScanTest(Base):
         self.step(Runner({"w1": "approve: ambiguous prompt in w1"}), self.rec())
         self.assertIn(KEY, self.state()["prompts"])
         self.assertEqual(self.ops(), [])
+
+
+class TimeoutTest(Base):
+    """run_script(timeout=20) raises subprocess.TimeoutExpired, which is not a RuntimeError: a hung show is an 'error', never an abort."""
+    class Hung(Runner):
+        def __call__(self, argv):
+            if argv[3] == "show" and argv[2] in self.hang:
+                self.calls.append(list(argv))
+                raise subprocess.TimeoutExpired(argv, 20)
+            return super().__call__(argv)
+
+    def hung(self, shows, hang):
+        r = self.Hung(shows)
+        r.hang = hang
+        return r
+
+    def react(self, emoji, name="1-a.json"):
+        self.event(name, {"type": "react", "emoji": emoji, "message_id": "m", "excerpt": "hi", "user": "U1", "ts": 1})
+
+    def test_hung_show_keeps_key_and_scan_continues(self):  # mutation: except RuntimeError only -> w2 never posted
+        self.seed()
+        r = self.hung({"w2": SHOW2}, hang={"w1"})
+        self.step(r, self.rec("w1", "w2"))
+        self.assertIn(KEY, self.state()["prompts"])
+        self.assertEqual([o["op"] for o in self.ops()], ["prompt"])
+        self.assertEqual(self.ops()[0]["window"], "w2")
+
+    def test_hung_show_still_consumes_react(self):
+        self.seed()
+        self.react("✅")
+        lines = []
+        dc.step("p", self.rec("w1"), 100.0, self.hung({}, hang={"w1"}), lambda s, t: lines.append((s, t)))
+        self.assertEqual(lines, [("p", '[Discord] ✅ yes to your message "hi"')])
+        self.assertIn(KEY, self.state()["prompts"])
+        self.assertEqual([a["result"] for a in self.audit()], ["queued"])
+
+
+class ScanFailureTest(Base):
+    def test_scan_exception_still_consumes_events_and_saves_state(self):
+        self.event("1-a.json", {"type": "react", "emoji": "🛑", "message_id": "m", "excerpt": "", "user": "U1", "ts": 1})
+        lines = []
+        with mock.patch.object(dc, "scan_prompts", side_effect=RuntimeError("boom")), mock.patch("sys.stderr") as err:
+            dc.step("p", self.rec("w1"), 100.0, Runner(), lambda s, t: lines.append((s, t)))
+        self.assertEqual(lines, [("p", "[Discord] 🛑 pause the queue")])
+        self.assertTrue((self.d / "controls-state.json").exists())
+        self.assertIn("discord_controls: scan failed (p): RuntimeError: boom", "".join(c[0][0] for c in err.write.call_args_list))
 
 
 class PermTest(Base):

@@ -181,6 +181,20 @@ class FeedStepWiringTest(Base):
         self.assertEqual(seen, ["a", "b"])
         self.assertIn("controls broke", "".join(c[0][0] for c in err.write.call_args_list))
 
+    def test_tick_error_does_not_skip_step(self):  # mutation: step inside the tick's try -> a's step never runs
+        self.configure("a")
+        self.configure("b")
+        seen = []
+        def tick(project, *a, **k):
+            if project == "a":
+                raise RuntimeError("tick broke")
+        with mock.patch.object(server.discord_feed, "tick", side_effect=tick), \
+             mock.patch.object(server.discord_controls, "step", side_effect=lambda project, *a, **k: seen.append(project)), \
+             mock.patch("sys.stderr") as err:
+            server.feed_tick([rec("a"), rec("b")], 1000.0)
+        self.assertEqual(seen, ["a", "b"])
+        self.assertIn("discord feed failed (a): RuntimeError: tick broke", "".join(c[0][0] for c in err.write.call_args_list))
+
     def test_no_channel_never_calls_step(self):
         self.configure("p", channel="")
         with mock.patch.object(server.discord_feed, "tick"), \
