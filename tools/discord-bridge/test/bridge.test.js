@@ -87,6 +87,36 @@ test('backoff doubles and caps at 60s', async () => {
   assert.deepStrictEqual(s.sleeps, [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000]);
 });
 
+test('a non-network error without a status goes to failed/ and later files still go', async () => {
+  const s = setup();
+  const n = s.put(post('bug')); s.put(post('after'));
+  s.client.failNext('send', { plain: true, message: 'ENOENT: no such file' });
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.sleeps, []);
+  assert.ok(s.failed().includes(n));
+  assert.strictEqual(s.client.callsOf('send').slice(-1)[0].payload.content, 'after');
+});
+
+test('retryable: 429, 503 and each named network code retry; ENOENT code does not', async () => {
+  for (const f of [{ status: 429 }, { status: 503 }, { code: 'ETIMEDOUT' }, { code: 'ENOTFOUND' }, { code: 'EAI_AGAIN' }, { code: 'ECONNREFUSED' }, { code: 'UND_ERR_SOCKET' }, { plain: true, message: 'socket hang up' }]) {
+    const s = setup(); const n = s.put(post('x')); s.client.failNext('send', f);
+    await s.bridge.tick();
+    assert.deepStrictEqual(s.sleeps, [1000], JSON.stringify(f)); assert.deepStrictEqual(s.files(), [], n);
+  }
+  const s = setup(); s.put(post('x')); s.client.failNext('send', { code: 'ENOENT' });
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.sleeps, []); assert.strictEqual(s.failed().length, 2);
+});
+
+test('a missing bridge.json channel fails the op instead of retrying forever', async () => {
+  const s = setup();
+  fs.writeFileSync(path.join(s.dir, 'bridge.json'), '{}');
+  s.put(post('x'));
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.sleeps, []);
+  assert.strictEqual(s.failed().length, 2);
+});
+
 test('an unparsable file goes to failed/', async () => {
   const s = setup();
   const n = s.put('{not json'); s.put(post('after'));
@@ -135,6 +165,29 @@ test('card: two ops within 30s send one edit with the later text', async () => {
   s.clock.t += 31000; await s.bridge.tick();
   const edits = s.client.callsOf('edit');
   assert.strictEqual(edits.length, 1); assert.strictEqual(edits[0].payload.content, 'v3');
+});
+
+test('card: held card files stay in the outbox until the coalesced edit is accepted', async () => {
+  // Mutation: delete a throttled card file at once -> files() is empty after the held ticks.
+  const s = setup();
+  s.put({ op: 'card', text: 'v1' }); await s.bridge.tick();
+  s.clock.t += 5000; s.put({ op: 'card', text: 'v2' }); await s.bridge.tick();
+  s.clock.t += 5000; s.put({ op: 'card', text: 'v3' }); await s.bridge.tick();
+  assert.strictEqual(s.files().length, 2);
+  s.clock.t += 31000; s.client.failNext('edit', { status: 500 });
+  await s.bridge.tick(); // edit fails once, is retried, then accepted
+  assert.strictEqual(s.client.callsOf('edit').length, 2);
+  assert.deepStrictEqual(s.files(), []);
+});
+
+test('card: a held card whose edit gets a 4xx moves every held file to failed/', async () => {
+  const s = setup();
+  s.put({ op: 'card', text: 'v1' }); await s.bridge.tick();
+  s.clock.t += 5000; s.put({ op: 'card', text: 'v2' }); await s.bridge.tick();
+  s.clock.t += 31000; s.client.failNext('edit', { status: 403, message: 'Missing Permissions' });
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.files(), []);
+  assert.strictEqual(s.failed().filter((n) => n.endsWith('.err')).length, 1);
 });
 
 test('threads: one per key; second op is a no-op; recorded in state', async () => {

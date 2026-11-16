@@ -13,6 +13,7 @@ const BACKOFF_CAP = 60000;
 const TICK_MS = 2000;
 const BODY_MAX = 80;
 const UNKNOWN_MESSAGE = 10008;
+const HELD = Symbol('held');
 
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 
@@ -24,7 +25,15 @@ function readToken(dir) {
 }
 
 const statusOf = (e) => (typeof e?.status === 'number' ? e.status : undefined);
-const isClientError = (e) => { const s = statusOf(e); return s >= 400 && s < 500 && s !== 429; };
+const NET_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EPIPE', 'ECONNABORTED', 'ENETUNREACH', 'EHOSTUNREACH']);
+// Retry only 5xx, 429 and network failures; everything else (4xx, bad file path, bad config, bugs) is permanent.
+function isRetryable(e) {
+  const s = statusOf(e);
+  if (s !== undefined) return s >= 500 || s === 429;
+  const c = e?.code ?? e?.cause?.code;
+  if (typeof c === 'string' && (NET_CODES.has(c) || c.startsWith('UND_ERR'))) return true;
+  return /socket hang up|fetch failed|network|timed? ?out/i.test(String(e?.message));
+}
 
 function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const token = readToken(dir);
@@ -50,7 +59,9 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
   const cfg = () => readJson(path.join(dir, 'bridge.json'), {});
   const save = () => stateLib.write(dir, st, now());
   const home = async () => {
-    const ch = await client.channels.fetch(cfg().channel);
+    const channel = cfg().channel;
+    if (!channel) throw new Error('bridge.json has no channel');
+    const ch = await client.channels.fetch(channel);
     if (ch?.guildId && st.guild_id !== ch.guildId) { st.guild_id = ch.guildId; save(); }
     return ch;
   };
@@ -77,17 +88,25 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     }
   }
 
-  async function opCard(op) {
-    if (st.card_message_id && now() - lastCardAt < CARD_MIN_MS) { pendingCard = { text: op.text }; return; }
+  // Delete the held card files (superseded ops) once an edit has been accepted.
+  function release() {
+    for (const n of pendingCard?.names || []) outbox.remove(dir, n);
     pendingCard = null;
+  }
+
+  async function opCard(op, name) {
+    if (st.card_message_id && now() - lastCardAt < CARD_MIN_MS) {
+      pendingCard = { text: op.text, names: [...(pendingCard?.names || []), name] };
+      return HELD; // files stay in the outbox until the coalesced edit is accepted
+    }
     await doCard(op.text);
+    release(); // this op and any held, superseded card ops were accepted
   }
 
   async function flushCard() {
     if (pendingCard && now() - lastCardAt >= CARD_MIN_MS) {
-      const { text } = pendingCard;
-      await doCard(text);
-      pendingCard = null;
+      await doCard(pendingCard.text);
+      release();
     }
   }
 
@@ -109,6 +128,7 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     const c = cfg();
     let text = String(op.text ?? '');
     if (op.link_thread_key && st.threads[op.link_thread_key]) {
+      if (!st.guild_id) await home();
       text += `\nhttps://discord.com/channels/${st.guild_id}/${st.threads[op.link_thread_key]}`;
     }
     let target;
@@ -135,7 +155,7 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     let delay = BACKOFF_START;
     for (;;) {
       try { return await fn(); } catch (e) {
-        if (isClientError(e) || closed) throw e;
+        if (!isRetryable(e) || closed) throw e;
         say(`retry in ${delay}ms: ${snip(e?.message)}`);
         await sleep(delay);
         delay = Math.min(delay * 2, BACKOFF_CAP);
@@ -143,11 +163,17 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     }
   }
 
+  const reasonOf = (e) => `status ${statusOf(e) ?? '?'}: ${snip(e?.message)}`;
+
   async function tick() {
     if (busy) return;
     busy = true;
     try {
-      try { await withRetry(flushCard); } catch (e) { say(`card flush failed: ${snip(e?.message)}`); pendingCard = null; }
+      try { await withRetry(flushCard); } catch (e) {
+        say(`card flush failed: ${snip(e?.message)}`);
+        for (const n of pendingCard?.names || []) { try { outbox.moveToFailed(dir, n, reasonOf(e)); } catch { /* already gone */ } }
+        pendingCard = null;
+      }
       for (const name of outbox.list(dir)) {
         if (closed) break;
         let op;
@@ -157,12 +183,12 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
         const h = op && handlers[op.op];
         if (!h) { outbox.moveToFailed(dir, name, `invalid op: ${snip(op?.op)}`); say(`failed ${name}: invalid op`); continue; }
         try {
-          await withRetry(() => h(op));
-          outbox.remove(dir, name);
+          const r = await withRetry(() => h(op, name));
+          if (r !== HELD) outbox.remove(dir, name);
         } catch (e) {
-          if (closed && !isClientError(e)) break; // shutting down: leave the file for the next run
-          outbox.moveToFailed(dir, name, `status ${statusOf(e) ?? '?'}: ${snip(e?.message)}`);
-          say(`failed ${name}: ${statusOf(e) ?? '?'} ${snip(e?.message)}`);
+          if (closed && isRetryable(e)) break; // shutting down: leave the file for the next run
+          outbox.moveToFailed(dir, name, reasonOf(e));
+          say(`failed ${name}: ${snip(reasonOf(e))}`);
         }
       }
     } finally { busy = false; }
@@ -214,6 +240,7 @@ function main() {
   const token = readToken(dir);
   if (!token) { console.error('no DISCORD_BOT_TOKEN in <dir>/.env'); process.exit(2); }
 
+  const scrub = (m) => String(m ?? '').split(token).join('***').replace(/\s+/g, ' ').slice(0, BODY_MAX);
   const logFile = path.join(dir, 'bridge.log');
   const log = (line) => { try { fs.appendFileSync(logFile, `${new Date().toISOString()} ${line}\n`); } catch { /* log is best effort */ } };
   const pidFile = path.join(dir, 'bridge.pid');
@@ -232,8 +259,8 @@ function main() {
   });
   bridge = createBridge({ dir, client, log });
   bridge.attach();
-  timer = setInterval(() => { bridge.tick().catch((e) => log(`tick error: ${String(e?.message).slice(0, BODY_MAX)}`)); }, TICK_MS);
-  client.login(token).catch((e) => { log(`login failed: ${String(e?.message).split(token).join('***').slice(0, BODY_MAX)}`); process.exit(1); });
+  timer = setInterval(() => { bridge.tick().catch((e) => log(`tick error: ${scrub(e?.message)}`)); }, TICK_MS);
+  client.login(token).catch((e) => { log(`login failed: ${scrub(e?.message)}`); process.exit(1); });
 }
 
 module.exports = { createBridge, readToken };

@@ -15,15 +15,15 @@ class FakeClient extends EventEmitter {
   }
 
   // failNext('send', {status: 500}) fails the next call of that method; count repeats it.
-  failNext(method, { status, code, message } = {}, count = 1) {
-    (this.failures[method] ||= []).push(...Array.from({ length: count }, () => ({ status, code, message })));
+  failNext(method, { status, code, message, plain } = {}, count = 1) {
+    (this.failures[method] ||= []).push(...Array.from({ length: count }, () => ({ status, code, message, plain })));
   }
 
   _maybeFail(method) {
     const f = (this.failures[method] || []).shift();
     if (!f) return;
     const err = new Error(f.message || `fake ${method} failure`);
-    if (f.status !== undefined) err.status = f.status; else err.code = 'ECONNRESET';
+    if (f.status !== undefined) err.status = f.status; else if (!f.plain) err.code = 'ECONNRESET'; // plain: a bare Error, no status or code
     if (f.code !== undefined) err.code = f.code;
     throw err;
   }
