@@ -15,6 +15,8 @@ FIX = re.compile(r"fix round (\d+)")
 COMMITS = re.compile(r"commits (.*)")
 RANGE = re.compile(r"([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})")
 FIX_FINDING = re.compile(r"fix round \d+(?:/\d+)? dispatched.*?\((Critical|Important):")
+REVIEW_RESULT = re.compile(r"^(?:scoped )?(?:re-)?review(?! dispatched)")
+SEVERITY = re.compile(r"(?:(\d+) )?(Critical|Important)\b")
 FAMILIES = ("haiku", "sonnet", "opus", "fable")
 TOKEN_COLS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
 KEYS = ("spec", "batch", "task_id", "subject", "tier", "model_mapped", "model_used", "escalated", "owner",
@@ -36,12 +38,17 @@ def _blank():
 def parse_ledger(progress):
     """{task number: facts}. `complete_at` is the line index of the task's `complete` line (ledger order)."""
     out = {}
+    named = {}   # task -> severities the review lines named since the last fix dispatch
     for i, line in enumerate((progress or "").splitlines()):
         m = TASK.match(line.strip().lstrip("-* ").strip())
         if not m:
             continue
-        t = out.setdefault(int(m.group(1)), _blank())
+        num = int(m.group(1))
+        t = out.setdefault(num, _blank())
         rest = m.group(2)
+        if rest.startswith("minor (deferred"):   # free text: no keyword in it is a ledger event
+            t["findings"]["minor"] += 1
+            continue
         d = DISPATCH.match(rest)
         if d:
             if d.group(1) not in t["owners"]:
@@ -64,14 +71,23 @@ def parse_ledger(progress):
         if rest.startswith("complete"):
             t["complete"] = True
             t["complete_at"] = i
-        if "minor (deferred)" in rest:
-            t["findings"]["minor"] += 1
         sev = re.match(r"(Critical|Important):", rest)
         if sev:
             t["findings"][sev.group(1).lower()] += 1
+        if REVIEW_RESULT.match(rest):
+            seen = {}
+            for f in SEVERITY.finditer(rest):
+                k = f.group(2).lower()
+                seen[k] = max(seen.get(k, 0), int(f.group(1)) if f.group(1) else 1)
+            for k, n in seen.items():
+                t["findings"][k] += n
+                named.setdefault(num, set()).add(k)
         ff = FIX_FINDING.search(rest)
         if ff:
-            t["findings"][ff.group(1).lower()] += 1
+            k = ff.group(1).lower()
+            if k not in named.get(num, ()):   # the review line of this round already counted it
+                t["findings"][k] += 1
+            named.pop(num, None)
     return out
 
 

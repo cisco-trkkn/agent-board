@@ -50,6 +50,12 @@ Task 2: minor (deferred): dead code (plan_text, if/pass, inline import, setUp lo
 Task 2: minor (deferred): branch --contains picks first non-main branch arbitrarily
 """
 
+REVIEW_LINES = """\
+Task 3: review ❌ spec (1 Important: graph→list fallback when cards <16 cells, unruled, untested), quality Approved
+Task 3: review spec ✅ quality needs fixes (Important: TERM trap orphans job processes) — fix round 1 sent to fts-impl with M1,M2,M5,M6; FIX_BASE 18cc4e8
+Task 4: review spec ❌ — 3 Important (failed-command span drops failed record; union only with --usage-db; limits end by spec path)
+"""
+
 FRESH = 'Task 6: fix round 1/5 dispatched to fresh qm-fix (sonnet/standard; qm-impl shut down) (FIX_BASE 5fa3176)'
 MULTI = 'Task 4: fix round 1/5 (3 addressed, 0 open; commits 00574a4..b9ef776 + 2e39ac9..518d841)'
 
@@ -90,8 +96,34 @@ class TestParseLedger(unittest.TestCase):
         self.assertEqual(led[10]["findings"], {"critical": 0, "important": 1, "minor": 0})  # `Important:` line
         self.assertEqual(led[1]["findings"], {"critical": 0, "important": 1, "minor": 0})  # fix dispatch (Important: ...)
         self.assertEqual(led[2]["findings"], {"critical": 0, "important": 0, "minor": 2})
-        # the prose "review spec - 1 Important (...)" line in QM is not a finding line
-        self.assertEqual(metrics_tasks.parse_ledger(QM)[2]["findings"]["important"], 0)
+        # severity on the review-result line counts: QM's "review spec ❌ — 1 Important (...)"
+        self.assertEqual(metrics_tasks.parse_ledger(QM)[2]["findings"]["important"], 1)
+
+    def test_findings_on_review_result_lines(self):
+        # verbatim: tasks-window Task 3 (paren form), fast-test-suite Task 3 ("quality needs fixes (Important: ...)"),
+        # queue-metrics Task 4 ("— 3 Important (...)")
+        led = metrics_tasks.parse_ledger(REVIEW_LINES)
+        self.assertEqual(led[3]["findings"]["important"], 1 + 1)   # two Task 3 lines, one Important each
+        self.assertEqual(led[4]["findings"]["important"], 3)
+
+    def test_fix_dispatch_severity_not_double_counted(self):
+        # the review line named the Important; the fix dispatch that answers it names it again: one finding
+        led = metrics_tasks.parse_ledger(
+            "Task 1: review spec ❌ (Important: a)\n"
+            "Task 1: fix round 1/5 dispatched to w (Important: a)\n"
+            "Task 1: review spec ✅ quality needs fixes (Critical: b)\n"
+            "Task 1: fix round 2/5 dispatched to w (Critical: b)\n"
+            "Task 2: fix round 1/5 dispatched to w (Important: d)\n")   # no review line: the dispatch counts
+        self.assertEqual(led[2]["findings"]["important"], 1)
+        self.assertEqual(led[1]["findings"], {"critical": 1, "important": 1, "minor": 0})
+
+    def test_minor_deferred_body_is_not_parsed(self):
+        led = metrics_tasks.parse_ledger(
+            "Task 1: review dispatched to r (a..b)\n"
+            "Task 1: minor (deferred, part 2): flags need re-review; review dispatched later; fix round 9 (Important: x)\n"
+            "Task 1: minor (deferred): y\n")
+        t = led[1]
+        self.assertEqual((t["review_rounds"], t["fix_rounds"], t["findings"]), (1, 0, {"critical": 0, "important": 0, "minor": 2}))
 
     def test_owners_models_commit_end_complete(self):
         led = metrics_tasks.parse_ledger(DISCORD)
