@@ -163,6 +163,16 @@ mkdir -p "$HOME/.claude/channels/discord"; print -r -- "DISCORD_BOT_TOKEN=$TOK" 
 run "" $C discord status
 check "status: default-dir warning"       test -n "$(grep -Fx 'discord: a token in ~/.claude/channels/discord/.env makes every session connect that bot; run tmux-ctl discord token for a project and delete that file' $S/out.$N)"
 
+# --- watch: no project, no tmux; the watchdog runs through the fake launchctl and a scratch TC_STATE
+rm -f $S/watch.loaded
+run "" env -u TMUX -u TMUX_PANE $C discord watch status
+check "watch status (not installed): exit 0, line from the watchdog"  test $rc -eq 0 -a "$out" = "not installed"
+run "" env -u TMUX -u TMUX_PANE TC_DISCORD_WATCH=0 $C discord watch --once
+check "watch --once with TC_DISCORD_WATCH=0: exit 0, silent"  test $rc -eq 0 -a -z "$out"
+run "" env -u TMUX -u TMUX_PANE $C discord watch bogus
+check "watch bogus: usage, exit 2"  test $rc -eq 2 -a -n "$(grep -i usage $S/out.$N)"
+check "leak: no LaunchAgent written to the scratch HOME"  test -z "$(ls $HOME/Library/LaunchAgents 2>/dev/null)"
+
 # --- help
 h="$($C help)"
 check "help: discord token line"          test -n "$(print -r -- "$h" | grep 'tmux-ctl discord token|pair|deny|policy|allow|remove|forget|status')"

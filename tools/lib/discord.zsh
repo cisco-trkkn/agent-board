@@ -11,6 +11,10 @@ _dc_tokenish() { [[ "$1" == *.* && ${#1} -ge 50 ]] }
 discord_cmd() {
   local sub="$1" project="" a
   shift 2>/dev/null
+  if [[ "$sub" == watch ]]; then   # the watchdog: no project, no tmux of our own (it finds the leads' panes itself)
+    python3 "$_DC_TOOLS/discord_watch.py" "${@:---once}"; return $?
+  fi
+  [[ "$sub" == migrate ]] && { _dc_migrate; return 0 }   # machine cleanup: no project
   local -a pos=()
   while (( $# )); do
     case "$1" in
@@ -105,7 +109,17 @@ _dc_status() {
   print -r -- "policy: ${pol:-pairing}"
   ack="$(jq -r '.ackReaction // ""' "$dir/access.json" 2>/dev/null)"
   print -r -- "ack reaction: ${ack:-off}"
-  print -r -- "held by: nobody"
+  local hold hpid hpane hname
+  hold="$(dc_holder "$dir")"
+  if [[ -z "$hold" ]]; then print -r -- "held by: nobody"
+  else
+    hpid="${hold%% *}"; hpane="${hold#* }"
+    [[ "$hpane" != - ]] && {   # an unknown pane id makes display answer for the current pane: require the id to echo back
+      hname="$("${TC_TMUX:-tmux}" display -p -t "$hpane" '#{pane_id} #{session_name}:#{window_name}' 2>/dev/null)"
+      [[ "${hname%% *}" == "$hpane" ]] && hname="${hname#* }" || hname=
+    }
+    if [[ -n "$hname" ]]; then print -r -- "held by: $hname pid $hpid"; else print -r -- "held by: another process pid $hpid"; fi
+  fi
   if jq -e '.plugins | has("discord@claude-plugins-official")' "$cfg/plugins/installed_plugins.json" >/dev/null 2>&1; then print -r -- "plugin: ok"; else print -r -- "plugin: missing"; fi
   for d in "$cfg"/plugins/cache/claude-plugins-official/discord/*(/N); do
     any=1
@@ -123,4 +137,49 @@ _dc_forget() {
   local project="$1" dir="$2"
   rm -f "$dir/.env"
   print -r -- "discord: token removed for $project"
+}
+
+# dc_holder <state dir>: "<claude pid> <pane id|->" when a live lead holds the discord channel for that state dir, else nothing.
+# A holder is a process that is the discord server (args hold /discord/ and `bun run … start` or `bun … server.ts`, or
+# discord-mcp-launch; never the stub) with DISCORD_STATE_DIR=<dir> exactly in its `ps -E` environment, and that has a
+# `claude` ancestor (argv[0] basename claude, or args starting `claude `) whose own parent is not 1 (an orphaned server
+# or a detached claude is not a live holder). The pane is that claude's TMUX_PANE.
+dc_holder() {
+  emulate -L zsh
+  local dir="$1" pid ppid args e p n c
+  local -A par nm
+  local -a cands
+  [[ -n "$dir" ]] || return 0
+  while read -r pid ppid args; do
+    par[$pid]=$ppid; nm[$pid]="$args"
+    [[ "$args" == *discord-mcp-stub.js* ]] && continue
+    if [[ "$args" == *discord-mcp-launch* ]] || [[ "$args" == */discord/* && ( "$args" =~ 'bun run .*start' || "$args" =~ 'bun .*server\.ts' ) ]]; then cands+=($pid); fi
+  done < <(ps -A -o pid=,ppid=,args= 2>/dev/null)
+  for pid in $cands; do
+    e="$(ps -Eww -o command= -p $pid 2>/dev/null) "
+    [[ "$e" == *" DISCORD_STATE_DIR=$dir "* ]] || continue
+    p=$pid n=0
+    while [[ -n "${par[$p]}" && $p -gt 1 && $n -lt 64 ]]; do
+      (( n++ ))
+      args="${nm[$p]}"
+      if [[ "${${args%% *}:t}" == claude || "$args" == "claude "* ]]; then
+        [[ "${par[$p]}" == 1 ]] && break
+        e="$(ps -Eww -o command= -p $p 2>/dev/null) "
+        c="-"; [[ "$e" =~ ' TMUX_PANE=(%[0-9]+) ' ]] && c="${match[1]}"
+        print -r -- "$p $c"; return 0
+      fi
+      p="${par[$p]}"
+    done
+  done
+  return 0
+}
+
+# _dc_migrate: remove what the Telegram channel left on this machine (idempotent; one line per action; always exit 0)
+_dc_migrate() {
+  local label=com.user.agent-board-telegram-watch plist="$HOME/Library/LaunchAgents/com.user.agent-board-telegram-watch.plist" tg="${TC_STATE:-$HOME/.local/state/agent-board}/telegram"
+  if launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1; then print -r -- "telegram watch: booted out"; else print -r -- "telegram watch: not loaded"; fi
+  if [[ -e "$plist" ]]; then rm -f "$plist" && print -r -- "telegram watch: plist removed"; else print -r -- "telegram watch: no plist"; fi
+  if claude plugin disable telegram@claude-plugins-official >/dev/null 2>&1; then print -r -- "telegram plugin: disabled"; else print -r -- "telegram plugin: not enabled"; fi
+  [[ -d "$tg" ]] && print -r -- "telegram: token dirs kept in $tg (delete them by hand when done)"
+  return 0
 }
