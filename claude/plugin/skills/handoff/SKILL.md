@@ -14,7 +14,7 @@ Arguments that start with `teammate <name>` replace that one teammate; the rest 
 
 1. Send `<name>` the checkpoint message from step 1.
 2. Wait up to 2 minutes for the reply. With no reply, record `no checkpoint` and the last 40 lines of its window: `tmux-ctl read "✦ <name>" 40`, or `tmux-ctl read <name> 40` if the window has no ✦ prefix.
-3. Send `<name>` a `shutdown_request` whose `reason` ends with the suffix from step 3, and wait for the termination notice. A teammate idle at its prompt is not gone.
+3. Send `<name>` a `shutdown_request` whose `reason` ends with the suffix from step 3, then run `tmux-ctl wait-gone <name>` in the same turn (outside tmux, wait for the termination notice). A teammate idle at its prompt is not gone.
 4. Respawn it with the same `name`, role and tier: the tier map in `claude/orchestrator.md` "Models and effort" gives the `subagent_type` and `model` (mechanical → effort-low + haiku, standard → effort-medium + sonnet, frontier → general-purpose + fable). The prompt is teammate rules 1–5 from `claude/orchestrator.md`, then the checkpoint note (task, files owned, progress, next step, assumptions, risks). For `no checkpoint`, give the captured output and "re-check the state of your files before continuing".
 5. Check the new pane is alive: `tmux list-panes -a -F '#{window_name} #{pane_dead}'`. Respawn again if it is dead.
 6. Report one line to the user: `respawned <name> from checkpoint`, or `respawned <name> from captured output`.
@@ -61,9 +61,11 @@ Only if that is still empty (always the case outside tmux), fall back to the bas
 
 **Register it** only if the doc is saved somewhere other than `~/.local/state/agent-board/handoffs/`: `tmux-ctl artifact <doc> --kind handoff`. A doc under `~/.local/state/agent-board/handoffs/` is already registered by the hook.
 
+**Mark a self-started handoff** (inside tmux only; step 4 defines self-started): run `tmux-ctl handoff-mark` now. Until `tmux-ctl relay` runs, the Stop guard blocks this session from ending its turn, so a handoff whose doc is written cannot stall before the relay. A user-started handoff does not run it. If you call the handoff off, run `tmux-ctl handoff-mark --clear`.
+
 ## 3. Shut the team down
 
-Send each teammate a `shutdown_request`. End its `reason` with: "To approve: first load SendMessage's schema with ToolSearch query \"select:SendMessage\", then send `message` as a JSON object, not a string." Confirm each one is gone.
+Send each teammate a `shutdown_request`. End its `reason` with: "To approve: first load SendMessage's schema with ToolSearch query \"select:SendMessage\", then send `message` as a JSON object, not a string." Then, in the same turn, run `tmux-ctl wait-gone <names>` (inside tmux): it returns when their `✦` windows are gone and kills the ones left after 300 s. Never end the turn waiting for shutdown confirmations: nothing re-invokes you when a teammate exits. Outside tmux, confirm each one is gone.
 
 ## 4. Ask before switching
 

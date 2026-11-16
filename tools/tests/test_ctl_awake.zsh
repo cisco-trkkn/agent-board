@@ -17,12 +17,13 @@ echo "\$*" >> "$S/caffeinate.args"
 exec "$S/real/caffeinate" 600
 STUB
 # pmset: $S/batt.cur (a fixture path) overrides the battery capture at call time (a running watchdog sees changes);
+# $S/log.cur (a fixture path) overrides the `pmset -g log` capture the same way;
 # $S/sleepdisabled present = `pmset -g` carries a SleepDisabled line (absent when 0, as on the real Mac).
 cat > "$S/bin/pmset" <<STUB
 #!/bin/sh
 case "\$*" in
   "-g batt") if [ -f "$S/batt.cur" ]; then cat "\$(cat "$S/batt.cur")"; else cat "\${AWAKE_FIXTURE_BATT:-$FX/batt-ac.txt}"; fi ;;
-  "-g log")  cat "$FX/log-sleeps.txt" ;;
+  "-g log")  if [ -f "$S/log.cur" ]; then cat "\$(cat "$S/log.cur")"; else cat "$FX/log-sleeps.txt"; fi ;;
   "-g")      printf 'System-wide power settings:\nCurrent Power Settings:\n standby 1\n'; [ -f "$S/sleepdisabled" ] && printf ' SleepDisabled\t\t1\n' ;;
 esac
 STUB
@@ -133,19 +134,47 @@ check "claude by comm, exe elsewhere (symlink named claude) found"  zsh -c '[[ $
 $C awake off >/dev/null
 
 # --- sleeps
-out="$($C awake sleeps '2026-11-07 10:28')"
-check "sleeps local: first line"               test "$(print -r -- "$out" | head -1)" = "2026-11-07 10:28:22 DarkWake Deep Idle"
-check "sleeps local: sleep reason"             sh -c "printf %s '$out' | grep -qx '2026-11-07 10:28:24 Sleep Sleep Service Back to Sleep'"
-check "sleeps local: nothing before the cutoff"  test -z "$(print -r -- "$out" | grep '10:12:')"
-check "sleeps: Wake Requests excluded"         test -z "$(print -r -- "$out" | grep -i 'request')"
-iso="$($C awake sleeps '2026-11-07T15:28:00Z')"
+out="$($C awake sleeps '2026-11-07 10:28' --all)"
+check "sleeps --all local: first line"         test "$(print -r -- "$out" | head -1)" = "2026-11-07 10:28:22 DarkWake Deep Idle"
+check "sleeps --all local: sleep reason"       sh -c "printf %s '$out' | grep -qx '2026-11-07 10:28:24 Sleep Sleep Service Back to Sleep'"
+check "sleeps --all local: nothing before the cutoff"  test -z "$(print -r -- "$out" | grep '10:12:')"
+check "sleeps --all: Wake Requests excluded"   test -z "$(print -r -- "$out" | grep -i 'request')"
+iso="$($C awake sleeps '2026-11-07T15:28:00Z' --all)"
+check "sleeps --all ISO UTC == local equivalent"  test "$iso" = "$out"
+all="$($C awake sleeps --all '2000-01-01 00:00')"
+check "sleeps --all: a real Wake line is listed"  test "$(print -r -- "$all" | awk '$3=="Wake"' | wc -l | tr -d ' ')" -ge 1
+check "sleeps --all: only three types"         test -z "$(print -r -- "$all" | awk '$3!="Sleep"&&$3!="Wake"&&$3!="DarkWake"')"
+check "sleeps --all: line count = fixture minus Wake Requests"  test "$(print -r -- "$all" | wc -l | tr -d ' ')" = "$(grep -vc 'Wake Requests' "$FX/log-sleeps.txt")"
+out="$($C awake sleeps '2099-01-01 00:00' --all)"; rc=$?
+check "sleeps --all: none prints nothing, exit 0"  test -z "$out" -a $rc -eq 0
+# default: one line per real sleep period (spec 2026-11-10-queue-reliability §5)
+out="$($C awake sleeps '2000-01-01 00:00')"
+check "sleeps: the real capture has one real period (Low Power Sleep, ended by the next Wake)"  test "$out" = "2026-11-07 11:52:58 – 2026-11-09 10:30:32 Low Power Sleep"
+print -r -- "$FX/log-sleeps-kinds.txt" > "$S/log.cur"   # one of every Sleep reason kind
+KINDS=(
+  "2026-11-10 20:31:19 – 2026-11-10 21:03:05 Idle Sleep"
+  "2026-11-11 08:46:33 – 2026-11-11 08:59:20 Clamshell Sleep"
+  "2026-11-11 09:30:00 – 2026-11-11 09:45:00 Low Power Sleep"
+  "2026-11-11 10:00:00 – 2026-11-11 10:05:00 Software Sleep"
+  "2026-11-11 23:00:00 – … Idle Sleep"
+)
+out="$($C awake sleeps '2000-01-01 00:00')"; rc=$?
+check "sleeps: only real periods, each ended by the next Wake, the open one by …"  test "$out" = "${(F)KINDS}" -a $rc -eq 0
+check "sleeps: no Maintenance, Sleep Service, Notification Wake or DarkWake line"  test -z "$(print -r -- "$out" | grep -E 'Maintenance|Sleep Service|Notification|DarkWake')"
+check "sleeps: a reason not on the deny-list shows (Software Sleep)"  zsh -c '[[ $1 == *"Software Sleep"* ]]' _ "$out"
+out="$($C awake sleeps '2026-11-11 09:00')"
+check "sleeps: periods that start before the cutoff are left out"  test "$out" = "${(F)KINDS[3,5]}"
+iso="$($C awake sleeps '2026-11-11T14:00:00Z')"
 check "sleeps ISO UTC == local equivalent"     test "$iso" = "$out"
-all="$($C awake sleeps '2000-01-01 00:00')"
-check "sleeps: a real Wake line is listed"     test "$(print -r -- "$all" | awk '$3=="Wake"' | wc -l | tr -d ' ')" -ge 1
-check "sleeps: only three types"               test -z "$(print -r -- "$all" | awk '$3!="Sleep"&&$3!="Wake"&&$3!="DarkWake"')"
-check "sleeps: line count = fixture minus Wake Requests"  test "$(print -r -- "$all" | wc -l | tr -d ' ')" = "$(grep -vc 'Wake Requests' "$FX/log-sleeps.txt")"
+all="$($C awake sleeps '2000-01-01 00:00' --all)"
+check "sleeps --all on the same log: every Sleep, Wake and DarkWake line"  test "$(print -r -- "$all" | wc -l | tr -d ' ')" = "$(grep -vc 'Wake Requests' "$FX/log-sleeps-kinds.txt")"
+check "sleeps --all keeps the old line format"  test "$(print -r -- "$all" | sed -n 2p)" = "2026-11-10 20:45:00 DarkWake Deep Idle"
 out="$($C awake sleeps '2099-01-01 00:00')"; rc=$?
 check "sleeps: none prints nothing, exit 0"    test -z "$out" -a $rc -eq 0
+$C awake sleeps >/dev/null 2>&1; check "sleeps without a time: exit 2"  test $? -eq 2
+$C awake sleeps --all >/dev/null 2>&1; check "sleeps --all without a time: exit 2"  test $? -eq 2
+$C awake sleeps '2026-11-11 09:00' extra >/dev/null 2>&1; check "sleeps with two times: exit 2"  test $? -eq 2
+rm -f "$S/log.cur"
 
 # --- lid mode (sudo and pmset are stubs; TC_AWAKE_TICK=1 makes the watchdog tick every second)
 waitfor() { local i; for i in {1..60}; do eval "$1" && return 0; sleep 0.1; done; return 1 }
@@ -289,6 +318,74 @@ check "stale, rule present: off clears it"     test ! -e "$S/sleepdisabled"
 check "stale: off called disablesleep 0"       test "$(ndis 0)" -ge 1
 out="$($C awake status)"
 check "stale cleared: no warning"              zsh -c '[[ $1 != *"stale lid hold"* ]]' _ "$out"
+deny
+
+# --- queue holds (spec 2026-11-10-queue-reliability §4): bound to the tmux server, so a relay does not end them
+allow; $C awake off >/dev/null; rm -f "$S/caffeinate.args" "$S/sudo.args"
+SRV="$(tt display -p '#{pid}')"   # the scratch tmux server: what `tmux display -p '#{pid}'` prints (probed on tmux 3.8)
+out="$($C awake on --queue)"; rc=$?
+cpq="$(lidfile .caffeinatePid)"
+check "queue on: watches the tmux server pid"   test "$out" = "awake: on (pid $cpq, watching $SRV)" -a $rc -eq 0
+check "queue on: caffeinate -i -s -w <server pid>"  test "$(<$S/caffeinate.args)" = "-i -s -w $SRV"
+check "queue on: awake.json has queue true and the server pid"  test "$(lidfile .queue)" = true -a "$(lidfile .pid)" = "$SRV"
+out="$($C awake status)"
+check "status: queue line for a queue hold"     zsh -c '[[ $1 == "on (pid $2, watching $3, since "*$'"'"'\nqueue: on\nlid: off\n'"'"'* ]]' _ "$out" $cpq $SRV
+out="$($C awake on --pid $W)"
+check "non-queue on over a queue hold: already on (queue)"  test "$out" = "awake: already on (queue)"
+out="$("$S/real/claude-fake" -c "$C awake on; true")"
+check "a claude's own on over a queue hold: already on (queue)"  test "$out" = "awake: already on (queue)"
+out="$($C awake on --queue)"
+check "queue on twice: already on (queue)"      test "$out" = "awake: already on (queue)"
+check "queue hold unchanged by all three"       test "$(lidfile .pid)" = "$SRV" -a "$(lidfile .caffeinatePid)" = "$cpq" -a "$(nstub)" = 1
+out="$($C awake on --queue --pid $W 2>&1)"; rc=$?
+check "--queue with --pid: usage, exit 2"       test $rc -eq 2 -a "$out" = "usage: tmux-ctl awake on [--queue | --pid N] [--lid]"
+check "--queue with --pid: hold unchanged"      test "$(lidfile .caffeinatePid)" = "$cpq"
+$C awake off >/dev/null
+out="$(TMUX="$S/no-such-socket,1,0" $C awake on --queue 2>/dev/null)"; rc=$?
+check "--queue with no tmux server: message, exit 1"  test "$out" = "awake: no tmux server; run on without --queue" -a $rc -eq 1
+check "--queue with no tmux server: nothing started"  test "$(nstub)" = 0 -a ! -e "$AF"
+
+# --- re-point: a live non-queue hold watching another pid moves to the caller
+sleep 300 & foreign=$!
+$C awake on --pid $foreign >/dev/null; cpf="$(lidfile .caffeinatePid)"
+out="$($C awake status)"
+check "status: no queue line for a plain hold"  zsh -c '[[ $1 != *queue* ]]' _ "$out"
+out="$(TC_AWAKE_ANCESTOR=zz-no-such-name $C awake on)"
+check "caller with no claude ancestor: the foreign hold is kept"  zsh -c '[[ $1 == "awake: already on (pid $2, since "*")" ]]' _ "$out" $cpf
+out="$("$S/real/claude-fake" -c "$C awake on; true")"
+me="$(lidfile .pid)"
+check "re-point: message names old and new pid" test "$out" = "awake: on (re-pointed from $foreign to $me)"
+check "re-point: the new pid is the caller's claude ancestor, not the foreign pid"  test -n "$me" -a "$me" != "$foreign" -a "$me" != "$W"
+check "re-point: old caffeinate killed, one running"  zsh -c '! kill -0 $1 2>/dev/null && [[ $2 == 1 ]]' _ $cpf "$(nstub)"
+check "re-point: awake.json points at the new caffeinate, no queue"  test "$(lidfile .caffeinatePid)" != "$cpf" -a "$(lidfile '.queue // false')" = false
+check "re-point: the recorded pid is a caffeinate"  test "$(basename "$(ps -o comm= -p "$(lidfile .caffeinatePid)")")" = caffeinate
+out="$($C awake on --pid $W)"
+check "re-point with --pid: to that pid"        test "$out" = "awake: on (re-pointed from $me to $W)" -a "$(lidfile .pid)" = "$W"
+out="$($C awake on --pid $W)"
+check "same owner again: already on, no re-point"  zsh -c '[[ $1 == "awake: already on (pid "* ]]' _ "$out"
+before="$(<"$AF")"; cpb="$(lidfile .caffeinatePid)"
+out="$($C awake on --pid abc 2>&1 >/dev/null)"; rc=$?
+check "on --pid abc over a live hold: usage on stderr, exit 2"  test "$out" = "usage: tmux-ctl awake on [--queue | --pid N] [--lid]" -a $rc -eq 2
+check "on --pid abc: awake.json byte-identical"  test "$(<"$AF")" = "$before"
+check "on --pid abc: the live caffeinate is not killed"  kill -0 $cpb
+$C awake off >/dev/null
+
+# --- re-point keeps lid and watchdogPid; the watchdog follows the re-pointed pid
+rm -f "$S/sudo.args"
+$C awake on --lid --pid $foreign >/dev/null; wdr="$(lidfile .watchdogPid)"; WDS+=($wdr)
+out="$($C awake on --queue --lid)"
+check "queue on over a plain hold: re-pointed to the tmux server"  test "$(print -r -- "$out" | head -1)" = "awake: on (re-pointed from $foreign to $SRV)"
+check "queue re-point: queue true"              test "$(lidfile .queue)" = true -a "$(lidfile .pid)" = "$SRV"
+check "queue re-point: lid and watchdogPid kept"  test "$(lidfile .lid)" = true -a "$(lidfile .watchdogPid)" = "$wdr"
+check "queue re-point: disablesleep 1 not called again"  test "$(ndis 1)" = 1
+kill $foreign; sleep 2.5   # two watchdog ticks after the first owner died
+check "watchdog follows the re-pointed pid: lid hold still on"  test -e "$S/sleepdisabled" -a "$(lidfile .lid)" = true
+check "watchdog follows the re-pointed pid: still running"  wdalive "$wdr"
+$C awake off >/dev/null
+check "off ends a queue hold"                   test ! -e "$AF" -a "$(nstub)" = 0 -a ! -e "$S/sleepdisabled"
+$C awake on --queue --lid >/dev/null; wdq="$(lidfile .watchdogPid)"; WDS+=($wdq)
+check "queue + lid: the watchdog's lead pid is the tmux server"  zsh -c '[[ "$(ps -o args= -p $1)" == *"awake _watchdog $2" ]]' _ "$wdq" "$SRV"
+$C awake off >/dev/null
 deny
 
 # --- unsupported: a PATH without caffeinate (resp. pmset)

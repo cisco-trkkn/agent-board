@@ -28,10 +28,14 @@
 #   tmux-ctl idea  <text>                  file an idea for after the plan (never act on it now)
 #   tmux-ctl context show|path|add <section> "<entry>"
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
-#   tmux-ctl awake on [--pid N] [--lid]|off|status|sleeps <since>|lid-setup
-#                                          hold the Mac awake (caffeinate) while the queue runs; sleeps lists Sleep/Wake lines since a time
+#   tmux-ctl awake on [--queue | --pid N] [--lid]|off|status|sleeps <since> [--all]|lid-setup
+#                                          hold the Mac awake (caffeinate) while the queue runs (--queue: bound to the tmux server, survives a relay); sleeps lists the real sleep periods since a time (--all: every Sleep/Wake line)
 #   tmux-ctl approve <win> once|deny --expect <text>  answer the permission prompt showing in a window: the one-time Yes, or No
 #                                          (never an always/auto-mode row; refuses when there is no prompt or it changed)
+#   tmux-ctl wait-gone <name>... [--timeout S]  after shutdown_requests: wait (default 300 s) until every `✦ <name>` window of this
+#                                          session is gone; at the timeout kill the ones left (exit 3)
+#   tmux-ctl handoff-mark [--clear]        a self-started handoff marks this session as not yet relayed (the Stop guard
+#                                          blocks its stops until `relay` runs); --clear removes the mark (handoff skill only)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)
 #   tmux-ctl overview [project] [--json]   the overseer digest: one line per open project (plan, in-progress
@@ -53,6 +57,29 @@ mkdir -p "$STATE"
 
 die() { print -u2 "tmux-ctl: $*"; exit 2 }
 t()   { tc_tmux "$@" }
+
+# wait-gone: drop the names it saw go from the lead's <state>/shutdown-pending/<session id> (same flock as
+# claude/plugin/scripts/shutdown-record.sh, rewritten in place under the lock), so a teammate respawned under the same name
+# is not blocked by the Stop guard. An emptied file is deleted with its stop-guard counter. Silent; any problem changes nothing.
+wg_clear() {
+  [[ "$CLAUDE_CODE_SESSION_ID" =~ '^[A-Za-z0-9_-]+$' && -f "$STATE/shutdown-pending/$CLAUDE_CODE_SESSION_ID" ]] || return 0
+  python3 -I -c 'import fcntl, os, sys
+try:
+    state, sid, gone = sys.argv[1], sys.argv[2], set(sys.argv[3:])
+    p = os.path.join(state, "shutdown-pending", sid)
+    with open(p, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        left = [n for n in f.read().split("\n") if n and n not in gone]
+        if left:
+            f.seek(0); f.truncate(); f.write("".join(n + "\n" for n in left))
+        else:
+            os.unlink(p)
+            try: os.unlink(os.path.join(state, "stop-guard", sid))
+            except OSError: pass
+except BaseException:
+    pass' "$STATE" "$CLAUDE_CODE_SESSION_ID" "$@" >/dev/null 2>&1
+  return 0
+}
 
 [[ -n "$TMUX" || "$1" == telegram ]] || die "not inside tmux"   # telegram works outside tmux with --project
 if [[ -z "$TMUX" ]]; then
@@ -519,6 +546,53 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     source "${0:A:h:h}/tools/lib/awake.zsh"
     awake_cmd "$@"; exit $? ;;
 
+  wait-gone)   # spec 2026-11-10-queue-reliability §1: the lead never ends a turn waiting for shutdown confirmations
+    wg_usage="usage: tmux-ctl wait-gone <name>... [--timeout <s>]"
+    wg_names=(); wg_to=300
+    while (( $# )); do
+      if [[ "$1" == --timeout ]]; then
+        [[ "$2" == <-> ]] || die "$wg_usage"
+        wg_to="$2"; shift 2
+      else wg_names+=("${1#✦ }"); shift; fi
+    done
+    (( $#wg_names )) || die "$wg_usage"
+    zmodload zsh/datetime
+    wg_start=$EPOCHSECONDS
+    while :; do
+      # exact names only, and the window id for the kill: a `-t "=sess:✦ a"` target also matches `✦ a-2` by prefix when `✦ a` is gone
+      # a failed listing is not "no windows": nothing is read from it, and the names stay unconfirmed until a listing succeeds
+      typeset -A wg_ids=()
+      wg_raw="$(t list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)" && wg_listed=1 || wg_listed=0
+      if (( wg_listed )); then
+        for wg_l in ${(f)wg_raw}; do
+          wg_ids[${wg_l#* }]="${wg_l%% *}"
+        done
+        wg_left=()
+        for wg_n in $wg_names; do (( ${+wg_ids[✦ $wg_n]} )) && wg_left+=("$wg_n"); done
+        if (( ! $#wg_left )); then wg_clear "${wg_names[@]}"; print -r -- "wait-gone: all gone"; exit 0; fi
+      fi
+      (( EPOCHSECONDS - wg_start >= wg_to )) && break
+      sleep $(( wg_to - (EPOCHSECONDS - wg_start) < 2 ? wg_to - (EPOCHSECONDS - wg_start) : 2 ))
+    done
+    if (( ! wg_listed )); then
+      for wg_n in $wg_names; do print -r -- "wait-gone: could not kill $wg_n"; done
+      exit 3
+    fi
+    wg_done=("${(@)wg_names:|wg_left}")   # the names that were already gone, plus each one killed below
+    for wg_n in $wg_left; do
+      if t kill-window -t "${wg_ids[✦ $wg_n]}" 2>/dev/null; then wg_done+=("$wg_n"); else print -r -- "wait-gone: could not kill $wg_n"; fi
+    done
+    wg_clear "${wg_done[@]}"
+    print -r -- "wait-gone: killed ${(j: :)wg_left} after ${wg_to}s"
+    exit 3 ;;
+
+  handoff-mark)   # spec 2026-11-10-queue-reliability §3: read by claude/plugin/scripts/lead-stop-guard.sh
+    [[ $# -eq 0 || ( $# -eq 1 && "$1" == --clear ) ]] || die "usage: tmux-ctl handoff-mark [--clear]"
+    [[ "$CLAUDE_CODE_SESSION_ID" =~ '^[A-Za-z0-9_-]+$' ]] || die "handoff-mark needs CLAUDE_CODE_SESSION_ID (run it from the lead's own Bash tool)"
+    hm="$STATE/handoff-pending/$CLAUDE_CODE_SESSION_ID"
+    if [[ "$1" == --clear ]]; then rm -f -- "$hm"; print -r -- "handoff-mark: cleared"
+    else mkdir -p "${hm:h}" && : > "$hm" || die "cannot write $hm"; print -r -- "handoff-mark: set"; fi ;;
+
   relay)
     [[ -n "$1" ]] || die "usage: tmux-ctl relay <handoff-doc> [--old-session <id>]"
     doc="${1:A}"; shift; old=""
@@ -539,6 +613,11 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     # tmux format-expands run-shell strings: '#' -> '##' in every interpolated argument
     h() { print -r -- "${1//\#/##}" }
     t run-shell -b "python3 -I $(h ${(q)${0:A:h:h}})/board/relay.py --session $(h ${(q)FEEDKEY}) --doc $(h ${(q)doc}) --old-session $(h ${(q)old}) --state $(h ${(q)STATE}) --socket $(h ${(q)sock}) > $(h ${(q)log}) 2>&1 || $(h ${(q)${0:A}}) _relay_failed $(h ${(q)log}) $(h ${(q)doc}) $(h ${(q)FEEDKEY})"
+    # the relay is scheduled: the self-started handoff's mark (handoff-mark) has done its job. Remove the old session's and
+    # the caller's own, so a wrong or missing --old-session never leaves the Stop guard blocking the stop the relay waits for.
+    for hm in "$old" "$CLAUDE_CODE_SESSION_ID"; do
+      [[ "$hm" =~ '^[A-Za-z0-9_-]+$' ]] && rm -f -- "$STATE/handoff-pending/$hm"
+    done
     print -r -- "relay scheduled: ${FEEDKEY}:claude restarts with $doc once this turn ends (log: $log)" ;;
 
   overview)
@@ -555,7 +634,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

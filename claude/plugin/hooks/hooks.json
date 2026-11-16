@@ -43,6 +43,19 @@
         "hooks": [
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/artifact-register.sh\" --scoped", "timeout": 5, "async": true }
         ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/shutdown-record.sh\" --scoped", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/lead-stop-guard.sh\" --scoped", "timeout": 10 }
+        ]
       }
     ],
     "PostToolUseFailure": [
