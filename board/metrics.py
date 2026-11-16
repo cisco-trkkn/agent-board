@@ -8,7 +8,7 @@ Nothing private goes in a line: no session ids, prompts, agent names, absolute p
 Task log (docs/superpowers/metrics/tasks.jsonl, same rules): one line per plan task, written by `record` and by
 `backfill-tasks`; readers take the last line per (batch, spec, task_id).
 
-CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|gate|status> ...
+CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|analyze|gate|status> ...
 A failing command prints one line `metrics: <sub>: <reason>` to stderr and exits 1. `tmux-ctl metrics` calls this.
 """
 import argparse
@@ -28,7 +28,7 @@ import tc_env  # noqa: E402
 import usage  # noqa: E402
 
 METRICS_DIR = Path("docs/superpowers/metrics")
-SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "gate", "status")
+SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "gate", "status")
 
 
 class MetricsError(Exception):
@@ -1101,6 +1101,12 @@ def _parser():
     bt.add_argument("--log", dest="tasks_log")
     bt.add_argument("--usage-db")
     bt.add_argument("--no-ingest", action="store_true")
+    an = sp.add_parser("analyze", parents=[common])
+    an.add_argument("--since", default="7d")
+    an.add_argument("--json", action="store_true")
+    an.add_argument("--out")
+    an.add_argument("--projects", nargs="+")
+    an.add_argument("--tasks-log")
     bf = sp.add_parser("backfill", parents=[common])
     bf.add_argument("--since")
     bf.add_argument("--until")
@@ -1612,6 +1618,38 @@ def cmd_backfill_tasks(repo, args):
         TASKS_OVERRIDE = None
 
 
+def cmd_analyze(repo, args):
+    """Write stats.json (R5: $TC_STATE/analytics/stats.json or --out) from every project's logs (R4: --projects, else
+    `overview --json`, else this repo alone)."""
+    import metrics_analyze   # lazy: metrics_analyze imports nothing from here
+    now = int(time.time())
+    m = re.fullmatch(r"(\d+)d", args.since)
+    try:
+        since = now - int(m.group(1)) * 86400 if m else _parse_when(args.since)
+    except ValueError:
+        raise MetricsError(f"bad --since {args.since}: use 7d, 30d, an ISO date or datetime")
+    here = main_root(repo)
+    if args.projects:
+        projects, source = list(args.projects), "args"
+    else:
+        try:
+            projects, source = metrics_analyze.overview_projects(), "overview"
+            if here in projects:
+                projects.remove(here)
+                projects.insert(0, here)
+        except Exception:
+            projects, source = [here], "repo-only"
+    stats = metrics_analyze.analyze(projects, since, now, tasks_log=args.tasks_log, source=source)
+    out = Path(args.out) if args.out else tc_env.state_dir() / "analytics" / "stats.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(stats, indent=1, sort_keys=False) + "\n")
+    if args.json:
+        print(json.dumps(stats, indent=1))
+    else:
+        print(f"analyzed {stats['trends']['specs_run']['current']} specs, {stats['coverage']['tasks']} tasks "
+              f"across {len(stats['projects'])} projects → {out}")
+
+
 def _log_error(repo, sub, exc, log=None):
     """Append a kind:error line: to `log` when the command was given one, else to the run log, but only when the
     repo already has a metrics directory (a repo without metrics files stays clean)."""
@@ -1676,7 +1714,7 @@ def main(argv=None):
             args.spec = rel_spec(repo, args.spec)
         rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
               "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill,
-              "backfill-tasks": cmd_backfill_tasks}[args.sub](repo, args)
+              "backfill-tasks": cmd_backfill_tasks, "analyze": cmd_analyze}[args.sub](repo, args)
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
