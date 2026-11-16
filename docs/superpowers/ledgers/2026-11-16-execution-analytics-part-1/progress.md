@@ -86,3 +86,4 @@ Final fix wave: green check ok (1183 tests OK rc 0; backfill 39/90 partial, owne
 Ruling: accept 39/90 partial vs "well below 47" — 35 of 39 are pre-ledger runs with no owner (data limit, not C1); owner-but-no-rows fell 12→4 — cost if wrong: per-task cost coverage stays thin for old runs only.
 Final fix wave: re-review clean (10/10 addressed, 0 new breakage; fix-wave-rereview.md)
 Finish: ledger archived; merge locally (queue answer), no push
+Task 7: complete (user gate: user answered "Useful" on Discord, 2026-11-16T21:12Z)

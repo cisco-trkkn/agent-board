@@ -55,12 +55,12 @@
     {
       "id": 7,
       "subject": "Task 7: User gate: read the real weekly report",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** You read the real `weekly --dry-run` output in the e2e note and judge whether the findings and recommendations are useful.\n\n> **USER-ORDERED GATE \u2014 NON-SKIPPABLE.** This task was requested by the user in the spec (\"one real `metrics weekly --dry-run` on this repo's real metrics is the user-gate check\"). It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Read: `docs/superpowers/notes/2026-11-16-execution-analytics-e2e.md`\n\n**Acceptance Criteria:**\n- [ ] You have read the pasted weekly output and replied \"useful\", or listed what to change.\n\n**Verify:** your reply in the conversation (in queue mode this waits for the morning report).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"user reply on the e2e note's weekly output\", \"acceptanceCriteria\": [\"user read the real weekly --dry-run output and answered useful or listed changes\"], \"modelTier\": \"mechanical\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
       "blockedBy": [
         6
       ]
     }
   ],
-  "lastUpdated": "2026-11-16T20:28:32Z"
+  "lastUpdated": "2026-11-16T21:12:09Z"
 }
