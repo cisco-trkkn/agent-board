@@ -173,3 +173,74 @@ def recommend(stats_path):
         else:
             kept.append(it)
     return {"items": kept, "dropped": dropped, "passed": len(kept), "asked": ASKED}
+
+
+# ---- the weekly report text ------------------------------------------------------------------------------------------
+
+MAX_LINE = 160
+
+
+def _one_line(v):
+    return re.sub(r"\s*\n\s*", " ", str(v)).strip()
+
+
+def _cell(v):
+    return "–" if v is None else str(v)
+
+
+def _signed(v):
+    return "–" if v is None else "0" if v == 0 else f"{v:+}"
+
+
+def _cap(line):
+    return line if len(line) <= MAX_LINE else line[:MAX_LINE - 1] + "…"
+
+
+def _flag_lines(flags):
+    short = lambda spec: Path(str(spec)).name   # noqa: E731
+    out = []
+    for r in flags["overpowered"]:
+        out.append(f"- overpowered: {short(r['spec'])} task {r['task_id']} {_one_line(r['subject'])} ({r['model_used']}, 0 fix rounds)")
+    for r in flags["underpowered"]:
+        out.append(f"- underpowered: {r['tier_model']}: {r['reason']}")
+    for r in flags["costly_steps"]:
+        out.append(f"- costly_steps: {short(r['spec'])} task {r['task_id']} {_one_line(r['subject'])} ${r['usd']}")
+    for r in flags["handoffs"]:
+        out.append(f"- handoffs: {short(r['spec'])} {r['handoffs']} handoffs, ${r['usd_per_active_hour']}/h vs median "
+                   f"${r['median_usd_per_active_hour']}/h")
+    fc = flags["forecast"]
+    for r in fc["below_half"]:
+        out.append(f"- forecast: {short(r['spec'])} recall {r['recall']} (below 0.5; medians: precision {_cell(fc['median_precision'])}, "
+                   f"recall {_cell(fc['median_recall'])})")
+    return [_cap(l) for l in out]
+
+
+def weekly_text(stats, rec, stats_path=None):
+    """The weekly report: header, trends table, flags, recommendations, coverage, stats path. Model-written strings go in
+    as they are, newlines collapsed to spaces."""
+    w = stats["window"]
+    lines = [f"Execution analytics, {w['since'][:10]} → {w['until'][:10]}", "", "```"]
+    names = list(stats["trends"])
+    width = max(len(n) for n in names + ["metric"])
+    cells = [("metric", "last week", "this week", "change")] + \
+            [(n, _cell(t["previous"]), _cell(t["current"]), _signed(t["change"])) for n, t in stats["trends"].items()]
+    cw = [max(len(r[i]) for r in cells) for i in (1, 2, 3)]
+    for r in cells:
+        lines.append(f"{r[0]:<{width}} | {r[1]:<{cw[0]}} | {r[2]:<{cw[1]}} | {r[3]:<{cw[2]}}".rstrip())
+    lines.append("```")
+    flag_lines = _flag_lines(stats["flags"])
+    lines += ["Flags:"] + flag_lines if flag_lines else ["Flags: none"]
+    lines.append("Recommendations:")
+    for n, it in enumerate(rec.get("items") or [], 1):
+        ev = "; ".join(f"{e['key']} = {_one_line(e['value'])}" for e in it["evidence"])
+        lines += [f"{n}. {_one_line(it['title'])}", f"   change: {_one_line(it['change'])}",
+                  f"   expected: {_one_line(it['expected_effect'])}", f"   risk: {_one_line(it['risk'])}", f"   evidence: {ev}"]
+    if "unavailable" in rec:
+        lines.append(f"recommendations unavailable: {_one_line(rec['unavailable'])}")
+    else:
+        lines.append(f"({rec['passed']} of {rec['asked']} passed the evidence check)")
+    c = stats["coverage"]
+    lines.append(f"coverage: {c['with_cost']}/{c['tasks']} tasks with cost data")
+    if stats_path is not None:
+        lines.append(f"stats: {stats_path}")
+    return "\n".join(lines) + "\n"

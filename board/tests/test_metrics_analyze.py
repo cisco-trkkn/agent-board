@@ -136,6 +136,14 @@ class TrendsTest(Base):
         s = self.one([run(f"x{i}", cur(i), usd=float(i)) for i in range(1, 11)])["trends"]["p90_usd_per_spec"]
         self.assertEqual(s["current"], 9.0)
 
+    def test_fractional_metrics_are_floats_even_when_the_median_is_whole(self):
+        # an int `0` in stats.json would read as 0 decimals and let the evidence check match a claimed 0.4
+        s = self.one([run("only", cur(), usd=3, fix_rounds=0, lead_share=1)])["trends"]
+        for key in ("median_usd_per_spec", "p90_usd_per_spec", "median_lead_share", "median_fix_rounds_per_spec",
+                    "median_elapsed_s", "median_active_min", "questions_per_spec"):
+            self.assertIsInstance(s[key]["current"], float, key)
+        self.assertIsInstance(s["specs_run"]["current"], int)
+
     def test_every_trend_key_present(self):
         self.assertEqual(set(self.s), set(TREND_KEYS))
 
@@ -234,6 +242,11 @@ class FlagsTest(Base):
         rows = self.flags([run("s", cur())], tasks)["costly_steps"]
         self.assertEqual([r["task_id"] for r in rows], [12, 11, 10, 9, 8, 7, 6, 5, 4, 3])    # mutation: [:11] adds task 2
         self.assertEqual(set(rows[0]), {"project", "spec", "task_id", "subject", "usd"})
+
+    def test_whole_number_values_in_rows_are_floats(self):
+        f = self.flags([run("s", cur(), manifest={"precision": 1, "recall": 0})], [task("s", 1, usd=3)])
+        self.assertIsInstance(f["costly_steps"][0]["usd"], float)
+        self.assertIsInstance(f["forecast"]["below_half"][0]["recall"], float)
 
     def test_costly_steps_fewer_than_ten(self):
         self.assertEqual(len(self.flags([run("s", cur())], [task("s", 1), task("s", 2)])["costly_steps"]), 2)

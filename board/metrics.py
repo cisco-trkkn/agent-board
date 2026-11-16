@@ -8,7 +8,7 @@ Nothing private goes in a line: no session ids, prompts, agent names, absolute p
 Task log (docs/superpowers/metrics/tasks.jsonl, same rules): one line per plan task, written by `record` and by
 `backfill-tasks`; readers take the last line per (batch, spec, task_id).
 
-CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|analyze|recommend|gate|status> ...
+CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|analyze|recommend|weekly|gate|status> ...
 A failing command prints one line `metrics: <sub>: <reason>` to stderr and exits 1. `tmux-ctl metrics` calls this.
 """
 import argparse
@@ -28,7 +28,7 @@ import tc_env  # noqa: E402
 import usage  # noqa: E402
 
 METRICS_DIR = Path("docs/superpowers/metrics")
-SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "recommend", "gate", "status")
+SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "recommend", "weekly", "gate", "status")
 
 
 class MetricsError(Exception):
@@ -1110,6 +1110,10 @@ def _parser():
     rm = sp.add_parser("recommend", parents=[common])
     rm.add_argument("--since", default="7d")
     rm.add_argument("--stats")
+    wk = sp.add_parser("weekly", parents=[common])
+    wk.add_argument("--dry-run", action="store_true")
+    wk.add_argument("--since", default="7d")
+    wk.add_argument("--tasks-log")
     bf = sp.add_parser("backfill", parents=[common])
     bf.add_argument("--since")
     bf.add_argument("--until")
@@ -1658,6 +1662,25 @@ def cmd_analyze(repo, args):
               f"across {len(stats['projects'])} projects → {out}")
 
 
+def _recommend_to_file(stats_path):
+    import metrics_recommend
+    res = metrics_recommend.recommend(stats_path)
+    (Path(stats_path).resolve().parent / "recommend.json").write_text(json.dumps(res, indent=1) + "\n")
+    return res
+
+
+def cmd_weekly(repo, args):
+    """`weekly --dry-run`: analyze, recommend and print the weekly report. Posting is part 2 (the Discord bridge)."""
+    if not args.dry_run:
+        raise MetricsError("posting needs part 2 (discord bridge); use --dry-run")
+    import metrics_recommend
+    stats, path = write_stats(repo, args.since, tasks_log=args.tasks_log)
+    if stats["trends"]["specs_run"]["current"] == 0:
+        print("no runs in the window; nothing to post")
+        return
+    print(metrics_recommend.weekly_text(stats, _recommend_to_file(path), path), end="")
+
+
 def cmd_recommend(repo, args):
     """Ask the model for three recommendations over stats.json (computed first unless --stats), keep the ones whose
     evidence matches, write recommend.json beside the stats file."""
@@ -1668,8 +1691,7 @@ def cmd_recommend(repo, args):
             raise MetricsError(f"stats file not found: {stats_path.name}")
     else:
         stats_path = write_stats(repo, args.since)[1]
-    res = metrics_recommend.recommend(stats_path)
-    (stats_path.parent / "recommend.json").write_text(json.dumps(res, indent=1) + "\n")
+    res = _recommend_to_file(stats_path)
     if "unavailable" in res:
         print(f"recommendations unavailable: {res['unavailable']}")
         return
@@ -1744,7 +1766,7 @@ def main(argv=None):
             args.spec = rel_spec(repo, args.spec)
         rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
               "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill,
-              "backfill-tasks": cmd_backfill_tasks, "analyze": cmd_analyze, "recommend": cmd_recommend}[args.sub](repo, args)
+              "backfill-tasks": cmd_backfill_tasks, "analyze": cmd_analyze, "recommend": cmd_recommend, "weekly": cmd_weekly}[args.sub](repo, args)
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)

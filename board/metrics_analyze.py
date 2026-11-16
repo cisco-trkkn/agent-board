@@ -71,12 +71,17 @@ def p90(vals):
     return v[math.ceil(0.9 * len(v)) - 1] if v else None
 
 
+def _round(x, d):
+    """Rounded to d decimals; a metric with decimals stays a float (a whole `0` would read as 0 decimals downstream)."""
+    return round(x, d) if d == 0 else round(float(x), d)
+
+
 def _r(x, d):
-    return None if x is None else round(x, d)
+    return None if x is None else _round(x, d)
 
 
 def _change(cur, prev, d):
-    return round(cur - prev, d) if cur is not None and prev is not None else None
+    return _round(cur - prev, d) if cur is not None and prev is not None else None
 
 
 def _trend(cur, prev, d):
@@ -170,7 +175,7 @@ def analyze(projects, since_ts, now, tasks_log=None, source="args"):
 
     priced = [(p, t) for p, t in cur_tasks if isinstance(t.get("usd"), (int, float))]
     priced.sort(key=lambda pt: (-pt[1]["usd"], pt[0], str(pt[1].get("spec")), pt[1].get("task_id") or 0))
-    costly = [{"project": p, "spec": t.get("spec"), "task_id": t.get("task_id"), "subject": t.get("subject"), "usd": round(t["usd"], 2)}
+    costly = [{"project": p, "spec": t.get("spec"), "task_id": t.get("task_id"), "subject": t.get("subject"), "usd": _round(t["usd"], 2)}
               for p, t in priced[:COSTLY_N]]
 
     def per_hour(r):
@@ -187,7 +192,7 @@ def analyze(projects, since_ts, now, tasks_log=None, source="args"):
 
     forecast = {"median_precision": _r(median(manifest(cur_runs, "precision")), 4),
                 "median_recall": _r(median(manifest(cur_runs, "recall")), 4),
-                "below_half": [{"project": p, "spec": r.get("spec"), "recall": round((r.get("manifest") or {})["recall"], 4)}
+                "below_half": [{"project": p, "spec": r.get("spec"), "recall": _round(r["manifest"]["recall"], 4)}
                                for p, r in cur_runs
                                if isinstance((r.get("manifest") or {}).get("recall"), (int, float)) and r["manifest"]["recall"] < 0.5]}
 

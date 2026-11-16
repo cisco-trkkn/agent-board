@@ -42,6 +42,10 @@
 #                                          tasks, needs-you, lead, last run, spend, alerts), or the JSON
 #   tmux-ctl discord token|pair|deny|policy|allow|remove|forget|status [--project <name>]  the project's Discord bot (token read from stdin, never printed)
 #   tmux-ctl discord watch --once|install|status|uninstall  the reconnect watchdog
+#   tmux-ctl metrics backfill-tasks [--log P]  task lines (tasks.jsonl) for past runs that have none
+#   tmux-ctl metrics analyze [--since 7d|30d|ISO] [--json]  trends, flags, coverage over every project -> stats.json
+#   tmux-ctl metrics recommend [--since] [--stats P]  three recommendations over stats.json, evidence-checked
+#   tmux-ctl metrics weekly --dry-run [--since] [--tasks-log P]  analyze + recommend, the weekly report on stdout
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
@@ -633,7 +637,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
