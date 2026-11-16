@@ -444,6 +444,28 @@ class DedupeTest(DeriveBase):
         self.assertEqual([e["kind"] for e in evs], ["spec_started", "plan_written"])
         self.assertTrue(st["primed"])
 
+    def test_new_list_baselines_its_completed_history(self):
+        st = primed()
+        a, st = df.derive("proj", self.root, [self.run_task], st, NOW, "session-aaaaaaaa")
+        self.assertEqual(len(a), 2)
+        done = [fx("19.json", status="completed"), fx("1.json")]
+        done[0]["id"] = "40"
+        b, st = df.derive("proj", self.root, [self.run_task] + done, st, NOW, "session-bbbbbbbb")
+        self.assertEqual([e["kind"] for e in b], ["spec_started", "plan_written"])   # no task_done, no outcome for the old tasks
+        self.assertEqual(st["primed_lists"], ["session-aaaaaaaa", "session-bbbbbbbb"])
+
+    def test_list_name_flip_emits_nothing_new(self):
+        st = {}
+        a1, st = df.derive("proj", self.root, [self.run_task, self.sub], st, NOW, "session-aaaaaaaa")
+        self.assertEqual([e["kind"] for e in a1], ["spec_started", "plan_written"])
+        team = [fx("19.json", status="completed", id="7"), fx("1.json", id="8")]
+        b, st = df.derive("proj", self.root, team, st, NOW, "team-x")
+        self.assertEqual(b, [])
+        a2, st = df.derive("proj", self.root, [self.run_task, self.sub], st, NOW, "session-aaaaaaaa")
+        self.assertEqual(a2, [])
+        b2, st = df.derive("proj", self.root, team, st, NOW, "team-x")
+        self.assertEqual(b2, [])
+
     def test_same_task_ids_from_two_lists_both_emit(self):
         st = primed()
         a, st = df.derive("proj", self.root, [self.run_task], st, NOW, "session-aaaaaaaa")

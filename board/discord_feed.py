@@ -273,11 +273,13 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
     """(events, new_state). Each event is emitted once: its key goes into state["seen"] (newest 2000 kept).
     The first call on a fresh state (no "primed") records the history already there (completed tasks, ledger lines,
     outcomes, reports) as seen without emitting, so an old ledger is not replayed; spec_started and plan_written
-    of a run already in progress are still emitted. An empty task list does not prime (the lead's task directory may not
+    of a run already in progress are still emitted. Priming is per task list (state["primed_lists"]): a list id not seen before (a relay's new list, or the list name flipping
+    between the session dir and the team fallback) baselines its history instead of replaying it. An empty task list does not prime (the lead's task directory may not
     be resolved yet at board start). Task ids restart at 1 in a new lead session, so dedupe keys and thread keys are
     `<list_id>:<task id>` (list_id = the task-list directory name) when list_id is given. Does not mutate `state`."""
     st = copy.deepcopy(state or {})
-    first = not st.get("primed")
+    primed_lists = list(st.get("primed_lists") or [])
+    first = (list_id not in primed_lists) if list_id else not st.get("primed")   # priming is per task list
     seen = list(st.get("seen") or [])
     have = set(seen)
     out = []
@@ -331,6 +333,9 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
         emit(f"report:{name}", _ev(project, "", "report_written", "progress", f"queue report: {_report_summary(Path(p))}", now, file=name), history=True)
     if tasks:
         st["primed"] = True
+        if list_id and list_id not in primed_lists:
+            primed_lists.append(list_id)
+    st["primed_lists"] = primed_lists[-50:]
     st["seen"] = seen[-SEEN_CAP:]
     return out, st
 
