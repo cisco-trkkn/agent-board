@@ -236,6 +236,14 @@ class FlagsTest(Base):
         self.assertEqual(hit[0]["escalation_rate"], 0.3)
         self.assertIn("escalation", hit[0]["reason"])
 
+    def test_underpowered_escalation_needs_five_tasks(self):
+        # same minimum as the fix-rounds branch (UNDER_MIN_TASKS = 5): 2 escalated of 2 is no evidence
+        def tasks(n):
+            return [task("s", i + 1, escalated=True) for i in range(n)]
+        self.assertEqual(self.flags([run("s", cur())], tasks(4))["underpowered"], [])
+        at = self.flags([run("s", cur())], tasks(5))["underpowered"]
+        self.assertEqual((len(at), at[0]["tasks"], at[0]["escalation_rate"]), (1, 5, 1.0))
+
     # ---- costly_steps ---------------------------------------------------------------------------------------------
     def test_costly_steps_top_ten_by_usd_ignoring_null(self):
         tasks = [task("s", i, usd=float(i)) for i in range(1, 13)] + [task("s", 13, usd=None)]

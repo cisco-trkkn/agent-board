@@ -167,7 +167,7 @@ def analyze(projects, since_ts, now, tasks_log=None, source="args"):
         why = []
         if n >= UNDER_MIN_TASKS and fixes is not None and fixes >= UNDER_FIX_ROUNDS:
             why.append(f"median fix rounds {fixes} over {n} tasks")
-        if esc >= UNDER_ESCALATION:
+        if n >= UNDER_MIN_TASKS and esc >= UNDER_ESCALATION:
             why.append(f"escalation rate {esc}")
         if why:
             underpowered.append({"tier_model": key, "tasks": n, "median_fix_rounds": _r(fixes, 1), "escalation_rate": esc,
