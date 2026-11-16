@@ -3,12 +3,12 @@
 # `✦ <name>` window (names recorded by shutdown-record.sh), or while a self-started handoff has not relayed
 # (`tmux-ctl handoff-mark`). It prints {"decision":"block","reason":…}; the reason tells the lead what to run.
 # docs/superpowers/specs/2026-11-10-queue-reliability-design.md §3.
-# Guarded: AGENT_BOARD_LEAD=1 (exported by bin/claude-orchestrator into the lead's own process) and $TMUX set.
+# Guarded: AGENT_BOARD_LEAD=1 (exported by bin/claude-orchestrator into the lead's own process) and $TMUX and $TMUX_PANE set.
 # Loop cap: <state>/stop-guard/<session_id> holds "<cksum of the reason> <count>"; the same reason a 4th time in a row
 # is allowed, with one line in <state>/stop-guard.log (UTC time, session id, the pending reason).
 # Fail-open: any error exits 0 with nothing printed. --scoped (the plugin registration) is accepted and changes nothing.
 emulate -L zsh
-[[ "$AGENT_BOARD_LEAD" == 1 && -n "$TMUX" ]] || { cat >/dev/null; exit 0 }
+[[ "$AGENT_BOARD_LEAD" == 1 && -n "$TMUX" && -n "$TMUX_PANE" ]] || { cat >/dev/null; exit 0 }
 {
   input="$(cat)"
   sid="$(print -r -- "$input" | jq -r '.session_id // empty')"

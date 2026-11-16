@@ -55,6 +55,35 @@ check "listing fails: exit 3, not all gone"        test $rc -eq 3 -a "$out" != "
 check "listing fails: prints could not kill"       test "$out" = "wait-gone: could not kill a"
 check "listing fails: waited for the timeout"      test $(( EPOCHSECONDS - t0 )) -ge 2
 
+# wait-gone clears the names it saw go from the lead's shutdown-pending file, so a teammate respawned under the same name
+# is not reported "still shutting down" by the Stop guard (final review I-1)
+G="$TT_REPO/claude/plugin/scripts/lead-stop-guard.sh"
+SID=aaaaaaaa-1111-2222-3333-444444444444
+PD="$TC_STATE/shutdown-pending"; PF="$PD/$SID"; CF="$TC_STATE/stop-guard/$SID"
+guard() { print -r -- '{"session_id":"'"$SID"'","hook_event_name":"Stop","stop_hook_active":false}' | AGENT_BOARD_LEAD=1 TMUX="$TMUX" TMUX_PANE="$TMUX_PANE" "$G" --scoped; }
+mkdir -p "$PD" "${CF:h}"; print -rl -- alpha beta > "$PF"; print -r -- "1 1" > "$CF"
+mk tt '✦ beta'
+out="$(CLAUDE_CODE_SESSION_ID=$SID $C wait-gone alpha --timeout 2 2>&1)"; rc=$?
+check "pending: a gone name prints all gone, exit 0"  test $rc -eq 0 -a "$out" = "wait-gone: all gone"
+check "pending: only the gone name was removed"      test "$(<$PF)" = beta
+out="$(CLAUDE_CODE_SESSION_ID=$SID $C wait-gone beta --timeout 2 2>&1)"; rc=$?
+check "pending: a name killed at the timeout: unchanged output and exit"  test $rc -eq 3 -a "$out" = "wait-gone: killed beta after 2s"
+check "pending: the last name gone: file and counter deleted"  test ! -e "$PF" -a ! -e "$CF"
+print -rl -- alpha > "$PF"; mk tt '✦ alpha'
+out="$(CLAUDE_CODE_SESSION_ID=$SID $C wait-gone alpha --timeout 2 2>&1)"
+mk tt '✦ alpha'
+check "respawned same name after wait-gone: the guard allows, prints nothing"  test -z "$(guard)"
+kw() { tt kill-window -t "$(wid tt "$1")" }
+kw '✦ alpha'
+print -rl -- alpha beta > "$PF"
+out="$($C wait-gone alpha --timeout 2 2>&1)"; rc=$?
+check "no CLAUDE_CODE_SESSION_ID: pending file untouched"  test "$(<$PF)" = "$(print -rl -- alpha beta)"
+out="$(CLAUDE_CODE_SESSION_ID='../x' $C wait-gone alpha --timeout 2 2>&1)"
+check "odd session id: pending file untouched"       test "$(<$PF)" = "$(print -rl -- alpha beta)"
+rm -f "$PF"
+out="$(CLAUDE_CODE_SESSION_ID=$SID $C wait-gone alpha --timeout 2 2>&1)"; rc=$?
+check "no pending file: nothing created, exit 0"     test $rc -eq 0 -a ! -e "$PF"
+
 # usage
 out="$(env -u TMUX -u TMUX_PANE $C wait-gone a 2>&1)"; rc=$?
 check "outside tmux: exit 2"                      test $rc -eq 2

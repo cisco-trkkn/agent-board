@@ -37,6 +37,11 @@ check "not a lead: allow"                             allowed
 check "not a lead: pending file untouched"            test "$(<$PF)" = alpha
 ( unset TMUX; run_hook; allowed ); check "no \$TMUX: allow"  test $? -eq 0
 
+# an empty $TMUX_PANE is not a lead pane: allow, keep the pending file (final review M-1)
+pend alpha   # the ✦ alpha window from above is still there
+( export TMUX_PANE=''; run_hook; allowed ); check "empty TMUX_PANE: allow, prints nothing"  test $? -eq 0
+check "empty TMUX_PANE: pending file kept"           test "$(<$PF)" = alpha
+
 # two names, one window gone: the file is rewritten, the block names only the one left
 pend alpha beta alpha
 run_hook

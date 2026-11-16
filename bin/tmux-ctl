@@ -58,6 +58,29 @@ mkdir -p "$STATE"
 die() { print -u2 "tmux-ctl: $*"; exit 2 }
 t()   { tc_tmux "$@" }
 
+# wait-gone: drop the names it saw go from the lead's <state>/shutdown-pending/<session id> (same flock as
+# claude/plugin/scripts/shutdown-record.sh, rewritten in place under the lock), so a teammate respawned under the same name
+# is not blocked by the Stop guard. An emptied file is deleted with its stop-guard counter. Silent; any problem changes nothing.
+wg_clear() {
+  [[ "$CLAUDE_CODE_SESSION_ID" =~ '^[A-Za-z0-9_-]+$' && -f "$STATE/shutdown-pending/$CLAUDE_CODE_SESSION_ID" ]] || return 0
+  python3 -I -c 'import fcntl, os, sys
+try:
+    state, sid, gone = sys.argv[1], sys.argv[2], set(sys.argv[3:])
+    p = os.path.join(state, "shutdown-pending", sid)
+    with open(p, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        left = [n for n in f.read().split("\n") if n and n not in gone]
+        if left:
+            f.seek(0); f.truncate(); f.write("".join(n + "\n" for n in left))
+        else:
+            os.unlink(p)
+            try: os.unlink(os.path.join(state, "stop-guard", sid))
+            except OSError: pass
+except BaseException:
+    pass' "$STATE" "$CLAUDE_CODE_SESSION_ID" "$@" >/dev/null 2>&1
+  return 0
+}
+
 [[ -n "$TMUX" || "$1" == telegram ]] || die "not inside tmux"   # telegram works outside tmux with --project
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
@@ -546,7 +569,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
         done
         wg_left=()
         for wg_n in $wg_names; do (( ${+wg_ids[✦ $wg_n]} )) && wg_left+=("$wg_n"); done
-        if (( ! $#wg_left )); then print -r -- "wait-gone: all gone"; exit 0; fi
+        if (( ! $#wg_left )); then wg_clear "${wg_names[@]}"; print -r -- "wait-gone: all gone"; exit 0; fi
       fi
       (( EPOCHSECONDS - wg_start >= wg_to )) && break
       sleep $(( wg_to - (EPOCHSECONDS - wg_start) < 2 ? wg_to - (EPOCHSECONDS - wg_start) : 2 ))
@@ -555,9 +578,11 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
       for wg_n in $wg_names; do print -r -- "wait-gone: could not kill $wg_n"; done
       exit 3
     fi
+    wg_done=("${(@)wg_names:|wg_left}")   # the names that were already gone, plus each one killed below
     for wg_n in $wg_left; do
-      t kill-window -t "${wg_ids[✦ $wg_n]}" 2>/dev/null || print -r -- "wait-gone: could not kill $wg_n"
+      if t kill-window -t "${wg_ids[✦ $wg_n]}" 2>/dev/null; then wg_done+=("$wg_n"); else print -r -- "wait-gone: could not kill $wg_n"; fi
     done
+    wg_clear "${wg_done[@]}"
     print -r -- "wait-gone: killed ${(j: :)wg_left} after ${wg_to}s"
     exit 3 ;;
 
