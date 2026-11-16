@@ -1,0 +1,48 @@
+         d`, and your report
+       8    `.superpowers/sdd/2026-11-15-turn-start-spinner-rule/task-3-report.md`. Stage only those pat
+     … +36 lines (~3 KB)
+
+⏺ effort-medium(Real-state turn-start check) Sonnet 5.5
+
+  Ran 1 shell command
+
+⏺ Tasks 1 and 2 of spec #2 are done and reviewed clean. ✦ spin-check (Sonnet) is running Task 3, the real
+  turn-start check, which only reads the live session. It will record my pane while it messages me to start a
+  turn, and I'll reply "ok" when the probe message arrives.
+
+
+⏺ Teammate @spin-rev finished
+  Tasks 1 and 2 both pass review, with spec ✅ and quality Approved. There are no Critical or Important
+  findings, and the minor ones are listed below. I wrote the full review to `.superpowers/sdd/2026-11…
+
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Teammate terminated (from system)                                                                           │
+│                                                                                                             │
+│ spin-impl has shut down.                                                                                    │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+⏺ spin-impl has shut down. I'm keeping spin-rev up to review Task 3. Waiting for ✦ spin-check's probe message.
+
+
+› Message from @spin-check (ctrl+o to expand)
+
+✶ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md… (2s · ↓ 7 tokens)
+  ⎿  ◼ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md › blocked by #23
+     ◼ S2 Task 3: real-state turn-start check
+     ◻ Plan & run: docs/superpowers/specs/2026-11-12-execution-analytics-design.md#part-1 › blocked by #2
+     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-replaces-discord-design.md › blocked by #3
+     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-bridge-visibility-design.md › blocked by #4
+      … +13 pending, 5 completed
+busy 1 · ready 1                                                                                           [-]
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ agent-board: 5h 16% · 7d 3% · ctx 23% · $6.11
+  Opus 5.5 · ctx 23% · 5h 16%
+  ⏵⏵ auto mode on (shift+tab to cycle)
+
+  ⏺ main
+  ◯ spin-rev    Batched review spec 2 tasks 1-2                                                        1m 57s
+  ◯ spin-check  Real-state turn-start check                                                               34s

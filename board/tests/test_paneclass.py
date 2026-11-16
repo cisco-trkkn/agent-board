@@ -133,14 +133,14 @@ class SpinnerLayoutsTest(unittest.TestCase):
 
     def test_real_turn_start_with_tip_row_is_working(self):
         # real Claude Code 2.1.322 capture: `✽ Actioning…` then `  ⎿  Tip: …` then a right-aligned `Ctrl+Y …` row
-        fx = HERE.parent / "tools" / "tests" / "fixtures" / "telegram-watch" / "working.txt"
+        fx = HERE.parent / "tools" / "tests" / "fixtures" / "discord-watch" / "working.txt"
         rows = fx.read_text().splitlines()
         while rows and not rows[-1].strip():
             rows.pop()
         self.assertEqual(paneclass.classify("2.1.322", rows, False), ("claude", "working"))
 
     def fixture_rows(self, name):
-        fx = HERE.parent / "tools" / "tests" / "fixtures" / "telegram-watch" / name
+        fx = HERE.parent / "tools" / "tests" / "fixtures" / "discord-watch" / name
         rows = fx.read_text().splitlines()
         while rows and not rows[-1].strip():
             rows.pop()

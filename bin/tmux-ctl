@@ -40,9 +40,8 @@
 #                                          orchestrator that starts from <doc> (handoff skill only)
 #   tmux-ctl overview [project] [--json]   the overseer digest: one line per open project (plan, in-progress
 #                                          tasks, needs-you, lead, last run, spend, alerts), or the JSON
-#   tmux-ctl telegram watch --once         the watchdog: reconnect any lead whose telegram MCP server is missing
-#   tmux-ctl telegram token|status|forget [project]  the project's Telegram bot token (read from stdin, never printed) and status;
-#                                          outside tmux give --project <name>
+#   tmux-ctl discord token|pair|deny|policy|allow|remove|forget|status [--project <name>]  the project's Discord bot (token read from stdin, never printed)
+#   tmux-ctl discord watch --once|install|status|uninstall  the reconnect watchdog
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
@@ -81,7 +80,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == telegram ]] || die "not inside tmux"   # telegram works outside tmux with --project
+[[ -n "$TMUX" || "$1" == discord ]] || die "not inside tmux"   # discord works outside tmux with --project
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -276,9 +275,9 @@ long_line() {
 }
 
 cmd="$1"; shift 2>/dev/null
-if [[ "$cmd" == telegram ]]; then   # before the tmux housekeeping below: no tmux needed
-  source "${0:A:h:h}/tools/lib/telegram.zsh"
-  telegram_cmd "$@"; exit $?
+if [[ "$cmd" == discord ]]; then   # no tmux needed
+  source "${0:A:h:h}/tools/lib/discord.zsh"
+  discord_cmd "$@"; exit $?
 fi
 # _done runs when a lane's command ends (the lane looks idle then); help needs no tmux
 if [[ "$cmd" != (_done|_append|help|-h|--help|"") ]]; then
@@ -634,7 +633,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

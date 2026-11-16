@@ -1,6 +1,6 @@
-# A stand-in for the claude TUI, enough for the telegram watchdog's e2e: an idle prompt with an input line, and a fake
-# telegram server child once `/mcp reconnect plugin:telegram:telegram` is submitted. (The screens the watchdog parses are
-# tested against real captures in fixtures/telegram-watch/; this only gives the typing path a process to type into.)
+# A stand-in for the claude TUI, enough for the discord watchdog's e2e: an idle prompt with an input line, and a fake
+# discord server child once `/mcp reconnect plugin:discord:discord` is submitted. (The screens the watchdog parses are
+# tested against real captures in fixtures/discord-watch/; this only gives the typing path a process to type into.)
 # Run through a symlink named claude to zsh (so ps calls it claude):  claude -f fake_claude_tui.zsh <marker> [--channels ...]
 marker="$1"; buf=; last=
 RULE='────────────────────────────────────────────────────────────'
@@ -18,9 +18,9 @@ if [[ -n "${FAKE_TICK:-}" ]]; then
 fi
 while read -rsk1 c; do
   if [[ "$c" == $'\r' || "$c" == $'\n' ]]; then
-    if [[ "$buf" == '/mcp reconnect plugin:telegram:telegram' ]]; then
-      if [[ -z "$child" ]]; then zsh -c 'sleep 120; sleep 0' telegram/server.ts "$marker" & child=$!; fi   # a second command keeps zsh from exec-ing sleep, which would hide the marker args
-      last='Successfully reconnected to plugin:telegram:telegram'
+    if [[ "$buf" == '/mcp reconnect plugin:discord:discord' ]]; then
+      if [[ -z "$child" ]]; then zsh -c 'sleep 120; sleep 0' bun /fake/discord/server.ts "$marker" & child=$!; fi   # a second command keeps zsh from exec-ing sleep, which would hide the marker args
+      last='Successfully reconnected to plugin:discord:discord'
     fi
     buf=
   elif [[ "$c" == $'\x15' ]]; then buf=

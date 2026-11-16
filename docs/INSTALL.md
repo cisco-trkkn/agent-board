@@ -184,45 +184,63 @@ State you may want to delete: `~/.local/state/agent-board/` (ideas and handoffs:
 
 ## Remote access
 
-Reach a dev lead from your phone through a Telegram bot. One bot per project; only leads started by `claude-orchestrator` get the channel.
+Reach a dev lead from your phone through a Discord bot. One bot per project; only leads started by `claude-orchestrator` (`agent-board lead`) get the channel.
 
-**Once.** Install Bun (`curl -fsSL https://bun.sh/install | bash`, which puts it at `~/.bun/bin/bun`) and the plugin: `claude plugin install telegram@claude-plugins-official`. Check both with `tmux-ctl telegram status` (`plugin: ok`, `bun: ok`).
+**Once.** Install Bun (`curl -fsSL https://bun.sh/install | bash`, which puts it at `~/.bun/bin/bun`) and the plugin: `claude plugin install discord@claude-plugins-official`. Check the plugin with `tmux-ctl discord status --project <name>` (`plugin: ok`).
 
 **Per project.**
 
-1. Create a bot with BotFather and copy its token.
-2. In the project's tmux session, pipe the token in; it is read from stdin, never from an argument, and never printed:
+1. In the Discord Developer Portal create an application and add a bot to it. On the bot page turn on **Message Content Intent** (Privileged Gateway Intents), then copy the bot token.
+2. Invite the bot to a private server of yours (OAuth2 → URL Generator, scope `bot`). DMs work only when you share a server with the bot.
+3. In the project's tmux session, pipe the token in; it is read from stdin, never from an argument, and never printed:
 
    ```zsh
-   print -r -- "<token>" | tmux-ctl telegram token          # inside the project's session
-   print -r -- "<token>" | tmux-ctl telegram token --project <name>   # outside tmux
+   print -r -- "<token>" | tmux-ctl discord token          # inside the project's session
+   print -r -- "<token>" | tmux-ctl discord token --project <name>   # outside tmux
    ```
 
-   It is stored as `~/.local/state/agent-board/telegram/<project>/.env` (mode 600). A project name must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`: a tmux session whose name starts with `_` or holds a space, `:` or non-ASCII characters never opts in (`tmux-ctl telegram` refuses it).
-3. Restart the lead (`claude-orchestrator --continue`). A lead with a token starts with `--channels plugin:telegram@claude-plugins-official`; the board shows `tg` on it.
-4. DM the bot; it answers with a pairing code. In that lead run `/telegram:access pair <code>`, then `/telegram:access policy allowlist`.
-5. `tmux-ctl telegram status` shows `token: set`, `paired: <n> allowlisted`, `policy: allowlist`, `poller: running (pid N)`, `plugin: ok`, `bun: ok`. It never shows the token.
+   It is stored as `~/.local/state/agent-board/discord/<project>/.env` (mode 600), and `access.json` in the same folder gets `ackReaction: "👀"` unless that key already exists (an empty value means you turned it off). It prints `discord: token saved for <project> (restart its lead: agent-board lead --continue, or Restart orchestrator on the board)`. A project name must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`: a tmux session whose name starts with `_` or holds a space, `:` or non-ASCII characters never opts in (`tmux-ctl discord` refuses it).
+4. Restart the lead (`agent-board lead --continue`, or Restart orchestrator on the board). A lead with a token starts with `--channels plugin:discord@claude-plugins-official` and `DISCORD_STATE_DIR` set to that folder; the board shows `dc` on it.
+5. DM the bot; it answers with a pairing code. In a terminal run `tmux-ctl discord pair <code>` (it prints `discord: paired <sender id>`), then `tmux-ctl discord policy allowlist`. `tmux-ctl discord deny <code>` drops a code; `allow <id>` and `remove <id>` edit the allowlist by hand. Access changes are yours, typed in a terminal: the lead never runs them.
+6. `tmux-ctl discord status` shows these lines, in this order:
 
-`tmux-ctl telegram forget` removes the project's token (the pairing in `access.json` stays). `TC_TELEGRAM=0` in the environment of `claude-orchestrator` turns the channel off.
+   ```
+   token: set
+   paired: <n> allowlisted
+   policy: allowlist
+   ack reaction: 👀
+   held by: <session>:<window> pid <n>
+   plugin: ok
+   launcher: ok
+   watch: loaded
+   ```
+
+   Other values: `token: missing`, `paired: none`, `policy: pairing`, `ack reaction: off`, `held by: nobody` (or `held by: another process pid <n>`), `plugin: missing`, `launcher: drift`, `watch: not loaded`. It never shows the token.
+
+`tmux-ctl discord forget` removes the project's token (the pairing in `access.json` stays). `TC_DISCORD=0` in the environment of `claude-orchestrator` turns the channel off.
 
 **Rules.**
 
-- Never run `/telegram:configure` and never put a token in `~/.claude/channels/telegram/.env`: every session would then poll that bot. `tmux-ctl telegram status` warns when that file exists; delete it.
-- One live lead per project. A second lead for the same bot stops the first one's poller, and the first stops receiving. The lead's own Bash commands do not see `TELEGRAM_STATE_DIR` (a plugin hook unsets it for them), so a `claude` started from the lead's Bash tool never polls that lead's bot (hooks and other non-Bash children of the lead still inherit it; none of this repo's hooks starts `claude` from the lead); still, never start a second lead for the same project.
-- Sessions without a token connect to a stub (see the launcher below), so `/mcp` shows telegram connected with no tools. On a machine that has not run `claude-orchestrator` since the install they still print `plugin:telegram:telegram … Connection closed`: the stock server exits at once without a token.
-- A failed telegram start is cached by Claude Code for 15 minutes, for the whole machine (`~/.claude/mcp-needs-auth-cache.json`, key `plugin:telegram:telegram`). The plugin is enabled in user settings for every session, so a session without a token (a teammate, a worktree, another project) fails and re-arms the cache, and a lead that starts inside the window skips Telegram and stays disconnected. Two things heal it: `claude-orchestrator` removes that one key before it starts a lead that has a token, and the watchdog below reconnects a lead that is already running. A lead whose plugin is "not connected" can always be fixed by hand with `/mcp` → `plugin:telegram:telegram` → Reconnect.
-- The plugin cannot be limited to leads: a second `--settings` replaces the first instead of merging, and a lead's `--settings` is copied onto its teammates' command lines. Instead no session fails. `claude-orchestrator` points every installed version of the plugin (`~/.claude/plugins/cache/claude-plugins-official/telegram/<version>/.mcp.json`) at `telegram-mcp-launch`, a copy of `claude/plugin/scripts/telegram-mcp-launch` that runs the real server when a token exists (`TELEGRAM_BOT_TOKEN` in the environment, or in `$TELEGRAM_STATE_DIR/.env`) and `telegram-mcp-stub.js` otherwise: an MCP server that connects, offers no tools and exits when stdin closes. Nothing fails, so nothing is cached. The original `.mcp.json` is saved to `~/.claude/plugin-backups/telegram/<version>/.mcp.json.bak-YYYYMMDD`; a plugin update (a new version directory with the stock launcher) is healed at the next lead start. It runs the real server under node (22.6 or newer, for `--experimental-strip-types`) when node exists, else bun; the helper needs `jq`. `TC_TELEGRAM_LAUNCHER=0` turns the healing off. To heal now without starting a lead: `zsh -c 'source tools/lib/telegram-launch.zsh && tg_ensure_launcher'` from the checkout.
+- Never put a token in `~/.claude/channels/discord/.env`: every session would then connect that bot. `tmux-ctl discord status` prints a warning line when that file exists; delete it.
+- One live lead per project (the guard). A second lead on the same bot would fight the first one over the gateway, so `claude-orchestrator` looks for a live holder first (a Discord server process with `DISCORD_STATE_DIR` set to the project's folder and a live `claude` above it). When another lead holds the bot, the new lead starts without the channel and prints `discord: <project>'s bot is held by the lead in <session>:<window> (pid <n>); this lead starts without it` (`another process` when the pane is unknown). A holder in the same pane is a stale one from an in-place replacement, so that lead proceeds. The lead's own Bash commands do not see `DISCORD_STATE_DIR` or `DISCORD_BOT_TOKEN` (the plugin hook `discord-env-scrub.sh` unsets them for them), so a `claude` started from the lead's Bash tool never opens a second gateway session on that bot; still, never start a second lead for the same project. `status` shows the holder on its `held by:` line.
+- Sessions without a token connect to a stub (see the launcher below), so `/mcp` shows discord connected with no tools. On a machine that has not run `claude-orchestrator` since the install they still print `plugin:discord:discord … Connection closed`: the stock server exits at once without a token.
+- A failed discord start is cached by Claude Code for 15 minutes, for the whole machine (`~/.claude/mcp-needs-auth-cache.json`, key `plugin:discord:discord`). The plugin is enabled in user settings for every session, so a session without a token (a teammate, a worktree, another project) fails and re-arms the cache, and a lead that starts inside the window skips Discord and stays disconnected. Two things heal it: `claude-orchestrator` removes that one key before it starts a lead that has the channel, and the watchdog below reconnects a lead that is already running. A lead whose plugin is "not connected" can always be fixed by hand with `/mcp` → `plugin:discord:discord` → Reconnect.
+- The plugin cannot be limited to leads: a second `--settings` replaces the first instead of merging, and a lead's `--settings` is copied onto its teammates' command lines. Instead no session fails. `claude-orchestrator` points every installed version of the plugin (`~/.claude/plugins/cache/claude-plugins-official/discord/<version>/.mcp.json`) at `discord-mcp-launch`, a copy of `claude/plugin/scripts/discord-mcp-launch` that runs the real server (`bun run --cwd <plugin> --shell=bun --silent start`) when a token exists (`DISCORD_BOT_TOKEN` in the environment, or in `$DISCORD_STATE_DIR/.env`) and `discord-mcp-stub.js` otherwise: an MCP server that connects, offers no tools and exits when stdin closes (it runs under node when node exists, else bun). Nothing fails, so nothing is cached. The original `.mcp.json` is saved to `~/.claude/plugin-backups/discord/<version>/.mcp.json.bak-YYYYMMDD`; a plugin update (a new version directory with the stock launcher) is healed at the next lead start. The helper needs `jq`. `TC_DISCORD_LAUNCHER=0` turns the healing off. To heal now without starting a lead: `zsh -c 'source tools/lib/discord-launch.zsh && dc_ensure_launcher'` from the checkout.
+- Replies longer than 2000 characters are split by the plugin (`textChunkLimit`); the lead keeps its replies short.
 
-**Watchdog.** `tmux-ctl telegram watch --once` looks at every running `claude` started with `--channels plugin:telegram@claude-plugins-official` and checks that it has a telegram server process (`server.ts`) among its children. When one is missing and the lead's pane is idle at its prompt, it types `/mcp reconnect plugin:telegram:telegram` and Enter (the command Claude Code itself offers; no menu is driven). It types nothing when the pane is busy or in tmux copy mode, when the input line has text, when the input box is not quiet (it takes two captures 3 seconds apart, `TC_TELEGRAM_WATCH_QUIET` seconds, capped at 10; before this check the variable was a 30 s activity window, so an old value above 10 now means 10, and both must show the lead idle with an empty input line and the same box, so someone typing between them stops it; output elsewhere on the screen, such as a redrawn status line, does not), or when the input line no longer reads back exactly the command just before Enter (then it sends no Enter and deletes only its own command text, keeping what you typed; if the line is then not exactly your text it leaves it alone and sends a banner). A reconnect that does not bring the server back is retried after 60 s, 2, 4, 8 ... up to 30 minutes, and the lead gets one macOS banner when that backoff starts; seeing a live server resets it. When it could not type (busy, copy mode, no pane) the banner is limited to one per lead per 15 minutes. It needs neither the board nor `$TMUX`: it finds the lead's pane through the agent-board tmux server and never touches another one. One line per action goes to `~/.local/state/agent-board/telegram-watch.log`.
+**Watchdog.** `tmux-ctl discord watch --once` looks at every running `claude` started with `--channels plugin:discord@claude-plugins-official` and checks that it has a discord server process among its children (the launcher, or `bun run … start` / `bun … server.ts` under a `/discord/` plugin folder; the stub does not count). When one is missing and the lead's pane is idle at its prompt, it types `/mcp reconnect plugin:discord:discord` and Enter (the command Claude Code itself offers; no menu is driven). It types nothing when the pane is busy or in tmux copy mode, when the input line has text, when the input box is not quiet (it takes two captures 3 seconds apart, `TC_DISCORD_WATCH_QUIET` seconds, capped at 10; both must show the lead idle with an empty input line and the same box, so someone typing between them stops it; output elsewhere on the screen, such as a redrawn status line, does not), or when the input line no longer reads back exactly the command just before Enter (then it sends no Enter and deletes only its own command text, keeping what you typed; if the line is then not exactly your text it leaves it alone and sends a banner). A reconnect that does not bring the server back is retried after 60 s, 2, 4, 8 ... up to 30 minutes, and the lead gets one macOS banner when that backoff starts; seeing a live server resets it. When it could not type (busy, copy mode, no pane) the banner is limited to one per lead per 15 minutes. It needs neither the board nor `$TMUX`: it finds the lead's pane through the agent-board tmux server and never touches another one. One line per action goes to `~/.local/state/agent-board/discord-watch.log`.
 
-    tmux-ctl telegram watch install      # writes ~/Library/LaunchAgents/com.user.agent-board-telegram-watch.plist (every 60 s) and loads it
-    tmux-ctl telegram watch status       # launchd's state and last exit code
-    tmux-ctl telegram watch uninstall
+    tmux-ctl discord watch install      # writes ~/Library/LaunchAgents/com.user.agent-board-discord-watch.plist (every 60 s) and loads it
+    tmux-ctl discord watch status       # launchd's state and last exit code
+    tmux-ctl discord watch uninstall
 
-`TC_TELEGRAM_WATCH=0` in the job's environment, or an empty file `~/.local/state/agent-board/telegram-watch.off`, turns it off without unloading it. Leads younger than 45 s are skipped (`TC_TELEGRAM_WATCH_GRACE` seconds), `TC_NOTIFY=0` silences the banner.
+`TC_DISCORD_WATCH=0` in the job's environment, or an empty file `~/.local/state/agent-board/discord-watch.off`, turns it off without unloading it. Leads younger than 45 s are skipped (`TC_DISCORD_WATCH_GRACE` seconds), `TC_NOTIFY=0` silences the banner.
+
+**Coming from Telegram.** `tmux-ctl discord migrate` removes what the Telegram channel left on this machine: it boots out and deletes the Telegram watchdog's LaunchAgent and disables the Telegram plugin. It keeps the old Telegram token folders under `~/.local/state/agent-board/telegram/` for you to delete by hand, and it is safe to run again.
+
 - The lead's own permission prompts reach the phone as buttons; the first answer, phone or terminal, wins.
-- AskUserQuestion is not relayed: while you are remote, the lead asks as a numbered list in Telegram.
-- A teammate's or worker's prompt is approved only on your Telegram reply `approve n` / `deny n`, through `tmux-ctl approve` (the one-time `Yes` or `No` only). Peer sessions are not covered.
+- AskUserQuestion is not relayed: while you are remote, the lead asks as a numbered list in Discord.
+- A teammate's or worker's prompt is approved only on your Discord reply `approve n` / `deny n`, through `tmux-ctl approve` (the one-time `Yes` or `No` only). Peer sessions are not covered.
 
 **At the office.** Keep the lid open and the Mac on mains power, and run `tmux-ctl awake on`.
 

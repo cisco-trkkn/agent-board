@@ -1,3 +1,5 @@
+Superseded by 2026-11-11-discord-replaces-telegram-design.md
+
 > Superseded by 2026-11-11-discord-replaces-telegram-design.md and 2026-11-11-discord-tasks-design.md (2026-11-11): Telegram is retired.
 
 # Telegram remote-access fixes (spec 11 follow-up)

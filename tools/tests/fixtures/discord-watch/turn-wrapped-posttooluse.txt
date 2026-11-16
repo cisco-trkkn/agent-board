@@ -1,0 +1,48 @@
+⏺ Task 4 passes the evidence check. I'm accepting the deviation: ❯ keep going with the queue in a plain capture
+  is probably Claude's greyed suggestion, which the plain capture can't tell apart from typed text. A separate
+  test with its own assertions covers that fixture. Sending Task 4 to spin-rev for review.
+
+  Ran 1 shell command
+
+⏺ While spin-rev reviews, spin-check can run the live re-run in parallel. It only reads, and a review fix that
+  changes the rule would just mean one more short run.
+
+⏺ Task 4 is committed (e76e40c). Its tests pass, and they include three mutation checks that fail as they
+  should. Two things are now running in parallel:
+
+  - Review: ✦ spin-rev is checking Task 4.
+  - Live re-run: ✦ spin-check is re-running the turn-start check against my pane. I'll reply "ok" when its
+    probe message arrives.
+
+
+⏺ Teammate @spin-wide finished
+  Task 4 is committed as e76e40c on `queue/turn-start-spinner-rule`, with one deviation from the brief. I sent
+  the same summary to the lead.…
+
+⏺ spin-wide is idle, and I'm keeping it up in case the review sends fixes back. Still waiting on two things:
+  the review in ✦ spin-rev, and the probe message from ✦ spin-check.
+
+
+› Message from @spin-check (ctrl+o to expand)
+
+✢ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md… (running PostToolUse hook ·
+4s · ↓ 9 tokens)
+  ⎿  ◼ Plan & run: docs/superpowers/specs/2026-11-11-turn-start-spinner-rule-design.md › blocked by #23, #24
+     ◼ S2 Task 3: real-state turn-start check › blocked by #24
+     ◼ S2 Task 4: task-label spinners + teammate row
+     ◻ Plan & run: docs/superpowers/specs/2026-11-12-execution-analytics-design.md#part-1 › blocked by #2
+     ◻ Plan & run: docs/superpowers/specs/2026-11-11-discord-replaces-discord-design.md › blocked by #3
+      … +14 pending, 5 completed
+busy 2 · ready 1                                                                                           [-]
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ agent-board: 5h 19% · 7d 4% · ctx 26% · $8.63
+  Opus 5.5 · ctx 26% · 5h 19%
+  ⏵⏵ auto mode on (shift+tab to cycle)
+
+  ⏺ main
+  ◯ spin-rev    Batched review spec 2 tasks 1-2                                                        9m 20s
+  ◯ spin-check  Real-state turn-start check                                                            7m 57s
+  ◯ spin-wide   Implement spec 2 Task 4                                                                3m 38s
