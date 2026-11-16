@@ -73,6 +73,10 @@ _aw_claude_pid() {   # nearest ancestor of this shell whose command name contain
   return 1
 }
 
+# Sleep reasons that are not a real sleep (the Mac was already asleep and went back to it). A deny-list: a reason
+# that is not listed here counts as real, so a new one still shows in `awake sleeps`.
+_AW_NOT_REAL=('Maintenance Sleep' 'Sleep Service Back to Sleep' 'Notification Wake Back to Sleep')
+
 _aw_epoch() {   # _aw_epoch <ISO UTC | local 'YYYY-MM-DD HH:MM'> -> epoch seconds
   zmodload -F zsh/datetime b:strftime 2>/dev/null
   local s="$1" e
@@ -182,20 +186,34 @@ awake_cmd() {
         fi
       done ;;
     sleeps)
-      [[ -n "$1" ]] || { print -u2 "usage: tmux-ctl awake sleeps <since>"; return 2 }
-      local from; from="$(_aw_epoch "$1")" || { print -u2 "awake: cannot read time '$1'"; return 2 }
+      # default: one line per real sleep period, "<start> – <end> <reason>"; --all: every Sleep, Wake and DarkWake line
+      local all=0 sarg="" susage="usage: tmux-ctl awake sleeps <since> [--all]"
+      while (( $# )); do
+        if [[ "$1" == --all ]]; then all=1
+        elif [[ -z "$sarg" ]]; then sarg="$1"
+        else print -u2 -r -- "$susage"; return 2; fi
+        shift
+      done
+      [[ -n "$sarg" ]] || { print -u2 -r -- "$susage"; return 2 }
+      local from; from="$(_aw_epoch "$sarg")" || { print -u2 "awake: cannot read time '$sarg'"; return 2 }
       zmodload -F zsh/datetime b:strftime 2>/dev/null
-      local line ts ty rest e reason lt
+      local line ts ty rest e reason lt pstart="" preason=""
       pmset -g log 2>/dev/null | awk '($4=="Sleep"||$4=="Wake"||$4=="DarkWake") && $5!="Requests"' | while IFS= read -r line; do
         ts="${line[1,25]}"; ty="${${(z)line}[4]}"; rest="${line#*$'\t'}"
         strftime -r -s e '%Y-%m-%d %H:%M:%S %z' "$ts" 2>/dev/null || continue
-        (( e >= from )) || continue
         if [[ "$ty" == Sleep ]]; then reason="${${rest#*\'}%%\'*}"
         else reason="${${rest#*from }%% \[*}"; fi
         strftime -s lt '%Y-%m-%d %H:%M:%S' "$e"
-        print -r -- "$lt $ty $reason"
+        if (( all )); then
+          (( e >= from )) && print -r -- "$lt $ty $reason"
+        elif [[ "$ty" == Sleep ]]; then   # a period opens at the first real Sleep line at or after <since>
+          [[ -z "$pstart" ]] && (( e >= from )) && (( ! ${_AW_NOT_REAL[(Ie)$reason]} )) && { pstart="$lt"; preason="$reason" }
+        elif [[ "$ty" == Wake && -n "$pstart" ]]; then   # and closes at the next Wake; DarkWake lines are dropped
+          print -r -- "$pstart – $lt $preason"; pstart=""
+        fi
       done
+      [[ -n "$pstart" ]] && print -r -- "$pstart – … $preason"
       return 0 ;;
-    *) print -u2 "usage: tmux-ctl awake on [--queue | --pid N] [--lid] | off | status | sleeps <since> | lid-setup"; return 2 ;;
+    *) print -u2 "usage: tmux-ctl awake on [--queue | --pid N] [--lid] | off | status | sleeps <since> [--all] | lid-setup"; return 2 ;;
   esac
 }

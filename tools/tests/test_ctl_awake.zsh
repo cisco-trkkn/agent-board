@@ -17,12 +17,13 @@ echo "\$*" >> "$S/caffeinate.args"
 exec "$S/real/caffeinate" 600
 STUB
 # pmset: $S/batt.cur (a fixture path) overrides the battery capture at call time (a running watchdog sees changes);
+# $S/log.cur (a fixture path) overrides the `pmset -g log` capture the same way;
 # $S/sleepdisabled present = `pmset -g` carries a SleepDisabled line (absent when 0, as on the real Mac).
 cat > "$S/bin/pmset" <<STUB
 #!/bin/sh
 case "\$*" in
   "-g batt") if [ -f "$S/batt.cur" ]; then cat "\$(cat "$S/batt.cur")"; else cat "\${AWAKE_FIXTURE_BATT:-$FX/batt-ac.txt}"; fi ;;
-  "-g log")  cat "$FX/log-sleeps.txt" ;;
+  "-g log")  if [ -f "$S/log.cur" ]; then cat "\$(cat "$S/log.cur")"; else cat "$FX/log-sleeps.txt"; fi ;;
   "-g")      printf 'System-wide power settings:\nCurrent Power Settings:\n standby 1\n'; [ -f "$S/sleepdisabled" ] && printf ' SleepDisabled\t\t1\n' ;;
 esac
 STUB
@@ -133,19 +134,47 @@ check "claude by comm, exe elsewhere (symlink named claude) found"  zsh -c '[[ $
 $C awake off >/dev/null
 
 # --- sleeps
-out="$($C awake sleeps '2026-11-07 10:28')"
-check "sleeps local: first line"               test "$(print -r -- "$out" | head -1)" = "2026-11-07 10:28:22 DarkWake Deep Idle"
-check "sleeps local: sleep reason"             sh -c "printf %s '$out' | grep -qx '2026-11-07 10:28:24 Sleep Sleep Service Back to Sleep'"
-check "sleeps local: nothing before the cutoff"  test -z "$(print -r -- "$out" | grep '10:12:')"
-check "sleeps: Wake Requests excluded"         test -z "$(print -r -- "$out" | grep -i 'request')"
-iso="$($C awake sleeps '2026-11-07T15:28:00Z')"
+out="$($C awake sleeps '2026-11-07 10:28' --all)"
+check "sleeps --all local: first line"         test "$(print -r -- "$out" | head -1)" = "2026-11-07 10:28:22 DarkWake Deep Idle"
+check "sleeps --all local: sleep reason"       sh -c "printf %s '$out' | grep -qx '2026-11-07 10:28:24 Sleep Sleep Service Back to Sleep'"
+check "sleeps --all local: nothing before the cutoff"  test -z "$(print -r -- "$out" | grep '10:12:')"
+check "sleeps --all: Wake Requests excluded"   test -z "$(print -r -- "$out" | grep -i 'request')"
+iso="$($C awake sleeps '2026-11-07T15:28:00Z' --all)"
+check "sleeps --all ISO UTC == local equivalent"  test "$iso" = "$out"
+all="$($C awake sleeps --all '2000-01-01 00:00')"
+check "sleeps --all: a real Wake line is listed"  test "$(print -r -- "$all" | awk '$3=="Wake"' | wc -l | tr -d ' ')" -ge 1
+check "sleeps --all: only three types"         test -z "$(print -r -- "$all" | awk '$3!="Sleep"&&$3!="Wake"&&$3!="DarkWake"')"
+check "sleeps --all: line count = fixture minus Wake Requests"  test "$(print -r -- "$all" | wc -l | tr -d ' ')" = "$(grep -vc 'Wake Requests' "$FX/log-sleeps.txt")"
+out="$($C awake sleeps '2099-01-01 00:00' --all)"; rc=$?
+check "sleeps --all: none prints nothing, exit 0"  test -z "$out" -a $rc -eq 0
+# default: one line per real sleep period (spec 2026-11-10-queue-reliability §5)
+out="$($C awake sleeps '2000-01-01 00:00')"
+check "sleeps: the real capture has one real period (Low Power Sleep, ended by the next Wake)"  test "$out" = "2026-11-07 11:52:58 – 2026-11-09 10:30:32 Low Power Sleep"
+print -r -- "$FX/log-sleeps-kinds.txt" > "$S/log.cur"   # one of every Sleep reason kind
+KINDS=(
+  "2026-11-10 20:31:19 – 2026-11-10 21:03:05 Idle Sleep"
+  "2026-11-11 08:46:33 – 2026-11-11 08:59:20 Clamshell Sleep"
+  "2026-11-11 09:30:00 – 2026-11-11 09:45:00 Low Power Sleep"
+  "2026-11-11 10:00:00 – 2026-11-11 10:05:00 Software Sleep"
+  "2026-11-11 23:00:00 – … Idle Sleep"
+)
+out="$($C awake sleeps '2000-01-01 00:00')"; rc=$?
+check "sleeps: only real periods, each ended by the next Wake, the open one by …"  test "$out" = "${(F)KINDS}" -a $rc -eq 0
+check "sleeps: no Maintenance, Sleep Service, Notification Wake or DarkWake line"  test -z "$(print -r -- "$out" | grep -E 'Maintenance|Sleep Service|Notification|DarkWake')"
+check "sleeps: a reason not on the deny-list shows (Software Sleep)"  zsh -c '[[ $1 == *"Software Sleep"* ]]' _ "$out"
+out="$($C awake sleeps '2026-11-11 09:00')"
+check "sleeps: periods that start before the cutoff are left out"  test "$out" = "${(F)KINDS[3,5]}"
+iso="$($C awake sleeps '2026-11-11T14:00:00Z')"
 check "sleeps ISO UTC == local equivalent"     test "$iso" = "$out"
-all="$($C awake sleeps '2000-01-01 00:00')"
-check "sleeps: a real Wake line is listed"     test "$(print -r -- "$all" | awk '$3=="Wake"' | wc -l | tr -d ' ')" -ge 1
-check "sleeps: only three types"               test -z "$(print -r -- "$all" | awk '$3!="Sleep"&&$3!="Wake"&&$3!="DarkWake"')"
-check "sleeps: line count = fixture minus Wake Requests"  test "$(print -r -- "$all" | wc -l | tr -d ' ')" = "$(grep -vc 'Wake Requests' "$FX/log-sleeps.txt")"
+all="$($C awake sleeps '2000-01-01 00:00' --all)"
+check "sleeps --all on the same log: every Sleep, Wake and DarkWake line"  test "$(print -r -- "$all" | wc -l | tr -d ' ')" = "$(grep -vc 'Wake Requests' "$FX/log-sleeps-kinds.txt")"
+check "sleeps --all keeps the old line format"  test "$(print -r -- "$all" | sed -n 2p)" = "2026-11-10 20:45:00 DarkWake Deep Idle"
 out="$($C awake sleeps '2099-01-01 00:00')"; rc=$?
 check "sleeps: none prints nothing, exit 0"    test -z "$out" -a $rc -eq 0
+$C awake sleeps >/dev/null 2>&1; check "sleeps without a time: exit 2"  test $? -eq 2
+$C awake sleeps --all >/dev/null 2>&1; check "sleeps --all without a time: exit 2"  test $? -eq 2
+$C awake sleeps '2026-11-11 09:00' extra >/dev/null 2>&1; check "sleeps with two times: exit 2"  test $? -eq 2
+rm -f "$S/log.cur"
 
 # --- lid mode (sudo and pmset are stubs; TC_AWAKE_TICK=1 makes the watchdog tick every second)
 waitfor() { local i; for i in {1..60}; do eval "$1" && return 0; sleep 0.1; done; return 1 }
