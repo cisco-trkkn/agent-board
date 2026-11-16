@@ -1,0 +1,15 @@
+{
+  "name": "discord-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agent Board discord bridge: sends the outbox, keeps the card and threads",
+  "main": "bridge.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "14.28.1"
+  }
+}

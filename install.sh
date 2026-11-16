@@ -2,7 +2,7 @@
 # install.sh — set up agent-board from this checkout.
 #
 #   ./install.sh                  link ~/.local/bin/agent-board to this checkout's bin/agent-board (the only thing it installs)
-#   ./install.sh --check          list the dependencies: "ok <path>" or "MISSING <name>"; exit 1 if any is missing
+#   ./install.sh --check          list the dependencies: "ok <path>" or "MISSING <name>"; exit 1 if any is missing (node: "optional: node missing")
 #   ./install.sh --uninstall      remove ~/.local/bin/agent-board, if it links into this checkout
 #   ./install.sh --migrate        install, then retire the old global setup (the author's pre-plugin install):
 #                                   - the 4 hooks in ~/.claude/settings.json, the hook and rules links in ~/.claude
@@ -65,7 +65,17 @@ check_deps() {
     then print -r -- "ok $p"
     else print "MISSING claude (needs >= 2.1.303 with --settings and --plugin-dir; found ${v:-no version})"; miss=1; fi
   else print "MISSING claude"; miss=1; fi
+  if p="$(command -v node)"; then print -r -- "ok $p"; else print "optional: node missing"; fi   # only the Discord bridge needs it
   return $miss
+}
+
+# the Discord bridge's dependencies (tools/discord-bridge); skipped when npm is missing or the checkout has no bridge
+bridge_deps() {
+  local d="$REPO/tools/discord-bridge"
+  [[ -f "$d/package-lock.json" ]] || return 0
+  if ! command -v npm >/dev/null 2>&1; then print "skip discord bridge deps (npm missing)"; return 0; fi
+  say "npm ci --omit=dev in $d" "installing discord bridge deps"
+  (( DRY )) || ( cd "$d" && npm ci --omit=dev >/dev/null 2>&1 ) || { print -u2 "discord bridge deps: npm ci failed (run tmux-ctl discord bridge install to see why)"; return 0 }
 }
 
 # --- install / uninstall
@@ -186,7 +196,7 @@ do_migrate() {
 
 case "$mode" in
   check)     check_deps; exit $? ;;
-  install)   do_install; exit $? ;;
+  install)   do_install; rc=$?; bridge_deps; exit $rc ;;
   uninstall) do_uninstall; exit 0 ;;
   migrate)   do_migrate; exit $rc ;;
 esac

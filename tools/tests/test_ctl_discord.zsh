@@ -144,7 +144,7 @@ check "status fresh: plugin missing"      test -n "$(grep -x 'plugin: missing' $
 check "status fresh: launcher drift"      test -n "$(grep -x 'launcher: drift' $S/out.$N)"
 check "status fresh: watch not loaded"    test -n "$(grep -x 'watch: not loaded' $S/out.$N)"
 run "" $C discord status
-check "status: lines in order"            test "$(sed 's/:.*//' $S/out.$N | tr '\n' ,)" = "token,paired,policy,ack reaction,held by,plugin,launcher,watch,"
+check "status: lines in order"            test "$(sed 's/:.*//' $S/out.$N | tr '\n' ,)" = "token,paired,policy,ack reaction,held by,plugin,launcher,watch,channel,bridge,outbox,"
 run "$TOK" $C discord token
 print -r -- '{"dmPolicy":"allowlist","allowFrom":["1","2"],"ackReaction":"👀"}' > $A
 mkdir -p $S/cfg/plugins; print -r -- '{"version":2,"plugins":{"discord@claude-plugins-official":[{"version":"0.0.4"}]}}' > $S/cfg/plugins/installed_plugins.json

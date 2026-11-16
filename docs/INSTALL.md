@@ -38,6 +38,7 @@ Versions are the ones tested. Older versions may work, but only Python 3.9 has b
 | jq | 1.7.1 | `tmux-ctl run` (run records) | on `PATH`; recent macOS ships `/usr/bin/jq` |
 | git | 2.4x | worktrees, board | needs `rev-parse --path-format` (git 2.31+) |
 | Claude Code | 2.1.303 | lead, teammates, workers | `claude` on `PATH`, logged in; needs `--settings`, `--plugin-dir` and agent teams |
+| node + npm | 22+ | the Discord bridge (`tools/discord-bridge`) | optional; only the bridge needs them. `install.sh` runs `npm ci --omit=dev` there when npm exists and prints `skip discord bridge deps (npm missing)` otherwise; `--check` prints `optional: node missing` |
 | superpowers-extended-cc plugin | 6.5.3 | the skills the rules invoke | optional; without it the lead still runs, but the skill names in its rules point at nothing |
 
 ```zsh
@@ -216,6 +217,16 @@ Reach a dev lead from your phone through a Discord bot. One bot per project; onl
    ```
 
    Other values: `token: missing`, `paired: none`, `policy: pairing`, `ack reaction: off`, `held by: nobody` (or `held by: another process pid <n>`), `plugin: missing`, `launcher: drift`, `watch: not loaded`. It never shows the token.
+
+**Home channel and bridge** (the bot posts a live status card, a thread per spec and alerts into one channel of your server).
+
+1. In the Developer Portal OAuth2 invite, or in the channel's permissions, give the bot these eight permissions in the home channel: View, Send Messages, Send Messages in Threads, Create Public Threads, Manage Messages (pin), Read Message History, Add Reactions, Attach Files. `status` cannot check them.
+2. Pair and allowlist yourself first (step 5), then run `tmux-ctl discord channel <channel id>`. It writes `groups[<id>] = {"requireMention": false, "allowFrom": [every allowlisted id]}` into `access.json` and `{"channel": "<id>", "user": "<first allowlisted id>"}` into `bridge.json` (both mode 600), keeps every other key, and prints `channel: <id>`; when both files already hold exactly that it changes nothing and prints `channel: <id> (unchanged)`. With nobody allowlisted it exits 1 with `discord: pair or allow a user first`.
+3. `tmux-ctl discord bridge install` runs `npm ci --omit=dev` in `tools/discord-bridge` (`install.sh` does it too). `tmux-ctl discord bridge start` starts `node tools/discord-bridge/bridge.js <dir>` in window `discord` of the project's hidden `<project>-bg` session, replacing a stale window; it prints `bridge: running (pid N)` and starts nothing when a bridge is already alive, and refuses with one line when the token, the channel or `tools/discord-bridge/node_modules` is missing. `bridge stop` sends TERM to the bridge and writes `bridge.stopped` (an empty file, mode 600, in the project's folder), so the board's keeper does not start it again; `tmux-ctl discord bridge start` typed by a person removes the marker and starts the bridge (the board passes `--keeper`, which prints `bridge: stopped by user (bridge.stopped)` and exits 0 while the marker exists). `TC_DISCORD_BRIDGE_DIR` points the install and the dependency check at another copy of the bridge folder.
+4. `tmux-ctl discord status` then ends with three more lines: `channel: <id>` (or `channel: none`), `bridge: running (pid N)`, `bridge: stopped`, `bridge: stopped by user`, `bridge: no channel` or `bridge: deps missing`, and `outbox: <n> pending, <m> failed` (the files in `outbox/` and `outbox/failed/`; `0 pending, 0 failed` when the folders are absent). A growing count means the bridge is down or Discord refuses the posts.
+5. `tmux-ctl discord audit [--since <ISO>]` prints the bridge's audit log as `<ts> <user> <action> <target> <result>` (`audit: none` when there is none).
+
+Kill switches: `TC_DISCORD_BRIDGE=0` starts no bridge (`bridge start` prints `bridge: disabled (TC_DISCORD_BRIDGE=0)`); `TC_DISCORD_ALERTS=0` keeps notifier events out of the Discord feed; `TC_NOTIFY=0` still means macOS banners only.
 
 `tmux-ctl discord forget` removes the project's token (the pairing in `access.json` stays). `TC_DISCORD=0` in the environment of `claude-orchestrator` turns the channel off.
 

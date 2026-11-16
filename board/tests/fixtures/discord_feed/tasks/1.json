@@ -1,0 +1,19 @@
+{
+  "id": "1",
+  "subject": "Plan & run: docs/superpowers/specs/2026-11-12-execution-analytics-design.md#part-1",
+  "description": "Running: final review done; fix wave, re-review, finish (merge locally, no push), metrics record. Plan docs/superpowers/plans/2026-11-16-execution-analytics-part-1.md.",
+  "status": "completed",
+  "blocks": [
+    "3"
+  ],
+  "blockedBy": [],
+  "metadata": {
+    "queue": {
+      "integration": "merge",
+      "push": false,
+      "batch": "2026-11-11-1",
+      "answeredAt": "2026-11-12T14:34:29Z"
+    },
+    "outcome": "merged 1e3772f"
+  }
+}
