@@ -471,7 +471,7 @@ def ensure_discord_bridges(records):
             if last is not None and now - last < DISCORD_RECHECK_S:
                 continue
             _discord_checked[p] = now
-            run_script([str(BIN / "tmux-ctl"), "discord", "bridge", "start", "--project", p], timeout=20)
+            run_script([str(BIN / "tmux-ctl"), "discord", "bridge", "start", "--keeper", "--project", p], timeout=20)
         except Exception as e:   # noqa: BLE001 - never on the request path's error budget
             print(f"tmux-dash: discord bridge ensure failed ({p}): {e}", file=sys.stderr, flush=True)
 

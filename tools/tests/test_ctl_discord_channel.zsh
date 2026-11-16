@@ -78,6 +78,13 @@ print -r -- $OP > $D/bridge.pid
 run $C discord status
 check "status: a live pid that is not bridge.js is stopped" test -n "$(grep -x 'bridge: stopped' $S/out.$N)"
 kill $OP; rm -f $D/bridge.pid
+# outbox backlog line, right after bridge:
+run $C discord status
+check "status: outbox 0 pending, 0 failed when the dirs are absent" test -n "$(grep -x 'outbox: 0 pending, 0 failed' $S/out.$N)" -a "$(grep -n '^outbox:' $S/out.$N | cut -d: -f1)" = "$(( $(grep -n '^bridge:' $S/out.$N | cut -d: -f1) + 1 ))"
+mkdir -p $D/outbox/failed; : > $D/outbox/1.json; : > $D/outbox/2.json; : > $D/outbox/3.json; : > $D/outbox/x.tmp; : > $D/outbox/failed/9.json; : > $D/outbox/failed/9.json.err
+run $C discord status
+check "status: outbox counts pending and failed json files" test -n "$(grep -x 'outbox: 3 pending, 1 failed' $S/out.$N)"
+rm -rf $D/outbox
 
 # --- bridge start
 print -r -- 'DISCORD_BOT_TOKEN=x.y' > $D/.env
@@ -119,6 +126,16 @@ check "stop: process gone" test ! "$(kill -0 $LP2 2>/dev/null && echo up)"
 print -r -- 999999 > $D/bridge.pid
 run $C discord bridge stop --project tt
 check "stop: stale pid file removed" test $rc -eq 0 -a ! -e $D/bridge.pid
+check "stop: writes bridge.stopped, mode 600, empty" test -f $D/bridge.stopped -a "$(mode $D/bridge.stopped)" = 600 -a ! -s $D/bridge.stopped
+run $C discord status
+check "status: stopped by user while the marker exists" test -n "$(grep -x 'bridge: stopped by user' $S/out.$N)"
+rm -f $S/node.args
+run $C discord bridge start --keeper --project tt
+check "start --keeper: refuses while bridge.stopped exists, exit 0" test $rc -eq 0 -a "$out" = "bridge: stopped by user (bridge.stopped)" -a -e $D/bridge.stopped -a -z "$(tt list-windows -t '=tt-bg:' -F '#{window_name}' | grep -x discord)"
+run $C discord bridge start --project tt
+check "start (a person): clears the marker and starts" test $rc -eq 0 -a ! -e $D/bridge.stopped -a -n "$(tt list-windows -t '=tt-bg:' -F '#{window_name}' | grep -x discord)"
+run $C discord bridge start --keeper --project tt
+check "start --keeper: no marker, starts as before" test $rc -eq 0 -a -z "$(grep -i 'stopped by user' $S/out.$N)"
 run $C discord bridge install --project tt
 check "install: npm ci --omit=dev in the bridge dir" test $rc -eq 0 -a "$(<$S/npm.log)" = "$S/bridge ci --omit=dev"
 

@@ -5,11 +5,11 @@
 
 _DC_TOOLS="${${(%):-%x}:A:h:h}"   # file scope: tools/
 _dc_root() { print -r -- "${TC_STATE:-$HOME/.local/state/agent-board}/discord" }
-_dc_usage() { print -u2 "usage: tmux-ctl discord token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|bridge install|start|stop|audit [--since <ISO>] [--project <name>] (the token is read from stdin)"; return 2 }
+_dc_usage() { print -u2 "usage: tmux-ctl discord token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>] (the token is read from stdin)"; return 2 }
 _dc_tokenish() { [[ "$1" == *.* && ${#1} -ge 50 ]] }
 
 discord_cmd() {
-  local sub="$1" project="" a since=""
+  local sub="$1" project="" a since="" keeper=0
   shift 2>/dev/null
   if [[ "$sub" == watch ]]; then   # the watchdog: no project, no tmux of our own (it finds the leads' panes itself)
     python3 "$_DC_TOOLS/discord_watch.py" "${@:---once}"; return $?
@@ -20,6 +20,7 @@ discord_cmd() {
     case "$1" in
       --project) project="$2"; shift 2 2>/dev/null || shift ;;
       --project=*) project="${1#--project=}"; shift ;;
+      --keeper) keeper=1; shift ;;
       --since) since="$2"; shift 2 2>/dev/null || shift ;;
       *) pos+=("$1"); shift ;;
     esac
@@ -48,7 +49,7 @@ discord_cmd() {
     status) _dc_status "$project" "$dir" ;;
     forget) _dc_forget "$project" "$dir" ;;
     audit)  _dc_audit "$dir" "$since" ;;
-    bridge) _dc_bridge "$dir" "$project" "$arg" ;;
+    bridge) _dc_bridge "$dir" "$project" "$arg" "$keeper" ;;
     *) (( $+commands[jq] )) || { print -u2 "discord: jq not found"; return 1 }
        case "$sub" in
          channel) _dc_channel "$dir" "$arg" ;;
@@ -142,7 +143,11 @@ _dc_status() {
   if [[ -z "$ch" ]]; then print -r -- "bridge: no channel"
   elif [[ ! -d "$bdir/node_modules" ]]; then print -r -- "bridge: deps missing"
   elif pid="$(_dc_bridge_pid "$dir")"; then print -r -- "bridge: running (pid $pid)"
+  elif [[ -e "$dir/bridge.stopped" ]]; then print -r -- "bridge: stopped by user"
   else print -r -- "bridge: stopped"; fi
+  local -a pend fail
+  pend=("$dir"/outbox/*.json(N)); fail=("$dir"/outbox/failed/*.json(N))
+  print -r -- "outbox: ${#pend} pending, ${#fail} failed"
   return 0
 }
 
@@ -238,19 +243,24 @@ _dc_channel() {
   if (( changed )); then print -r -- "channel: $id"; else print -r -- "channel: $id (unchanged)"; fi
 }
 
-# _dc_bridge <dir> <project> install|start|stop
+# _dc_bridge <dir> <project> install|start|stop [keeper 0|1]: stop writes bridge.stopped; start --keeper (the board) honours it, a person clears it
 _dc_bridge() {
-  local dir="$1" project="$2" act="$3" bdir pid repo="${_DC_TOOLS:h}"
+  local dir="$1" project="$2" act="$3" keeper="${4:-0}" bdir pid repo="${_DC_TOOLS:h}"
   bdir="$(_dc_bridge_dir)"
   case "$act" in
     install)
       ( cd "$bdir" && npm ci --omit=dev ) ;;
     stop)
+      ( umask 077; : > "$dir/bridge.stopped" ) && chmod 600 "$dir/bridge.stopped"
       if pid="$(_dc_bridge_pid "$dir")"; then kill -TERM "$pid" && print -r -- "bridge: stopping (pid $pid)"
       else rm -f "$dir/bridge.pid"; print -r -- "bridge: not running"; fi ;;
     start)
       [[ "$TC_DISCORD_BRIDGE" == 0 ]] && { print -r -- "bridge: disabled (TC_DISCORD_BRIDGE=0)"; return 0 }
       if pid="$(_dc_bridge_pid "$dir")"; then print -r -- "bridge: running (pid $pid)"; return 0; fi
+      if [[ -e "$dir/bridge.stopped" ]]; then
+        (( keeper )) && { print -r -- "bridge: stopped by user (bridge.stopped)"; return 0 }
+        rm -f "$dir/bridge.stopped"
+      fi
       "$_DC_TOOLS/../claude/plugin/scripts/discord-mcp-launch" --has-token "$dir" || { print -u2 "bridge: no bot token (tmux-ctl discord token)"; return 1 }
       [[ -n "$(jq -r '.channel // empty' "$dir/bridge.json" 2>/dev/null)" ]] || { print -u2 "bridge: no channel (tmux-ctl discord channel <id>)"; return 1 }
       [[ -d "$bdir/node_modules" ]] || { print -u2 "bridge: node_modules missing (tmux-ctl discord bridge install)"; return 1 }

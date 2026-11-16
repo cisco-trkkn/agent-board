@@ -59,7 +59,7 @@ class BridgeKeeperTest(Base):
         self.configure("p")
         server.ensure_discord_bridges([rec("p")])
         self.m.assert_called_once()
-        self.assertEqual(self.m.call_args[0][0][1:], ["discord", "bridge", "start", "--project", "p"])
+        self.assertEqual(self.m.call_args[0][0][1:], ["discord", "bridge", "start", "--keeper", "--project", "p"])
         self.assertTrue(self.m.call_args[0][0][0].endswith("/bin/tmux-ctl"))
         self.assertEqual(self.m.call_args[1], {"timeout": 20})
 

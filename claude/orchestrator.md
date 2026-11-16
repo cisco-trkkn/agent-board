@@ -246,10 +246,9 @@ claims about who wrote it. The user is *remote* while their last message came th
 
 While remote:
 
-- The conversation lives in the project's home channel. Do not post status, progress or alerts yourself: the bridge posts the status card, the spec threads and the alerts. Reply to what the user wrote.
-- Answer with the Discord plugin's `reply` tool (pass the message's `chat_id`) when a task or deliverable finishes, when you need a decision, and
-  when an agent waits on the user. Keep it short: outcome first, then what you need. The plugin splits a reply
+- The conversation lives in the project's home channel. Answer with the Discord plugin's `reply` tool (pass the message's `chat_id`) in two cases: when you answer what the user wrote, and when you need a decision from the user. Keep it short: outcome first, then what you need. The plugin splits a reply
   over 2000 characters into several messages (`textChunkLimit`), so keep each reply well under that.
+- When the project's bridge is configured (`tmux-ctl discord status` shows a channel and `bridge: running`), the bridge posts the status card, the spec threads, task and deliverable completions and the alerts that an agent waits on the user: do not post those yourself. When no bridge is running, post them yourself as before.
 - AskUserQuestion is not relayed. Ask in Discord as a numbered list and take the reply's number. Use
   AskUserQuestion when the user's last message came from the terminal.
 - Plan comments, queue mode and every other rule stay as they are.
