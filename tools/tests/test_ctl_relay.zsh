@@ -33,8 +33,34 @@ sleep 6   # relay.py would have polled twice (2s apart) and respawned the lead b
 check "lead pane untouched"  test "$(tt display -p -t "$lead" '#{pane_pid}')" = "$lead_pid0"
 check "no orchestrator started" test ! -e "$STUB/args"
 check "no lineage written"   test ! -e "$TC_LINEAGE/tt.jsonl"
-out="$($C relay "$doc" --old-session OLD1)"
+# handoff-mark: a self-started handoff marks its session until the relay is scheduled (spec 2026-11-10-queue-reliability §3)
+HP="$TC_STATE/handoff-pending"
+out="$(CLAUDE_CODE_SESSION_ID=OLD1 $C handoff-mark)"; rc=$?
+check "handoff-mark: writes the marker"        test $rc -eq 0 -a -f "$HP/OLD1"
+check "handoff-mark: says so"                  test "$out" = "handoff-mark: set"
+CLAUDE_CODE_SESSION_ID=OLD1 $C handoff-mark >/dev/null
+check "handoff-mark twice: still one marker"   test "$(ls "$HP" | wc -l | tr -d ' ')" = 1
+out="$(CLAUDE_CODE_SESSION_ID=OLD1 $C handoff-mark --clear)"; rc=$?
+check "handoff-mark --clear: removes it"       test $rc -eq 0 -a ! -e "$HP/OLD1" -a "$out" = "handoff-mark: cleared"
+CLAUDE_CODE_SESSION_ID=OLD1 $C handoff-mark --clear >/dev/null; check "handoff-mark --clear with no marker: exit 0"  test $? -eq 0
+out="$(env -u CLAUDE_CODE_SESSION_ID $C handoff-mark 2>&1)"; rc=$?
+check "handoff-mark without CLAUDE_CODE_SESSION_ID: exit 2"  test $rc -eq 2
+check "handoff-mark without the variable: names it"  zsh -c '[[ $1 == *CLAUDE_CODE_SESSION_ID* ]]' _ "$out"
+CLAUDE_CODE_SESSION_ID='../x' $C handoff-mark >/dev/null 2>&1; rc=$?
+check "handoff-mark with an id that is not a plain id: exit 2, nothing written"  test $rc -eq 2 -a ! -e "$TC_STATE/x"
+CLAUDE_CODE_SESSION_ID=OLD1 $C handoff-mark extra >/dev/null 2>&1; check "handoff-mark with an unknown argument: exit 2"  test $? -eq 2
+check "help lists handoff-mark"                sh -c "$C help | grep -q 'tmux-ctl handoff-mark'"
+# the relay removes the old session's marker once it is scheduled; a refused relay leaves it
+CLAUDE_CODE_SESSION_ID=OLD1 $C handoff-mark >/dev/null
+CLAUDE_CODE_SESSION_ID=SELF1 $C handoff-mark >/dev/null
+CLAUDE_CODE_SESSION_ID=OTHER1 $C handoff-mark >/dev/null
+TMUX_PANE=$worker $C relay "$doc" --old-session OLD1 >/dev/null 2>&1
+check "refused relay: markers kept"            test -f "$HP/OLD1" -a -f "$HP/SELF1"
+out="$(CLAUDE_CODE_SESSION_ID=SELF1 $C relay "$doc" --old-session OLD1)"
 check "relay scheduled"     zsh -c 'print -r -- "$1" | grep -q "relay scheduled"' x "$out"
+check "relay: --old-session marker removed"    test ! -e "$HP/OLD1"
+check "relay: the caller's own marker removed" test ! -e "$HP/SELF1"
+check "relay: another session's marker kept"   test -f "$HP/OTHER1"
 check "orchestrator started" tt_wait 30 test -s "$STUB/args"
 check "prompt names doc"    grep -qF "Read $doc and continue from where the previous session left off." "$STUB/args"
 check "lineage written"     tt_wait 10 sh -c "test \"\$(jq -r .old_session_id $TC_LINEAGE/tt.jsonl 2>/dev/null)\" = OLD1"
