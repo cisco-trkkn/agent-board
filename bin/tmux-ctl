@@ -638,7 +638,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,51p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
