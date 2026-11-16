@@ -5,11 +5,11 @@
 
 _DC_TOOLS="${${(%):-%x}:A:h:h}"   # file scope: tools/
 _dc_root() { print -r -- "${TC_STATE:-$HOME/.local/state/agent-board}/discord" }
-_dc_usage() { print -u2 "usage: tmux-ctl discord token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status [--project <name>] (the token is read from stdin)"; return 2 }
+_dc_usage() { print -u2 "usage: tmux-ctl discord token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|bridge install|start|stop|audit [--since <ISO>] [--project <name>] (the token is read from stdin)"; return 2 }
 _dc_tokenish() { [[ "$1" == *.* && ${#1} -ge 50 ]] }
 
 discord_cmd() {
-  local sub="$1" project="" a
+  local sub="$1" project="" a since=""
   shift 2>/dev/null
   if [[ "$sub" == watch ]]; then   # the watchdog: no project, no tmux of our own (it finds the leads' panes itself)
     python3 "$_DC_TOOLS/discord_watch.py" "${@:---once}"; return $?
@@ -20,6 +20,7 @@ discord_cmd() {
     case "$1" in
       --project) project="$2"; shift 2 2>/dev/null || shift ;;
       --project=*) project="${1#--project=}"; shift ;;
+      --since) since="$2"; shift 2 2>/dev/null || shift ;;
       *) pos+=("$1"); shift ;;
     esac
   done
@@ -34,7 +35,7 @@ discord_cmd() {
     print -u2 "discord: too many arguments (the token is never taken from the command line; pipe it on stdin)"; return 2
   fi
   local arg="${pos[1]}"
-  case "$sub" in token|status|forget) ;; pair|deny|policy|allow|remove) [[ -n "$arg" ]] || { _dc_usage; return 2 } ;; *) _dc_usage; return 2 ;; esac
+  case "$sub" in token|status|forget|audit) ;; pair|deny|policy|allow|remove|channel|bridge) [[ -n "$arg" ]] || { _dc_usage; return 2 } ;; *) _dc_usage; return 2 ;; esac
   [[ -n "$project" ]] || project="$FEEDKEY"
   [[ -n "$project" ]] || { [[ "$sub" == (token|status|forget) && -n "$arg" ]] && project="$arg" && arg=; }
   [[ -n "$project" ]] || { _dc_usage; return 2 }
@@ -46,8 +47,11 @@ discord_cmd() {
     token)  _dc_token "$project" "$dir" ;;
     status) _dc_status "$project" "$dir" ;;
     forget) _dc_forget "$project" "$dir" ;;
+    audit)  _dc_audit "$dir" "$since" ;;
+    bridge) _dc_bridge "$dir" "$project" "$arg" ;;
     *) (( $+commands[jq] )) || { print -u2 "discord: jq not found"; return 1 }
        case "$sub" in
+         channel) _dc_channel "$dir" "$arg" ;;
          pair)   _dc_pair "$dir" "$arg" ;;
          deny)   _dc_deny "$dir" "$arg" ;;
          policy) case "$arg" in pairing|allowlist|disabled) _dc_write "$dir" '.dmPolicy = $p' --arg p "$arg" ;; *) _dc_usage ;; esac ;;
@@ -132,7 +136,23 @@ _dc_status() {
   if [[ -f "$HOME/.claude/channels/discord/.env" ]]; then
     print -r -- "discord: a token in ~/.claude/channels/discord/.env makes every session connect that bot; run tmux-ctl discord token for a project and delete that file"
   fi
+  local ch; ch="$(jq -r '.channel // empty' "$dir/bridge.json" 2>/dev/null)"
+  print -r -- "channel: ${ch:-none}"
+  local bdir; bdir="$(_dc_bridge_dir)"
+  if [[ -z "$ch" ]]; then print -r -- "bridge: no channel"
+  elif [[ ! -d "$bdir/node_modules" ]]; then print -r -- "bridge: deps missing"
+  elif pid="$(_dc_bridge_pid "$dir")"; then print -r -- "bridge: running (pid $pid)"
+  else print -r -- "bridge: stopped"; fi
   return 0
+}
+
+_dc_bridge_dir() { print -r -- "${TC_DISCORD_BRIDGE_DIR:-${_DC_TOOLS:h}/tools/discord-bridge}" }
+# _dc_bridge_pid <dir>: prints the pid and succeeds when bridge.pid names a live process running bridge.js
+_dc_bridge_pid() {
+  local pid; [[ -r "$1/bridge.pid" ]] || return 1
+  pid="$(<"$1/bridge.pid")"; pid="${pid//[[:space:]]/}"
+  [[ "$pid" =~ '^[0-9]+$' ]] && kill -0 "$pid" 2>/dev/null && ps -o command= -p "$pid" 2>/dev/null | grep -q 'bridge\.js' || return 1
+  print -r -- "$pid"
 }
 
 _dc_forget() {
@@ -192,4 +212,60 @@ _dc_migrate() {
   fi
   [[ -d "$tg" ]] && print -r -- "telegram: token dirs kept in $tg (delete them by hand when done)"
   return 0
+}
+
+# _dc_channel <dir> <id>: the project's home channel -> access.json groups[<id>] and bridge.json; a no-op when both already hold it
+_dc_channel() {
+  local dir="$1" id="$2" live="$1/access.json" user want cur
+  [[ "$id" =~ '^[0-9]+$' ]] || { _dc_usage; return 2 }
+  [[ -e "$live" ]] && jq -e . "$live" >/dev/null 2>&1 || { print -u2 "discord: pair or allow a user first"; return 1 }
+  user="$(jq -r '.allowFrom[0] // empty' "$live")"
+  [[ -n "$user" ]] || { print -u2 "discord: pair or allow a user first"; return 1 }
+  local gwant gcur bwant bcur changed=0
+  gwant="$(jq -cS '{requireMention: false, allowFrom: (.allowFrom // [])}' "$live")"
+  gcur="$(jq -cS --arg c "$id" '.groups[$c] // empty' "$live")"
+  bwant="$(jq -cnS --arg c "$id" --arg u "$user" '{channel: $c, user: $u}')"
+  bcur="$(jq -cS . "$dir/bridge.json" 2>/dev/null)"
+  if [[ "$gwant" != "$gcur" ]]; then
+    _dc_write "$dir" '.groups[$c] = {"requireMention": false, "allowFrom": (.allowFrom // [])}' --arg c "$id" || return 1
+    changed=1
+  fi
+  if [[ "$bwant" != "$bcur" ]]; then
+    ( umask 077; print -r -- "$bwant" | jq --indent 2 . > "$dir/bridge.json.next" ) && chmod 600 "$dir/bridge.json.next" && mv -f "$dir/bridge.json.next" "$dir/bridge.json" \
+      || { rm -f "$dir/bridge.json.next"; print -u2 "discord: could not write $dir/bridge.json"; return 1 }
+    changed=1
+  fi
+  if (( changed )); then print -r -- "channel: $id"; else print -r -- "channel: $id (unchanged)"; fi
+}
+
+# _dc_bridge <dir> <project> install|start|stop
+_dc_bridge() {
+  local dir="$1" project="$2" act="$3" bdir pid repo="${_DC_TOOLS:h}"
+  bdir="$(_dc_bridge_dir)"
+  case "$act" in
+    install)
+      ( cd "$bdir" && npm ci --omit=dev ) ;;
+    stop)
+      if pid="$(_dc_bridge_pid "$dir")"; then kill -TERM "$pid" && print -r -- "bridge: stopping (pid $pid)"
+      else rm -f "$dir/bridge.pid"; print -r -- "bridge: not running"; fi ;;
+    start)
+      [[ "$TC_DISCORD_BRIDGE" == 0 ]] && { print -r -- "bridge: disabled (TC_DISCORD_BRIDGE=0)"; return 0 }
+      if pid="$(_dc_bridge_pid "$dir")"; then print -r -- "bridge: running (pid $pid)"; return 0; fi
+      "$_DC_TOOLS/../claude/plugin/scripts/discord-mcp-launch" --has-token "$dir" || { print -u2 "bridge: no bot token (tmux-ctl discord token)"; return 1 }
+      [[ -n "$(jq -r '.channel // empty' "$dir/bridge.json" 2>/dev/null)" ]] || { print -u2 "bridge: no channel (tmux-ctl discord channel <id>)"; return 1 }
+      [[ -d "$bdir/node_modules" ]] || { print -u2 "bridge: node_modules missing (tmux-ctl discord bridge install)"; return 1 }
+      BG="${project}-bg"   # outside tmux BG is empty; the bridge window lives in the project's hidden session directly
+      ensure_bg
+      t kill-window -t "=${BG}:=discord" 2>/dev/null
+      t new-window -d -t "=${BG}:" -n discord -c "$repo" "exec node ${(q)repo}/tools/discord-bridge/bridge.js ${(q)dir}" || { print -u2 "bridge: could not start the window"; return 1 }
+      print -r -- "bridge: started in ${BG}:discord" ;;
+    *) _dc_usage ;;
+  esac
+}
+
+# _dc_audit <dir> <since>: audit.jsonl as "<ts> <user> <action> <target> <result>", ts >= since
+_dc_audit() {
+  local f="$1/audit.jsonl"
+  [[ -s "$f" ]] || { print -r -- "audit: none"; return 0 }
+  jq -r --arg s "$2" 'select($s == "" or (.ts|tostring) >= $s) | "\(.ts) \(.user) \(.action) \(.target) \(.result)"' "$f"
 }
