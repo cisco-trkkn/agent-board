@@ -15,6 +15,11 @@ case "$1" in
   --help) echo "Options:"; [ -z "$STUB_CLAUDE_NOFLAG" ] && echo "  --settings <file>  --plugin-dir <path>" ;;
 esac
 exit 0' > "$STUB/claude"
+# node and npm stubs: install runs `npm ci` in tools/discord-bridge, which must never touch the real checkout's node_modules
+print -r -- '#!/bin/sh
+exit 0' > "$STUB/node"
+print -r -- "#!/bin/sh
+echo \"\$PWD \$*\" >> \"$SCR/npm.log\"" > "$STUB/npm"
 chmod +x "$STUB"/*
 # system tools without the ones --check looks for: CI runners keep fzf/jq/tmux in /usr/bin, which would hide a "missing" stub
 SYSBIN="$SCR/sysbin"; mkdir -p "$SYSBIN"
@@ -51,7 +56,7 @@ STAMP="$(date +%Y%m%d)"
 newhome
 out="$(inst --check 2>&1)"; rc=$?
 check "check: exit 0 with all deps" test $rc -eq 0
-check "check: one ok line per dependency (8)" test "$(print -r -- "$out" | grep -c '^ok ')" -eq 8
+check "check: one ok line per dependency (8 + optional node)" test "$(print -r -- "$out" | grep -c '^ok ')" -eq 9
 check "check: ok line carries the path" test -n "$(print -r -- "$out" | grep -F "ok $STUB/tmux")"
 rm "$STUB/fzf"; mv "$STUB/jq" "$STUB/jq.off"
 out="$(inst --check 2>&1)"; rc=$?
@@ -70,6 +75,7 @@ check "check writes nothing" test -z "$(ls -A "$H")"
 newhome
 out="$(inst 2>&1)"; rc=$?
 check "install: exit 0" test $rc -eq 0
+check "install: npm ci --omit=dev ran in tools/discord-bridge" test "$(<$SCR/npm.log)" = "$R/tools/discord-bridge ci --omit=dev"
 check "install: link points at this checkout's bin/agent-board" test "$(readlink "$H/.local/bin/agent-board")" = "$R/bin/agent-board"
 check "install: exactly one entry under ~/.local" test "$(find "$H" -mindepth 1 | sort | tr '\n' ' ')" = "$H/.local $H/.local/bin $H/.local/bin/agent-board "
 check "install: nothing under ~/.claude" test ! -e "$H/.claude"
