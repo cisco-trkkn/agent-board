@@ -60,10 +60,15 @@ CD=$FX/bash-auto-countdown.txt; CDX='│ GT=/tmp/agent-board-gate; touch $GT/x.g
 sed 's/in 1:47,/in 1:46,/' $CD > $S/cd-tick.txt
 sed 's/gate-tap-3-ran/gate-tap-3-evil/' $S/cd-tick.txt > $S/cd-tick-cmd.txt
 swap_case c-tick $CD $S/cd-tick.txt --expect "$CDX"
-# mutation: drop the countdown masking in the again/block compare → the tick fails the press
+# (RED run before the fix: this case failed; no other mutation was run)
 check "countdown tick between the reads: chose Yes, key 1"  test $rc -eq 0 -a "$(got c-tick)" = 1
 swap_case c-tickcmd $CD $S/cd-tick-cmd.txt --expect "$CDX"
-# mutation: mask more than the time (e.g. the whole row or the command) → the swapped command is pressed
 check "tick plus a changed command: exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in c-tickcmd changed"
 check "tick plus a changed command: no key sent"  test "$(got c-tickcmd)" = NONE
+# the phrase inside the command text (a P: line), digits changed between the reads: not the warning row, so it must not be masked
+sed 's/gate-tap-3-ran/gate-tap-3-ran # block this request in 1:23/' $CD > $S/cd-quote-a.txt
+sed 's/in 1:23/in 9:59/' $S/cd-quote-a.txt > $S/cd-quote-b.txt
+swap_case c-quote $S/cd-quote-a.txt $S/cd-quote-b.txt --expect "${CDX} # block this request in 1:23"
+check "digits changed inside the command text: exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in c-quote changed"
+check "digits changed inside the command text: no key sent"  test "$(got c-quote)" = NONE
 tt_done
