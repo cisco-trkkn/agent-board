@@ -32,16 +32,25 @@ def _check(op):
     shapes = {"post": ({"op", "text", "tier", "mention_user"}, set(_POST_OPT)),
               "card": ({"op", "text"}, set()),
               "thread": ({"op", "key", "title"}, set()),
-              "archive": ({"op", "key"}, set())}
+              "archive": ({"op", "key"}, set()),
+              "prompt": ({"op", "key", "window", "tool", "lines", "tier", "mention_user"}, set()),
+              "edit": ({"op", "key", "text"}, set())}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
     need, opt = shapes[kind]
     keys = set(op)
     if not need <= keys or keys - need - opt:
         raise ValueError(f"bad keys for {kind}: {sorted(keys)}")
-    for k in keys - {"op", "mention_user", "files"}:
+    for k in keys - {"op", "mention_user", "files", "lines"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
+    if kind == "prompt":
+        if op["tier"] not in TIERS:
+            raise ValueError(f"tier {op['tier']!r} is not a tier")
+        if not isinstance(op["mention_user"], bool):
+            raise ValueError("mention_user must be a bool")
+        if not (isinstance(op["lines"], list) and all(isinstance(l, str) for l in op["lines"])):
+            raise ValueError("lines must be a list of strings")
     if kind == "post":
         if op["tier"] not in TIERS:
             raise ValueError(f"tier {op['tier']!r} never becomes a post")
@@ -75,7 +84,7 @@ def _enforce_cap(box):
             op = {}
         infos.append((f, op))
     for victim in ([f for f, o in infos if o.get("op") == "card"]
-                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
+                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive", "prompt", "edit") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
         if over <= 0:
             break
         try:
@@ -447,7 +456,7 @@ def tick(project, record, root, now, lead_tasks=None, list_id=""):
         return {"events": len(flow), "ops": written}
 
 
-# ---- board wiring: the notifier's sink, the channel check, the inbound stub ----
+# ---- board wiring: the notifier's sink, the channel check ----
 NOTIFY_TIERS = {"needs_you": "decision", "test_failed": "critical", "failing": "critical", "stuck": "critical",
                 "plan_done": "progress", "lead_idle": "routine", "context": "routine", "usage": "routine"}
 
@@ -469,26 +478,3 @@ def sink_event(ev):
     append_event(project, {"ts": ev.get("ts") or time.time(), "project": project, "spec": "", "kind": ev["kind"],
                            "tier": NOTIFY_TIERS.get(ev["kind"], "routine"), "text": f"{ev.get('title', '')}: {ev.get('text', '')}".strip(": "),
                            "refs": {"thread_key": thread} if thread else {}})
-
-
-def read_inbound(dir):
-    """The events stub: every <dir>/events/*.json in name order gets one audit line (result "ignored"; "rejected" for a
-    user missing from access.json allowFrom or an unreadable file), then is deleted. Returns how many it handled."""
-    d = Path(dir)
-    allow = _load(d / "access.json").get("allowFrom")
-    allow = {str(a) for a in allow} if isinstance(allow, list) else set()
-    n = 0
-    for f in sorted((d / "events").glob("*.json")):
-        try:
-            ev = json.loads(f.read_text(encoding="utf-8"))
-            ev = ev if isinstance(ev, dict) else {}
-        except (OSError, ValueError):
-            ev = {}
-        user = str(ev.get("user") or "")
-        audit_append(d, user, "inbound", str(ev.get("custom_id") or ""), "ignored" if user and user in allow else "rejected")
-        try:
-            f.unlink()
-        except OSError:
-            continue
-        n += 1
-    return n

@@ -14,6 +14,9 @@ const TICK_MS = 2000;
 const BODY_MAX = 80;
 const UNKNOWN_MESSAGE = 10008;
 const HELD = Symbol('held');
+const PROMPT_MAX = 1500;
+const PROMPTS_KEEP = 200;
+const REACT_EMOJI = new Set(['✅', '❌', '🛑', '▶', '⏭']);
 
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 
@@ -149,7 +152,54 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     say(`post ${op.thread_key || 'home'} ${snip(op.text)}`);
   }
 
-  const handlers = { post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  async function opPrompt(op) {
+    const c = cfg();
+    const lines = (Array.isArray(op.lines) ? op.lines : []).map(String);
+    let shown = lines;
+    let cut = false;
+    if (lines.join('\n').length > PROMPT_MAX) {
+      let n = 0; let total = 0;
+      for (const l of lines) {
+        const next = total + (n ? 1 : 0) + l.length;
+        if (next > PROMPT_MAX) break;
+        total = next; n++;
+      }
+      shown = [...lines.slice(0, n), `… (${lines.length - n} more lines)`];
+      cut = true;
+    }
+    const body = shown.map((l) => l.replace(/`{3,}/g, (m) => `\`\u200b${m.slice(1).match(/`{1,2}/g).join('\u200b')}`)).join('\n');
+    const head = `${c.user ? `<@${c.user}> ` : ''}🔐 ${op.window} wants to run ${op.tool}`;
+    const content = `${head}\n\`\`\`\n${body}\n\`\`\`${cut ? '\nOpen on the board to see all of it.' : ''}`;
+    const id = (a) => `ab:perm:${op.key}:${a}`;
+    const buttons = [];
+    if (!cut) buttons.push({ type: 2, style: 3, label: 'Allow once', custom_id: id('allow') });
+    buttons.push({ type: 2, style: 4, label: 'Deny', custom_id: id('deny') });
+    const ch = await home();
+    const msg = await ch.send({
+      content: content.slice(0, 2000),
+      allowedMentions: c.user ? { users: [String(c.user)] } : { parse: [] },
+      components: [{ type: 1, components: buttons }],
+    });
+    st.prompts[op.key] = msg.id;
+    for (const k of Object.keys(st.prompts).slice(0, Math.max(0, Object.keys(st.prompts).length - PROMPTS_KEEP))) delete st.prompts[k];
+    save();
+    say(`prompt ${snip(op.key)} ${snip(op.tool)}`);
+  }
+
+  async function opEdit(op) {
+    const id = st.prompts[op.key];
+    if (!id) { say(`edit ${snip(op.key)}: no message`); return; }
+    const ch = await home();
+    try {
+      const msg = await ch.messages.fetch(id);
+      await msg.edit({ content: String(op.text ?? '').slice(0, 2000), components: [] });
+    } catch (e) {
+      if (e?.code !== UNKNOWN_MESSAGE) throw e;
+      say(`edit ${snip(op.key)}: no message`);
+    }
+  }
+
+  const handlers = { prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -203,23 +253,60 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
 
   function onDisconnect() { st.connected = false; save(); say('disconnected'); }
 
+  // access.json is re-read on every click/reaction; missing or unreadable means nobody.
+  function allowFrom() {
+    const a = readJson(path.join(dir, 'access.json'), null)?.allowFrom;
+    return new Set(Array.isArray(a) ? a.map(String) : []);
+  }
+
+  function writeEvent(ev) {
+    const evDir = path.join(dir, 'events');
+    fs.mkdirSync(evDir, { recursive: true });
+    const name = `${ev.ts}-${crypto.randomBytes(4).toString('hex')}.json`;
+    fs.writeFileSync(path.join(evDir, `${name}.tmp`), JSON.stringify(ev));
+    fs.renameSync(path.join(evDir, `${name}.tmp`), path.join(evDir, name));
+  }
+
   async function onInteraction(i) {
     const id = i?.customId;
     if (typeof id !== 'string' || !id.startsWith('ab:')) return;
-    const ts = now();
-    const evDir = path.join(dir, 'events');
-    fs.mkdirSync(evDir, { recursive: true });
-    const name = `${ts}-${crypto.randomBytes(4).toString('hex')}.json`;
-    const ev = { ts, user: i.user?.id, custom_id: id, message_id: i.message?.id, channel_id: i.channelId };
-    fs.writeFileSync(path.join(evDir, `${name}.tmp`), JSON.stringify(ev));
-    fs.renameSync(path.join(evDir, `${name}.tmp`), path.join(evDir, name));
-    say(`event ${snip(id)}`);
+    if (!allowFrom().has(String(i.user?.id))) {
+      try { await i.reply({ content: 'Not authorized.', flags: 64 }); } catch (e) { say(`reply failed: ${snip(e?.message)}`); }
+      say(`click ${snip(id)}: not authorized`);
+      return;
+    }
     try { await i.deferUpdate(); } catch (e) { say(`ack failed: ${snip(e?.message)}`); }
+    const ts = now();
+    const base = { user: i.user?.id, message_id: i.message?.id, ts };
+    const m = /^ab:perm:(.+):(allow|deny)$/.exec(id);
+    if (m) writeEvent({ type: 'perm', key: m[1], choice: m[2], ...base });
+    else writeEvent({ type: 'click', custom_id: id, user: base.user, message_id: base.message_id, channel_id: i.channelId, ts });
+    say(`event ${snip(id)}`);
   }
 
-  // Wire the client: components only; no message listener at all.
+  async function onReaction(reaction, user) {
+    if (reaction?.partial) reaction = await reaction.fetch();
+    if (user?.partial) user = await user.fetch();
+    if (!user || user.bot || !allowFrom().has(String(user.id))) return;
+    const emoji = String(reaction.emoji?.name ?? '').replace(/\uFE0F/g, '');
+    if (!REACT_EMOJI.has(emoji)) return;
+    let msg = reaction.message;
+    if (msg?.partial) msg = await msg.fetch();
+    if (!msg || msg.author?.id !== client.user?.id) return;
+    const home = cfg().channel;
+    if (!home || (msg.channel?.id !== home && msg.channel?.parentId !== home)) return;
+    const excerpt = String(msg.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    writeEvent({ type: 'react', emoji: emoji === '▶' || emoji === '⏭' ? `${emoji}\uFE0F` : emoji, message_id: msg.id, excerpt, user: String(user.id), ts: now() });
+    say(`react ${emoji}`);
+    if (!msg.reactions?.cache?.get('👀')?.me) {
+      try { await msg.react('👀'); } catch (e) { say(`react failed: ${snip(e?.message)}`); }
+    }
+  }
+
+  // Wire the client: components and reactions; no message listener.
   function attach() {
     client.on('interactionCreate', (i) => { onInteraction(i).catch((e) => say(`interaction: ${snip(e?.message)}`)); });
+    client.on('messageReactionAdd', (r, u) => { onReaction(r, u).catch((e) => say(`reaction: ${snip(e?.message)}`)); });
     const ready = () => { onReady().catch(() => {}); };
     client.on('clientReady', ready);
     client.on('ready', ready);
@@ -231,7 +318,7 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
 
   function close() { closed = true; }
 
-  return { tick, onInteraction, onReady, onDisconnect, attach, close, TICK_MS };
+  return { tick, onInteraction, onReaction, onReady, onDisconnect, attach, close, TICK_MS };
 }
 
 function main() {
@@ -254,9 +341,10 @@ function main() {
     process.on(sig, () => { clearInterval(timer); bridge?.close(); try { stateLib.write(dir, { ...stateLib.read(dir), connected: false }); } catch { /* ok */ } process.exit(0); });
   }
 
-  const { Client, GatewayIntentBits: I } = require('discord.js');
+  const { Client, GatewayIntentBits: I, Partials } = require('discord.js');
   const client = new Client({
     intents: [I.Guilds, I.GuildMessages, I.GuildMessageReactions, I.DirectMessages, I.DirectMessageReactions],
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
   bridge = createBridge({ dir, client, log });
   bridge.attach();

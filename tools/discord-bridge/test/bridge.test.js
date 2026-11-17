@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createBridge } = require('../bridge');
-const { FakeClient, fakeInteraction } = require('./fake-client');
+const { FakeClient, fakeInteraction, fakeMessage, fakeReaction } = require('./fake-client');
 
 const TOKEN = 'TESTTOKEN.abc123.SECRETSECRETSECRET';
 let seq = 0;
@@ -265,17 +265,6 @@ test('bridge-state: connected true on ready, false on disconnect, with guild_id,
   assert.strictEqual(s.st().connected, false);
 });
 
-test('interactions: ab: component is written to events/ and acked', async () => {
-  const s = setup();
-  const i = fakeInteraction({ customId: 'ab:approve:7', user: 'U1', messageId: 'm5', channelId: 'C1' });
-  await s.bridge.onInteraction(i);
-  const evs = fs.readdirSync(path.join(s.dir, 'events'));
-  assert.strictEqual(evs.length, 1); assert.match(evs[0], /^\d{13}-[0-9a-f]{8}\.json$/);
-  const e = JSON.parse(fs.readFileSync(path.join(s.dir, 'events', evs[0]), 'utf8'));
-  assert.deepStrictEqual(e, { ts: s.clock.t, user: 'U1', custom_id: 'ab:approve:7', message_id: 'm5', channel_id: 'C1' });
-  assert.strictEqual(i.deferred, 1);
-});
-
 test('interactions: other customId is ignored (no file, no reply)', async () => {
   // Mutation: drop the ab: prefix check -> a file and a deferUpdate appear.
   const s = setup();
@@ -305,4 +294,265 @@ test('log never holds the token or more than 80 chars of a body', async () => {
   assert.ok(!all.includes('SECRETSECRET'));
   assert.ok(!/[a-z]{81}/.test(all.replace(/\*\*\*/g, '')), 'a run of 81+ body chars is logged');
   assert.ok(all.length > 0);
+});
+
+// ---- discord controls: prompt/edit ops, authorized clicks, reactions ----
+const allow = (s, ids) => fs.writeFileSync(path.join(s.dir, 'access.json'), JSON.stringify({ allowFrom: ids }));
+const events = (s) => { try { return fs.readdirSync(path.join(s.dir, 'events')).filter((n) => n.endsWith('.json')).sort(); } catch { return []; } };
+const readEv = (s, n) => JSON.parse(fs.readFileSync(path.join(s.dir, 'events', n), 'utf8'));
+const prompt = (lines, extra = {}) => ({ op: 'prompt', key: '%3:abc', window: 'w1', tool: 'Bash command', lines, tier: 'decision', mention_user: true, ...extra });
+
+test('prompt op: one home send with mention, code block, Allow/Deny row; id kept in state', async () => {
+  const s = setup();
+  s.put(prompt(['echo a', 'echo b']));
+  await s.bridge.tick();
+  const sends = s.client.callsOf('send');
+  assert.strictEqual(sends.length, 1);
+  assert.strictEqual(sends[0].target, 'C1');
+  const p = sends[0].payload;
+  assert.ok(p.content.startsWith('<@U1> 🔐 w1 wants to run Bash command'));
+  assert.ok(p.content.includes('```\necho a\necho b\n```'));
+  assert.deepStrictEqual(p.allowedMentions, { users: ['U1'] });
+  assert.deepStrictEqual(p.components, [{ type: 1, components: [
+    { type: 2, style: 3, label: 'Allow once', custom_id: 'ab:perm:%3:abc:allow' },
+    { type: 2, style: 4, label: 'Deny', custom_id: 'ab:perm:%3:abc:deny' },
+  ] }]);
+  assert.strictEqual(s.st().prompts['%3:abc'], 'm1');
+  assert.deepStrictEqual(s.files(), []);
+});
+
+test('prompt over 1500 chars is cut on a line boundary, notes the rest, Deny only', async () => {
+  const s = setup();
+  const lines = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0').repeat(20));
+  s.put(prompt(lines));
+  await s.bridge.tick();
+  const p = s.client.callsOf('send')[0].payload;
+  const kept = Math.floor(1501 / 41); // 36 lines of 40 plus newlines: 36*41-1 = 1475 <= 1500
+  assert.ok(p.content.includes(`… (${60 - kept} more lines)`), p.content);
+  assert.ok(p.content.includes('Open on the board to see all of it.'));
+  assert.ok(p.content.length <= 2000);
+  const btns = p.components[0].components;
+  assert.deepStrictEqual(btns.map((b) => b.label), ['Deny']);
+  assert.ok(!p.content.includes(lines[kept]) || kept === 59);
+});
+
+test('a ``` inside a prompt line cannot close the block early', async () => {
+  const s = setup();
+  s.put(prompt(['echo ```hi```', 'next']));
+  await s.bridge.tick();
+  const c = s.client.callsOf('send')[0].payload.content;
+  assert.strictEqual(c.split('```').length - 1, 2, c);
+  assert.ok(c.includes('echo `​``hi`​``'));
+});
+
+test('edit op: fetches prompts[key], edits text and clears buttons', async () => {
+  const s = setup();
+  s.put(prompt(['x']));
+  await s.bridge.tick();
+  s.put({ op: 'edit', key: '%3:abc', text: '🔐 w1 wants to run Bash command: ⛔ denied' });
+  await s.bridge.tick();
+  const e = s.client.callsOf('edit');
+  assert.strictEqual(e.length, 1);
+  assert.deepStrictEqual(e[0].payload, { content: '🔐 w1 wants to run Bash command: ⛔ denied', components: [] });
+  assert.deepStrictEqual(s.files(), []); assert.deepStrictEqual(s.failed(), []);
+});
+
+test('edit op with an unknown key is removed with a log line, not failed', async () => {
+  const s = setup();
+  s.put({ op: 'edit', key: 'nope', text: 't' });
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.files(), []); assert.deepStrictEqual(s.failed(), []);
+  assert.ok(s.logs.some((l) => l.includes('edit nope: no message')));
+  assert.strictEqual(s.client.callsOf('edit').length, 0);
+});
+
+test('edit op whose message is gone (10008) is removed with a log line, not failed', async () => {
+  const s = setup();
+  s.put(prompt(['x']));
+  await s.bridge.tick();
+  s.client.messages.get('m1').deleted = true;
+  s.put({ op: 'edit', key: '%3:abc', text: 't' });
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.files(), []); assert.deepStrictEqual(s.failed(), []);
+  assert.ok(s.logs.some((l) => l.includes('edit %3:abc: no message')));
+});
+
+test('prompts in state keep only the newest 200 by insertion', async () => {
+  const s = setup();
+  for (let i = 0; i < 202; i++) s.put(prompt(['x'], { key: `k${i}` }));
+  await s.bridge.tick();
+  const keys = Object.keys(s.st().prompts);
+  assert.strictEqual(keys.length, 200);
+  assert.ok(!keys.includes('k0') && !keys.includes('k1') && keys.includes('k201'));
+});
+
+test('state read defaults prompts to {} for old state files', () => {
+  const s = setup();
+  fs.writeFileSync(path.join(s.dir, 'bridge-state.json'), JSON.stringify({ card_message_id: 'm9', threads: {} }));
+  const b = createBridge({ dir: s.dir, client: s.client, log: () => {} });
+  return b.onReady().then(() => assert.deepStrictEqual(s.st().prompts, {}));
+});
+
+test('click by a user outside allowFrom: ephemeral reply, no defer, no event', async () => {
+  // Mutation: drop the allowFrom check -> defer happens and an event is written.
+  const s = setup();
+  allow(s, ['U1']);
+  const i = fakeInteraction({ customId: 'ab:perm:%3:abc:allow', user: 'U9' });
+  await s.bridge.onInteraction(i);
+  assert.deepStrictEqual(i.replies, [{ content: 'Not authorized.', flags: 64 }]);
+  assert.strictEqual(i.deferred, 0);
+  assert.deepStrictEqual(events(s), []);
+});
+
+test('click with a missing access.json: nobody is allowed', async () => {
+  const s = setup();
+  const i = fakeInteraction({ customId: 'ab:perm:k:allow', user: 'U1' });
+  await s.bridge.onInteraction(i);
+  assert.strictEqual(i.deferred, 0); assert.deepStrictEqual(events(s), []);
+  assert.strictEqual(i.replies.length, 1);
+});
+
+test('allowlist is re-read on every click', async () => {
+  const s = setup();
+  allow(s, []);
+  const i1 = fakeInteraction({ customId: 'ab:perm:k:allow', user: 'U1' });
+  await s.bridge.onInteraction(i1);
+  allow(s, ['U1']);
+  const i2 = fakeInteraction({ customId: 'ab:perm:k:allow', user: 'U1' });
+  await s.bridge.onInteraction(i2);
+  assert.strictEqual(i1.deferred, 0); assert.strictEqual(i2.deferred, 1);
+});
+
+test('authorized perm click defers before the event file exists; event shape', async () => {
+  // Mutation: write the event before deferUpdate -> events/ is not empty at defer time.
+  const s = setup();
+  allow(s, ['U1']);
+  let atDefer;
+  const i = fakeInteraction({ customId: 'ab:perm:%3:abc:allow', user: 'U1', messageId: 'm5', onDefer: () => { atDefer = events(s).length; } });
+  await s.bridge.onInteraction(i);
+  assert.strictEqual(atDefer, 0);
+  assert.strictEqual(i.deferred, 1);
+  const evs = events(s);
+  assert.strictEqual(evs.length, 1); assert.match(evs[0], /^\d{13}-[0-9a-f]{8}\.json$/);
+  assert.deepStrictEqual(readEv(s, evs[0]), { type: 'perm', key: '%3:abc', choice: 'allow', user: 'U1', message_id: 'm5', ts: s.clock.t });
+  assert.deepStrictEqual(fs.readdirSync(path.join(s.dir, 'events')).filter((n) => n.endsWith('.tmp')), []);
+});
+
+test('deny click: choice deny', async () => {
+  const s = setup();
+  allow(s, ['U1']);
+  await s.bridge.onInteraction(fakeInteraction({ customId: 'ab:perm:%3:abc:deny', user: 'U1' }));
+  assert.strictEqual(readEv(s, events(s)[0]).choice, 'deny');
+});
+
+test('other ab: click becomes a click event', async () => {
+  const s = setup();
+  allow(s, ['U1']);
+  const i = fakeInteraction({ customId: 'ab:approve:7', user: 'U1', messageId: 'm5', channelId: 'C1' });
+  await s.bridge.onInteraction(i);
+  assert.deepStrictEqual(readEv(s, events(s)[0]), { type: 'click', custom_id: 'ab:approve:7', user: 'U1', message_id: 'm5', channel_id: 'C1', ts: s.clock.t });
+  assert.strictEqual(i.deferred, 1);
+});
+
+test('non-ab: id (plugin perm:x) does nothing at all', async () => {
+  const s = setup();
+  allow(s, ['U1']);
+  const i = fakeInteraction({ customId: 'perm:x', user: 'U1' });
+  await s.bridge.onInteraction(i);
+  assert.strictEqual(i.deferred, 0); assert.deepStrictEqual(i.replies, []); assert.deepStrictEqual(events(s), []);
+});
+
+async function react(s, { emoji = '✅', user = { id: 'U1' }, msg = {}, reaction = {} } = {}) {
+  const message = fakeMessage({ content: '  hello \n  world ', ...msg });
+  const r = fakeReaction({ emoji, message, ...reaction });
+  await s.bridge.onReaction(r, user);
+  return message;
+}
+
+test('✅ by an allowlisted user on a bot message: react event with excerpt, bot adds 👀', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const m = await react(s, { msg: { id: 'm7', content: 'x'.repeat(100) } });
+  const evs = events(s);
+  assert.strictEqual(evs.length, 1);
+  assert.deepStrictEqual(readEv(s, evs[0]), { type: 'react', emoji: '✅', message_id: 'm7', excerpt: 'x'.repeat(80), user: 'U1', ts: s.clock.t });
+  assert.deepStrictEqual(m.reacted, ['👀']);
+});
+
+test('excerpt collapses whitespace', async () => {
+  const s = setup(); allow(s, ['U1']);
+  await react(s);
+  assert.strictEqual(readEv(s, events(s)[0]).excerpt, 'hello world');
+});
+
+test('▶️ and ▶ both give ▶️; ⏭ gives ⏭️; ❌ and 🛑 pass', async () => {
+  const s = setup(); allow(s, ['U1']);
+  for (const e of ['▶️', '▶', '⏭', '❌', '🛑']) await react(s, { emoji: e });
+  const got = events(s).map((n) => readEv(s, n).emoji).sort();
+  assert.deepStrictEqual(got, ['▶️', '▶️', '⏭️', '❌', '🛑'].sort());
+});
+
+for (const [name, opts] of [
+  ['non-allowlisted user', { user: { id: 'U9' } }],
+  ['a bot user', { user: { id: 'U1', bot: true } }],
+  ['a message by another author', { msg: { authorId: 'OTHER' } }],
+  ['a channel outside home', { msg: { channelId: 'C2' } }],
+  ['a thread of another channel', { msg: { channelId: 'T9', parentId: 'C2' } }],
+  ['an unknown emoji', { emoji: '👍' }],
+]) {
+  test(`reaction ignored: ${name}`, async () => {
+    // Mutation (author case): drop the author check -> an event appears.
+    const s = setup(); allow(s, ['U1']);
+    const m = await react(s, opts);
+    assert.deepStrictEqual(events(s), []); assert.deepStrictEqual(m.reacted, []);
+  });
+}
+
+test('a message that already has the bot 👀 gets no second one', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const m = await react(s, { msg: { hasEyes: true } });
+  assert.strictEqual(events(s).length, 1); assert.deepStrictEqual(m.reacted, []);
+});
+
+test('a thread message whose parentId is home is accepted', async () => {
+  const s = setup(); allow(s, ['U1']);
+  await react(s, { msg: { channelId: 'T1', parentId: 'C1' } });
+  assert.strictEqual(events(s).length, 1);
+});
+
+test('partial reaction and message are fetched before reading', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const m = await react(s, { msg: { partial: true }, reaction: { partial: true } });
+  assert.strictEqual(events(s).length, 1); assert.strictEqual(m.partial, false);
+});
+
+test('attach registers messageReactionAdd', () => {
+  const s = setup();
+  s.bridge.attach();
+  assert.strictEqual(s.client.listenerCount('messageReactionAdd'), 1);
+});
+
+test('main builds the client with the four partials', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'bridge.js'), 'utf8');
+  assert.match(src, /partials:\s*\[\s*Partials\.Message,\s*Partials\.Channel,\s*Partials\.Reaction,\s*Partials\.User\s*\]/);
+});
+
+test('runs of 4 and 6 backticks cannot close the block early', async () => {
+  const s = setup();
+  s.put(prompt(['a ```` b', 'c `````` d', 'e']));
+  await s.bridge.tick();
+  const c = s.client.callsOf('send')[0].payload.content;
+  const inner = c.slice(c.indexOf('```\n') + 4, c.lastIndexOf('\n```'));
+  assert.ok(!inner.includes('```'), inner);
+  assert.strictEqual(c.split('```').length - 1, 2, c);
+});
+
+test('prompt without a configured user: no mention prefix and no <@undefined>', async () => {
+  const s = setup();
+  fs.writeFileSync(path.join(s.dir, 'bridge.json'), JSON.stringify({ channel: 'C1' }));
+  s.put(prompt(['x']));
+  await s.bridge.tick();
+  const p = s.client.callsOf('send')[0].payload;
+  assert.ok(p.content.startsWith('🔐 w1 wants to run Bash command'), p.content);
+  assert.ok(!p.content.includes('undefined'));
+  assert.deepStrictEqual(p.allowedMentions, { parse: [] });
 });

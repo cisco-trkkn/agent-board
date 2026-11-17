@@ -11,6 +11,7 @@ class FakeClient extends EventEmitter {
     this.seq = 0;
     this.chans = new Map();
     this.messages = new Map();
+    this.user = { id: 'BOT' };
     this.channels = { fetch: (id) => this._fetchChannel(id) };
   }
 
@@ -39,7 +40,11 @@ class FakeClient extends EventEmitter {
   _makeMessage(channelId, payload) {
     const msg = {
       id: this._newId('m'), channelId, payload, pinned: false,
-      edit: async (p) => { this._record('edit', msg.id, p); this._maybeFail('edit'); this._gone(msg); msg.payload = p; return msg; },
+      author: { id: this.user.id }, content: payload?.content ?? '',
+      channel: { id: channelId, parentId: this.chans.get(channelId)?.parentId ?? null },
+      reactions: { cache: new Map() },
+      react: async (e) => { this._record('react', msg.id, e); msg.reactions.cache.set(e, { me: true }); },
+      edit: async (p) => { this._record('edit', msg.id, p); this._maybeFail('edit'); this._gone(msg); msg.payload = p; if (p?.content !== undefined) msg.content = p.content; return msg; },
       pin: async () => { this._record('pin', msg.id); this._maybeFail('pin'); msg.pinned = true; },
     };
     this.messages.set(msg.id, msg);
@@ -50,9 +55,9 @@ class FakeClient extends EventEmitter {
     if (msg.deleted) { const e = new Error('Unknown Message'); e.status = 404; e.code = 10008; throw e; }
   }
 
-  _makeChannel(id, isThread = false) {
+  _makeChannel(id, isThread = false, parentId = null) {
     const ch = {
-      id, guildId: this.guildId, isThread,
+      id, guildId: this.guildId, isThread, parentId,
       send: async (p) => { this._record('send', id, p); this._maybeFail('send'); return this._makeMessage(id, p); },
       messages: {
         fetch: async (mid) => {
@@ -86,12 +91,28 @@ class FakeClient extends EventEmitter {
   }
 }
 
+// A standalone message (any author/channel); react() records into .reacted.
+function fakeMessage({ id = 'mx', authorId = 'BOT', content = '', channelId = 'C1', parentId = null, partial = false, hasEyes = false } = {}) {
+  const m = { id, author: { id: authorId }, content, channel: { id: channelId, parentId }, partial, reacted: [], reactions: { cache: new Map() } };
+  if (hasEyes) m.reactions.cache.set('👀', { me: true });
+  m.react = async (e) => { m.reacted.push(e); m.reactions.cache.set(e, { me: true }); };
+  m.fetch = async () => { m.partial = false; return m; };
+  return m;
+}
+
+// A fake reaction; fetch() resolves a partial one. user is {id, bot?}.
+function fakeReaction({ emoji, message, partial = false }) {
+  const r = { emoji: { name: emoji }, message, partial };
+  r.fetch = async () => { r.partial = false; return r; };
+  return r;
+}
+
 // A fake interaction: a component click or other.
-function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1' } = {}) {
+function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer } = {}) {
   const i = { customId, user: { id: user }, message: { id: messageId }, channelId, replies: [], deferred: 0 };
-  i.deferUpdate = async () => { i.deferred++; };
+  i.deferUpdate = async () => { if (onDefer) onDefer(); i.deferred++; };
   i.reply = async (x) => { i.replies.push(x); };
   return i;
 }
 
-module.exports = { FakeClient, fakeInteraction };
+module.exports = { FakeClient, fakeInteraction, fakeMessage, fakeReaction };
