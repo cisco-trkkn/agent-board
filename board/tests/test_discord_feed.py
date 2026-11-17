@@ -1,4 +1,5 @@
 """discord_feed core: spool writer, feed file, status card, audit. Every test runs on a TC_STATE temp dir."""
+import hashlib
 import json
 import os
 import sys
@@ -594,7 +595,8 @@ class OpsTest(Base):
                                  self.ev("test_failed", "critical"), self.ev("usage", "routine"),
                                  self.ev("spec_outcome", "progress", text="failed — x")], st)
         self.assertEqual(ops[0], {"op": "post", "thread_key": "7", "text": "t", "tier": "progress", "mention_user": False})
-        self.assertEqual(ops[1], {"op": "post", "text": "t", "tier": "decision", "mention_user": True, "link_thread_key": "7"})
+        self.assertEqual(ops[1], {"op": "post", "text": "t", "tier": "decision", "mention_user": True, "link_thread_key": "7",
+                                  "key": "dec:" + hashlib.sha1(b"1.0|t").hexdigest()[:12]})   # decision posts carry a key (ops mirror)
         self.assertEqual(ops[2]["tier"], "critical")
         self.assertTrue(ops[2]["mention_user"])
         self.assertEqual(len(ops), 4)  # routine: no op

@@ -59,8 +59,19 @@ def _show(run, window):
     return (tool, lines) if lines else "error"
 
 
+def _ops(fn, *args):
+    """Call discord_ops.<fn> (a no-op there when the ops bot is not configured); a failure never breaks the controls step."""
+    try:
+        import discord_ops
+        return getattr(discord_ops, fn)(*args)
+    except Exception as e:  # noqa: BLE001
+        print(f"discord_controls: ops {fn} failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
 def _edit(d, key, rec, outcome):
-    discord_feed.outbox_write(d, {"op": "edit", "key": key, "text": f"🔐 {rec['window']} wants to run {rec['tool']}: {outcome}"})
+    text = f"🔐 {rec['window']} wants to run {rec['tool']}: {outcome}"
+    discord_feed.outbox_write(d, {"op": "edit", "key": key, "text": text})
+    _ops("resolve", d.name, key, text)
 
 
 def scan_prompts(d, record, state, now, run):
@@ -86,6 +97,7 @@ def scan_prompts(d, record, state, now, run):
                 discord_feed.outbox_write(d, {"op": "prompt", "key": key, "window": w, "tool": tool, "lines": lines,
                                               "tier": "decision", "mention_user": True})
                 prompts[key] = {"window": w, "pane": pane, "tool": tool, "lines": lines, "ts": now}
+                _ops("mirror_prompt", d.name, key, w, tool, lines)
     for key, rec in list(prompts.items()):
         got = show(rec["window"])
         if got == "error":
@@ -143,6 +155,8 @@ def consume_events(d, project, state, run, add_line):
                     add_line(project, tpl.format(" ".join(str(ev.get("excerpt") or "").split())))
                     result = "queued"
                 discord_feed.audit_append(d, user, "react", str(ev.get("emoji") or ""), result)
+            elif kind in ("slash", "modal", "read", "rejected"):
+                _ops("handle_event", project, d, ev, add_line, allow)
             else:
                 discord_feed.audit_append(d, user, "click", str(ev.get("custom_id") or ""), "ignored" if user in allow else "rejected")
         finally:

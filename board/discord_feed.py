@@ -21,7 +21,8 @@ CARD_MAX = 1900
 CARD_EVERY = 30
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
-_POST_OPT = {"thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool}
+APPROVAL_KINDS = ("perm", "question", "merge", "other")
+_POST_OPT = {"key": str, "thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool}
 _last_ms = 0
 _ms_lock = threading.Lock()   # the overview thread and the notifier sink both write
 
@@ -35,7 +36,8 @@ def _check(op):
               "thread": ({"op", "key", "title"}, set()),
               "archive": ({"op", "key"}, set()),
               "prompt": ({"op", "key", "window", "tool", "lines", "tier", "mention_user"}, set()),
-              "edit": ({"op", "key", "text"}, set())}
+              "edit": ({"op", "key", "text"}, set()),
+              "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link"})}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
     need, opt = shapes[kind]
@@ -52,6 +54,11 @@ def _check(op):
             raise ValueError("mention_user must be a bool")
         if not (isinstance(op["lines"], list) and all(isinstance(l, str) for l in op["lines"])):
             raise ValueError("lines must be a list of strings")
+    if kind == "approval":
+        if op["kind"] not in APPROVAL_KINDS:
+            raise ValueError(f"kind {op['kind']!r} is not an approval kind")
+        if not isinstance(op["mention_user"], bool):
+            raise ValueError("mention_user must be a bool")
     if kind == "post":
         if op["tier"] not in TIERS:
             raise ValueError(f"tier {op['tier']!r} never becomes a post")
@@ -87,7 +94,7 @@ def _enforce_cap(box):
             op = {}
         infos.append((f, op))
     for victim in ([f for f, o in infos if o.get("op") == "card"]
-                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive", "prompt", "edit") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
+                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive", "prompt", "edit", "approval") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
         if over <= 0:
             break
         try:
@@ -444,6 +451,9 @@ def ops_for_events(events, state):
             ops.append({"op": "thread", "key": refs["thread_key"], "title": ev.get("spec") or refs["thread_key"]})
         if tier in ("critical", "decision"):
             op = {"op": "post", "text": ev["text"], "tier": tier, "mention_user": True}
+            if tier == "decision":
+                op["key"] = f"merge:{refs['task']}" if kind == "merge_approval" and refs.get("task") else \
+                    "dec:" + hashlib.sha1(f"{ev.get('ts')}|{ev.get('text')}".encode()).hexdigest()[:12]
             if thread:
                 op["link_thread_key"] = thread
         else:
