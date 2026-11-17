@@ -37,7 +37,7 @@ def _check(op):
               "archive": ({"op", "key"}, set()),
               "prompt": ({"op", "key", "window", "tool", "lines", "tier", "mention_user"}, set()),
               "edit": ({"op", "key", "text"}, set()),
-              "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link"})}
+              "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"})}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
     need, opt = shapes[kind]

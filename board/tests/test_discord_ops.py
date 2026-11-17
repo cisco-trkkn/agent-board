@@ -191,6 +191,7 @@ class Tick(Base):
         (ap,) = [o for o in self.outbox() if o["op"] == "approval"]
         self.assertEqual((ap["kind"], ap["mention_user"], ap["link"]), ("other", True, "https://discord.com/channels/999/123"))
         self.assertEqual(ap["text"], "a: needs a call")
+        self.assertEqual(ap["project"], "a")   # mutation: drop op["project"] in _approve -> fails
         self.assertEqual(self.state()["approvals"][ap["key"]]["project"], "a")
 
     def test_merge_approval_becomes_merge_kind_keyed_by_task(self):
@@ -493,7 +494,7 @@ class Events(Base):
 class FeedChanges(Base):
     def test_check_accepts_approval_and_post_key(self):
         df._check({"op": "approval", "key": "k", "kind": "perm", "text": "t", "mention_user": True})
-        df._check({"op": "approval", "key": "k", "kind": "question", "text": "t", "mention_user": True, "link": "https://x"})
+        df._check({"op": "approval", "key": "k", "kind": "question", "text": "t", "mention_user": True, "link": "https://x", "project": "a"})
         df._check({"op": "post", "text": "t", "tier": "critical", "mention_user": True, "key": "k"})
         with self.assertRaises(ValueError):
             df._check({"op": "approval", "key": "k", "kind": "bogus", "text": "t", "mention_user": True})

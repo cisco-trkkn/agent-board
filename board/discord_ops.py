@@ -147,7 +147,7 @@ def _link(project):
 # ---- approvals ----
 def _approve(d, st, project, src_key, kind, text, link="", title="", spec=""):
     key = _okey(project, src_key)
-    op = {"op": "approval", "key": key, "kind": kind, "text": text[:2000], "mention_user": True}
+    op = {"op": "approval", "key": key, "kind": kind, "text": text[:2000], "mention_user": True, "project": project}
     if link:
         op["link"] = link
     discord_feed.outbox_write(d, op)
