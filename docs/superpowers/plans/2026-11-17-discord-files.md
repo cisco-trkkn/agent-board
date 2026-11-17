@@ -278,10 +278,12 @@ if __name__ == "__main__":
 - [ ] After merge (the live bridge runs `tools/discord-bridge` from main; restart it with `tmux-ctl discord bridge stop` / `start` after asking), `tmux-ctl discord snap` posts a PNG of the board to `#agent-board`, the user confirms it shows the board, and `ls <discord dir>/tmp/` shows the PNG gone.
 - [ ] `tmux-ctl discord send docs/superpowers/specs/2026-11-11-discord-files-design.md -m "spec"` arrives as an attachment.
 - [ ] The user sends a photo; the lead downloads it with `download_attachment`, Reads it, and describes it in a reply citing the downloaded path.
+- [ ] snap with the real HOME while the user's Chrome is open posts within 60 s; if not, add `--user-data-dir=<dir>/tmp/chrome-profile` and re-run.
+- [ ] a 15 MB send arrives (or gives the too-large line) and `failed/` stays empty — settles whether Discord's per-file limit is 10 MB or 25 MB.
 - [ ] The board URL and token appear in no Discord message (the user checks the snap post text; `grep -c` of the token over `bridge.log` = 0).
 
 **Verify:** `grep -c "$(cat ~/.local/state/tmux-dash/token)" ~/.local/state/agent-board/discord/agent-board/bridge.log` → `0`, plus the user's Discord confirmation.
 
 ```json:metadata
-{"files": [], "verifyCommand": "grep -c \"$(cat ~/.local/state/tmux-dash/token)\" ~/.local/state/agent-board/discord/agent-board/bridge.log", "acceptanceCriteria": ["snap PNG arrives and shows the board; tmp PNG deleted", "send of the spec arrives as attachment", "user photo downloaded, Read and described with its path", "token in no Discord message; bridge.log token count 0"], "modelTier": "mechanical", "userGate": true, "tags": ["user-gate"]}
+{"files": [], "verifyCommand": "grep -c \"$(cat ~/.local/state/tmux-dash/token)\" ~/.local/state/agent-board/discord/agent-board/bridge.log", "acceptanceCriteria": ["snap PNG arrives and shows the board; tmp PNG deleted", "send of the spec arrives as attachment", "user photo downloaded, Read and described with its path", "token in no Discord message; bridge.log token count 0", "snap with the real HOME while the user's Chrome is open posts within 60 s; if not, add `--user-data-dir=<dir>/tmp/chrome-profile` and re-run", "a 15 MB send arrives (or gives the too-large line) and `failed/` stays empty — settles whether Discord's per-file limit is 10 MB or 25 MB"], "modelTier": "mechanical", "userGate": true, "tags": ["user-gate"]}
 ```
