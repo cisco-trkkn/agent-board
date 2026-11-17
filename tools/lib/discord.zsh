@@ -5,11 +5,12 @@
 
 _DC_TOOLS="${${(%):-%x}:A:h:h}"   # file scope: tools/
 _dc_root() { print -r -- "${TC_STATE:-$HOME/.local/state/agent-board}/discord" }
-_dc_usage() { print -u2 "usage: tmux-ctl discord token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>]|send [--thread <key>] <file>… [-m <text>]|snap [<project>] (the token is read from stdin)"; return 2 }
+_dc_ops_dir() { print -r -- "$(_dc_root)/_ops" }
+_dc_usage() { print -u2 "usage: tmux-ctl discord [--ops] token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|ops-channels <command-center id> <approvals id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>]|send [--thread <key>] <file>… [-m <text>]|snap [<project>] (the token is read from stdin)"; return 2 }
 _dc_tokenish() { [[ "$1" == *.* && ${#1} -ge 50 ]] }
 
 discord_cmd() {
-  local sub="$1" project="" a since="" keeper=0
+  local sub="$1" project="" a since="" keeper=0 ops=0
   shift 2>/dev/null
   if [[ "$sub" == watch ]]; then   # the watchdog: no project, no tmux of our own (it finds the leads' panes itself)
     python3 "$_DC_TOOLS/discord_watch.py" "${@:---once}"; return $?
@@ -22,6 +23,7 @@ discord_cmd() {
       --project) project="$2"; shift 2 2>/dev/null || shift ;;
       --project=*) project="${1#--project=}"; shift ;;
       --keeper) keeper=1; shift ;;
+      --ops) ops=1; shift ;;
       --since) since="$2"; shift 2 2>/dev/null || shift ;;
       *) pos+=("$1"); shift ;;
     esac
@@ -33,27 +35,37 @@ discord_cmd() {
       return 2
     fi
   done
-  if (( ${#pos} > 1 )); then
+  if (( ops )) && [[ -n "$project" ]]; then print -u2 "discord: --ops and --project exclude each other"; _dc_usage; return 2; fi
+  if (( ${#pos} > 1 )) && ! [[ "$sub" == ops-channels && ${#pos} == 2 ]]; then
     print -u2 "discord: too many arguments (the token is never taken from the command line; pipe it on stdin)"; return 2
   fi
   local arg="${pos[1]}"
-  case "$sub" in token|status|forget|audit) ;; pair|deny|policy|allow|remove|channel|bridge) [[ -n "$arg" ]] || { _dc_usage; return 2 } ;; *) _dc_usage; return 2 ;; esac
-  [[ -n "$project" ]] || project="$FEEDKEY"
-  [[ -n "$project" ]] || { [[ "$sub" == (token|status|forget) && -n "$arg" ]] && project="$arg" && arg=; }
-  [[ -n "$project" ]] || { _dc_usage; return 2 }
-  if ! [[ "$project" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]]; then   # never echo the value: it may be a token
-    print -u2 "discord: a project name uses letters, digits, '.', '_' and '-' and starts with a letter or digit"; return 2
+  case "$sub" in token|status|forget|audit) ;; pair|deny|policy|allow|remove|channel|bridge) [[ -n "$arg" ]] || { _dc_usage; return 2 } ;;
+    ops-channels) [[ "${pos[1]}" =~ '^[0-9]+$' && "${pos[2]}" =~ '^[0-9]+$' ]] || { _dc_usage; return 2 }; ops=1 ;;
+    *) _dc_usage; return 2 ;; esac
+  local dir
+  if (( ops )); then
+    project=_ops; dir="$(_dc_ops_dir)"   # the ops bot: its own state dir; "_ops" is no valid project name, so it skips the project-name check
+  else
+    [[ "$sub" == ops-channels ]] && { _dc_usage; return 2 }
+    [[ -n "$project" ]] || project="$FEEDKEY"
+    [[ -n "$project" ]] || { [[ "$sub" == (token|status|forget) && -n "$arg" ]] && project="$arg" && arg=; }
+    [[ -n "$project" ]] || { _dc_usage; return 2 }
+    if ! [[ "$project" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]]; then   # never echo the value: it may be a token
+      print -u2 "discord: a project name uses letters, digits, '.', '_' and '-' and starts with a letter or digit"; return 2
+    fi
+    dir="$(_dc_root)/$project"
   fi
-  local dir="$(_dc_root)/$project"
   case "$sub" in
     token)  _dc_token "$project" "$dir" ;;
-    status) _dc_status "$project" "$dir" ;;
+    status) _dc_status "$project" "$dir" "$ops" ;;
     forget) _dc_forget "$project" "$dir" ;;
     audit)  _dc_audit "$dir" "$since" ;;
-    bridge) _dc_bridge "$dir" "$project" "$arg" "$keeper" ;;
+    bridge) _dc_bridge "$dir" "$project" "$arg" "$keeper" "$ops" ;;
     *) (( $+commands[jq] )) || { print -u2 "discord: jq not found"; return 1 }
        case "$sub" in
          channel) _dc_channel "$dir" "$arg" ;;
+         ops-channels) _dc_ops_channels "$dir" "${pos[1]}" "${pos[2]}" ;;
          pair)   _dc_pair "$dir" "$arg" ;;
          deny)   _dc_deny "$dir" "$arg" ;;
          policy) case "$arg" in pairing|allowlist|disabled) _dc_write "$dir" '.dmPolicy = $p' --arg p "$arg" ;; *) _dc_usage ;; esac ;;
@@ -108,7 +120,7 @@ _dc_deny() {   # _dc_deny <dir> <code>
 }
 
 _dc_status() {
-  local project="$1" dir="$2" n pol ack cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" d bad=0 any=0
+  local project="$1" dir="$2" ops="${3:-0}" n pol ack cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" d bad=0 any=0
   "$_DC_TOOLS/../claude/plugin/scripts/discord-mcp-launch" --has-token "$dir" && print -r -- "token: set" || print -r -- "token: missing"
   n="$(jq '.allowFrom | length' "$dir/access.json" 2>/dev/null)"
   if [[ "${n:-0}" -gt 0 ]]; then print -r -- "paired: $n allowlisted"; else print -r -- "paired: none"; fi
@@ -138,8 +150,14 @@ _dc_status() {
   if [[ -f "$HOME/.claude/channels/discord/.env" ]]; then
     print -r -- "discord: a token in ~/.claude/channels/discord/.env makes every session connect that bot; run tmux-ctl discord token for a project and delete that file"
   fi
-  local ch; ch="$(jq -r '.channel // empty' "$dir/bridge.json" 2>/dev/null)"
-  print -r -- "channel: ${ch:-none}"
+  local ch cc ap; ch="$(jq -r '.channel // empty' "$dir/bridge.json" 2>/dev/null)"
+  if (( ops )); then
+    cc="$(jq -r '.command_center // empty' "$dir/bridge.json" 2>/dev/null)"; ap="$(jq -r '.approvals // empty' "$dir/bridge.json" 2>/dev/null)"
+    print -r -- "command center: ${cc:-none}"; print -r -- "approvals: ${ap:-none}"
+    [[ -n "$cc" && -n "$ap" ]] && ch=ok || ch=
+  else
+    print -r -- "channel: ${ch:-none}"
+  fi
   local bdir; bdir="$(_dc_bridge_dir)"
   if [[ -z "$ch" ]]; then print -r -- "bridge: no channel"
   elif [[ ! -d "$bdir/node_modules" ]]; then print -r -- "bridge: deps missing"
@@ -244,9 +262,32 @@ _dc_channel() {
   if (( changed )); then print -r -- "channel: $id"; else print -r -- "channel: $id (unchanged)"; fi
 }
 
-# _dc_bridge <dir> <project> install|start|stop [keeper 0|1]: stop writes bridge.stopped; start --keeper (the board) honours it, a person clears it
+# _dc_ops_channels <dir> <command center id> <approvals id>: the ops bot's two channels -> access.json groups and bridge.json; a no-op when both already hold them
+_dc_ops_channels() {
+  local dir="$1" cc="$2" ap="$3" live="$1/access.json" user gwant bwant bcur c changed=0
+  [[ -e "$live" ]] && jq -e . "$live" >/dev/null 2>&1 || { print -u2 "discord: pair or allow a user first"; return 1 }
+  user="$(jq -r '.allowFrom[0] // empty' "$live")"
+  [[ -n "$user" ]] || { print -u2 "discord: pair or allow a user first"; return 1 }
+  gwant="$(jq -cS '{requireMention: false, allowFrom: (.allowFrom // [])}' "$live")"
+  for c in "$cc" "$ap"; do
+    if [[ "$gwant" != "$(jq -cS --arg c "$c" '.groups[$c] // empty' "$live")" ]]; then
+      _dc_write "$dir" '.groups[$c] = {"requireMention": false, "allowFrom": (.allowFrom // [])}' --arg c "$c" || return 1
+      changed=1
+    fi
+  done
+  bwant="$(jq -cnS --arg c "$cc" --arg a "$ap" --arg u "$user" '{command_center: $c, approvals: $a, user: $u}')"
+  bcur="$(jq -cS . "$dir/bridge.json" 2>/dev/null)"
+  if [[ "$bwant" != "$bcur" ]]; then
+    ( umask 077; print -r -- "$bwant" | jq --indent 2 . > "$dir/bridge.json.next" ) && chmod 600 "$dir/bridge.json.next" && mv -f "$dir/bridge.json.next" "$dir/bridge.json" \
+      || { rm -f "$dir/bridge.json.next"; print -u2 "discord: could not write $dir/bridge.json"; return 1 }
+    changed=1
+  fi
+  if (( changed )); then print -r -- "ops-channels: $cc $ap"; else print -r -- "ops-channels: $cc $ap (unchanged)"; fi
+}
+
+# _dc_bridge <dir> <project> install|start|stop [keeper 0|1] [ops 0|1]: stop writes bridge.stopped; start --keeper (the board) honours it, a person clears it
 _dc_bridge() {
-  local dir="$1" project="$2" act="$3" keeper="${4:-0}" bdir pid repo="${_DC_TOOLS:h}"
+  local dir="$1" project="$2" act="$3" keeper="${4:-0}" ops="${5:-0}" bdir pid repo="${_DC_TOOLS:h}"
   bdir="$(_dc_bridge_dir)"
   case "$act" in
     install)
@@ -263,13 +304,20 @@ _dc_bridge() {
         rm -f "$dir/bridge.stopped"
       fi
       "$_DC_TOOLS/../claude/plugin/scripts/discord-mcp-launch" --has-token "$dir" || { print -u2 "bridge: no bot token (tmux-ctl discord token)"; return 1 }
-      [[ -n "$(jq -r '.channel // empty' "$dir/bridge.json" 2>/dev/null)" ]] || { print -u2 "bridge: no channel (tmux-ctl discord channel <id>)"; return 1 }
+      local win=discord opsarg=
+      if (( ops )); then
+        [[ -n "$(jq -r '.command_center // empty' "$dir/bridge.json" 2>/dev/null)" && -n "$(jq -r '.approvals // empty' "$dir/bridge.json" 2>/dev/null)" ]] \
+          || { print -u2 "bridge: no command_center/approvals channels (tmux-ctl discord ops-channels <command center id> <approvals id>)"; return 1 }
+        win=discord-ops; opsarg=" --ops"
+      else
+        [[ -n "$(jq -r '.channel // empty' "$dir/bridge.json" 2>/dev/null)" ]] || { print -u2 "bridge: no channel (tmux-ctl discord channel <id>)"; return 1 }
+      fi
       [[ -d "$bdir/node_modules" ]] || { print -u2 "bridge: node_modules missing (tmux-ctl discord bridge install)"; return 1 }
-      BG="${project}-bg"   # outside tmux BG is empty; the bridge window lives in the project's hidden session directly
+      BG="${project}-bg"   # ops: _ops-bg; outside tmux BG is empty; the bridge window lives in the project's hidden session directly
       ensure_bg
-      t kill-window -t "=${BG}:=discord" 2>/dev/null
-      t new-window -d -t "=${BG}:" -n discord -c "$repo" "exec node ${(q)repo}/tools/discord-bridge/bridge.js ${(q)dir}" || { print -u2 "bridge: could not start the window"; return 1 }
-      print -r -- "bridge: started in ${BG}:discord" ;;
+      t kill-window -t "=${BG}:=${win}" 2>/dev/null
+      t new-window -d -t "=${BG}:" -n "$win" -c "$repo" "exec node ${(q)repo}/tools/discord-bridge/bridge.js ${(q)dir}${opsarg}" || { print -u2 "bridge: could not start the window"; return 1 }
+      print -r -- "bridge: started in ${BG}:${win}" ;;
     *) _dc_usage ;;
   esac
 }
