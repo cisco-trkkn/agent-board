@@ -11,6 +11,10 @@ What it does:
   backoff (1 s doubling to 60 s) without sending later files first.
 - Keeps the pinned status card (`card` op, at most one edit per 30 s), one public thread per key
   (`thread`, `archive`), and posts (`post`, with optional mention, deep link and files).
+- `post` `files` (absolute paths): at most 10 per post and 25 MB each. A missing file is dropped and the text gains
+  `<name> not found`; a bigger one gains `<name> too large (<size>)`; beyond 10, `<k> more files not sent (10 max)`
+  (the post still goes). `delete_files: true` unlinks, after a successful send only, each listed file that resolves
+  inside `<dir>/tmp/`; any other path is kept and logged. A failed send keeps the files.
 - Writes `<dir>/bridge-state.json` atomically (`card_message_id`, `threads`, `guild_id`, `connected`, `ts`).
 - Ops added for the controls: `prompt` `{key, window, tool, lines, mention_user}` posts
   `<@user> 🔐 <window> wants to run <tool>` with the lines in a code block and `Allow once` / `Deny` buttons
