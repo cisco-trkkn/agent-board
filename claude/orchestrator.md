@@ -276,7 +276,7 @@ When `tmux-ctl discord status` shows `bridge: running` for the project, the brid
    "<label>"`. It presses nothing and exits 1 with `approve: no permission prompt in <window>`, `approve: the
    prompt in <window> changed` (also when `<lines>` are not exactly the lines of the command), `approve: no one-time Yes in
    <window>`, `approve: no No option in <window>` or `approve: <window> is in copy mode`: say so in Discord
-   and ask again. A line other than the "Esc to cancel" footer below the options also reads as "no permission
+   and ask again. A line other than the "Esc to cancel" footer, or, after it, one status divider ending ` @<name> ─` as the last row, below the options also reads as "no permission
    prompt".
 4. A prompt offering only "always allow", "don't ask again", "switch to auto mode" or "switch to accept
    edits" rows waits for the user at the terminal; never press those rows.
