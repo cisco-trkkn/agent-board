@@ -107,11 +107,15 @@ function fakeReaction({ emoji, message, partial = false }) {
   return r;
 }
 
-// A fake interaction: a component click or other.
-function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer } = {}) {
-  const i = { customId, user: { id: user }, message: { id: messageId }, channelId, replies: [], deferred: 0 };
+// A fake interaction: a component click or other. ephemeral: the clicked message is an ephemeral reply
+// (flags 64); values: the picked options of a select menu. reply/followUp/update are recorded in replies.
+function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer, values, ephemeral = false } = {}) {
+  const i = { customId, user: { id: user }, message: { id: messageId, flags: ephemeral ? 64 : 0 }, channelId, replies: [], updates: [], followUps: [], deferred: 0 };
+  if (values) i.values = values;
   i.deferUpdate = async () => { if (onDefer) onDefer(); i.deferred++; };
   i.reply = async (x) => { i.replies.push(x); };
+  i.followUp = async (x) => { i.followUps.push(x); };
+  i.update = async (x) => { i.updates.push(x); };
   return i;
 }
 

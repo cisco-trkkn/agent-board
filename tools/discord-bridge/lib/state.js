@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const file = (dir) => path.join(dir, 'bridge-state.json');
-const defaults = () => ({ card_message_id: null, threads: {}, guild_id: null, connected: false, prompts: {} });
+const defaults = () => ({ card_message_id: null, threads: {}, guild_id: null, connected: false, prompts: {}, posts: {}, approvals: {} });
 
 function read(dir) {
   try { return { ...defaults(), ...JSON.parse(fs.readFileSync(file(dir), 'utf8')) }; } catch { return defaults(); }

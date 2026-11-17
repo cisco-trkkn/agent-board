@@ -16,6 +16,10 @@ const UNKNOWN_MESSAGE = 10008;
 const HELD = Symbol('held');
 const PROMPT_MAX = 1500;
 const PROMPTS_KEEP = 200;
+const APPROVALS_KEEP = 500;
+const FILES_PAGE = 10;
+const SELECT_MAX = 25;
+const REPLY_MAX = 2000;
 const REACT_EMOJI = new Set(['✅', '❌', '🛑', '▶', '⏭']);
 
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
@@ -39,7 +43,7 @@ function isRetryable(e) {
   return /socket hang up|fetch failed|network|timed? ?out/i.test(String(e?.message));
 }
 
-function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const token = readToken(dir);
   let st = stateLib.read(dir);
   let pendingCard = null; // {text} held back by the 30 s throttle
@@ -62,17 +66,25 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
 
   const cfg = () => readJson(path.join(dir, 'bridge.json'), {});
   const save = () => stateLib.write(dir, st, now());
-  const home = async () => {
-    const channel = cfg().channel;
-    if (!channel) throw new Error('bridge.json has no channel');
+  // The channel a bridge.json key names: `channel` in project mode, `command_center` / `approvals` in ops mode.
+  const chan = async (field) => {
+    const channel = cfg()[field];
+    if (!channel) throw new Error(`bridge.json has no ${field}`);
     const ch = await client.channels.fetch(channel);
     if (ch?.guildId && st.guild_id !== ch.guildId) { st.guild_id = ch.guildId; save(); }
     return ch;
   };
+  const home = () => chan(ops ? 'command_center' : 'channel');
+  const CARD_ROW = [{ type: 1, components: [
+    { type: 2, style: 4, label: 'Pause all', custom_id: 'ab:ops:pause-all' },
+    { type: 2, style: 3, label: 'Resume all', custom_id: 'ab:ops:resume-all' },
+    { type: 2, style: 2, label: 'Inbox', custom_id: 'ab:ops:inbox' },
+  ] }];
+  const cardPayload = (text) => ({ content: text, allowedMentions: { parse: [] }, ...(ops ? { components: CARD_ROW } : {}) });
 
   async function createCard(text) {
     const ch = await home();
-    const msg = await ch.send({ content: text, allowedMentions: { parse: [] } });
+    const msg = await ch.send(cardPayload(text));
     st.card_message_id = msg.id; save();
     lastCardAt = now();
     await msg.pin();
@@ -83,7 +95,7 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     const ch = await home();
     try {
       const msg = await ch.messages.fetch(st.card_message_id);
-      await msg.edit({ content: text, allowedMentions: { parse: [] } });
+      await msg.edit(cardPayload(text));
       lastCardAt = now();
     } catch (e) {
       if (e?.code !== UNKNOWN_MESSAGE) throw e;
@@ -141,6 +153,11 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     return { ok, notes };
   }
 
+  // Keep only the newest `keep` entries of a key -> message id map (insertion order).
+  function trim(map, keep) {
+    for (const k of Object.keys(map).slice(0, Math.max(0, Object.keys(map).length - keep))) delete map[k];
+  }
+
   async function opPost(op) {
     const c = cfg();
     let text = String(op.text ?? '');
@@ -164,7 +181,8 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     if (notes.length) text += '\n' + notes.join('\n');
     payload.content = text.slice(0, 2000);
     if (ok.length) payload.files = ok;
-    await target.send(payload);
+    const sent = await target.send(payload);
+    if (op.key) { st.posts[op.key] = sent.id; trim(st.posts, PROMPTS_KEEP); save(); }
     if (op.delete_files === true) {
       let tmpRoot = null;
       try { tmpRoot = fs.realpathSync(path.join(dir, 'tmp')) + path.sep; } catch { /* no tmp/ */ }
@@ -207,25 +225,72 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
       components: [{ type: 1, components: buttons }],
     });
     st.prompts[op.key] = msg.id;
-    for (const k of Object.keys(st.prompts).slice(0, Math.max(0, Object.keys(st.prompts).length - PROMPTS_KEEP))) delete st.prompts[k];
+    trim(st.prompts, PROMPTS_KEEP);
     save();
     say(`prompt ${snip(op.key)} ${snip(op.tool)}`);
   }
 
+  const cut = (t, n) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
+
+  async function opApproval(op) {
+    if (!ops) throw new Error('approval op needs ops mode');
+    const c = cfg();
+    const key = String(op.key);
+    const row = (buttons) => ({ type: 1, components: buttons });
+    const comps = [];
+    if (op.kind === 'perm') {
+      comps.push(row([
+        { type: 2, style: 3, label: 'Allow once', custom_id: `ab:ops:allow:${key}` },
+        { type: 2, style: 4, label: 'Deny', custom_id: `ab:ops:deny:${key}` },
+      ]));
+    } else if (op.kind === 'merge') {
+      comps.push(row([
+        { type: 2, style: 3, label: 'Merge', custom_id: `ab:ops:merge:${key}` },
+        { type: 2, style: 2, label: 'Keep branch', custom_id: `ab:ops:keep:${key}` },
+        { type: 2, style: 1, label: 'Show files', custom_id: `ab:ops:files:${key}:0` },
+      ]));
+      const files = views()?.evidence?.[key]?.files;
+      if (Array.isArray(files) && files.length) {
+        comps.push(row([{
+          type: 3, custom_id: `ab:ops:diff:${key}`, placeholder: 'Show a diff',
+          options: files.slice(0, SELECT_MAX).map((f) => ({ label: cut(String(f.path), 100), value: String(f.path).slice(0, 100) })),
+        }]));
+      }
+    } else if (op.link) {
+      const project = op.project || views()?.approvals?.find((a) => a.key === key)?.project || 'project';
+      comps.push(row([{ type: 2, style: 5, label: cut(`Reply in ${project}`, 80), url: String(op.link) }]));
+    }
+    let text = String(op.text ?? '');
+    const payload = { allowedMentions: { parse: [] } };
+    if (op.mention_user && c.user) {
+      text = `<@${c.user}> ${text}`;
+      payload.allowedMentions = { users: [String(c.user)] };
+    }
+    payload.content = text.slice(0, REPLY_MAX);
+    if (comps.length) payload.components = comps;
+    const ch = await chan('approvals');
+    const msg = await ch.send(payload);
+    st.approvals[key] = msg.id;
+    trim(st.approvals, APPROVALS_KEEP);
+    save();
+    say(`approval ${snip(key)} ${snip(op.kind)}`);
+  }
+
   async function opEdit(op) {
-    const id = st.prompts[op.key];
-    if (!id) { say(`edit ${snip(op.key)}: no message`); return; }
-    const ch = await home();
+    const key = op.key;
+    const where = [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')]].find(([m]) => m[key]);
+    if (!where) { say(`edit ${snip(key)}: no message`); return; }
+    const ch = await where[1]();
     try {
-      const msg = await ch.messages.fetch(id);
+      const msg = await ch.messages.fetch(where[0][key]);
       await msg.edit({ content: String(op.text ?? '').slice(0, 2000), components: [] });
     } catch (e) {
       if (e?.code !== UNKNOWN_MESSAGE) throw e;
-      say(`edit ${snip(op.key)}: no message`);
+      say(`edit ${snip(key)}: no message`);
     }
   }
 
-  const handlers = { prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  const handlers = { approval: opApproval, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -285,6 +350,8 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     return new Set(Array.isArray(a) ? a.map(String) : []);
   }
 
+  const views = () => readJson(path.join(dir, 'views.json'), null);
+
   function writeEvent(ev) {
     const evDir = path.join(dir, 'events');
     fs.mkdirSync(evDir, { recursive: true });
@@ -293,14 +360,89 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     fs.renameSync(path.join(evDir, `${name}.tmp`), path.join(evDir, name));
   }
 
+  const EPHEMERAL = 64;
+  const isEphemeral = (i) => { const f = i.message?.flags; return typeof f === 'number' ? (f & EPHEMERAL) !== 0 : !!f?.has?.(EPHEMERAL); };
+  const NO_MENTIONS = { parse: [] };
+  // Ephemeral answer to a click: a new reply, or an update of the ephemeral message the click came from.
+  async function answer(i, content, components) {
+    const body = { content: cut(content, REPLY_MAX), allowedMentions: NO_MENTIONS, ...(components ? { components } : {}) };
+    try {
+      if (isEphemeral(i)) await i.update({ ...body, components: components || [] });
+      else await i.reply({ ...body, flags: EPHEMERAL });
+    } catch (e) { say(`reply failed: ${snip(e?.message)}`); }
+  }
+
+  const fence = (t) => t.replace(/`{3,}/g, (m) => `\`\u200b${m.slice(1).match(/`{1,2}/g).join('\u200b')}`);
+
+  function filesPage(key, page, data) {
+    const files = data?.evidence?.[key]?.files;
+    if (!Array.isArray(files) || !files.length) return { content: 'No file list for this approval.' };
+    const pages = Math.ceil(files.length / FILES_PAGE);
+    const p = Math.min(Math.max(page, 0), pages - 1);
+    let body = files.slice(p * FILES_PAGE, (p + 1) * FILES_PAGE).map((f) => `${f.path} +${f.add} -${f.del}`).join('\n');
+    body = cut(body, REPLY_MAX - 30);
+    const btns = [];
+    if (p > 0) btns.push({ type: 2, style: 2, label: 'Prev', custom_id: `ab:ops:files:${key}:${p - 1}` });
+    if (p < pages - 1) btns.push({ type: 2, style: 2, label: 'Next', custom_id: `ab:ops:files:${key}:${p + 1}` });
+    return { content: `${body}\npage ${p + 1}/${pages}`, components: btns.length ? [{ type: 1, components: btns }] : [] };
+  }
+
+  function inboxText(data) {
+    const list = Array.isArray(data.approvals) ? data.approvals : [];
+    if (!list.length) return 'No open decisions.';
+    const lines = []; let total = 0;
+    for (const a of list) {
+      const l = `${a.project} · ${a.title}${a.link ? ` ${a.link}` : ''}`;
+      if (total + l.length + 1 > REPLY_MAX - 30) { lines.push(`… ${list.length - lines.length} more, see board`); break; }
+      lines.push(l); total += l.length + 1;
+    }
+    return lines.join('\n');
+  }
+
+  // ab:ops:* clicks in ops mode. Read-only buttons are answered here from views.json; actions become click events.
+  async function onOpsInteraction(i, id) {
+    const user = String(i.user?.id);
+    const ev = (e) => writeEvent({ ...e, user, ts: now() });
+    const read = (what) => { ev({ type: 'read', what }); say(`read ${snip(what)}`); };
+    let m;
+    if (id === 'ab:ops:inbox' || (m = /^ab:ops:files:([^:]+):(\d+)$/.exec(id)) || (m = /^ab:ops:diff:([^:]+)$/.exec(id))) {
+      const data = views();
+      if (!data || typeof data !== 'object') { await answer(i, 'Board data not available yet.'); read(id); return; }
+      if (id === 'ab:ops:inbox') await answer(i, inboxText(data));
+      else if (id.startsWith('ab:ops:files:')) { const r = filesPage(m[1], Number(m[2]), data); await answer(i, r.content, r.components); }
+      else {
+        const ev0 = data.evidence?.[m[1]];
+        const want = String(i.values?.[0] ?? '');
+        const file = ev0?.files?.find((f) => String(f.path).slice(0, 100) === want);
+        const d = ev0?.diffs?.[file ? file.path : want];
+        await answer(i, typeof d === 'string' ? `\`\`\`diff\n${fence(d).slice(0, 1850)}\n\`\`\`` : `No diff stored for ${cut(want, 200)}.`);
+      }
+      read(id);
+      return;
+    }
+    if (id === 'ab:ops:pause-all') {
+      await answer(i, 'Pause every running queue?', [{ type: 1, components: [
+        { type: 2, style: 4, label: 'Confirm pause all', custom_id: `ab:ops:pause-all-confirm:${now()}` },
+      ] }]);
+      read(id);
+      return;
+    }
+    if (id.startsWith('ab:ops:pause-all-confirm:')) await answer(i, 'Sent.', []);
+    else { try { await i.deferUpdate(); } catch (e) { say(`ack failed: ${snip(e?.message)}`); } }
+    ev({ type: 'click', custom_id: id, message_id: i.message?.id, channel_id: i.channelId });
+    say(`event ${snip(id)}`);
+  }
+
   async function onInteraction(i) {
     const id = i?.customId;
     if (typeof id !== 'string' || !id.startsWith('ab:')) return;
     if (!allowFrom().has(String(i.user?.id))) {
       try { await i.reply({ content: 'Not authorized.', flags: 64 }); } catch (e) { say(`reply failed: ${snip(e?.message)}`); }
       say(`click ${snip(id)}: not authorized`);
+      if (ops && id.startsWith('ab:ops:')) writeEvent({ type: 'rejected', what: id, user: String(i.user?.id), ts: now() });
       return;
     }
+    if (ops && id.startsWith('ab:ops:')) return onOpsInteraction(i, id);
     try { await i.deferUpdate(); } catch (e) { say(`ack failed: ${snip(e?.message)}`); }
     const ts = now();
     const base = { user: i.user?.id, message_id: i.message?.id, ts };
@@ -344,12 +486,13 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
 
   function close() { closed = true; }
 
-  return { tick, onInteraction, onReaction, onReady, onDisconnect, attach, close, TICK_MS };
+  const ctx = { dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, NO_MENTIONS };
+  return { ctx, tick, onInteraction, onReaction, onReady, onDisconnect, attach, close, TICK_MS };
 }
 
 function main() {
   const dir = process.argv[2];
-  if (!dir) { console.error('usage: node bridge.js <dir>'); process.exit(2); }
+  if (!dir) { console.error('usage: node bridge.js <dir> [--ops]'); process.exit(2); }
   fs.mkdirSync(dir, { recursive: true });
   const token = readToken(dir);
   if (!token) { console.error('no DISCORD_BOT_TOKEN in <dir>/.env'); process.exit(2); }
@@ -372,7 +515,7 @@ function main() {
     intents: [I.Guilds, I.GuildMessages, I.GuildMessageReactions, I.DirectMessages, I.DirectMessageReactions],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
-  bridge = createBridge({ dir, client, log });
+  bridge = createBridge({ dir, client, ops: process.argv.includes('--ops'), log });
   bridge.attach();
   timer = setInterval(() => { bridge.tick().catch((e) => log(`tick error: ${scrub(e?.message)}`)); }, TICK_MS);
   client.login(token).catch((e) => { log(`login failed: ${scrub(e?.message)}`); process.exit(1); });
