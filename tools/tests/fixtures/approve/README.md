@@ -53,3 +53,5 @@ paths, tokens or secrets were in the captures (`grep -c '/Users/'` → 0 for eve
 
 After `kill-server`: `ps -ax` scanned 972 processes, 0 matched `apcap`; the scratch dir was removed
 (`ls` of it: "No such file or directory").
+
+`bash-teammate-divider.txt`: a real capture from a teammate pane (not a plain `claude` session), Claude Code current at 2026-11-17, `tmux capture-pane -p -J`, 49 rows. Bash prompt with 2 options (1 Yes / 2 No), a `│ Dangerous rm operation …` warning under the second `╌` rule, a `⚠ Claude Code will automatically block this request …` row, blank rows around the `Esc to cancel · Tab to amend` footer, and a last row that is a solid divider carrying the teammate label (`──── @gate-tap ─`).
