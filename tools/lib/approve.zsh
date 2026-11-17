@@ -108,7 +108,9 @@ approve_cmd() {
   [[ -n "$TC_APPROVE_BEFORE_SEND" ]] && eval "$TC_APPROVE_BEFORE_SEND" >/dev/null 2>&1
   [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "approve: $win is in copy mode"; return 1 }
   again="$(_ap_screen "$pane" | _ap_prompt)"
-  if [[ "$again" != "$block" ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
+  # auto mode draws "block this request in M:SS" inside the block and it ticks every second: mask only that time in this compare
+  local _cd='s/block this request in [0-9][0-9]*:[0-9][0-9]/block this request in M:SS/'
+  if [[ "$(print -r -- "$again" | sed -e "$_cd")" != "$(print -r -- "$block" | sed -e "$_cd")" ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
   [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "approve: $win is in copy mode"; return 1 }
   t send-keys -t "$pane" "$digit"
   print -r -- "approve: $win: chose \"$want\""

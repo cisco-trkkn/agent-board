@@ -41,7 +41,7 @@ n=100; while [[ ! -e $S/ready-$1 ]] && (( n-- > 0 )); do sleep 0.05; done
 SW
   cp $S/pane-$1.zsh $S/pane-$1.first; mkpane $1 $3; mv $S/pane-$1.zsh $S/pane2-$1.zsh; cp $S/pane-$1.first $S/pane-$1.zsh
   export TC_APPROVE_BEFORE_SEND="zsh $S/swap-$1.zsh"
-  ap $1 once; unset TC_APPROVE_BEFORE_SEND
+  ap $1 once "${@:4}"; unset TC_APPROVE_BEFORE_SEND
 }
 swap_case c-swap $FX/bash-git.txt $FX/write.txt
 # mutation: skip the re-capture compare → a key is sent to the new prompt
@@ -55,4 +55,15 @@ for loc in default C; do
   check "swapped command ($loc locale): no key sent"  test "$(got c-cmd-$loc)" = NONE
 done
 APENV=()
+# auto-mode countdown row (real capture, fixtures/approve/README.md): its M:SS ticks every second, so a tick between the two reads must not fail the press
+CD=$FX/bash-auto-countdown.txt; CDX='│ GT=/tmp/agent-board-gate; touch $GT/x.gate; rm -f $GT/*.gate$(printf '"''"') && echo gate-tap-3-ran'
+sed 's/in 1:47,/in 1:46,/' $CD > $S/cd-tick.txt
+sed 's/gate-tap-3-ran/gate-tap-3-evil/' $S/cd-tick.txt > $S/cd-tick-cmd.txt
+swap_case c-tick $CD $S/cd-tick.txt --expect "$CDX"
+# mutation: drop the countdown masking in the again/block compare → the tick fails the press
+check "countdown tick between the reads: chose Yes, key 1"  test $rc -eq 0 -a "$(got c-tick)" = 1
+swap_case c-tickcmd $CD $S/cd-tick-cmd.txt --expect "$CDX"
+# mutation: mask more than the time (e.g. the whole row or the command) → the swapped command is pressed
+check "tick plus a changed command: exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in c-tickcmd changed"
+check "tick plus a changed command: no key sent"  test "$(got c-tickcmd)" = NONE
 tt_done

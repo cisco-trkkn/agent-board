@@ -55,3 +55,5 @@ After `kill-server`: `ps -ax` scanned 972 processes, 0 matched `apcap`; the scra
 (`ls` of it: "No such file or directory").
 
 `bash-teammate-divider.txt`: a real capture from a teammate pane (not a plain `claude` session), Claude Code current at 2026-11-17, `tmux capture-pane -p -J`, 49 rows. Bash prompt with 2 options (1 Yes / 2 No), a `│ Dangerous rm operation …` warning under the second `╌` rule, a `⚠ Claude Code will automatically block this request …` row, blank rows around the `Esc to cancel · Tab to amend` footer, and a last row that is a solid divider carrying the teammate label (`──── @gate-tap ─`).
+
+`bash-auto-countdown.txt`: a real capture from a teammate pane in auto mode, 2026-11-17, with the countdown row (` ⚠ Claude Code will automatically block this request in 1:47, ...`); its `M:SS` ticks every second. It also has the `@gate-tap` divider.
