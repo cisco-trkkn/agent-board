@@ -19,5 +19,8 @@ if [[ "${TC_DISCORD-1}" != 0 ]] && "$AB_REPO/claude/plugin/scripts/discord-mcp-l
   CH_ARGS=(--channels plugin:discord@claude-plugins-official)
   { python3 "$AB_REPO/tools/discord_cache.py" clear || true } >/dev/null 2>&1   # a cached failed start would skip the channel
 fi
+# enabledPlugins loads the discord plugin in every overseer: point its .mcp.json at the launcher so a token-less one connects the stub
+# and never records a failed start (as claude-orchestrator does; never blocks the launch).
+{ source "$AB_REPO/tools/lib/discord-launch.zsh" && dc_ensure_launcher } || true
 exec claude --model haiku --effort low "${CH_ARGS[@]}" -n overseer --setting-sources project,local --settings "$AB_REPO/claude/overseer-settings.json" \
   --append-system-prompt-file "$AB_REPO/claude/overseer.md" "$@"
