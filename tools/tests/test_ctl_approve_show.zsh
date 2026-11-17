@@ -41,4 +41,7 @@ check "divider straight after the options, no footer: no prompt"  test $rc -eq 1
 replay sh-tdd $TD; shw sh-tdd show; ap sh-tdd deny --expect "$(print -r -- "$out" | grep -a '^P:' | sed 's/^P://')"
 check "deny teammate divider: exit 0, key 2"  test $rc -eq 0 -a "$(got sh-tdd)" = 2
 check "help shows the whole header (show line and metrics line)"  test "$($C help | grep -c "approve <win> show")" = 1 -a "$($C help | grep . | tail -1 | grep -c "metrics <sub>")" = 1
+# auto-mode capture with the countdown row: parses; the row is not a P: line
+replay sh-cd $FX/bash-auto-countdown.txt; shw sh-cd show
+check "show auto countdown capture: exact output + exit 0"  test "$out" = $'T:Bash command\nP:│ GT=/tmp/agent-board-gate; touch $GT/x.gate; rm -f $GT/*.gate$(printf \'\') && echo gate-tap-3-ran' -a $rc -eq 0
 tt_done
