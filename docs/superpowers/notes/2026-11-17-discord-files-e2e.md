@@ -15,6 +15,8 @@ records: 95 nonzero-exit: 15 within 24h: 3 in worktrees: 13
   nonzero: 16864-11933 1 1794846099 .../worktrees/queue-reliability True
 ```
 
+All three qualifying failed runs came from the `queue-reliability` worktree, so on real data P2's pick can attach an unrelated worktree's log.
+
 Pick: id `16864-11933`, cmd `zsh tools/tests/test_ctl_relay.zsh`, exit 1: the newest of the three failing worktree runs in the last 24 h (P2). The written log has 47 lines (≤ 200). That run's log is shorter than 200 lines, so this check does not exercise the tail cut; the Task 2 unit test does.
 
 ## 2. Real report through `derive` + `ops_for_events`
@@ -40,7 +42,16 @@ snap: 1 post, 1 file
 rc=0      real 3.594 s (user 1.55 s, sys 1.32 s)
 ```
 
-**Chrome alongside the user's Chrome:** headless Chrome with the default profile worked: 3.6 s, no hang, rc 0. The `--user-data-dir` retry was therefore not needed and not run. One run only; it does not prove a hang cannot happen.
+**Chrome alongside the user's Chrome:** headless Chrome ran with the scratch `HOME` and no `--user-data-dir`: 3.6 s, no hang, rc 0. Which profile it used is not shown. After the run, the scratch HOME has no Chrome profile:
+
+```
+$ ls "<scratch>/home/Library/Application Support/Google/Chrome"
+ls: ...: No such file or directory
+$ find <scratch>/home -maxdepth 4
+home/.local/state/tmux-dash/token      (only the token file)
+```
+
+So Chrome did not create its profile under the scratch HOME; it used either the real profile location (resolved from the account, not `$HOME`) or a temporary profile. Contention with the user's real profile is therefore neither shown nor ruled out. One run only; it does not prove a hang cannot happen. `--user-data-dir` stays open for the Task 6 user gate.
 
 PNG: `.../state/discord/agent-board/tmp/snap-1794875743-99349.png`, **62 131 bytes** (≥ 20 KB). Read with the Read tool: the board is visible, not blank. The Overview shows the header (Agent Board, tabs Overview / agent-board / interiors / signal-hub-gcp, "live"), the PROJECTS list with agent-board "Working" and its teammates (df-rev, gate-tap, ap-fix, df-e2e), interiors and signal-hub-gcp "Idle", "$0.00 today" per project, and the NOTIFICATIONS block. The right-hand Overseer panel shows a bare **404** because the scratch board has no ttyd behind it; that is a property of the scratch board, not of `snap`.
 
@@ -111,7 +122,7 @@ The only difference is `feed-state.json`, written by the **live** feed, not by t
 
 ## Result
 
-All six checks hold. One observation for the lead: headless Chrome with the default profile worked next to the user's open Chrome (3.6 s); a code fix for `--user-data-dir` is not indicated by this run.
+All six checks hold. Open question for the Task 6 gate: whether `snap` needs `--user-data-dir` when the user's own Chrome is running. This run (scratch HOME, 3.6 s, rc 0) does not show contention with the user's real profile either way.
 
 ## 7. Bridge suite
 
