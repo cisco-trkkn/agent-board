@@ -98,9 +98,33 @@ check "start --ops (a person): clears the marker and starts" test $rc -eq 0 -a !
 run $C discord status --ops
 check "status --ops: stopped bridge line" test -n "$(grep -x 'bridge: stopped' $S/out.$N)"
 
+# --- merge-request (Task 5): fixture repo in a temp dir, scratch TC_STATE; the evidence and the feed event land there
+R="$S/repo"; mkdir -p $R
+G() { git -C $R -c user.name=t -c user.email=t@t "$@" }
+G init -q -b main; print x > $R/a; G add -A; G commit -qm base; G checkout -qb feat; print y > $R/b; G add -A; G commit -qm work
+MR=(discord merge-request --project tt --task 7 --spec spec-x --branch feat --tests "12 passed" --verdict Approved --repo $R)
+run $C $MR --finding "one finding"
+check "merge-request: posted, rc 0" test $rc -eq 0 -a "$out" = "merge-request: posted spec-x"
+check "merge-request: evidence file in <_ops>/evidence, mode 600, sha = rev-parse" test "$(mode $O/evidence/tt-7.json)" = 600 -a "$(jq -r .sha $O/evidence/tt-7.json)" = "$(G rev-parse feat)"
+check "merge-request: one merge_approval decision event in the project's feed" test "$(jq -rc '[.kind,.tier,.spec,.refs.task]' $TC_STATE/feed/tt.jsonl)" = '["merge_approval","decision","spec-x","7"]'
+check "merge-request: the finding is in the post text" test -n "$(jq -r .text $TC_STATE/feed/tt.jsonl | grep -x 'one finding')"
+mv $B $B.off
+run $C $MR
+check "merge-request without ops: project channel only note, rc 0" test $rc -eq 0 -a "$out" = "merge-request: posted spec-x (ops bot not set up: project channel only)"
+mv $B.off $B
+rm -f $TC_STATE/feed/tt.jsonl; rm -rf $O/evidence
+run $C discord merge-request --project tt --task 7 --spec s --branch '-x' --tests t --verdict v --repo $R
+check "merge-request: a branch starting with - exits 2, nothing written" test $rc -eq 2 -a ! -e $TC_STATE/feed/tt.jsonl -a ! -e $O/evidence
+run $C discord merge-request --project tt --task 7 --spec s --branch "feat;touch $S/PWNED" --tests t --verdict v --repo $R
+check "merge-request: a shell-looking branch exits 2 and runs nothing" test $rc -eq 2 -a ! -e $S/PWNED
+run $C discord merge-request --project tt --task 7
+check "merge-request: missing options exit 2" test $rc -eq 2
+check "leak: merge-request wrote no real feed or evidence" test ! -e "$S/home/.local/state/agent-board/feed"
+
 # --- usage / leaks
 h="$($C help)"
 check "help: lists --ops and ops-channels" test -n "$(print -r -- "$h" | grep 'ops-channels')" -a -n "$(print -r -- "$h" | grep -e '--ops')"
+check "help: lists merge-request" test -n "$(print -r -- "$h" | grep 'discord merge-request')"
 check "help: last line intact (the metrics <sub> line)" test -n "$(print -r -- "$h" | tail -1 | grep 'metrics <sub>')"
 check "leak: no discord-ops window in the main session" test -z "$(tt list-windows -t '=tt:' -F '#{window_name}' | grep -x discord-ops)"
 tt_done

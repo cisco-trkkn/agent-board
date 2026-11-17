@@ -147,7 +147,7 @@ def _link(project):
 
 
 # ---- approvals ----
-def _approve(d, st, project, src_key, kind, text, link="", title="", spec="", now=None):
+def _approve(d, st, project, src_key, kind, text, link="", title="", spec="", now=None, branch=""):
     key = _okey(project, src_key)
     op = {"op": "approval", "key": key, "kind": kind, "text": text[:2000], "mention_user": True, "project": project}
     if link:
@@ -155,6 +155,8 @@ def _approve(d, st, project, src_key, kind, text, link="", title="", spec="", no
     discord_feed.outbox_write(d, op)
     st["approvals"][key] = {"project": project, "kind": kind, "src_key": src_key, "title": title or text[:100], "link": link,
                             "spec": spec, "ts": now if now is not None else time.time()}
+    if branch:
+        st["approvals"][key]["branch"] = branch   # the keep edit names it
     return key
 
 
@@ -174,6 +176,19 @@ def _approvals_view(st, now=None):
     return [{"key": k, "project": v.get("project"), "kind": v.get("kind"), "title": v.get("title"), "link": v.get("link")}
             for k, v in st["approvals"].items()
             if not (v.get("kind") in ("other", "merge") and now - (v.get("ts") or 0) > OPEN_TTL)]
+
+
+def _evidence_view(st):
+    """views.json `evidence`: per open merge approval (keyed by its ops key) the files and diffs `discord merge-request` stored."""
+    out = {}
+    for k, v in st["approvals"].items():
+        m = re.match(r"^merge:([A-Za-z0-9._-]+)(?::([0-9a-f]{8}))?$", str(v.get("src_key") or ""))
+        if v.get("kind") != "merge" or not m or not PROJECT_RE.match(str(v.get("project"))):
+            continue
+        ev = _load(tc_env.ops_dir() / "evidence" / f"{v['project']}-{m.group(1)}.json")
+        if ev.get("sha") and (not m.group(2) or str(ev["sha"])[:8] == m.group(2)):
+            out[k] = {"files": ev.get("files") or [], "diffs": ev.get("diffs") or {}}
+    return out
 
 
 def mirror_prompt(project, src_key, window, tool, lines):
@@ -208,7 +223,7 @@ def resolve(project, src_key, text):
 def _event_key(project, ev):
     refs = ev.get("refs") or {}
     if ev.get("kind") == "merge_approval" and refs.get("task"):
-        return f"merge:{refs['task']}"
+        return discord_feed.merge_key(refs)
     return ("crit:" if ev.get("tier") == "critical" else "dec:") + hashlib.sha1(f"{ev.get('ts')}|{ev.get('text')}".encode()).hexdigest()[:12]
 
 
@@ -230,7 +245,8 @@ def _mirror_events(d, st, project, link, now):
             text = f"{project}: {ev.get('text', '')}"
             if tier == "decision":
                 _approve(d, st, project, src, "merge" if kind == "merge_approval" else "other", text, link=link,
-                         title=str(ev.get("text", ""))[:100], spec=str(ev.get("spec") or ""), now=now)
+                         title=str(ev.get("text", ""))[:100], spec=str(ev.get("spec") or ""), now=now,
+                         branch=str((ev.get("refs") or {}).get("branch") or ""))
             else:
                 discord_feed.outbox_write(d, {"op": "post", "text": text[:2000], "tier": "critical", "mention_user": True})
             st["mirrored"].append(key)
@@ -278,7 +294,7 @@ def tick(records, tasks_by_project, limits, now, add_line):
         status.update({r["project"]: _project_line(r, tasks_by_project.get(r["project"]), links[r["project"]]) for r in records})
         _write_json(d / "views.json", {"ts": now, "projects": sorted(links), "status": status,
                                        "queue": {r["project"]: queue_text(tasks_by_project.get(r["project"])) for r in records},
-                                       "approvals": _approvals_view(st, now), "evidence": {}})
+                                       "approvals": _approvals_view(st, now), "evidence": _evidence_view(st)})
         return {"approvals": len(st["approvals"])}
 
 
@@ -389,7 +405,7 @@ def _click(d, user, cid, st, add_line, now, on_merge):
             result, text = str(r["result"]), str(r["text"])
         else:
             add_line(rec["project"], f"[Discord] keep branch for {rec.get('spec') or rec.get('title')}")
-            result, text = "queued", "kept"
+            result, text = "queued", f"kept: {rec['branch']}" if rec.get("branch") else "kept"
         _edit_both(rec["project"], k, rec["src_key"], text)
         st["approvals"].pop(k, None)   # only after the action went through: a failure leaves the record and the button live
         return result

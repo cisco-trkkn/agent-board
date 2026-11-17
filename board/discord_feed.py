@@ -435,6 +435,15 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
     return out, st
 
 
+def merge_key(refs):
+    """The source key of a merge approval: merge:<task>:<sha[:8]> (task ids restart per session, a moved branch is a new post)."""
+    refs = refs or {}
+    if not refs.get("task"):
+        return ""
+    sha = str(refs.get("sha") or "")[:8]
+    return f"merge:{refs['task']}:{sha}" if sha else f"merge:{refs['task']}"
+
+
 def ops_for_events(events, state):
     """Outbox ops by tier: progress -> post in the spec thread (home for a report or when no spec runs); critical and
     decision -> home post with mention_user and a link to the running spec's thread; routine -> nothing (card only)."""
@@ -452,7 +461,7 @@ def ops_for_events(events, state):
         if tier in ("critical", "decision"):
             op = {"op": "post", "text": ev["text"], "tier": tier, "mention_user": True}
             if tier == "decision":
-                op["key"] = f"merge:{refs['task']}" if kind == "merge_approval" and refs.get("task") else \
+                op["key"] = merge_key(refs) if kind == "merge_approval" and refs.get("task") else \
                     "dec:" + hashlib.sha1(f"{ev.get('ts')}|{ev.get('text')}".encode()).hexdigest()[:12]
             if thread:
                 op["link_thread_key"] = thread

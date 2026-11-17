@@ -203,8 +203,24 @@ class Tick(Base):
         self.tick([rec("a")])
         (ap,) = [o for o in self.outbox() if o["op"] == "approval"]
         self.assertEqual(ap["kind"], "merge")
-        self.assertEqual(ap["key"], okey("a", "merge:7"))
-        self.assertEqual(self.state()["approvals"][ap["key"]]["src_key"], "merge:7")
+        self.assertEqual(ap["key"], okey("a", "merge:7:abc"))   # the source key carries the branch sha: task ids restart per session
+        self.assertEqual(self.state()["approvals"][ap["key"]]["src_key"], "merge:7:abc")
+
+    def test_merge_approval_keeps_the_branch_and_views_carry_the_evidence(self):
+        self.configure()
+        self.project("a")
+        self.tick([rec("a")])
+        sha = "0123456789abcdef"
+        (self.ops / "evidence").mkdir()
+        (self.ops / "evidence" / "a-7.json").write_text(json.dumps({"sha": sha, "files": [{"path": "x.py", "add": 1, "del": 0}], "diffs": {"x.py": "+1"}}))
+        (self.ops / "evidence" / "a-8.json").write_text(json.dumps({"sha": "ffffffff00", "files": [{"path": "other", "add": 1, "del": 0}], "diffs": {}}))
+        self.feed("a", kind="merge_approval", text="merge approval: s", refs={"task": "7", "sha": sha, "branch": "feat/x"})
+        self.feed("a", kind="merge_approval", text="merge approval: t", refs={"task": "8", "sha": "11111111aa", "branch": "feat/y"})   # evidence sha differs
+        self.tick([rec("a")])
+        k = okey("a", "merge:7:01234567")
+        self.assertEqual(self.state()["approvals"][k]["branch"], "feat/x")
+        ev = json.loads((self.ops / "views.json").read_text())["evidence"]
+        self.assertEqual(ev, {k: {"files": [{"path": "x.py", "add": 1, "del": 0}], "diffs": {"x.py": "+1"}}})   # mutation: ignore the sha check -> a-8 appears
 
     def test_critical_becomes_ops_post_with_mention(self):
         self.configure()
@@ -511,6 +527,16 @@ class Events(Base):
         self.assertEqual(self.outbox()[-1], {"op": "edit", "key": k, "text": "a: kept"})
         self.assertEqual(self.outbox(self.pd)[-1], {"op": "edit", "key": "merge:8", "text": "kept"})
         self.assertEqual(self.state()["approvals"], {})
+
+    def test_keep_names_the_branch_when_the_record_has_it(self):
+        k = self.seed_merge("merge:9:abcdef01", "s3")
+        st = json.loads((self.ops / "ops-state.json").read_text())
+        st["approvals"][k]["branch"] = "feat/z"
+        (self.ops / "ops-state.json").write_text(json.dumps(st))
+        self.event("1.json", ok(f"ab:ops:keep:{k}"))
+        self.consume()
+        self.assertEqual(self.outbox()[-1]["text"], "a: kept: feat/z")
+        self.assertEqual(self.outbox(self.pd)[-1]["text"], "kept: feat/z")
 
     def test_event_exception_audited_as_error(self):
         # mutation: drop the audit line in consume's except -> no `error:` audit and the test fails
