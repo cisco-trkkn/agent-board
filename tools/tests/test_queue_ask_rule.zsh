@@ -14,4 +14,7 @@ check 'merge approved line is handled' has '[Discord] merge approved for <spec>'
 check 'keep branch line is handled' has '[Discord] keep branch for <spec>'
 check 'merge approved sets merged <sha>, keep sets kept <branch>' has_re 'merge approved for <spec>`[^.]*merged <sha>.*keep branch for <spec>`[^.]*kept <branch>'
 check 'the two lines are never a push' has 'neither line is ever a push'
+check 'ask records the metrics run as --outcome kept' has 'metrics record <spec> --batch <id> --outcome kept'
+check 'ask stores push false' has '`ask` stores `"push": false`'
+check 'morning report lists specs still awaiting merge approval' has 'lists each spec still awaiting merge approval with its branch'
 tt_done
