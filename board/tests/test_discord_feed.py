@@ -454,7 +454,8 @@ class TriggerTest(DeriveBase):
         self.assertEqual(evs[0]["tier"], "critical")
         ops = df.ops_for_events(evs, st)
         self.assertEqual(ops[0], {"op": "post", "text": "failed — tests red", "tier": "critical", "mention_user": True, "link_thread_key": "1"})
-        self.assertEqual(ops[1], {"op": "archive", "key": "1"})
+        self.assertEqual(ops[1]["text"], "failed — no failing test run recorded")   # no run record in this fixture
+        self.assertEqual(ops[2], {"op": "archive", "key": "1"})
 
     def test_report_written_home_channel(self):
         r = self.root / "docs/superpowers/reports"
@@ -685,3 +686,156 @@ class TickTest(DeriveBase):
             fh.close()
         self.assertIsNotNone(self.tick([self.run_task]))
         self.assertTrue((d / "feed-state.json").exists())
+
+
+# ---- discord-files Task 2: report and failed-run log attachments, delete_files ----
+class DeleteFilesTest(Base):
+    def test_bool_accepted_non_bool_rejected(self):
+        df.outbox_write(self.dir, post(files=["/a/b.png"], delete_files=True))
+        with self.assertRaises(ValueError):
+            df.outbox_write(self.dir, post(files=["/a/b.png"], delete_files="yes"))
+
+
+class ReportFilesTest(DeriveBase):
+    def test_report_post_carries_file(self):
+        r = self.root / "docs/superpowers/reports"
+        r.mkdir(parents=True)
+        (r / "2026-11-16-queue.md").write_text("# Queue report\n")
+        evs, _ = self.derive([], primed())
+        self.assertEqual(evs[0]["refs"]["path"], str(r / "2026-11-16-queue.md"))
+        op = df.ops_for_events(evs, {"running_thread_key": "3"})[0]
+        self.assertEqual(op["files"], [str(r / "2026-11-16-queue.md")])
+        self.assertNotIn("thread_key", op)
+        df._check(op)
+
+    def test_event_without_path_posts_without_files(self):
+        ev = {"ts": 1.0, "project": "p", "spec": "", "kind": "report_written", "tier": "progress", "text": "queue report: x",
+              "refs": {"file": "x-queue.md"}}
+        op = df.ops_for_events([ev], {})[0]
+        self.assertNotIn("files", op)
+
+
+class FailedRunLogTest(DeriveBase):
+    NOW_I = int(NOW)
+
+    def setUp(self):
+        super().setUp()
+        self.runs = Path(self.tmp.name) / "runs"
+        self.runs.mkdir()
+        self.n = 0
+
+    def log(self, lines=300, name=None):
+        self.n += 1
+        p = self.runs / (name or f"log{self.n}.out")
+        p.write_text("".join(f"line {i}\n" for i in range(1, lines + 1)))
+        return p
+
+    def write_runs(self, *recs):
+        f = Path(self.tmp.name) / "runs-proj.jsonl"
+        f.write_text("".join(json.dumps(r) + "\n" for r in recs))
+
+    def rec(self, rid="r1", **over):
+        r = {"id": rid, "ts": self.NOW_I - 3600, "agent": "w", "win": "tests", "session": "s", "cmd": "python3 -m unittest",
+             "cwd": "/x/.claude/worktrees/w", "exit": 1, "duration": 5, "log": str(self.log()), "summary": ""}
+        r.update(over)
+        return r
+
+    def failed(self):
+        done = fx("1.json")
+        done["metadata"]["outcome"] = "failed — tests red"
+        evs, st = self.derive([done], primed())
+        return evs, st, df.ops_for_events(evs, st)
+
+    @staticmethod
+    def hhmm(ts):
+        import datetime
+        return datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
+
+    def test_post_names_worktree_and_time(self):
+        self.write_runs(self.rec(cwd="/x/.claude/worktrees/queue-reliability"))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: python3 -m unittest (exit 1) · queue-reliability · {self.hhmm(self.NOW_I - 3600)}")
+
+    def test_post_empty_cmd_shows_id(self):
+        self.write_runs(self.rec("r9", cmd="  "))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: r9 (exit 1) · w · {self.hhmm(self.NOW_I - 3600)}")
+
+    def test_post_long_cmd_cut_to_200(self):
+        self.write_runs(self.rec(cmd="a" * 500))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: {'a' * 200}… (exit 1) · w · {self.hhmm(self.NOW_I - 3600)}")
+
+    def attach(self, rid):
+        return tc_env.discord_dir("proj") / "attachments" / f"{rid}.log"
+
+    def test_log_attached_in_thread(self):
+        self.write_runs({**self.rec(), "exit": None}, self.rec())
+        evs, st, ops = self.failed()
+        f = self.attach("r1")
+        self.assertEqual(f.read_text().splitlines(), [f"line {i}" for i in range(101, 301)])
+        self.assertEqual([o["op"] for o in ops], ["post", "post", "archive"])
+        self.assertEqual(ops[0], {"op": "post", "text": "failed — tests red", "tier": "critical", "mention_user": True, "link_thread_key": "1"})
+        self.assertEqual(ops[1], {"op": "post", "text": f"failed run log: python3 -m unittest (exit 1) · w · {self.hhmm(self.NOW_I - 3600)}", "tier": "progress",
+                                  "mention_user": False, "thread_key": "1", "files": [str(f)]})
+        for o in ops:
+            df._check(o)
+
+    def assert_no_log(self, *recs):
+        self.write_runs(*recs)
+        evs, st, ops = self.failed()
+        self.assertEqual([o["op"] for o in ops], ["post", "post", "archive"])
+        self.assertEqual(ops[1]["text"], "failed — no failing test run recorded")
+        self.assertNotIn("files", ops[1])
+        self.assertEqual(ops[1]["thread_key"], "1")
+        self.assertFalse((tc_env.discord_dir("proj") / "attachments").exists())
+
+    def test_exit_zero_not_picked(self):       # mutation: drop the exit != 0 filter -> this fails
+        self.assert_no_log(self.rec(exit=0))
+
+    def test_start_record_only_not_picked(self):
+        self.assert_no_log(self.rec(exit=None))
+
+    def test_cwd_outside_worktrees_not_picked(self):   # mutation: drop the cwd filter -> this fails
+        self.assert_no_log(self.rec(cwd="/x/main"))
+
+    def test_older_than_24h_not_picked(self):
+        self.assert_no_log(self.rec(ts=self.NOW_I - 86400 - 10))
+
+    def test_missing_log_file_not_picked(self):
+        self.assert_no_log(self.rec(log=str(self.runs / "gone.out")))
+
+    def test_newest_qualifying_wins(self):
+        self.write_runs(self.rec("old", ts=self.NOW_I - 7200, cmd="old cmd"), self.rec("new", ts=self.NOW_I - 60, cmd="new cmd"),
+                        self.rec("newer-ok", ts=self.NOW_I - 30, exit=0))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: new cmd (exit 1) · w · {self.hhmm(self.NOW_I - 60)}")
+        self.assertTrue(self.attach("new").is_file())
+
+    def test_attachments_pruned_to_20(self):
+        d = tc_env.discord_dir("proj") / "attachments"
+        d.mkdir(parents=True)
+        for i in range(25):
+            p = d / f"old{i:02d}.log"
+            p.write_text("x")
+            os.utime(p, (1000 + i, 1000 + i))
+        self.write_runs(self.rec())
+        self.failed()
+        names = sorted(p.name for p in d.iterdir())
+        self.assertEqual(len(names), 20)
+        self.assertIn("r1.log", names)
+        self.assertNotIn("old00.log", names)
+
+    def test_merged_outcome_adds_no_log_post(self):
+        self.write_runs(self.rec())
+        evs, st = self.derive([fx("1.json")], primed())
+        self.assertEqual([o["op"] for o in df.ops_for_events(evs, st)], ["post", "archive"])
+
+    def test_replay_does_not_rewrite_log(self):
+        self.write_runs(self.rec())
+        done = fx("1.json")
+        done["metadata"]["outcome"] = "failed — tests red"
+        evs, st = self.derive([done], primed())
+        self.attach("r1").unlink()
+        self.assertEqual(self.derive([done], st)[0], [])
+        self.assertFalse(self.attach("r1").exists())

@@ -247,13 +247,113 @@ test('posts: no mention sets allowedMentions parse []', async () => {
 
 test('posts: link_thread_key appends the deep link; files attach', async () => {
   const s = setup();
+  const fd = fs.mkdtempSync(path.join(os.tmpdir(), 'dbf-'));
+  const a = path.join(fd, 'a.txt'); const b = path.join(fd, 'b.txt');
+  fs.writeFileSync(a, 'a'); fs.writeFileSync(b, 'b');
   s.put({ op: 'thread', key: 'k', title: 'K' });
-  s.put(post('see', { link_thread_key: 'k', files: ['/tmp/a.txt'] }));
+  s.put(post('see', { link_thread_key: 'k', files: [a, b] }));
   await s.bridge.tick();
   const tid = s.st().threads.k;
   const p = s.client.callsOf('send')[0].payload;
   assert.ok(p.content.endsWith(`https://discord.com/channels/G1/${tid}`), p.content);
-  assert.deepStrictEqual(p.files, ['/tmp/a.txt']);
+  assert.deepStrictEqual(p.files, [a, b]);
+});
+
+function mkfiles(names) {
+  const fd = fs.mkdtempSync(path.join(os.tmpdir(), 'dbf-'));
+  return names.map((n) => { const p = path.join(fd, n); fs.writeFileSync(p, n); return p; });
+}
+
+test('files: over 25 MB is not attached and the text names it', async () => {
+  // Mutation: remove the size check -> big.bin is attached.
+  const s = setup();
+  const [ok] = mkfiles(['ok.txt']);
+  const big = path.join(path.dirname(ok), 'big.bin');
+  fs.writeFileSync(big, ''); fs.truncateSync(big, 26 * 1024 * 1024);
+  s.put(post('hi', { files: [ok, big] }));
+  await s.bridge.tick();
+  const p = s.client.callsOf('send')[0].payload;
+  assert.deepStrictEqual(p.files, [ok]);
+  assert.ok(p.content.includes('big.bin too large (26.0 MB)'), p.content);
+});
+
+test('files: a missing path is dropped with a line and the op is still sent', async () => {
+  const s = setup();
+  const [ok] = mkfiles(['ok.txt']);
+  s.put(post('hi', { files: [path.join(path.dirname(ok), 'gone.log'), ok] }));
+  await s.bridge.tick();
+  const p = s.client.callsOf('send')[0].payload;
+  assert.deepStrictEqual(p.files, [ok]);
+  assert.ok(p.content.includes('gone.log not found'), p.content);
+  assert.deepStrictEqual(s.files(), []);
+  assert.deepStrictEqual(s.failed(), []);
+});
+
+test('files: 12 files send the first 10 and a line for the rest', async () => {
+  const s = setup();
+  const all = mkfiles(Array.from({ length: 12 }, (_, i) => `f${i}.txt`));
+  s.put(post('hi', { files: all }));
+  await s.bridge.tick();
+  const p = s.client.callsOf('send')[0].payload;
+  assert.deepStrictEqual(p.files, all.slice(0, 10));
+  assert.ok(p.content.includes('2 more files not sent (10 max)'), p.content);
+});
+
+test('files: content stays within 2000 chars with the added lines', async () => {
+  const s = setup();
+  const all = mkfiles(Array.from({ length: 12 }, (_, i) => `f${i}.txt`));
+  s.put(post('x'.repeat(3000), { files: all }));
+  await s.bridge.tick();
+  assert.ok(s.client.callsOf('send')[0].payload.content.length <= 2000);
+});
+
+function tmpFile(s, name, sub = 'tmp') {
+  const d = path.join(s.dir, sub); fs.mkdirSync(d, { recursive: true });
+  const p = path.join(d, name); fs.writeFileSync(p, 'x'); return p;
+}
+
+test('delete_files removes a file under <dir>/tmp/ after a successful send', async () => {
+  const s = setup();
+  const p = tmpFile(s, 'snap.png');
+  s.put(post('pic', { files: [p], delete_files: true }));
+  await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('send').length, 1);
+  assert.ok(!fs.existsSync(p));
+});
+
+test('delete_files keeps a file outside <dir>/tmp/ and logs it', async () => {
+  // Mutation: remove the tmp/ containment check -> the outside file is deleted.
+  const s = setup();
+  const [out] = mkfiles(['keep.txt']);
+  const sib = tmpFile(s, 'sib.txt', 'tmpx'); // prefix-sibling of tmp/
+  s.put(post('pic', { files: [out, sib], delete_files: true }));
+  await s.bridge.tick();
+  assert.ok(fs.existsSync(out));
+  assert.ok(fs.existsSync(sib));
+  assert.ok(s.logs.some((l) => l.includes('kept') && l.includes(out)), s.logs.join('\n'));
+});
+
+test('delete_files keeps a file reached through a symlinked dir in tmp/ that points outside', async () => {
+  // Mutation: compare path.resolve instead of realpath -> the outside file is deleted.
+  const s = setup();
+  const [out] = mkfiles(['outside.txt']);
+  fs.mkdirSync(path.join(s.dir, 'tmp'), { recursive: true });
+  fs.symlinkSync(path.dirname(out), path.join(s.dir, 'tmp', 'link'));
+  const via = path.join(s.dir, 'tmp', 'link', path.basename(out));
+  s.put(post('pic', { files: [via], delete_files: true }));
+  await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('send').length, 1);
+  assert.ok(fs.existsSync(out));
+});
+
+test('delete_files keeps the tmp file when the send fails', async () => {
+  const s = setup();
+  const p = tmpFile(s, 'snap.png');
+  s.client.failNext('send', { status: 400 });
+  s.put(post('pic', { files: [p], delete_files: true }));
+  await s.bridge.tick();
+  assert.ok(fs.existsSync(p));
+  assert.strictEqual(s.failed().length > 0, true);
 });
 
 test('bridge-state: connected true on ready, false on disconnect, with guild_id, atomic', async () => {

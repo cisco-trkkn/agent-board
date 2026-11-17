@@ -249,8 +249,10 @@ While remote:
 - The conversation lives in the project's home channel. Answer with the Discord plugin's `reply` tool (pass the message's `chat_id`) in two cases: when you answer what the user wrote, and when you need a decision from the user. Keep it short: outcome first, then what you need. The plugin splits a reply
   over 2000 characters into several messages (`textChunkLimit`), so keep each reply well under that.
 - When the project's bridge is configured (`tmux-ctl discord status` shows a channel and `bridge: running`), the bridge posts the status card, the spec threads, task and deliverable completions and the alerts that an agent waits on the user: do not post those yourself. When no bridge is running, post them yourself as before.
+- When the user asks for a file, a report, a log or a picture of the board from Discord, use `tmux-ctl discord send` or `snap`.
 - AskUserQuestion is not relayed. Ask in Discord as a numbered list and take the reply's number. Use
   AskUserQuestion when the user's last message came from the terminal.
+- An image the user sends (`attachment_count` on the channel tag) is downloaded with `download_attachment` and Read before answering. For a bug report it goes to `systematic-debugging` like any other bug, and the reply cites the downloaded path. The file stays in the plugin's inbox dir; nothing is copied into the repo unless the user asks.
 - Plan comments, queue mode and every other rule stay as they are.
 - Your own permission prompts reach the phone as buttons; nothing to do.
 - Never run `tmux-ctl discord pair|deny|policy|allow|remove` or `/discord:access`: access changes are the user's,

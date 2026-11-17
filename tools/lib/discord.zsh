@@ -5,7 +5,7 @@
 
 _DC_TOOLS="${${(%):-%x}:A:h:h}"   # file scope: tools/
 _dc_root() { print -r -- "${TC_STATE:-$HOME/.local/state/agent-board}/discord" }
-_dc_usage() { print -u2 "usage: tmux-ctl discord token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>] (the token is read from stdin)"; return 2 }
+_dc_usage() { print -u2 "usage: tmux-ctl discord token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>]|send [--thread <key>] <file>… [-m <text>]|snap [<project>] (the token is read from stdin)"; return 2 }
 _dc_tokenish() { [[ "$1" == *.* && ${#1} -ge 50 ]] }
 
 discord_cmd() {
@@ -14,6 +14,7 @@ discord_cmd() {
   if [[ "$sub" == watch ]]; then   # the watchdog: no project, no tmux of our own (it finds the leads' panes itself)
     python3 "$_DC_TOOLS/discord_watch.py" "${@:---once}"; return $?
   fi
+  [[ "$sub" == (send|snap) ]] && { _dc_send "$sub" "$@"; return $? }   # files out: paths and a message, never a token
   [[ "$sub" == migrate ]] && { _dc_migrate; return 0 }   # machine cleanup: no project
   local -a pos=()
   while (( $# )); do
@@ -278,4 +279,68 @@ _dc_audit() {
   local f="$1/audit.jsonl"
   [[ -s "$f" ]] || { print -r -- "audit: none"; return 0 }
   jq -r --arg s "$2" 'select($s == "" or (.ts|tostring) >= $s) | "\(.ts) \(.user) \(.action) \(.target) \(.result)"' "$f"
+}
+
+# _dc_send send|snap [--thread <key>] [-m <text>] [--project <name>] <file>…|[<project>]
+# send: one post op carrying the files (absolute paths, each checked before anything is written).
+# snap: headless Chrome screenshots the board into <dir>/tmp/ and sends it with delete_files (the bridge removes it after the send).
+# The board URL carries the token: it only goes to Chrome's argv, never to an op, a message or a log line.
+_dc_send() {
+  local mode="$1" project="" thread="-" text="" f p n
+  shift
+  local -a files=() pos=()
+  while (( $# )); do
+    case "$1" in
+      --project) project="$2"; shift 2 2>/dev/null || shift ;;
+      --project=*) project="${1#--project=}"; shift ;;
+      --thread) thread="$2"; shift 2 2>/dev/null || shift ;;
+      -m) text="$2"; shift 2 2>/dev/null || shift ;;
+      *) pos+=("$1"); shift ;;
+    esac
+  done
+  if [[ "$mode" == snap ]]; then
+    (( ${#pos} <= 1 )) || { _dc_usage; return 2 }
+    [[ -n "$project" ]] || project="${pos[1]}"
+  else
+    files=("${pos[@]}")
+  fi
+  [[ -n "$project" ]] || project="$FEEDKEY"
+  [[ -n "$project" ]] || { _dc_usage; return 2 }
+  if ! [[ "$project" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]]; then
+    print -u2 "discord: a project name uses letters, digits, '.', '_' and '-' and starts with a letter or digit"; return 2
+  fi
+  local dir="$(_dc_root)/$project" delete=0
+  if [[ "$mode" == snap ]]; then
+    local chrome="${TC_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}" tok url png
+    [[ -x "$chrome" ]] || { print -u2 "snap: Chrome not found"; return 1 }
+    tok="$(<"$HOME/.local/state/tmux-dash/token" 2>/dev/null)" || tok=
+    [[ -n "$tok" ]] || { print -u2 "snap: no board token (is the board running?)"; return 1 }
+    url="http://127.0.0.1:${TMUX_DASH_PORT:-7700}/$tok/"
+    mkdir -p "$dir/tmp" || { print -u2 "snap: could not create $dir/tmp"; return 1 }
+    png="$dir/tmp/snap-$(date +%s)-$$.png"
+    perl -e 'alarm shift; exec @ARGV or exit 127' "${TC_SNAP_TIMEOUT:-60}" "$chrome" --headless=new --virtual-time-budget=5000 --window-size=1200,1600 "--screenshot=$png" "$url" >/dev/null 2>&1 </dev/null
+    local crc=$?
+    if (( crc == 142 )); then rm -f "$png"; print -u2 "snap: Chrome timed out"; return 1; fi   # 128+SIGALRM
+    [[ -s "$png" ]] || { rm -f "$png"; print -u2 "snap: no screenshot"; return 1 }
+    files=("$png"); delete=1
+    [[ -n "$text" ]] || text="board snapshot $(date +%H:%M)"
+  else
+    (( ${#files} )) || { _dc_usage; return 2 }
+    (( ${#files} <= 10 )) || { print -u2 "send: at most 10 files"; return 2 }
+    local -a abs=()
+    for f in "${files[@]}"; do
+      p="${f:A}"
+      [[ -e "$p" ]] || { print -u2 "send: $p: not found"; return 1 }
+      [[ -f "$p" ]] || { print -u2 "send: $p: not a file"; return 1 }
+      [[ -r "$p" ]] || { print -u2 "send: $p: not readable"; return 1 }
+      abs+=("$p")
+    done
+    files=("${abs[@]}")
+    if [[ -z "$text" ]]; then
+      local -a base=("${(@)files:t}"); text="${(j:, :)base}"
+    fi
+  fi
+  python3 -I "${_DC_TOOLS:h}/board/discord_send.py" "$project" "$thread" "$delete" "$text" "${files[@]}" || { print -u2 "$mode: could not write the post"; return 1 }
+  n=${#files}
+  print -r -- "$mode: 1 post, $n file$([[ $n == 1 ]] || print s)"
 }
