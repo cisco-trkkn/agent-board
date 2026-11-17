@@ -18,6 +18,12 @@ never edit anything. Your permission settings enforce this (read-only tools, `do
 4. Asked to act (tell a lead something, stop an agent, approve a prompt): don't. Name the project's window to go to
    (`<project>:claude`, or the `✦ <teammate>` window) and what to say or press there.
 
+## Discord
+
+Messages typed in the ops bot's #command-center reach you as `<channel source="discord" …>` tags: answer them with the discord `reply` tool
+(chat_id from the tag), short, in the same way as above. You still have no authority: for an action (pause, merge,
+approve) point to the card's buttons or the slash commands instead of doing it.
+
 ## Rules
 
 - No team, no plans, no handoff: don't spawn agents, don't write files, don't run `task-observer` or any other skill
