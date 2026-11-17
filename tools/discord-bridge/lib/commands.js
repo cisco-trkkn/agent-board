@@ -1,10 +1,12 @@
 'use strict';
 // Slash commands and idea/new-spec forms, shared by the ops bridge and the project bridges.
+// Exports: payload(ops), handle(i, ctx), inboxText(data), fence(text) (escapes ``` for code blocks).
 // handle(i, ctx) gets the bridge's ctx: {dir, ops, views, allowFrom, writeEvent, now, say, snip, answer}.
 const path = require('node:path');
 
 const REPLY_MAX = 2000;
 const PROJECT_MAX = 60; // ab:modal:new-spec:<project> stays under Discord's 100-char custom_id limit
+const ACTIONS = new Set(['pause', 'resume', 'idea', 'new-spec']); // rejected up front; read commands answer it and still write their read event
 const NEEDS_PROJECT = new Set(['queue', 'pause', 'resume', 'idea', 'new-spec']);
 const DESCRIPTIONS = {
   status: 'Show the board status', queue: 'Show a project queue', pause: "Pause a project's queue",
@@ -55,7 +57,7 @@ async function handleCommand(i, ctx) {
   if (NEEDS_PROJECT.has(name) && !project) { await ctx.answer(i, 'Pick a project.'); return; }
   const data = ctx.views();
   const unknown = project && (ctx.ops || given) && Array.isArray(data?.projects) && !data.projects.includes(project);
-  if (unknown && name !== 'queue') { await ctx.answer(i, `Unknown project: ${project}`); return; }
+  if (unknown && ACTIONS.has(name)) { await ctx.answer(i, `Unknown project: ${project}`); return; }
 
   if (name === 'idea' || name === 'new-spec') {
     const f = FORMS[name];

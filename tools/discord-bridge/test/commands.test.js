@@ -231,3 +231,10 @@ test('ctx.views is the one reader: project mode ctx.views reads ../_ops/views.js
   assert.strictEqual(s.bridge.ctx.views().status._all, 'ALL CARD');
   assert.strictEqual(typeof s.bridge.ctx.fence, 'function');
 });
+
+test('/status with an unknown project answers Unknown project and still writes exactly one read event', async () => {
+  const s = setup();
+  const i = await s.run(fakeCommand({ name: 'status', options: { project: 'nope' } }));
+  assert.strictEqual(i.replies[0].content, 'Unknown project: nope');
+  assert.deepStrictEqual(evShape(s), [{ type: 'read', what: '/status', user: 'U1' }]);
+});
