@@ -1,10 +1,10 @@
 'use strict';
 // Slash commands and idea/new-spec forms, shared by the ops bridge and the project bridges.
 // handle(i, ctx) gets the bridge's ctx: {dir, ops, views, allowFrom, writeEvent, now, say, snip, answer}.
-const fs = require('node:fs');
 const path = require('node:path');
 
 const REPLY_MAX = 2000;
+const PROJECT_MAX = 60; // ab:modal:new-spec:<project> stays under Discord's 100-char custom_id limit
 const NEEDS_PROJECT = new Set(['queue', 'pause', 'resume', 'idea', 'new-spec']);
 const DESCRIPTIONS = {
   status: 'Show the board status', queue: 'Show a project queue', pause: "Pause a project's queue",
@@ -20,7 +20,7 @@ function payload(ops) {
   return Object.keys(DESCRIPTIONS).map((name) => {
     const c = { name, description: DESCRIPTIONS[name], type: 1 };
     if (name !== 'approvals') {
-      c.options = [{ name: 'project', description: 'Project name', type: 3, required: ops && NEEDS_PROJECT.has(name) }];
+      c.options = [{ name: 'project', description: 'Project name', type: 3, max_length: PROJECT_MAX, required: ops && NEEDS_PROJECT.has(name) }];
     }
     return c;
   });
@@ -39,13 +39,9 @@ function inboxText(data) {
   return lines.join('\n');
 }
 
-// views.json: the ops dir's own, or from a project dir the sibling _ops dir's.
-function viewsOf(ctx) {
-  const f = ctx.ops ? path.join(ctx.dir, 'views.json') : path.join(path.dirname(ctx.dir), '_ops', 'views.json');
-  try { const v = JSON.parse(fs.readFileSync(f, 'utf8')); return v && typeof v === 'object' ? v : null; } catch { return null; }
-}
-
-const fenced = (t) => `\`\`\`\n${String(t).replace(/`{3,}/g, (m) => `\`​${m.slice(1).match(/`{1,2}/g).join('​')}`).slice(0, 1900)}\n\`\`\``;
+// Escape ``` inside text that goes in a code block.
+const fence = (t) => String(t).replace(/`{3,}/g, (m) => `\`\u200b${m.slice(1).match(/`{1,2}/g).join('\u200b')}`);
+const fenced = (t, ctx) => `\`\`\`\n${ctx.fence(t).slice(0, 1900)}\n\`\`\``;
 
 async function handleCommand(i, ctx) {
   const name = i.commandName;
@@ -55,6 +51,11 @@ async function handleCommand(i, ctx) {
   const own = path.basename(ctx.dir);
   const given = i.options?.getString?.('project') || null;
   const project = given || (ctx.ops ? null : own);
+
+  if (NEEDS_PROJECT.has(name) && !project) { await ctx.answer(i, 'Pick a project.'); return; }
+  const data = ctx.views();
+  const unknown = project && (ctx.ops || given) && Array.isArray(data?.projects) && !data.projects.includes(project);
+  if (unknown && name !== 'queue') { await ctx.answer(i, `Unknown project: ${project}`); return; }
 
   if (name === 'idea' || name === 'new-spec') {
     const f = FORMS[name];
@@ -70,12 +71,11 @@ async function handleCommand(i, ctx) {
     return;
   }
   // Read-only: answered from views.json.
-  const data = viewsOf(ctx);
   if (!data) { await ctx.answer(i, ctx.ops ? 'Board data not available yet.' : NOT_SET_UP); event({ type: 'read', what }); return; }
   if (name === 'approvals') await ctx.answer(i, inboxText(data));
-  else if (project && Array.isArray(data.projects) && !data.projects.includes(project)) await ctx.answer(i, `Unknown project: ${project}`);
+  else if (unknown) await ctx.answer(i, `Unknown project: ${project}`);
   else if (name === 'status') await ctx.answer(i, project ? (data.status?.[project] ?? `No status for ${project}.`) : (data.status?._all ?? 'No status yet.'));
-  else await ctx.answer(i, fenced(data.queue?.[project] ?? `No queue for ${project}.`)); // queue
+  else await ctx.answer(i, fenced(data.queue?.[project] ?? `No queue for ${project}.`, ctx)); // queue
   event({ type: 'read', what });
 }
 
@@ -84,6 +84,8 @@ async function handleModal(i, ctx, m) {
   const f = FORMS[form];
   const val = (id) => String(i.fields.getTextInputValue(id) ?? '').trim();
   const fields = Object.fromEntries(f.inputs.map(([id]) => [id, val(id)]));
+  const empty = f.inputs.find(([id]) => !fields[id]);
+  if (empty) { await ctx.answer(i, `Empty ${empty[0]}.`); return; }
   await ctx.answer(i, f.ack(project));
   ctx.writeEvent({ type: 'modal', form, project, fields, user: String(i.user?.id), ts: ctx.now() });
 }
@@ -105,4 +107,4 @@ async function handle(i, ctx) {
   return true;
 }
 
-module.exports = { payload, handle, inboxText };
+module.exports = { payload, handle, inboxText, fence };

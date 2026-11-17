@@ -190,3 +190,44 @@ test('attach wires command and modal interactions through the same handler', asy
   await new Promise((r) => setTimeout(r, 20));
   assert.strictEqual(i.replies[0].content, 'ALL CARD');
 });
+
+test('project option has max_length 60 so the modal custom_id stays under 100 chars', () => {
+  for (const ops of [true, false]) {
+    for (const c of commands.payload(ops).filter((x) => x.options)) assert.strictEqual(c.options[0].max_length, 60, c.name);
+  }
+  assert.ok(`ab:modal:new-spec:${'p'.repeat(60)}`.length <= 100);
+});
+
+test('ops mode with no project: Pick a project. for pause/resume/idea/new-spec/queue; no event, no modal', async () => {
+  const s = setup();
+  for (const name of ['pause', 'resume', 'idea', 'new-spec', 'queue']) {
+    const i = await s.run(fakeCommand({ name }));
+    assert.deepStrictEqual([i.replies[0]?.content, i.replies[0]?.flags, i.modals.length], ['Pick a project.', 64, 0], name);
+  }
+  assert.deepStrictEqual(s.events(), []);
+});
+
+test('pause/resume/idea/new-spec reject an unknown project when views.projects exists', async () => {
+  const s = setup();
+  for (const name of ['pause', 'resume', 'idea', 'new-spec']) {
+    const i = await s.run(fakeCommand({ name, options: { project: 'nope' } }));
+    assert.strictEqual(i.replies[0].content, 'Unknown project: nope', name);
+    assert.strictEqual(i.modals.length, 0);
+  }
+  assert.deepStrictEqual(s.events(), []);
+});
+
+test('a whitespace-only required modal field: Empty <field>. and no event', async () => {
+  const s = setup();
+  const a = await s.run(fakeModal({ customId: 'ab:modal:idea:alpha', fields: { title: '   ', text: 'x' } }));
+  assert.deepStrictEqual([a.replies[0].content, a.replies[0].flags], ['Empty title.', 64]);
+  const b = await s.run(fakeModal({ customId: 'ab:modal:new-spec:alpha', fields: { what: 'w', why: ' \n ' } }));
+  assert.strictEqual(b.replies[0].content, 'Empty why.');
+  assert.deepStrictEqual(s.events(), []);
+});
+
+test('ctx.views is the one reader: project mode ctx.views reads ../_ops/views.json', () => {
+  const s = setup({ ops: false });
+  assert.strictEqual(s.bridge.ctx.views().status._all, 'ALL CARD');
+  assert.strictEqual(typeof s.bridge.ctx.fence, 'function');
+});

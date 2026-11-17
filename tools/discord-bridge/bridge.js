@@ -364,7 +364,11 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     return new Set(Array.isArray(a) ? a.map(String) : []);
   }
 
-  const views = () => readJson(path.join(dir, 'views.json'), null);
+  // views.json: the ops dir's own, or from a project dir the sibling _ops dir's.
+  const views = () => {
+    const v = readJson(ops ? path.join(dir, 'views.json') : path.join(path.dirname(dir), '_ops', 'views.json'), null);
+    return v && typeof v === 'object' ? v : null;
+  };
 
   function writeEvent(ev) {
     const evDir = path.join(dir, 'events');
@@ -386,7 +390,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     } catch (e) { say(`reply failed: ${snip(e?.message)}`); }
   }
 
-  const fence = (t) => t.replace(/`{3,}/g, (m) => `\`\u200b${m.slice(1).match(/`{1,2}/g).join('\u200b')}`);
+  const fence = commands.fence;
 
   function filesPage(key, page, data) {
     const files = data?.evidence?.[key]?.files;
@@ -489,7 +493,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   function close() { closed = true; }
 
-  const ctx = { dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, NO_MENTIONS };
+  const ctx = { dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, fence, NO_MENTIONS };
   return { ctx, tick, onInteraction, onReaction, onReady, onDisconnect, attach, close, TICK_MS };
 }
 
