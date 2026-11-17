@@ -36,5 +36,9 @@ check "teammate divider then typed text: no prompt"  test $rc -eq 1 -a "$err" = 
 check "two label dividers: no prompt"  test $rc -eq 1 -a "$err" = "approve: no permission prompt in sh-td2"
 { grep -a -v '@gate-tap' $TD; print -r -- "$(grep -a -m1 '^──────────' $TD)"; } > $S/td-bare.txt; replay sh-tdb $S/td-bare.txt; shw sh-tdb show
 check "bare divider (no @name label) after footer: no prompt"  test $rc -eq 1 -a "$err" = "approve: no permission prompt in sh-tdb"
+{ grep -a -v -e 'Esc to cancel' $TD; } > $S/td-nofooter.txt; replay sh-tdn $S/td-nofooter.txt; shw sh-tdn show
+check "divider straight after the options, no footer: no prompt"  test $rc -eq 1 -a "$err" = "approve: no permission prompt in sh-tdn"
+replay sh-tdd $TD; shw sh-tdd show; ap sh-tdd deny --expect "$(print -r -- "$out" | grep -a '^P:' | sed 's/^P://')"
+check "deny teammate divider: exit 0, key 2"  test $rc -eq 0 -a "$(got sh-tdd)" = 2
 check "help shows the whole header (show line and metrics line)"  test "$($C help | grep -c "approve <win> show")" = 1 -a "$($C help | grep . | tail -1 | grep -c "metrics <sub>")" = 1
 tt_done
