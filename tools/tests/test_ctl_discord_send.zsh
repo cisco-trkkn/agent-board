@@ -84,6 +84,18 @@ check "snap: no chrome"                 test $rc -eq 1 -a "$out" = "snap: Chrome
 clr; touch $S/chrome.nopng
 run $C discord snap tt
 check "snap: no screenshot"             test $rc -eq 1 -a "$out" = "snap: no screenshot" -a "$(ops)" = 0
+rm -f $S/chrome.nopng; clr
+cat > $S/bin/slowchrome <<STUB
+#!/bin/sh
+for a in "\$@"; do case "\$a" in --screenshot=*) p="\${a#--screenshot=}";; esac; done
+printf '\211PNG' > "\$p"
+sleep 30
+STUB
+chmod +x $S/bin/slowchrome
+before="$(ls $D/tmp)"; t0=$SECONDS
+TC_CHROME=$S/bin/slowchrome TC_SNAP_TIMEOUT=1 run $C discord snap tt
+check "snap: chrome timeout"            test $rc -eq 1 -a "$out" = "snap: Chrome timed out" -a "$(ops)" = 0 -a $(( SECONDS - t0 )) -lt 15
+check "snap: timeout leaves no png"     test "$(ls $D/tmp)" = "$before"
 
 # --- usage + header
 run $C discord bogus --project tt

@@ -746,6 +746,26 @@ class FailedRunLogTest(DeriveBase):
         evs, st = self.derive([done], primed())
         return evs, st, df.ops_for_events(evs, st)
 
+    @staticmethod
+    def hhmm(ts):
+        import datetime
+        return datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
+
+    def test_post_names_worktree_and_time(self):
+        self.write_runs(self.rec(cwd="/x/.claude/worktrees/queue-reliability"))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: python3 -m unittest (exit 1) · queue-reliability · {self.hhmm(self.NOW_I - 3600)}")
+
+    def test_post_empty_cmd_shows_id(self):
+        self.write_runs(self.rec("r9", cmd="  "))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: r9 (exit 1) · w · {self.hhmm(self.NOW_I - 3600)}")
+
+    def test_post_long_cmd_cut_to_200(self):
+        self.write_runs(self.rec(cmd="a" * 500))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: {'a' * 200}… (exit 1) · w · {self.hhmm(self.NOW_I - 3600)}")
+
     def attach(self, rid):
         return tc_env.discord_dir("proj") / "attachments" / f"{rid}.log"
 
@@ -756,7 +776,7 @@ class FailedRunLogTest(DeriveBase):
         self.assertEqual(f.read_text().splitlines(), [f"line {i}" for i in range(101, 301)])
         self.assertEqual([o["op"] for o in ops], ["post", "post", "archive"])
         self.assertEqual(ops[0], {"op": "post", "text": "failed — tests red", "tier": "critical", "mention_user": True, "link_thread_key": "1"})
-        self.assertEqual(ops[1], {"op": "post", "text": "failed run log: python3 -m unittest (exit 1)", "tier": "progress",
+        self.assertEqual(ops[1], {"op": "post", "text": f"failed run log: python3 -m unittest (exit 1) · w · {self.hhmm(self.NOW_I - 3600)}", "tier": "progress",
                                   "mention_user": False, "thread_key": "1", "files": [str(f)]})
         for o in ops:
             df._check(o)
@@ -789,7 +809,7 @@ class FailedRunLogTest(DeriveBase):
         self.write_runs(self.rec("old", ts=self.NOW_I - 7200, cmd="old cmd"), self.rec("new", ts=self.NOW_I - 60, cmd="new cmd"),
                         self.rec("newer-ok", ts=self.NOW_I - 30, exit=0))
         evs, st, ops = self.failed()
-        self.assertEqual(ops[1]["text"], "failed run log: new cmd (exit 1)")
+        self.assertEqual(ops[1]["text"], f"failed run log: new cmd (exit 1) · w · {self.hhmm(self.NOW_I - 60)}")
         self.assertTrue(self.attach("new").is_file())
 
     def test_attachments_pruned_to_20(self):

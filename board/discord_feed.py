@@ -3,6 +3,7 @@
 Spool writer (outbox, 200 cap), feed-event file (spec §11), status card renderer and throttle, audit log.
 Paths come from tc_env (agent_base, discord_dir, feed_path). Test: tests/test_discord_feed.py."""
 import copy
+import datetime
 import fcntl
 import glob
 import hashlib
@@ -332,7 +333,12 @@ def _failed_run_log(project, now):
             p.unlink()
     except OSError:
         return None
-    return {"log_file": str(dest), "log_cmd": str(r.get("cmd", "")), "log_exit": r["exit"]}
+    m = re.search(r"/\.claude/worktrees/([^/]+)", str(r.get("cwd", "")))
+    where = m.group(1) if m else os.path.basename(str(r.get("cwd", "")).rstrip("/"))
+    cmd = " ".join(str(r.get("cmd", "")).split())
+    cmd = (cmd[:200] + "…") if len(cmd) > 200 else cmd
+    at = datetime.datetime.fromtimestamp(r["ts"]).strftime("%H:%M")
+    return {"log_file": str(dest), "log_cmd": cmd or str(r["id"]), "log_exit": r["exit"], "log_where": where, "log_at": at}
 
 
 def derive(project, root, lead_tasks, state, now, list_id=""):
@@ -450,7 +456,7 @@ def ops_for_events(events, state):
         if kind == "spec_outcome" and refs.get("thread_key"):
             if str(ev.get("text", "")).startswith("failed"):
                 if refs.get("log_file"):
-                    ops.append({"op": "post", "text": f"failed run log: {refs.get('log_cmd', '')} (exit {refs.get('log_exit')})",
+                    ops.append({"op": "post", "text": f"failed run log: {refs.get('log_cmd', '')} (exit {refs.get('log_exit')}) · {refs.get('log_where', '')} · {refs.get('log_at', '')}",
                                 "tier": "progress", "mention_user": False, "thread_key": refs["thread_key"], "files": [refs["log_file"]]})
                 elif refs.get("no_run_log"):
                     ops.append({"op": "post", "text": "failed — no failing test run recorded", "tier": "progress",

@@ -333,6 +333,19 @@ test('delete_files keeps a file outside <dir>/tmp/ and logs it', async () => {
   assert.ok(s.logs.some((l) => l.includes('kept') && l.includes(out)), s.logs.join('\n'));
 });
 
+test('delete_files keeps a file reached through a symlinked dir in tmp/ that points outside', async () => {
+  // Mutation: compare path.resolve instead of realpath -> the outside file is deleted.
+  const s = setup();
+  const [out] = mkfiles(['outside.txt']);
+  fs.mkdirSync(path.join(s.dir, 'tmp'), { recursive: true });
+  fs.symlinkSync(path.dirname(out), path.join(s.dir, 'tmp', 'link'));
+  const via = path.join(s.dir, 'tmp', 'link', path.basename(out));
+  s.put(post('pic', { files: [via], delete_files: true }));
+  await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('send').length, 1);
+  assert.ok(fs.existsSync(out));
+});
+
 test('delete_files keeps the tmp file when the send fails', async () => {
   const s = setup();
   const p = tmpFile(s, 'snap.png');

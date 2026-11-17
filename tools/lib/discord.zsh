@@ -318,8 +318,10 @@ _dc_send() {
     url="http://127.0.0.1:${TMUX_DASH_PORT:-7700}/$tok/"
     mkdir -p "$dir/tmp" || { print -u2 "snap: could not create $dir/tmp"; return 1 }
     png="$dir/tmp/snap-$(date +%s)-$$.png"
-    "$chrome" --headless=new --virtual-time-budget=5000 --window-size=1200,1600 "--screenshot=$png" "$url" >/dev/null 2>&1 </dev/null
-    [[ -s "$png" ]] || { print -u2 "snap: no screenshot"; return 1 }
+    perl -e 'alarm shift; exec @ARGV or exit 127' "${TC_SNAP_TIMEOUT:-60}" "$chrome" --headless=new --virtual-time-budget=5000 --window-size=1200,1600 "--screenshot=$png" "$url" >/dev/null 2>&1 </dev/null
+    local crc=$?
+    if (( crc == 142 )); then rm -f "$png"; print -u2 "snap: Chrome timed out"; return 1; fi   # 128+SIGALRM
+    [[ -s "$png" ]] || { rm -f "$png"; print -u2 "snap: no screenshot"; return 1 }
     files=("$png"); delete=1
     [[ -n "$text" ]] || text="board snapshot $(date +%H:%M)"
   else

@@ -166,10 +166,12 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     if (ok.length) payload.files = ok;
     await target.send(payload);
     if (op.delete_files === true) {
-      const tmpRoot = path.join(dir, 'tmp') + path.sep;
+      let tmpRoot = null;
+      try { tmpRoot = fs.realpathSync(path.join(dir, 'tmp')) + path.sep; } catch { /* no tmp/ */ }
       for (const p of paths) {
-        const r = path.resolve(p);
-        if (r.startsWith(tmpRoot)) { try { fs.unlinkSync(r); } catch { /* already gone */ } }
+        let r;
+        try { r = fs.realpathSync(p); } catch { continue; } // already gone
+        if (tmpRoot && r.startsWith(tmpRoot)) { try { fs.unlinkSync(r); } catch { /* already gone */ } }
         else say(`delete_files: kept ${r} (outside tmp/)`);
       }
     }
