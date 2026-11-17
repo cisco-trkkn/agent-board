@@ -31,7 +31,14 @@ _ap_prompt() {
         q = i; e = j - 1
       }
       if (!q) exit
-      for (i = e + 1; i <= NR; i++) if (l[i] !~ /^[ \t]*Esc to cancel/) exit   # only the footer may follow the options
+      # only the footer may follow the options, then at most one teammate status divider ("──── @name ─") as the last row
+      dv = 0
+      for (i = e + 1; i <= NR; i++) {
+        if (dv) exit
+        if (l[i] ~ /^[ \t]*Esc to cancel/) continue
+        if (index(l[i], "──────────") == 1 && l[i] ~ / @[A-Za-z0-9_.-]+ ─$/) { dv = 1; continue }
+        exit
+      }
       s = q
       for (i = q; i >= 1; i--) if (index(l[i], "──────────") == 1) { s = i; break }
       for (i = s; i <= e; i++) print "B:" l[i]

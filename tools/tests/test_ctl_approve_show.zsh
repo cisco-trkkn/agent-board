@@ -24,5 +24,17 @@ check "show ambiguous: message, exit 1, empty stdout"  test $rc -eq 1 -a "$err" 
 check "show ambiguous: no key"             test "$(got sh-a)" = NONE
 replay sh-e $FX/bash-git.txt; shw sh-e show --expect x
 check "show --expect: usage error exit 2, no key"  test $rc -eq 2 -a "$(got sh-e)" = NONE
+# teammate pane: a status divider "──── @name ─" follows the footer (real capture, 2026-11-17); only that one labelled row may follow it
+TD=$FX/bash-teammate-divider.txt
+replay sh-td $TD; shw sh-td show
+check "show teammate divider: exact output + exit 0"  test "$out" = $'T:Bash command\nP:│ GT=/tmp/agent-board-gate; rm -f $GT/*.gate$(printf \'\') && echo gate-tap-2-allowed' -a $rc -eq 0
+replay sh-tdo $TD; ap sh-tdo once --expect "$(print -r -- "$out" | grep -a '^P:' | sed 's/^P://')"
+check "once teammate divider: exit 0, key 1"  test $rc -eq 0 -a "$(got sh-tdo)" = 1
+{ cat $TD; print ' rm -rf /tmp/x'; } > $S/td-typed.txt; replay sh-tdt $S/td-typed.txt; shw sh-tdt show
+check "teammate divider then typed text: no prompt"  test $rc -eq 1 -a "$err" = "approve: no permission prompt in sh-tdt"
+{ grep -a -v '@gate-tap' $TD; print -r -- "$(grep -a '@gate-tap' $TD)"; print -r -- "$(grep -a '@gate-tap' $TD)"; } > $S/td-two.txt; replay sh-td2 $S/td-two.txt; shw sh-td2 show
+check "two label dividers: no prompt"  test $rc -eq 1 -a "$err" = "approve: no permission prompt in sh-td2"
+{ grep -a -v '@gate-tap' $TD; print -r -- "$(grep -a -m1 '^──────────' $TD)"; } > $S/td-bare.txt; replay sh-tdb $S/td-bare.txt; shw sh-tdb show
+check "bare divider (no @name label) after footer: no prompt"  test $rc -eq 1 -a "$err" = "approve: no permission prompt in sh-tdb"
 check "help shows the whole header (show line and metrics line)"  test "$($C help | grep -c "approve <win> show")" = 1 -a "$($C help | grep . | tail -1 | grep -c "metrics <sub>")" = 1
 tt_done
