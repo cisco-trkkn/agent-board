@@ -53,7 +53,8 @@ class Base(unittest.TestCase):
         self.lines = []
         self.add = lambda s, t: self.lines.append((s, t))
         self.merges = []
-        self.on_merge = lambda *a: self.merges.append(a)
+        self.merge_ret = {"result": "merged abc", "text": "merge approved — sent to the lead"}
+        self.on_merge = lambda *a: (self.merges.append(a), self.merge_ret)[1]
 
     def configure(self, user="U1"):
         (self.ops / "bridge.json").write_text(json.dumps({"command_center": "C1", "approvals": "A1", "user": user}))
@@ -257,6 +258,30 @@ class Tick(Base):
         self.assertEqual(len(m), 2000)
         self.assertEqual(m[-1], okey("a", "dec:" + hashlib.sha1(f"{NOW}|x".encode()).hexdigest()[:12]))
 
+    def test_open_approvals_capped_and_aged_out_of_views(self):
+        # mutation: drop _trim_open / the age filter -> 205 records stay / the stale one stays in views.approvals
+        self.configure()
+        self.project("a")
+        st = {"approvals": {f"k{i:03d}": {"project": "a", "kind": "other", "src_key": f"s{i}", "title": "t", "link": "", "ts": NOW - 100 + i} for i in range(205)}}
+        st["approvals"]["perm1"] = {"project": "a", "kind": "perm", "src_key": "p", "title": "t", "link": "", "ts": NOW - 99 * 86400}
+        (self.ops / "ops-state.json").write_text(json.dumps(st))
+        self.tick([rec("a")])
+        ap = self.state()["approvals"]
+        self.assertEqual(len([k for k, v in ap.items() if v["kind"] in ("other", "merge")]), 200)
+        self.assertNotIn("k000", ap)
+        self.assertIn("k204", ap)
+        self.assertIn("perm1", ap)   # perm/question are resolved by their own flows, never capped
+        keys = {a["key"] for a in json.loads((self.ops / "views.json").read_text())["approvals"]}
+        self.assertIn("perm1", keys)
+
+    def test_open_approval_older_than_7_days_leaves_views(self):
+        self.configure()
+        self.project("a")
+        mk = lambda ts: {"project": "a", "kind": "merge", "src_key": "m", "title": "t", "link": "", "ts": ts}
+        (self.ops / "ops-state.json").write_text(json.dumps({"approvals": {"old": mk(NOW - 8 * 86400), "fresh": mk(NOW - 6 * 86400)}}))
+        self.tick([rec("a")])
+        self.assertEqual([a["key"] for a in json.loads((self.ops / "views.json").read_text())["approvals"]], ["fresh"])
+
     def test_lock_held_returns_none(self):
         import fcntl
         self.configure()
@@ -440,22 +465,71 @@ class Events(Base):
             self.consume()
         self.assertEqual([t for _, t in self.lines], [PAUSE, RESUME])
 
-    def test_merge_and_keep(self):
-        k = okey("a", "merge:7")
-        (self.ops / "ops-state.json").write_text(json.dumps({"approvals": {k: {"project": "a", "kind": "merge", "src_key": "merge:7", "spec": "s1", "title": "t", "link": "", "ts": NOW}}}))
+    def seed_merge(self, src="merge:7", spec="s1", ts=NOW):
+        k = okey("a", src)
+        st = json.loads((self.ops / "ops-state.json").read_text()) if (self.ops / "ops-state.json").exists() else {}
+        st.setdefault("approvals", {})[k] = {"project": "a", "kind": "merge", "src_key": src, "spec": spec, "title": "t", "link": "", "ts": ts}
+        (self.ops / "ops-state.json").write_text(json.dumps(st))
+        return k
+
+    def test_merge_calls_on_merge_and_edits_both_copies(self):
+        k = self.seed_merge()
         self.event("1.json", ok(f"ab:ops:merge:{k}"))
         self.consume()
-        self.assertEqual(len(self.merges), 1)
-        self.assertEqual(self.merges[0][0:2], ("a", "merge:7"))
+        (m,) = self.merges
+        self.assertEqual((m[0], m[1], m[2]["kind"], m[2]["spec"]), ("a", "merge:7", "merge", "s1"))
+        (ed,) = self.outbox()
+        self.assertEqual(ed, {"op": "edit", "key": k, "text": "a: merge approved — sent to the lead"})
+        (ped,) = self.outbox(self.pd)
+        self.assertEqual(ped, {"op": "edit", "key": "merge:7", "text": "merge approved — sent to the lead"})
+        self.assertEqual(self.audit()[-1]["result"], "merged abc")
+        self.assertEqual(self.state()["approvals"], {})
         self.event("2.json", ok(f"ab:ops:merge:{k}"))   # second tap: record is gone
         self.consume()
         self.assertEqual(len(self.merges), 1)
         self.assertEqual(self.audit()[-1]["result"], "unknown")
-        k2 = okey("a", "merge:8")
-        (self.ops / "ops-state.json").write_text(json.dumps({"approvals": {k2: {"project": "a", "kind": "merge", "src_key": "merge:8", "spec": "s2", "title": "t", "link": "", "ts": NOW}}}))
-        self.event("3.json", ok(f"ab:ops:keep:{k2}"))
+
+    def test_merge_failure_keeps_record_and_audits_error(self):
+        # mutation: pop the record before calling on_merge -> the record is gone and the test fails
+        k = self.seed_merge()
+        def boom(*a):
+            raise RuntimeError("boom\nsecond line")
+        self.on_merge = boom
+        self.event("1.json", ok(f"ab:ops:merge:{k}"))
+        self.consume()
+        self.assertIn(k, self.state()["approvals"])
+        self.assertEqual(self.audit()[-1]["result"], "error: boom")
+        self.assertEqual(self.outbox(), [])
+        self.assertEqual(list((self.ops / "events").glob("*.json")), [])
+
+    def test_keep_edits_both_copies(self):
+        # mutation: edit only the ops copy -> the project outbox stays empty and the test fails
+        k = self.seed_merge("merge:8", "s2")
+        self.event("1.json", ok(f"ab:ops:keep:{k}"))
         self.consume()
         self.assertEqual(self.lines, [("a", "[Discord] keep branch for s2")])
+        self.assertEqual(self.outbox()[-1], {"op": "edit", "key": k, "text": "a: kept"})
+        self.assertEqual(self.outbox(self.pd)[-1], {"op": "edit", "key": "merge:8", "text": "kept"})
+        self.assertEqual(self.state()["approvals"], {})
+
+    def test_event_exception_audited_as_error(self):
+        # mutation: drop the audit line in consume's except -> no `error:` audit and the test fails
+        def bad(p, t):
+            raise OSError("disk gone\nmore")
+        self.event("1.json", {"type": "slash", "command": "pause", "project": "a", "user": "U1", "ts": NOW})
+        ops.consume(bad, lambda argv: "", NOW, on_merge=self.on_merge)
+        self.assertEqual(self.audit()[-1]["result"], "error: disk gone")
+
+    def test_known_project_from_last_tick_or_discord_dir(self):
+        # mutation: back to bridge.json-only -> a project with a bare discord dir or only in the last tick is "unknown project"
+        bare = tc_env.discord_dir("bare")
+        bare.mkdir(parents=True)
+        self.tick([rec("ticked")])
+        for name in ("bare", "ticked", "nowhere"):
+            self.event(f"{name}.json", {"type": "slash", "command": "pause", "project": name, "user": "U1", "ts": NOW})
+        self.consume()
+        self.assertEqual(sorted(p for p, _ in self.lines), ["bare", "ticked"])
+        self.assertEqual([a["result"] for a in self.audit()], ["queued", "unknown project", "queued"])   # bare, nowhere, ticked
 
     def test_slash_pause_resume_and_unknown_project(self):
         self.event("1.json", {"type": "slash", "command": "pause", "project": "a", "user": "U1", "ts": NOW})
@@ -489,6 +563,62 @@ class Events(Base):
 
     def audit(self):
         return [json.loads(l) for l in (self.ops / "audit.jsonl").read_text().splitlines()]
+
+
+class ControlsHooks(Base):
+    """The three hooks discord_controls has into discord_ops, driven through the real controls step."""
+    SRC = "%5:" + hashlib.sha1(b"x").hexdigest()
+
+    def setUp(self):
+        super().setUp()
+        self.configure()
+        self.pd = self.project("a")
+        (self.pd / "access.json").write_text(json.dumps({"allowFrom": ["U1"]}))
+        self.shows = {"w1": "T:Bash\nP:x\n", "w2": "T:Edit\nP:y\n"}
+
+    def run_(self, argv):
+        if argv[3] == "show":
+            if self.shows.get(argv[2]) is None:
+                raise RuntimeError("approve: no permission prompt")
+            return self.shows[argv[2]]
+        return ""
+
+    def step(self, needs=("w1",)):
+        import discord_controls as dc
+        r = {"needs_you": [{"window": w, "pane": "%5", "kind": "claude", "reason": ""} for w in needs]}
+        dc.step("a", r, NOW, self.run_, self.add)
+
+    def test_new_prompt_mirrored_once_and_resolved_when_gone(self):
+        # mutations: delete the mirror_prompt hook in scan_prompts / the resolve hook in _edit -> the matching assertion fails
+        self.step(needs=("w1",))
+        self.step(needs=("w1",))   # same prompt again: not mirrored twice
+        (ap,) = [o for o in self.outbox() if o["op"] == "approval"]
+        self.assertEqual((ap["kind"], ap["key"]), ("perm", okey("a", self.SRC)))
+        self.shows["w1"] = None
+        self.step(needs=())
+        (ed,) = [o for o in self.outbox() if o["op"] == "edit"]
+        self.assertEqual(ed["key"], ap["key"])
+        self.assertIn("a: 🔐 w1 wants to run Bash", ed["text"])
+
+    def test_failing_ops_call_does_not_break_the_step(self):
+        # mutation: let _ops raise (narrow its except) -> the scan aborts at w1 and w2's prompt op is lost
+        with mock.patch.object(ops, "mirror_prompt", side_effect=RuntimeError("x")):
+            self.step(needs=("w1", "w2"))
+        self.assertEqual(len([o for o in self.outbox(self.pd) if o["op"] == "prompt"]), 2)   # w2 is still scanned after w1's hook failed
+
+    def test_slash_modal_read_rejected_routed_to_handle_event(self):
+        # mutation: delete the routing branch in consume_events -> these fall to the click audit and the results differ
+        evs = [{"type": "slash", "command": "pause", "project": "a", "user": "U1", "ts": NOW},
+               {"type": "read", "what": "/status", "user": "U1", "ts": NOW},
+               {"type": "rejected", "what": "/pause", "user": "EVIL", "ts": NOW}]
+        for i, e in enumerate(evs):
+            self.event(f"{i}.json", e, d=self.pd)
+        with mock.patch.object(ops.ideas, "add"):
+            self.event("3.json", {"type": "modal", "form": "idea", "fields": {"title": "T", "text": "d"}, "user": "U1", "ts": NOW}, d=self.pd)
+            self.step(needs=())
+        au = [json.loads(l) for l in (self.pd / "audit.jsonl").read_text().splitlines()]
+        self.assertEqual([a["result"] for a in au], ["queued", "answered", "rejected", "idea added"])
+        self.assertEqual(self.lines, [("a", PAUSE)])
 
 
 class FeedChanges(Base):

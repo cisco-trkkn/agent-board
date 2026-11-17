@@ -28,6 +28,8 @@ CONFIRM_S = 60
 PROMPT_LINES = 15
 FIELD_MAX = 300
 DETAIL_MAX = 4000
+OPEN_KEEP = 200        # newest `other`/`merge` approvals kept in the state
+OPEN_TTL = 7 * 86400   # older ones leave views.json
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PAUSE_LINE = "[Discord] 🛑 pause the queue"
 RESUME_LINE = "[Discord] ▶️ resume the queue"
@@ -145,14 +147,14 @@ def _link(project):
 
 
 # ---- approvals ----
-def _approve(d, st, project, src_key, kind, text, link="", title="", spec=""):
+def _approve(d, st, project, src_key, kind, text, link="", title="", spec="", now=None):
     key = _okey(project, src_key)
     op = {"op": "approval", "key": key, "kind": kind, "text": text[:2000], "mention_user": True, "project": project}
     if link:
         op["link"] = link
     discord_feed.outbox_write(d, op)
     st["approvals"][key] = {"project": project, "kind": kind, "src_key": src_key, "title": title or text[:100], "link": link,
-                            "spec": spec, "ts": time.time()}
+                            "spec": spec, "ts": now if now is not None else time.time()}
     return key
 
 
@@ -160,9 +162,18 @@ def _edit_ops(d, key, text):
     discord_feed.outbox_write(d, {"op": "edit", "key": key, "text": text[:2000]})
 
 
-def _approvals_view(st):
+def _trim_open(st):
+    """Keep the newest OPEN_KEEP `other`/`merge` approvals (nothing else resolves them when the decision is made elsewhere)."""
+    old = sorted(((v.get("ts") or 0, k) for k, v in st["approvals"].items() if v.get("kind") in ("other", "merge")), reverse=True)
+    for _, k in old[OPEN_KEEP:]:
+        del st["approvals"][k]
+
+
+def _approvals_view(st, now=None):
+    now = time.time() if now is None else now
     return [{"key": k, "project": v.get("project"), "kind": v.get("kind"), "title": v.get("title"), "link": v.get("link")}
-            for k, v in st["approvals"].items()]
+            for k, v in st["approvals"].items()
+            if not (v.get("kind") in ("other", "merge") and now - (v.get("ts") or 0) > OPEN_TTL)]
 
 
 def mirror_prompt(project, src_key, window, tool, lines):
@@ -201,7 +212,7 @@ def _event_key(project, ev):
     return ("crit:" if ev.get("tier") == "critical" else "dec:") + hashlib.sha1(f"{ev.get('ts')}|{ev.get('text')}".encode()).hexdigest()[:12]
 
 
-def _mirror_events(d, st, project, link):
+def _mirror_events(d, st, project, link, now):
     fp = tc_env.feed_path(project)
     if project not in st["offsets"]:
         st["offsets"][project] = fp.stat().st_size if fp.exists() else 0   # first sight: no replay
@@ -219,7 +230,7 @@ def _mirror_events(d, st, project, link):
             text = f"{project}: {ev.get('text', '')}"
             if tier == "decision":
                 _approve(d, st, project, src, "merge" if kind == "merge_approval" else "other", text, link=link,
-                         title=str(ev.get("text", ""))[:100], spec=str(ev.get("spec") or ""))
+                         title=str(ev.get("text", ""))[:100], spec=str(ev.get("spec") or ""), now=now)
             else:
                 discord_feed.outbox_write(d, {"op": "post", "text": text[:2000], "tier": "critical", "mention_user": True})
             st["mirrored"].append(key)
@@ -233,7 +244,7 @@ def _lead_question(d, st, record, link, now):
     waiting = any(n.get("window") == "claude" for n in record.get("needs_you") or [])
     key = st["questions"].get(p)
     if waiting and not key:
-        st["questions"][p] = _approve(d, st, p, f"question:{p}:{int(now)}", "question", f"{p}: the lead is waiting on you", link=link)
+        st["questions"][p] = _approve(d, st, p, f"question:{p}:{int(now)}", "question", f"{p}: the lead is waiting on you", link=link, now=now)
     elif not waiting and key:
         del st["questions"][p]
         st["approvals"].pop(key, None)
@@ -251,10 +262,12 @@ def tick(records, tasks_by_project, limits, now, add_line):
         records = [r for r in records if isinstance(r, dict) and r.get("project")]
         links = {r["project"]: _link(r["project"]) for r in records}
         tasks_by_project = tasks_by_project or {}
+        st["projects"] = sorted(r["project"] for r in records)
         st["queues"] = {r["project"]: discord_feed._queue(tasks_by_project.get(r["project"]) or []) for r in records}
         for r in records:
             _lead_question(d, st, r, links[r["project"]], now)
-            _mirror_events(d, st, r["project"], links[r["project"]])
+            _mirror_events(d, st, r["project"], links[r["project"]], now)
+        _trim_open(st)
         text = render_card(records, tasks_by_project, links, limits, now)
         card = discord_feed.card_op_due(st, text, now)
         if card:
@@ -265,13 +278,16 @@ def tick(records, tasks_by_project, limits, now, add_line):
         status.update({r["project"]: _project_line(r, tasks_by_project.get(r["project"]), links[r["project"]]) for r in records})
         _write_json(d / "views.json", {"ts": now, "projects": sorted(links), "status": status,
                                        "queue": {r["project"]: queue_text(tasks_by_project.get(r["project"])) for r in records},
-                                       "approvals": _approvals_view(st), "evidence": {}})
+                                       "approvals": _approvals_view(st, now), "evidence": {}})
         return {"approvals": len(st["approvals"])}
 
 
 # ---- events ----
 def _known(project):
-    return bool(project) and PROJECT_RE.match(str(project)) is not None and (tc_env.discord_dir(project) / "bridge.json").is_file()
+    """A project of the last tick's records, or one with a discord dir."""
+    if not project or PROJECT_RE.match(str(project)) is None:
+        return False
+    return project in (_load(tc_env.ops_dir() / "ops-state.json").get("projects") or []) or tc_env.discord_dir(project).is_dir()
 
 
 def _collapse(v, n=FIELD_MAX):
@@ -325,9 +341,15 @@ def handle_event(project, d, ev, add_line, allow):
     return result
 
 
-def _default_merge(project, src_key, st, add_line, now):
+def _default_merge(project, src_key, rec, add_line, now):
     import discord_merge   # Task 5; imported here so this module loads without it
-    return discord_merge.on_merge(project, src_key, st, add_line, now)
+    return discord_merge.on_merge(project, src_key, rec, add_line, now)
+
+
+def _edit_both(project, ops_key, src_key, text):
+    """Edit the ops copy (`<project>: <text>`) and the project channel's copy (key = the source key)."""
+    _edit_ops(tc_env.ops_dir(), ops_key, f"{project}: {text}")
+    discord_feed.outbox_write(tc_env.discord_dir(project), {"op": "edit", "key": src_key, "text": text[:2000]})
 
 
 def _line_all(st, prefix, line, add_line):
@@ -359,17 +381,18 @@ def _click(d, user, cid, st, add_line, now, on_merge):
     if act == "resume-all":
         return f"queued {_line_all(st, 'queue: paused', RESUME_LINE, add_line)}"
     if act in ("merge", "keep"):
-        rec = st["approvals"].pop(k, None)
+        rec = st["approvals"].get(k)
         if not rec or rec.get("kind") != "merge":
-            if rec:
-                st["approvals"][k] = rec
             return "unknown"
         if act == "merge":
-            r = (on_merge or _default_merge)(rec["project"], rec["src_key"], st, add_line, now)
-            return r if isinstance(r, str) else "merged"
-        add_line(rec["project"], f"[Discord] keep branch for {rec.get('spec') or rec.get('title')}")
-        _edit_ops(tc_env.ops_dir(), k, f"{rec['project']}: kept")
-        return "queued"
+            r = (on_merge or _default_merge)(rec["project"], rec["src_key"], dict(rec), add_line, now)
+            result, text = str(r["result"]), str(r["text"])
+        else:
+            add_line(rec["project"], f"[Discord] keep branch for {rec.get('spec') or rec.get('title')}")
+            result, text = "queued", "kept"
+        _edit_both(rec["project"], k, rec["src_key"], text)
+        st["approvals"].pop(k, None)   # only after the action went through: a failure leaves the record and the button live
+        return result
     return "ignored"
 
 
@@ -404,6 +427,9 @@ def consume(add_line, run, now, on_merge=None):
                 done += 1
             except Exception as e:   # noqa: BLE001 -- one bad event never blocks the rest
                 print(f"discord_ops: event {f.name} failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                first = (str(e).splitlines() or [type(e).__name__])[0]
+                discord_feed.audit_append(d, str(ev.get("user") or ""), str(ev.get("type") or ""), str(ev.get("custom_id") or ev.get("what") or ""),
+                                          f"error: {first}"[:200])
             finally:
                 try:
                     f.unlink()
