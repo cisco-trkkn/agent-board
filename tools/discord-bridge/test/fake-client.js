@@ -13,6 +13,7 @@ class FakeClient extends EventEmitter {
     this.messages = new Map();
     this.user = { id: 'BOT' };
     this.channels = { fetch: (id) => this._fetchChannel(id) };
+    this.application = { commands: { set: async (payload, guildId) => { this._record('setCommands', guildId, payload); this._maybeFail('setCommands'); return payload; } } };
   }
 
   // failNext('send', {status: 500}) fails the next call of that method; count repeats it.
@@ -119,4 +120,25 @@ function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 
   return i;
 }
 
-module.exports = { FakeClient, fakeInteraction, fakeMessage, fakeReaction };
+// A chat-input command; options is {name: value}.
+function fakeCommand({ name, options = {}, user = 'U1', channelId = 'C1' } = {}) {
+  const i = { commandName: name, user: { id: user }, channelId, replies: [], updates: [], modals: [], deferred: 0 };
+  i.isChatInputCommand = () => true;
+  i.isModalSubmit = () => false;
+  i.options = { getString: (n) => (n in options ? options[n] : null) };
+  i.reply = async (x) => { i.replies.push(x); };
+  i.showModal = async (m) => { i.modals.push(m); };
+  return i;
+}
+
+// A modal submit; fields is {inputId: value}.
+function fakeModal({ customId, fields = {}, user = 'U1' } = {}) {
+  const i = { customId, user: { id: user }, replies: [], updates: [] };
+  i.isChatInputCommand = () => false;
+  i.isModalSubmit = () => true;
+  i.fields = { getTextInputValue: (n) => String(fields[n] ?? '') };
+  i.reply = async (x) => { i.replies.push(x); };
+  return i;
+}
+
+module.exports = { fakeCommand, fakeModal, FakeClient, fakeInteraction, fakeMessage, fakeReaction };

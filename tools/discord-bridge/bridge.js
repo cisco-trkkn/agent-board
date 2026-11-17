@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const outbox = require('./lib/outbox');
 const stateLib = require('./lib/state');
+const commands = require('./lib/commands');
 
 const CARD_MIN_MS = 30000;
 const BACKOFF_START = 1000;
@@ -336,13 +337,26 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     } finally { busy = false; }
   }
 
+  // Slash commands: once per connection, in the guild of the home channel. Failure is logged only.
+  let registered = false;
+  async function register(ch) {
+    if (registered || !ch?.guildId) return;
+    registered = true;
+    try { await client.application.commands.set(commands.payload(ops), ch.guildId); say('commands registered'); } catch (e) {
+      registered = false;
+      say(`commands registration failed: ${snip(e?.message)}`);
+    }
+  }
+
   async function onReady() {
-    try { await home(); } catch (e) { say(`ready: home channel fetch failed: ${snip(e?.message)}`); }
+    let ch = null;
+    try { ch = await home(); } catch (e) { say(`ready: home channel fetch failed: ${snip(e?.message)}`); }
     st.connected = true; save();
+    await register(ch);
     say('connected');
   }
 
-  function onDisconnect() { st.connected = false; save(); say('disconnected'); }
+  function onDisconnect() { registered = false; st.connected = false; save(); say('disconnected'); }
 
   // access.json is re-read on every click/reaction; missing or unreadable means nobody.
   function allowFrom() {
@@ -387,18 +401,6 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     return { content: `${body}\npage ${p + 1}/${pages}`, components: btns.length ? [{ type: 1, components: btns }] : [] };
   }
 
-  function inboxText(data) {
-    const list = Array.isArray(data.approvals) ? data.approvals : [];
-    if (!list.length) return 'No open decisions.';
-    const lines = []; let total = 0;
-    for (const a of list) {
-      const l = `${a.project} · ${a.title}${a.link ? ` ${a.link}` : ''}`;
-      if (total + l.length + 1 > REPLY_MAX - 30) { lines.push(`… ${list.length - lines.length} more, see board`); break; }
-      lines.push(l); total += l.length + 1;
-    }
-    return lines.join('\n');
-  }
-
   // ab:ops:* clicks in ops mode. Read-only buttons are answered here from views.json; actions become click events.
   async function onOpsInteraction(i, id) {
     const user = String(i.user?.id);
@@ -408,7 +410,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (id === 'ab:ops:inbox' || (m = /^ab:ops:files:([^:]+):(\d+)$/.exec(id)) || (m = /^ab:ops:diff:([^:]+)$/.exec(id))) {
       const data = views();
       if (!data || typeof data !== 'object') { await answer(i, 'Board data not available yet.'); read(id); return; }
-      if (id === 'ab:ops:inbox') await answer(i, inboxText(data));
+      if (id === 'ab:ops:inbox') await answer(i, commands.inboxText(data));
       else if (id.startsWith('ab:ops:files:')) { const r = filesPage(m[1], Number(m[2]), data); await answer(i, r.content, r.components); }
       else {
         const ev0 = data.evidence?.[m[1]];
@@ -434,6 +436,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   }
 
   async function onInteraction(i) {
+    if (await commands.handle(i, ctx)) return;
     const id = i?.customId;
     if (typeof id !== 'string' || !id.startsWith('ab:')) return;
     if (!allowFrom().has(String(i.user?.id))) {
