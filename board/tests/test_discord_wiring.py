@@ -16,6 +16,8 @@ server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 import discord_controls  # noqa: E402
 import discord_feed  # noqa: E402
+import discord_merge  # noqa: E402
+import discord_ops  # noqa: E402
 import notify  # noqa: E402
 import tc_env  # noqa: E402
 
@@ -219,6 +221,175 @@ class FeedStepWiringTest(Base):
 
     def test_discord_controls_bin_is_server_bin(self):
         self.assertEqual(server.discord_controls.BIN, server.BIN)
+
+
+class OpsBase(Base):
+    def configure_ops(self, token=True, channels=True):
+        d = tc_env.ops_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        if token:
+            (d / ".env").write_text("DISCORD_BOT_TOKEN=dummy\n")
+        if channels:
+            (d / "bridge.json").write_text(json.dumps({"command_center": "CC", "approvals": "AP", "user": "u1"}))
+        return d
+
+
+class OpsKeeperTest(OpsBase):
+    def setUp(self):
+        super().setUp()
+        server._discord_checked.clear()
+        self.run = mock.patch.object(server, "run_script")
+        self.m = self.run.start()
+        self.addCleanup(self.run.stop)
+        self.mono = mock.patch.object(server.time, "monotonic", return_value=1000.0)
+        self.clock = self.mono.start()
+        self.addCleanup(self.mono.stop)
+
+    def test_starts_ops_bridge_with_ops_flag(self):
+        self.configure_ops()
+        server.ensure_discord_bridges([])
+        self.m.assert_called_once_with([str(server.BIN / "tmux-ctl"), "discord", "bridge", "start", "--keeper", "--ops"], timeout=20)
+
+    def test_needs_token_and_both_channels(self):
+        self.configure_ops(token=False)
+        server.ensure_discord_bridges([])
+        d = tc_env.ops_dir()
+        (d / "bridge.json").unlink()
+        self.configure_ops(token=True, channels=False)
+        server.ensure_discord_bridges([])
+        (d / "bridge.json").write_text(json.dumps({"command_center": "CC"}))
+        server.ensure_discord_bridges([])
+        self.m.assert_not_called()
+
+    def test_once_per_60s(self):
+        self.configure_ops()
+        server.ensure_discord_bridges([])
+        self.clock.return_value = 1059.0
+        server.ensure_discord_bridges([])
+        self.assertEqual(self.m.call_count, 1)
+        self.clock.return_value = 1061.0
+        server.ensure_discord_bridges([])
+        self.assertEqual(self.m.call_count, 2)
+
+    def test_kill_switch(self):
+        self.configure_ops()
+        with mock.patch.dict(os.environ, {"TC_DISCORD_BRIDGE": "0"}):
+            server.ensure_discord_bridges([])
+        self.m.assert_not_called()
+
+    def test_failure_logged_and_rate_limited(self):
+        self.configure_ops()
+        self.m.side_effect = RuntimeError("boom")
+        with mock.patch("sys.stderr") as err:
+            server.ensure_discord_bridges([])
+            server.ensure_discord_bridges([])
+        self.assertEqual(self.m.call_count, 1)
+        self.assertIn("boom", "".join(c[0][0] for c in err.write.call_args_list))
+
+    def test_project_bridges_still_start(self):
+        self.configure("p"); self.configure_ops()
+        server.ensure_discord_bridges([rec("p")])
+        argvs = [c[0][0] for c in self.m.call_args_list]
+        self.assertIn([str(server.BIN / "tmux-ctl"), "discord", "bridge", "start", "--keeper", "--project", "p"], argvs)
+        self.assertEqual(len(argvs), 2)
+
+
+class OpsTickWiringTest(OpsBase):
+    def setUp(self):
+        super().setUp()
+        server._discord_checked.clear()
+        self.order = []
+        self.tick = mock.patch.object(server.discord_ops, "tick", side_effect=lambda *a, **k: self.order.append("ops-tick"))
+        self.consume = mock.patch.object(server.discord_ops, "consume", side_effect=lambda *a, **k: self.order.append("ops-consume"))
+        self.mt, self.mc = self.tick.start(), self.consume.start()
+        self.addCleanup(self.tick.stop); self.addCleanup(self.consume.stop)
+        self.limits = mock.patch.object(server.usage, "plan_limits", return_value={"five_hour": 12})
+        self.taps = mock.patch.object(server.usage, "tap_entries", return_value=["tap"])
+        self.ml, self.mtaps = self.limits.start(), self.taps.start()
+        self.addCleanup(self.limits.stop); self.addCleanup(self.taps.stop)
+
+    def run_tick(self, records, tasks=None, now=1000.0):
+        tasks = tasks if tasks is not None else [{"id": "1", "subject": "s", "status": "pending"}]
+        with mock.patch.object(server.planview, "lead_entry", return_value=("sid", 5, 6)), \
+             mock.patch.object(server.planview, "raw_live_list", return_value=("lid", tasks)), \
+             mock.patch.object(server.discord_feed, "tick", side_effect=lambda p, *a, **k: self.order.append(("feed", p))), \
+             mock.patch.object(server.discord_controls, "step", side_effect=lambda p, *a, **k: self.order.append(("step", p))):
+            server.feed_tick(records, now)
+
+    def test_one_tick_and_one_consume_after_every_project(self):
+        self.configure("a"); self.configure("b"); self.configure_ops()
+        self.run_tick([rec("a"), rec("b")])
+        self.assertEqual(self.order, [("feed", "a"), ("step", "a"), ("feed", "b"), ("step", "b"), "ops-tick", "ops-consume"])
+
+    def test_tick_args_cover_every_project_even_without_a_channel(self):
+        self.configure("a"); self.configure_ops()
+        tasks = [{"id": "1", "subject": "s", "status": "pending"}]
+        records = [rec("a"), rec("nochan")]
+        self.run_tick(records, tasks=tasks, now=1234.0)
+        a = self.mt.call_args[0]
+        self.assertEqual(a[0], records)
+        self.assertEqual(a[1], {"a": tasks, "nochan": tasks})
+        self.assertEqual(a[2], {"five_hour": 12})
+        self.assertEqual(a[3], 1234.0)
+        self.assertEqual(a[4], server.COMMENTS.add_line)
+        self.mtaps.assert_called_once_with(1234.0, 10 ** 9)
+        self.ml.assert_called_once_with(["tap"])
+
+    def test_consume_gets_add_line_run_now_and_merge_hook(self):
+        self.configure_ops()
+        self.run_tick([rec("a")], now=55.0)
+        args, kw = self.mc.call_args
+        self.assertEqual(args[0], server.COMMENTS.add_line)
+        self.assertTrue(callable(args[1]))
+        self.assertEqual(args[2], 55.0)
+        self.assertIs(kw["on_merge"], discord_merge.on_merge)
+
+    def test_ops_not_configured_makes_no_ops_calls(self):
+        self.configure("a")
+        self.run_tick([rec("a")])
+        self.mt.assert_not_called(); self.mc.assert_not_called()
+
+    def test_limits_failure_is_none(self):
+        self.configure_ops()
+        self.ml.side_effect = RuntimeError("no taps")
+        self.run_tick([rec("a")])
+        self.assertIsNone(self.mt.call_args[0][2])
+
+    def test_tick_exception_logged_overview_and_consume_continue(self):
+        self.configure_ops()
+        self.mt.side_effect = RuntimeError("ops tick broke")
+        with mock.patch("sys.stderr") as err:
+            self.run_tick([rec("a")])
+        self.mc.assert_called_once()
+        self.assertIn("tmux-dash: discord ops failed: RuntimeError: ops tick broke", "".join(c[0][0] for c in err.write.call_args_list))
+
+    def test_consume_exception_logged(self):
+        self.configure_ops()
+        self.mc.side_effect = RuntimeError("consume broke")
+        with mock.patch("sys.stderr") as err:
+            self.run_tick([rec("a")])
+        self.assertIn("tmux-dash: discord ops failed: RuntimeError: consume broke", "".join(c[0][0] for c in err.write.call_args_list))
+
+    def test_task_fetch_failure_for_one_project_does_not_stop_ops(self):
+        self.configure_ops()
+        with mock.patch.object(server.planview, "lead_entry", side_effect=RuntimeError("no lead")), \
+             mock.patch("sys.stderr"):
+            server.feed_tick([rec("a")], 1.0)
+        self.assertEqual(self.mt.call_args[0][1], {"a": []})
+        self.mc.assert_called_once()
+
+    def test_overview_payload_returns_when_ops_raises(self):
+        self.configure_ops()
+        self.mt.side_effect = RuntimeError("x"); self.mc.side_effect = RuntimeError("y")
+        ov = {"generated": 1.0, "projects": [rec("p")]}
+        with mock.patch.object(server, "build_overview", return_value=ov), \
+             mock.patch.object(server, "ensure_overseer"), mock.patch.object(server, "ensure_discord_bridges"), \
+             mock.patch.object(server.planview, "lead_entry", return_value=("", 0, 0)), \
+             mock.patch.object(server.planview, "raw_live_list", return_value=("", [])), \
+             mock.patch("sys.stderr"):
+            server._overview_cache.update(at=0.0, value=None)
+            value = server.overview_payload()
+        self.assertEqual(value["projects"][0]["project"], "p")
 
 
 class SinkTest(Base):

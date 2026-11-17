@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_feed, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_feed, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -475,19 +475,34 @@ def ensure_discord_bridges(records):
             run_script([str(BIN / "tmux-ctl"), "discord", "bridge", "start", "--keeper", "--project", p], timeout=20)
         except Exception as e:   # noqa: BLE001 - never on the request path's error budget
             print(f"tmux-dash: discord bridge ensure failed ({p}): {e}", file=sys.stderr, flush=True)
+    try:   # the ops bot: one bridge for all projects, same 60 s recheck
+        ops = tc_env.ops_dir()
+        if (ops / ".env").is_file() and discord_ops.configured():
+            now = time.monotonic()
+            last = _discord_checked.get("_ops")
+            if last is None or now - last >= DISCORD_RECHECK_S:
+                _discord_checked["_ops"] = now
+                run_script([str(BIN / "tmux-ctl"), "discord", "bridge", "start", "--keeper", "--ops"], timeout=20)
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: discord bridge ensure failed (ops): {e}", file=sys.stderr, flush=True)
 
 
 def feed_tick(records, now):
     """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (prompt buttons, inbound events).
     A failure in one project is logged and never breaks the overview or the next project."""
     home = HOME / ".claude"
+    ops_on = discord_ops.configured()
+    tasks_by_project = {}   # the ops card and views cover every project, with or without a channel of its own
     for r in records:
         p = r["project"]
         try:
             if not discord_feed.channel_of(p):
+                if ops_on:
+                    tasks_by_project[p] = planview.raw_live_list(home, *planview.lead_entry(p, home, tmux))[1]
                 continue
             sid, pid, started = planview.lead_entry(p, home, tmux)
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
+            tasks_by_project[p] = tasks
             discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id)
         except Exception as e:   # noqa: BLE001
             print(f"tmux-dash: discord feed failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
@@ -496,6 +511,28 @@ def feed_tick(records, now):
                                   add_line=COMMENTS.add_line)
         except Exception as e:   # noqa: BLE001 -- a tick error does not skip the controls step, and vice versa
             print(f"tmux-dash: discord controls failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    if ops_on:
+        ops_tick(records, tasks_by_project, now)
+    # (the daily digest, Task 8, runs here: after the ops tick and consume, before the overview returns)
+
+
+def ops_tick(records, tasks_by_project, now):
+    """The ops bot: one tick (card, views, approvals) then one pass over its events, after every project's step.
+    A failure in either is logged and never breaks the overview."""
+    for p in (r["project"] for r in records):
+        tasks_by_project.setdefault(p, [])   # a project whose lead list could not be read still appears on the card
+    try:
+        try:
+            limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+        except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
+            limits = None
+        discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line)
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    try:
+        discord_ops.consume(COMMENTS.add_line, lambda argv: run_script(argv, timeout=20), now, on_merge=discord_merge.on_merge)
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
 def build_overview(now=None):
