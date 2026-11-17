@@ -43,6 +43,7 @@
 #                                          tasks, needs-you, lead, last run, spend, alerts), or the JSON
 #   tmux-ctl discord token|pair|deny|policy|allow|remove|forget|status [--project <name>]  the project's Discord bot (token read from stdin, never printed)
 #   tmux-ctl discord channel <id>|bridge install|start|stop|audit [--since <ISO>] [--project <name>]  the home channel, the bridge process (window discord in <project>-bg) and its audit log
+#   tmux-ctl discord send [--thread <key>] <file>… [-m <text>] [--project <name>]  post up to 10 files; snap [<project>]  post a PNG of the board
 #   tmux-ctl discord watch --once|install|status|uninstall  the reconnect watchdog
 #   tmux-ctl metrics backfill-tasks [--log P]  task lines (tasks.jsonl) for past runs that have none
 #   tmux-ctl metrics analyze [--since 7d|30d|ISO] [--json]  trends, flags, coverage over every project -> stats.json
@@ -639,7 +640,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

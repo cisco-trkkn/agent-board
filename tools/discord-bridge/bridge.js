@@ -128,6 +128,19 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
     await t.setArchived(true);
   }
 
+  const MAX_FILES = 10, MAX_BYTES = 25 * 1024 * 1024;
+  const fmtSize = (n) => (n / (1024 * 1024)).toFixed(1) + ' MB';
+  function pickFiles(paths) {
+    const ok = [], notes = [];
+    for (const p of paths.slice(0, MAX_FILES)) {
+      let st; try { st = fs.statSync(p); } catch { notes.push(`${path.basename(p)} not found`); continue; }
+      if (st.size > MAX_BYTES) notes.push(`${path.basename(p)} too large (${fmtSize(st.size)})`);
+      else ok.push(p);
+    }
+    if (paths.length > MAX_FILES) notes.push(`${paths.length - MAX_FILES} more files not sent (${MAX_FILES} max)`);
+    return { ok, notes };
+  }
+
   async function opPost(op) {
     const c = cfg();
     let text = String(op.text ?? '');
@@ -146,9 +159,22 @@ function createBridge({ dir, client, log = () => {}, now = Date.now, sleep = (ms
       text = `<@${c.user}> ${text}`;
       payload.allowedMentions = { users: [String(c.user)] };
     }
+    const paths = Array.isArray(op.files) ? op.files.map(String) : [];
+    const { ok, notes } = pickFiles(paths);
+    if (notes.length) text += '\n' + notes.join('\n');
     payload.content = text.slice(0, 2000);
-    if (Array.isArray(op.files) && op.files.length) payload.files = op.files;
+    if (ok.length) payload.files = ok;
     await target.send(payload);
+    if (op.delete_files === true) {
+      let tmpRoot = null;
+      try { tmpRoot = fs.realpathSync(path.join(dir, 'tmp')) + path.sep; } catch { /* no tmp/ */ }
+      for (const p of paths) {
+        let r;
+        try { r = fs.realpathSync(p); } catch { continue; } // already gone
+        if (tmpRoot && r.startsWith(tmpRoot)) { try { fs.unlinkSync(r); } catch { /* already gone */ } }
+        else say(`delete_files: kept ${r} (outside tmp/)`);
+      }
+    }
     say(`post ${op.thread_key || 'home'} ${snip(op.text)}`);
   }
 

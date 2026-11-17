@@ -3,6 +3,7 @@
 Spool writer (outbox, 200 cap), feed-event file (spec §11), status card renderer and throttle, audit log.
 Paths come from tc_env (agent_base, discord_dir, feed_path). Test: tests/test_discord_feed.py."""
 import copy
+import datetime
 import fcntl
 import glob
 import hashlib
@@ -20,7 +21,7 @@ CARD_MAX = 1900
 CARD_EVERY = 30
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
-_POST_OPT = {"thread_key": str, "link_thread_key": str, "files": list}
+_POST_OPT = {"thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool}
 _last_ms = 0
 _ms_lock = threading.Lock()   # the overview thread and the notifier sink both write
 
@@ -41,7 +42,7 @@ def _check(op):
     keys = set(op)
     if not need <= keys or keys - need - opt:
         raise ValueError(f"bad keys for {kind}: {sorted(keys)}")
-    for k in keys - {"op", "mention_user", "files", "lines"}:
+    for k in keys - {"op", "mention_user", "files", "lines", "delete_files"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
     if kind == "prompt":
@@ -58,6 +59,8 @@ def _check(op):
             raise ValueError("mention_user must be a bool")
         if "files" in op and not (isinstance(op["files"], list) and all(isinstance(f, str) and f.startswith("/") for f in op["files"])):
             raise ValueError("files must be absolute paths")
+        if "delete_files" in op and not isinstance(op["delete_files"], bool):
+            raise ValueError("delete_files must be a bool")
 
 
 def _next_ms():
@@ -289,6 +292,55 @@ def _report_summary(path):
     return path.name
 
 
+LOG_LINES = 200
+ATTACH_KEEP = 20
+
+
+def _failed_run_log(project, now):
+    """The newest failing run record (exit not null/0, cwd in a worktree, ts within 24 h before now, log file present);
+    its last LOG_LINES lines go to <discord dir>/attachments/<id>.log (newest ATTACH_KEEP files kept).
+    {"log_file", "log_cmd", "log_exit"} or None."""
+    import tc_env
+    recs = {}
+    f = tc_env.state_dir() / f"runs-{project}.jsonl"
+    try:
+        lines = f.read_text(errors="replace").splitlines() if f.is_file() else []
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and r.get("id"):
+            recs[str(r["id"])] = r   # each id appears twice (start, final): the last one wins
+    ok = [r for r in recs.values()
+          if r.get("exit") not in (None, 0) and "/.claude/worktrees/" in str(r.get("cwd", ""))
+          and isinstance(r.get("ts"), (int, float)) and now - 86400 <= r["ts"] <= now
+          and os.path.isfile(str(r.get("log", "")))]
+    if not ok:
+        return None
+    r = max(ok, key=lambda r: r["ts"])
+    try:
+        with open(r["log"], encoding="utf-8", errors="replace") as fh:
+            tail = fh.read().splitlines()[-LOG_LINES:]
+        d = tc_env.discord_dir(project) / "attachments"
+        d.mkdir(parents=True, exist_ok=True)
+        dest = d / (re.sub(r"[^\w.-]", "_", str(r["id"])) + ".log")
+        dest.write_text("\n".join(tail) + "\n", encoding="utf-8")
+        old = sorted((p for p in d.iterdir() if p.is_file()), key=lambda p: (p.stat().st_mtime, p.name))
+        for p in old[:-ATTACH_KEEP]:
+            p.unlink()
+    except OSError:
+        return None
+    m = re.search(r"/\.claude/worktrees/([^/]+)", str(r.get("cwd", "")))
+    where = m.group(1) if m else os.path.basename(str(r.get("cwd", "")).rstrip("/"))
+    cmd = " ".join(str(r.get("cmd", "")).split())
+    cmd = (cmd[:200] + "…") if len(cmd) > 200 else cmd
+    at = datetime.datetime.fromtimestamp(r["ts"]).strftime("%H:%M")
+    return {"log_file": str(dest), "log_cmd": cmd or str(r["id"]), "log_exit": r["exit"], "log_where": where, "log_at": at}
+
+
 def derive(project, root, lead_tasks, state, now, list_id=""):
     """(events, new_state). Each event is emitted once: its key goes into state["seen"] (newest 2000 kept).
     The first call on a fresh state (no "primed") records the history already there (completed tasks, ledger lines,
@@ -360,10 +412,13 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
             outcome = str(meta.get("outcome") or "completed")
             tier = "critical" if outcome.startswith("failed") else "progress"
             rid = tk(t["id"])
-            emit(f"outcome:{rid}", _ev(project, _spec_name(t["subject"]), "spec_outcome", tier, outcome, now, thread_key=rid), history=True)
+            extra = {}
+            if outcome.startswith("failed") and f"outcome:{rid}" not in have and not first:
+                extra = _failed_run_log(project, now) or {"no_run_log": True}
+            emit(f"outcome:{rid}", _ev(project, _spec_name(t["subject"]), "spec_outcome", tier, outcome, now, thread_key=rid, **extra), history=True)
     for p in sorted(glob.glob(os.path.join(glob.escape(str(root)), "docs", "superpowers", "reports", "*-queue.md"))):
         name = os.path.basename(p)
-        emit(f"report:{name}", _ev(project, "", "report_written", "progress", f"queue report: {_report_summary(Path(p))}", now, file=name), history=True)
+        emit(f"report:{name}", _ev(project, "", "report_written", "progress", f"queue report: {_report_summary(Path(p))}", now, file=name, path=os.path.abspath(p)), history=True)
     if tasks:
         st["primed"] = True
         if list_id and list_id not in primed_lists:
@@ -395,8 +450,17 @@ def ops_for_events(events, state):
             op = {"op": "post", "text": ev["text"], "tier": "progress", "mention_user": False}
             if thread and kind != "report_written":
                 op["thread_key"] = thread
+            if kind == "report_written" and refs.get("path"):
+                op["files"] = [refs["path"]]
         ops.append(op)
         if kind == "spec_outcome" and refs.get("thread_key"):
+            if str(ev.get("text", "")).startswith("failed"):
+                if refs.get("log_file"):
+                    ops.append({"op": "post", "text": f"failed run log: {refs.get('log_cmd', '')} (exit {refs.get('log_exit')}) · {refs.get('log_where', '')} · {refs.get('log_at', '')}",
+                                "tier": "progress", "mention_user": False, "thread_key": refs["thread_key"], "files": [refs["log_file"]]})
+                elif refs.get("no_run_log"):
+                    ops.append({"op": "post", "text": "failed — no failing test run recorded", "tier": "progress",
+                                "mention_user": False, "thread_key": refs["thread_key"]})
             ops.append({"op": "archive", "key": refs["thread_key"]})
     return ops
 
