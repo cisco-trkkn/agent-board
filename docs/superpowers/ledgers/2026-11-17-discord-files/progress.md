@@ -54,3 +54,7 @@ Ruling: narrowing the failed-run pick to the spec's own worktree is a follow-up 
 Final review: fix wave green (df-wave a4f1177..22f7465; node 70/70, unittest 111 OK, send ALL PASS)
 Final review: fix wave re-review df-rrw — all addressed, no new C/I
 Final: minor (deferred): slow-chrome test stub leaves an orphan sleep 30; the alarm kills only Chrome's main process, not helpers
+Finish: pre-merge all.zsh FAIL 5/140 — help range sed '2,52p' not bumped after Task 3 added a help line (test_metrics_weekly x2, backfill_privacy, awake/context/wait_gone 'help still ends at the blank line'); node 70/70
+Finish: help-range fix df-help 55ddea3 (5 failing suites green); re-review dispatched df-rrh
+Finish: help fix re-review df-rrh ADDRESSED, no new breakage (report gives summaries, not raw output — the full all.zsh rerun is the evidence)
+Finish: pre-merge all.zsh ALL PASS 140 (rc 4 time budget only), node 70/70, at 9e27dd8 (main merged in)
