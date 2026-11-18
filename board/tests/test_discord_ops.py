@@ -454,6 +454,26 @@ class Events(Base):
         self.consume()
         self.assertEqual(self.lines, [("a", RESUME)])
 
+    def test_resume_all_after_pause_all_when_queue_still_reads_running(self):
+        # the pause is a lead line: the task list (and so queues) still reads running afterwards
+        self.seed_queues(a="queue: running x (1/2)", b="queue: running y (1/1)")
+        self.event("1.json", ok(f"ab:ops:pause-all-confirm:{int(NOW * 1000)}"))
+        self.event("2.json", ok("ab:ops:resume-all"))
+        self.event("3.json", ok("ab:ops:resume-all"))
+        self.consume()
+        self.assertEqual(self.lines, [("a", PAUSE), ("b", PAUSE), ("a", RESUME), ("b", RESUME)])
+        self.assertEqual([r["result"] for r in self.audit()[-2:]], ["queued 2", "queued 0"])
+        self.assertEqual(json.loads((self.ops / "ops-state.json").read_text())["paused_by_ops"], {})
+
+    def test_resume_all_does_not_double_send_when_paused_by_ops_and_reads_paused(self):
+        self.seed_queues(a="queue: paused")
+        st = json.loads((self.ops / "ops-state.json").read_text())
+        st["paused_by_ops"] = {"a": NOW}
+        (self.ops / "ops-state.json").write_text(json.dumps(st))
+        self.event("1.json", ok("ab:ops:resume-all"))
+        self.consume()
+        self.assertEqual(self.lines, [("a", RESUME)])
+
     def test_repeated_pause_all_files_send_per_file(self):
         self.seed_queues(a="queue: running x (1/2)")
         for n in ("1.json", "2.json"):
