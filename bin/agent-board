@@ -8,6 +8,7 @@
 #   agent-board jump           fuzzy-jump to any window
 #   agent-board cleanup        close finished agent windows
 #   agent-board worktrees <cmd>  classify, remove or sweep agent worktrees (agent-worktrees)
+#   agent-board restore <cmd>  snapshot/restore after a reboot: tick, snapshot, again, status, schedule install|status|uninstall
 #   agent-board help           this list
 emulate -L zsh
 here="${0:A:h}"
@@ -19,6 +20,7 @@ case "$1" in
   jump)    shift; exec "$here/tmux-jump" "$@" ;;
   worktrees) shift; exec "$here/agent-worktrees" "$@" ;;
   cleanup) shift; exec "$here/tmux-agent-cleanup" "$@" ;;
-  help|-h|--help) sed -n '2,11p' "${0:A}" | sed 's/^# \{0,1\}//' ;;
-  *)       sed -n '2,11p' "${0:A}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  restore) shift; exec python3 "${here:h}/board/restore.py" "$@" ;;
+  help|-h|--help) sed -n '2,12p' "${0:A}" | sed 's/^# \{0,1\}//' ;;
+  *)       sed -n '2,12p' "${0:A}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
