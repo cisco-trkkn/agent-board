@@ -229,6 +229,11 @@ class Network(Base):
         self.run_restore(snap())
         self.assertEqual(self.sh.calls[0][0], ["/sbin/route", "-n", "get", "default"])
 
+    def test_route_command_seam(self):
+        with mock.patch.dict(os.environ, {"TC_RESTORE_ROUTE": "/usr/bin/true"}):
+            self.run_restore(snap())
+        self.assertEqual(self.sh.calls[0][0], ["/usr/bin/true", "-n", "get", "default"])
+
     def test_times_out_after_300s_and_carries_on(self):
         self.sh.route_ok_after = 10**6
         self.run_restore(snap())

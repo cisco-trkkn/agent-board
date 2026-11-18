@@ -360,7 +360,7 @@ def do_restore(dir, snap, cfg):
     others. Marks the snapshot restored (with restored_at and results) even after failures; returns the results
     {project: {"status", "failures", "error"?}}."""
     _log(dir, cfg, f"restore: boot {snap.get('boot')}, {len(snap.get('projects') or [])} projects")
-    ok = _poll(cfg, NET_WAIT, NET_POLL, lambda: cfg.sh([ROUTE, "-n", "get", "default"])[0] == 0)
+    ok = _poll(cfg, NET_WAIT, NET_POLL, lambda: cfg.sh([os.environ.get("TC_RESTORE_ROUTE") or ROUTE, "-n", "get", "default"])[0] == 0)
     _log(dir, cfg, "network: up" if ok else "network: not up after 300 s, carrying on")
     shared = []
     _step(dir, cfg, "board", "dash start", shared, _safe(cfg.sh, list(cfg.dash_ctl) + ["dash", "start"], cwd=cfg.home))
