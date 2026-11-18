@@ -45,7 +45,7 @@
 #   tmux-ctl discord ... --ops  the same on the ops bot (state dir _ops); ops-channels <command center id> <approvals id>  its two channels
 #   tmux-ctl discord channel <id>|bridge install|start|stop|audit [--since <ISO>] [--project <name>]  the home channel, the bridge process (window discord in <project>-bg) and its audit log
 #   tmux-ctl discord merge-request --project <p> --task <id> --spec <s> --branch <b> [--target main] --tests <line> --verdict <text> [--finding <line>]…  post a merge approval (queue integration ask)
-#   tmux-ctl discord send [--thread <key>] <file>… [-m <text>] [--project <name>]  post up to 10 files; snap [<project>]  post a PNG of the board
+#   tmux-ctl discord send [--thread <key>] [<file>…] [-m <text>] [--project <name>]  post up to 10 files; snap [<project>]  post a PNG of the board
 #   tmux-ctl discord watch --once|install|status|uninstall  the reconnect watchdog
 #   tmux-ctl metrics backfill-tasks [--log P]  task lines (tasks.jsonl) for past runs that have none
 #   tmux-ctl metrics analyze [--since 7d|30d|ISO] [--json]  trends, flags, coverage over every project -> stats.json

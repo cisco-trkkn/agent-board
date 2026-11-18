@@ -105,5 +105,5 @@ check "snap: timeout leaves no png"     test "$(ls $D/tmp)" = "$before"
 run $C discord bogus --project tt
 check "usage lists send"                test -n "$(grep -F 'send [--thread <key>] [<file>…] [-m <text>]' $S/out.$N)"
 check "usage lists snap"                test -n "$(grep -F 'snap [<project>]' $S/out.$N)"
-check "header lists send and snap"      test -n "$(grep -F 'send [--thread <key>] <file>… [-m <text>]' $C)" -a -n "$(grep -F 'snap [<project>]' $C)"
+check "header lists send and snap"      test -n "$(grep -F 'send [--thread <key>] [<file>…] [-m <text>]' $C)" -a -n "$(grep -F 'snap [<project>]' $C)"
 tt_done
