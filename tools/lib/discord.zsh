@@ -6,7 +6,7 @@
 _DC_TOOLS="${${(%):-%x}:A:h:h}"   # file scope: tools/
 _dc_root() { print -r -- "${TC_STATE:-$HOME/.local/state/agent-board}/discord" }
 _dc_ops_dir() { print -r -- "$(_dc_root)/_ops" }
-_dc_usage() { print -u2 "usage: tmux-ctl discord [--ops] token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|ops-channels <command-center id> <approvals id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>]|merge-request --project <p> --task <id> --spec <s> --branch <b> [--target main] --tests <line> --verdict <text> [--finding <line>]…|send [--thread <key>] <file>… [-m <text>]|snap [<project>] (the token is read from stdin)"; return 2 }
+_dc_usage() { print -u2 "usage: tmux-ctl discord [--ops] token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|ops-channels <command-center id> <approvals id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>]|merge-request --project <p> --task <id> --spec <s> --branch <b> [--target main] --tests <line> --verdict <text> [--finding <line>]…|send [--thread <key>] [<file>…] [-m <text>]|snap [<project>] (the token is read from stdin)"; return 2 }
 _dc_tokenish() { [[ "$1" == *.* && ${#1} -ge 50 ]] }
 
 discord_cmd() {
@@ -374,7 +374,7 @@ _dc_send() {
     files=("$png"); delete=1
     [[ -n "$text" ]] || text="board snapshot $(date +%H:%M)"
   else
-    (( ${#files} )) || { _dc_usage; return 2 }
+    (( ${#files} )) || [[ -n "$text" ]] || { _dc_usage; return 2 }
     (( ${#files} <= 10 )) || { print -u2 "send: at most 10 files"; return 2 }
     local -a abs=()
     for f in "${files[@]}"; do

@@ -45,6 +45,10 @@ check "send: directory"                 test $rc -eq 1 -a "$out" = "send: $S/wor
 print c > secret.txt; chmod 000 secret.txt
 run $C discord send a.txt secret.txt --project tt
 check "send: unreadable (chmod 000), no op" test $rc -eq 1 -a "$out" = "send: $S/work/secret.txt: not readable" -a "$(ops)" = 0
+clr; run $C discord send -m hi --project tt
+check "send -m alone: exit 0, stdout"   test $rc -eq 0 -a "$out" = "send: 1 post, 0 files"
+check "send -m alone: one text op"      test "$(ops)" = 1 -a "$(op1 | jq -c '[.text,.files,.op]')" = '["hi",[],"post"]'
+clr
 run $C discord send --project tt
 check "send: no files -> usage exit 2"  test $rc -eq 2 -a -n "$(grep -i usage $S/out.$N)"
 files=(); for i in {1..11}; do print x > f$i; files+=(f$i); done
@@ -99,7 +103,7 @@ check "snap: timeout leaves no png"     test "$(ls $D/tmp)" = "$before"
 
 # --- usage + header
 run $C discord bogus --project tt
-check "usage lists send"                test -n "$(grep -F 'send [--thread <key>] <file>… [-m <text>]' $S/out.$N)"
+check "usage lists send"                test -n "$(grep -F 'send [--thread <key>] [<file>…] [-m <text>]' $S/out.$N)"
 check "usage lists snap"                test -n "$(grep -F 'snap [<project>]' $S/out.$N)"
 check "header lists send and snap"      test -n "$(grep -F 'send [--thread <key>] <file>… [-m <text>]' $C)" -a -n "$(grep -F 'snap [<project>]' $C)"
 tt_done
