@@ -126,6 +126,22 @@ agent-board worktrees schedule uninstall
 
 Run it from `~/agent-board` (the main checkout), not from a worktree: the plist points at the `agent-board` beside the CLI you ran (or at `~/.local/bin/agent-board` when that link exists), and a worktree is the kind of directory the sweep removes. `install` refuses, and writes nothing, when neither is executable. `agent-board worktrees classify` and `sweep --dry-run` show what a sweep would do without removing anything.
 
+### Restore after a reboot (recommended)
+
+A forced reboot (a macOS update installed by an MDM profile, a crash) kills the `agent-board` tmux server and every lead, worker and Discord bridge in it. A LaunchAgent snapshots the server every minute (projects, leads, awake state) and, on the first tick after a new boot, restarts the server and board, reopens each project's session, resumes its lead with a prompt and posts the result to Discord.
+
+```zsh
+agent-board restore schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-restore.plist and loads it
+agent-board restore schedule status       # loaded or not loaded, the snapshot's age, boot and project names
+agent-board restore schedule uninstall
+```
+
+The job runs `agent-board restore tick` at load and every 60 s; its output goes to `~/.local/state/agent-board/restore/launchd.log` (`$TC_STATE/restore/` when set). `install` backs up an existing plist as `.bak-YYYYMMDD`. macOS only: on Linux the command prints `macOS only` and exits 2.
+
+- **Switches.** `TC_RESTORE=0` in the job's environment, or an empty file `~/.local/state/agent-board/restore/restore.off`, makes every tick do nothing; remove either to resume.
+- **`agent-board restore again`** clears the snapshot's `restored` flag so the next tick restores once more (after a failed or partial restore).
+- **Known limit: FileVault.** With FileVault on, the Mac stops at the disk-unlock screen after a reboot and no user LaunchAgent runs until you log in, so nothing is restored until then. The restore starts at the first tick after login.
+
 ### Usage tab statusLine (optional)
 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):
