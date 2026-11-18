@@ -18,6 +18,7 @@ from pathlib import Path
 
 CAP = 200
 CARD_MAX = 1900
+PRESENCE_MAX = 128
 CARD_EVERY = 30
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
@@ -37,6 +38,7 @@ def _check(op):
               "archive": ({"op", "key"}, set()),
               "prompt": ({"op", "key", "window", "tool", "lines", "tier", "mention_user"}, set()),
               "edit": ({"op", "key", "text"}, set()),
+              "presence": ({"op", "text"}, set()),
               "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"})}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
@@ -47,6 +49,8 @@ def _check(op):
     for k in keys - {"op", "mention_user", "files", "lines", "delete_files"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
+    if kind == "presence" and (not op["text"] or len(op["text"]) > PRESENCE_MAX):
+        raise ValueError("presence text must be 1..128 chars")
     if kind == "prompt":
         if op["tier"] not in TIERS:
             raise ValueError(f"tier {op['tier']!r} is not a tier")
@@ -182,11 +186,30 @@ def _spec_name(subject):
     return os.path.basename(path).removesuffix(".md") + hashsep + frag
 
 
-def _queue(lead_tasks):
+def spec_progress(lead_tasks, floor):
+    """(done, total) of the running spec's own tasks: not `Plan & run:`, numeric id above floor. None when floor is None."""
+    if floor is None:
+        return None
+    own = [t for t in lead_tasks if isinstance(t, dict) and not str(t.get("subject", "")).startswith(_PLAN_RUN)
+           and (_num(t.get("id")) or 0) > floor]
+    return sum(t.get("status") == "completed" for t in own), len(own)
+
+
+def spec_floor(project):
+    """The running spec's floor from the project's feed-state.json, None when unknown."""
+    import tc_env
+    st = _load(tc_env.discord_dir(project) / "feed-state.json")
+    v = (st.get("spec_floor") or {}).get(st.get("running_thread_key") or "")
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _queue(lead_tasks, floor=None):
     runs = sorted((t for t in lead_tasks if str(t.get("subject", "")).startswith(_PLAN_RUN)), key=_tid)
     for k, t in enumerate(runs, 1):
         if t.get("status") == "in_progress":
-            return f"queue: running {_spec_name(t['subject'])} ({k}/{len(runs)})"
+            prog = spec_progress(lead_tasks, floor)
+            tasks = f"tasks {prog[0]}/{prog[1]} · " if prog else ""
+            return f"queue: running {_spec_name(t['subject'])} ({tasks}spec {k} of {len(runs)})"
     if any(t.get("status") == "pending" for t in runs):
         return "queue: paused"
     return "queue: idle"
@@ -202,7 +225,7 @@ def render_card(record, lead_tasks, now, floor=None):
     Task lines are the running spec's: tasks with a numeric id above `floor` (the highest task id when the spec started);
     with no floor known, only tasks that are not completed."""
     lead_tasks = [t for t in (lead_tasks or []) if isinstance(t, dict)]
-    head = [_queue(lead_tasks)]
+    head = [_queue(lead_tasks, floor)]
     body = []
     def of_spec(t):
         n = _num(t.get("id"))

@@ -96,10 +96,10 @@ def _pct(v):
     return f"{round(v)}%" if isinstance(v, (int, float)) and not isinstance(v, bool) else "—"
 
 
-def queue_text(lead_tasks):
+def queue_text(lead_tasks, floor=None):
     """The /queue view: the queue line, then one line per `Plan & run:` task in id order."""
     tasks = [t for t in (lead_tasks or []) if isinstance(t, dict)]
-    out = [discord_feed._queue(tasks)]
+    out = [discord_feed._queue(tasks, floor)]
     runs = sorted((t for t in tasks if str(t.get("subject", "")).startswith(discord_feed._PLAN_RUN)), key=discord_feed._tid)
     for t in runs:
         mark = {"completed": "✓", "in_progress": "▶"}.get(t.get("status"), "·")
@@ -108,12 +108,18 @@ def queue_text(lead_tasks):
     return "\n".join(out)[:QUEUE_MAX]
 
 
-def _project_line(record, tasks, link):
+BLOCKING = ("failing", "stuck")
+
+
+def _project_line(record, tasks, link, floor=None):
     p = record.get("project", "?")
-    blockers = ", ".join(str(a.get("label", a.get("kind", "?"))) for a in record.get("alerts") or []) or "none"
-    line = (f"**{p}** · {discord_feed._queue([t for t in (tasks or []) if isinstance(t, dict)])} · "
-            f"blockers: {blockers} · "
-            f"waiting on you: {len(record.get('needs_you') or [])}")
+    al = [a for a in record.get("alerts") or [] if isinstance(a, dict)]
+    label = lambda a: str(a.get("label", a.get("kind", "?")))
+    blockers = ", ".join(label(a) for a in al if a.get("kind") in BLOCKING) or "none"
+    others = ", ".join(label(a) for a in al if a.get("kind") not in BLOCKING)
+    queue = discord_feed._queue([t for t in (tasks or []) if isinstance(t, dict)], floor)
+    line = (f"**{p}** · {queue} · blockers: {blockers}" + (f" · alerts: {others}" if others else "")
+            + f" · waiting on you: {len(record.get('needs_you') or [])}")
     return line + (f" · <{link}>" if link else "")
 
 
@@ -124,10 +130,11 @@ def _usage_line(records, limits):
         else f"usage: 5h {_pct(limits.get('five_hour'))} · week {_pct(limits.get('seven_day'))} · today $—"
 
 
-def render_card(records, tasks_by_project, links, limits, now):
+def render_card(records, tasks_by_project, links, limits, now, floors=None):
     """Plain text (no code block, so links render), at most CARD_MAX characters; overflow cut with '… <n> more'."""
     head = _usage_line(records, limits)
-    body = [_project_line(r, (tasks_by_project or {}).get(r.get("project")), (links or {}).get(r.get("project"))) for r in records]
+    body = [_project_line(r, (tasks_by_project or {}).get(r.get("project")), (links or {}).get(r.get("project")),
+                           (floors or {}).get(r.get("project"))) for r in records]
     tail = "updated " + time.strftime("%H:%M", time.localtime(now))
     keep = len(body)
     while True:
@@ -277,22 +284,23 @@ def tick(records, tasks_by_project, limits, now, add_line):
         records = [r for r in records if isinstance(r, dict) and r.get("project")]
         links = {r["project"]: _link(r["project"]) for r in records}
         tasks_by_project = tasks_by_project or {}
+        floors = {r["project"]: discord_feed.spec_floor(r["project"]) for r in records}
         st["projects"] = sorted(r["project"] for r in records)
-        st["queues"] = {r["project"]: discord_feed._queue(tasks_by_project.get(r["project"]) or []) for r in records}
+        st["queues"] = {r["project"]: discord_feed._queue(tasks_by_project.get(r["project"]) or [], floors[r["project"]]) for r in records}
         for r in records:
             _lead_question(d, st, r, links[r["project"]], now)
             _mirror_events(d, st, r["project"], links[r["project"]], now)
         _trim_open(st)
-        text = render_card(records, tasks_by_project, links, limits, now)
+        text = render_card(records, tasks_by_project, links, limits, now, floors)
         card = discord_feed.card_op_due(st, text, now)
         if card:
             discord_feed.outbox_write(d, card)
             st["card_text"], st["card_ts"] = text, now
         st["queue_ts"] = now
         status = {"_all": text}
-        status.update({r["project"]: _project_line(r, tasks_by_project.get(r["project"]), links[r["project"]]) for r in records})
+        status.update({r["project"]: _project_line(r, tasks_by_project.get(r["project"]), links[r["project"]], floors[r["project"]]) for r in records})
         _write_json(d / "views.json", {"ts": now, "projects": sorted(links), "status": status,
-                                       "queue": {r["project"]: queue_text(tasks_by_project.get(r["project"])) for r in records},
+                                       "queue": {r["project"]: queue_text(tasks_by_project.get(r["project"]), floors[r["project"]]) for r in records},
                                        "approvals": _approvals_view(st, now), "evidence": _evidence_view(st)})
         return {"approvals": len(st["approvals"])}
 

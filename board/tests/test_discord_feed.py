@@ -245,7 +245,7 @@ class CardTest(unittest.TestCase):
                 task(5, "Task 2: node bridge", "in_progress", "bv-node", "frontier"),
                 task(6, "Task 3: docs")]
         t = df.render_card(rec(), lead, NOW, floor=0)
-        self.assertIn("queue: running 2026-11-16-b (2/3)", t)
+        self.assertIn("queue: running 2026-11-16-b (tasks 1/3 · spec 2 of 3)", t)
         self.assertIn("✓ Task 1: feed core", t)
         self.assertRegex(t, r"▶ Task 2: node bridge .*bv-node.*frontier")
         self.assertIn("· Task 3: docs", t)
@@ -285,6 +285,54 @@ class CardTest(unittest.TestCase):
 
     def test_small_not_cut(self):
         self.assertNotIn("more", df.render_card(rec(), [], NOW))
+
+
+class SpecProgressTest(Base):
+    def lead(self):
+        runs = [task(i, f"Plan & run: docs/superpowers/specs/s{i}.md", "in_progress" if i == 2 else "completed") for i in range(2, 14)]
+        own = [task(i, f"Task {i}", "completed" if i < 16 else "pending") for i in range(14, 20)]
+        old = [task(1, "EA fix wave", "completed")]   # before the spec: at or below the floor
+        return old + runs + own
+
+    def test_progress_counts_own_tasks_above_floor(self):
+        # mutation: drop the `> floor` filter -> total includes the 12 runs and fails
+        self.assertEqual(df.spec_progress(self.lead(), 13), (2, 6))
+
+    def test_progress_none_without_floor(self):
+        self.assertIsNone(df.spec_progress(self.lead(), None))
+
+    def test_card_shows_tasks_and_spec(self):
+        t = df.render_card(rec(), self.lead(), NOW, floor=13)
+        self.assertIn("queue: running s2 (tasks 2/6 · spec 1 of 12)", t)
+
+    def test_card_without_floor(self):
+        t = df.render_card(rec(), self.lead(), NOW)
+        self.assertIn("queue: running s2 (spec 1 of 12)", t)
+
+    def test_spec_floor_reads_feed_state(self):
+        self.dir.mkdir(parents=True)
+        (self.dir / "feed-state.json").write_text(json.dumps({"running_thread_key": "3", "spec_floor": {"3": 13}}))
+        self.assertEqual(df.spec_floor("proj"), 13)
+
+    def test_spec_floor_none_when_absent_or_not_int(self):
+        self.assertIsNone(df.spec_floor("proj"))
+        self.dir.mkdir(parents=True)
+        (self.dir / "feed-state.json").write_text(json.dumps({"running_thread_key": "3", "spec_floor": {"3": None}}))
+        self.assertIsNone(df.spec_floor("proj"))
+        (self.dir / "feed-state.json").write_text(json.dumps({"running_thread_key": "3", "spec_floor": {"3": True}}))
+        self.assertIsNone(df.spec_floor("proj"))
+
+
+class PresenceCheckTest(unittest.TestCase):
+    def test_valid(self):
+        df._check({"op": "presence", "text": "x"})
+        df._check({"op": "presence", "text": "x" * 128})
+
+    def test_invalid(self):
+        for op in ({"op": "presence", "text": ""}, {"op": "presence", "text": "x" * 129}, {"op": "presence", "text": 5},
+                   {"op": "presence", "text": "x", "extra": "y"}, {"op": "presence"}):
+            with self.assertRaises(ValueError, msg=str(op)):
+                df._check(op)
 
 
 class DueTest(unittest.TestCase):
