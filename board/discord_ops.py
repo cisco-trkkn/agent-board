@@ -110,10 +110,9 @@ def queue_text(lead_tasks):
 
 def _project_line(record, tasks, link):
     p = record.get("project", "?")
-    plan = record.get("plan") if isinstance(record.get("plan"), dict) else {}
     blockers = ", ".join(str(a.get("label", a.get("kind", "?"))) for a in record.get("alerts") or []) or "none"
     line = (f"**{p}** · {discord_feed._queue([t for t in (tasks or []) if isinstance(t, dict)])} · "
-            f"{plan.get('done', 0)}/{plan.get('total', 0)} · blockers: {blockers} · "
+            f"blockers: {blockers} · "
             f"waiting on you: {len(record.get('needs_you') or [])}")
     return line + (f" · <{link}>" if link else "")
 
@@ -153,7 +152,7 @@ def _approve(d, st, project, src_key, kind, text, link="", title="", spec="", no
     if link:
         op["link"] = link
     discord_feed.outbox_write(d, op)
-    st["approvals"][key] = {"project": project, "kind": kind, "src_key": src_key, "title": title or text[:100], "link": link,
+    st["approvals"][key] = {"project": project, "kind": kind, "src_key": src_key, "title": ((title or text).splitlines() or [""])[0][:100], "link": link,
                             "spec": spec, "ts": now if now is not None else time.time()}
     if branch:
         st["approvals"][key]["branch"] = branch   # the keep edit names it

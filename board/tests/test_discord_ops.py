@@ -101,8 +101,8 @@ class RenderCard(Base):
         out = ops.render_card(r, tasks, self.LINKS, limits, NOW)
         lines = out.split("\n")
         self.assertEqual(lines[0], "usage: 5h 63% · week 93% · today $1.75")
-        self.assertEqual(lines[1], "**a** · queue: running x (1/2) · 1/3 · blockers: ctx 90% · waiting on you: 1 · <https://discord.com/channels/9/1>")
-        self.assertEqual(lines[2], "**b** · queue: idle · 0/0 · blockers: none · waiting on you: 0")
+        self.assertEqual(lines[1], "**a** · queue: running x (1/2) · blockers: ctx 90% · waiting on you: 1 · <https://discord.com/channels/9/1>")
+        self.assertEqual(lines[2], "**b** · queue: idle · blockers: none · waiting on you: 0")
         self.assertTrue(lines[3].startswith("updated "))
         self.assertNotIn("```", out)
 
@@ -205,6 +205,17 @@ class Tick(Base):
         self.assertEqual(ap["kind"], "merge")
         self.assertEqual(ap["key"], okey("a", "merge:7:abc"))   # the source key carries the branch sha: task ids restart per session
         self.assertEqual(self.state()["approvals"][ap["key"]]["src_key"], "merge:7:abc")
+
+    def test_approval_title_is_the_first_line_cut_to_100(self):
+        self.configure()
+        self.project("a")
+        self.tick([rec("a")])
+        self.feed("a", kind="merge_approval", text="merge approval: s\nfeat/x → main @ abc\n a.py | 1 +" + "y" * 200,
+                  refs={"task": "7", "sha": "abc"})
+        self.feed("a", text="x" * 150 + "\nsecond line")
+        self.tick([rec("a")])
+        titles = sorted(r["title"] for r in self.state()["approvals"].values())
+        self.assertEqual(titles, ["merge approval: s", "x" * 100])
 
     def test_merge_approval_keeps_the_branch_and_views_carry_the_evidence(self):
         self.configure()
