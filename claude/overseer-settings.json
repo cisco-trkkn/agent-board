@@ -4,6 +4,7 @@
     "defaultMode": "dontAsk",
     "allow": [
       "Read", "Grep", "Glob",
+      "mcp__plugin_discord_discord__reply", "mcp__plugin_discord_discord__fetch_messages",
       "Bash(tmux-ctl overview *)",
       "Bash(git log *)", "Bash(git status *)", "Bash(git show *)"
     ],
@@ -16,5 +17,6 @@
       "Bash(git push *)", "Bash(git commit *)", "Bash(git checkout *)", "Bash(git merge *)", "Bash(git reset *)"
     ]
   },
+  "enabledPlugins": { "discord@claude-plugins-official": true },
   "teammateMode": "in-process"
 }

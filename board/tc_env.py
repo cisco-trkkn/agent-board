@@ -49,5 +49,10 @@ def discord_dir(project):
     return agent_base() / "discord" / project
 
 
+def ops_dir():
+    """The ops bot's state dir; same path as _dc_ops_dir in tools/lib/discord.zsh. `_ops` is never a valid project name."""
+    return agent_base() / "discord" / "_ops"
+
+
 def feed_path(project):
     return agent_base() / "feed" / f"{project}.jsonl"

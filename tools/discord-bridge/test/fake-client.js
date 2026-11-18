@@ -13,6 +13,7 @@ class FakeClient extends EventEmitter {
     this.messages = new Map();
     this.user = { id: 'BOT' };
     this.channels = { fetch: (id) => this._fetchChannel(id) };
+    this.application = { commands: { set: async (payload, guildId) => { this._record('setCommands', guildId, payload); this._maybeFail('setCommands'); return payload; } } };
   }
 
   // failNext('send', {status: 500}) fails the next call of that method; count repeats it.
@@ -107,12 +108,37 @@ function fakeReaction({ emoji, message, partial = false }) {
   return r;
 }
 
-// A fake interaction: a component click or other.
-function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer } = {}) {
-  const i = { customId, user: { id: user }, message: { id: messageId }, channelId, replies: [], deferred: 0 };
+// A fake interaction: a component click or other. ephemeral: the clicked message is an ephemeral reply
+// (flags 64); values: the picked options of a select menu. reply/followUp/update are recorded in replies.
+function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer, values, ephemeral = false } = {}) {
+  const i = { customId, user: { id: user }, message: { id: messageId, flags: ephemeral ? 64 : 0 }, channelId, replies: [], updates: [], followUps: [], deferred: 0 };
+  if (values) i.values = values;
   i.deferUpdate = async () => { if (onDefer) onDefer(); i.deferred++; };
+  i.reply = async (x) => { i.replies.push(x); };
+  i.followUp = async (x) => { i.followUps.push(x); };
+  i.update = async (x) => { i.updates.push(x); };
+  return i;
+}
+
+// A chat-input command; options is {name: value}.
+function fakeCommand({ name, options = {}, user = 'U1', channelId = 'C1' } = {}) {
+  const i = { commandName: name, user: { id: user }, channelId, replies: [], updates: [], modals: [], deferred: 0 };
+  i.isChatInputCommand = () => true;
+  i.isModalSubmit = () => false;
+  i.options = { getString: (n) => (n in options ? options[n] : null) };
+  i.reply = async (x) => { i.replies.push(x); };
+  i.showModal = async (m) => { i.modals.push(m); };
+  return i;
+}
+
+// A modal submit; fields is {inputId: value}.
+function fakeModal({ customId, fields = {}, user = 'U1' } = {}) {
+  const i = { customId, user: { id: user }, replies: [], updates: [] };
+  i.isChatInputCommand = () => false;
+  i.isModalSubmit = () => true;
+  i.fields = { getTextInputValue: (n) => String(fields[n] ?? '') };
   i.reply = async (x) => { i.replies.push(x); };
   return i;
 }
 
-module.exports = { FakeClient, fakeInteraction, fakeMessage, fakeReaction };
+module.exports = { fakeCommand, fakeModal, FakeClient, fakeInteraction, fakeMessage, fakeReaction };
