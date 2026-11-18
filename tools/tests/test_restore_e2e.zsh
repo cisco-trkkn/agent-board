@@ -28,6 +28,7 @@ json.dump({"boot": 1, "saved_at": 1.0, "restored": False, "awake": None, "projec
      "lead": {"session_id": "11112222-aaaa-bbbb-cccc-ddddeeeeffff", "model": "opus", "discord": True}},
     {"name": "projB", "path": f"{d}/projB", "bridge": False, "lead": None}]}, open(out, "w"))
 PY
+cp "$TC_STATE/restore/snapshot.json" "$TT_DIR/seed.json"
 
 python3 "$R/board/restore.py" tick; rc=$?
 check "tick exits 0" test $rc -eq 0
@@ -53,4 +54,23 @@ n_before="$(wc -l < "$CTL_LOG" | tr -d ' ')"
 python3 "$R/board/restore.py" tick
 check "second tick: no new ctl calls (no second restore)" test "$(wc -l < "$CTL_LOG" | tr -d ' ')" = "$n_before"
 check "second tick: one dash start in total" test "$(grep -cx 'dash start' "$CTL_LOG")" = 1
+
+# --- the same restore under the LaunchAgent's environment: nothing but HOME, the plist PATH and the seams, /usr/bin/python3
+# (3.9 on this Mac). Real /sbin/route, no TC_RESTORE_ROUTE: it proves sysctl and route resolve there. Skipped where there is no
+# default route to find (a runner without network would sit in the 300 s wait).
+if [[ "$OSTYPE" == darwin* ]] && /sbin/route -n get default >/dev/null 2>&1; then
+  S kill-session -t "=projA"; S kill-session -t "=projB"
+  rm -f "$ORCH_ARGV" "$CTL_LOG"
+  cp "$TT_DIR/seed.json" "$TC_STATE/restore/snapshot.json"   # the seeded older-boot snapshot again (the second tick above replaced it)
+  check "launchd env: snapshot reset has two projects" test "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["projects"]))' "$TC_STATE/restore/snapshot.json")" = 2
+  env -i HOME="$HOME" PATH="$HOME/.local/bin:/opt/homebrew/bin:$HOME/.bun/bin:/usr/bin:/bin" TC_STATE="$TC_STATE" \
+    TMUX_DASH_TMUX_ARGS="$TMUX_DASH_TMUX_ARGS" TC_RESTORE_ORCH="$TC_RESTORE_ORCH" TC_RESTORE_CTL="$TC_RESTORE_CTL" \
+    TC_LAYOUT=/usr/bin/true /usr/bin/python3 "$R/board/restore.py" tick
+  check "launchd env: tick exits 0" test $? -eq 0
+  check "launchd env: both sessions recreated" test "$(S has-session -t "=projA" 2>&1 && S has-session -t "=projB" 2>&1; print $?)" = 0
+  check "launchd env: ctl log has dash start and bridge start" test "$(grep -cE '^(dash start|discord bridge start --project projA)$' "$CTL_LOG")" = 2
+  check "launchd env: snapshot marked restored" python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["restored"] is True' "$TC_STATE/restore/snapshot.json"
+else
+  print -r -- "skip - launchd env case: needs macOS and a default route"
+fi
 tt_done
