@@ -55,6 +55,7 @@ class Install(Base):
         self.assertEqual(d["StartInterval"], 60)
         self.assertNotIn("StartCalendarInterval", d)
         self.assertIs(d["AbandonProcessGroup"], True)
+        self.assertEqual(d["EnvironmentVariables"]["LANG"], os.environ.get("LANG") or "en_US.UTF-8")
         self.assertEqual(d["WorkingDirectory"], str(self.home))
         self.assertEqual(d["ProgramArguments"], [str(cli), "restore", "tick"])
         h = str(self.home)
@@ -114,6 +115,23 @@ class UninstallStatus(Base):
         self.assertEqual(self.calls(), [f"bootout gui/{os.getuid()}/com.user.agent-board-restore"])
         self.assertTrue(any("removed" in l for l in lines))
         self.assertEqual(rs.uninstall(), ["not installed"])
+
+    def test_uninstall_marks_the_snapshot_restored(self):
+        import restore
+        with mock.patch.dict(os.environ, {"TC_STATE": str(Path(self.tmp) / "st")}):
+            d = restore.restore_dir()
+            restore.save(d, {"boot": 5, "saved_at": 1.0, "restored": False, "awake": None,
+                             "projects": [{"name": "a", "path": "/x", "lead": None, "bridge": False}]})
+            rs.install()
+            lines = rs.uninstall()
+            self.assertTrue(restore.load(d)["restored"])
+            self.assertTrue(any("restored" in l for l in lines))
+
+    def test_uninstall_without_a_snapshot_is_fine(self):
+        with mock.patch.dict(os.environ, {"TC_STATE": str(Path(self.tmp) / "st2")}):
+            rs.install()
+            rs.uninstall()
+            self.assertFalse((Path(self.tmp) / "st2" / "restore" / "snapshot.json").exists())
 
     def fake_restore(self, snap):
         m = types.ModuleType("restore")

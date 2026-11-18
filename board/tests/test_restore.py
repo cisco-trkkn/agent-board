@@ -116,6 +116,15 @@ class Projects(Base):
         self.assertEqual(snap["saved_at"], NOW)
         self.assertIs(snap["restored"], False)
 
+    def test_unexpected_error_goes_to_on_error(self):
+        seen = []
+
+        def boom(c):
+            raise RuntimeError("x")
+        self.assertIsNone(restore.snapshot(run=boom, tmux=TMUX, status_dir=self.sdir, awake_file=self.awake, now=NOW,
+                                           on_error=seen.append))
+        self.assertEqual([type(e).__name__ for e in seen], ["RuntimeError"])
+
     def test_tmux_failure_returns_none_and_never_raises(self):
         self.assertIsNone(self.snap(Fake(fail=["list-sessions"])))
 
@@ -223,14 +232,19 @@ class Save(Base):
         self.assertEqual(len(restore.load(self.dir)["projects"]), 2)
 
     def test_earlier_boot_unrestored_never_replaced(self):
-        restore.save(self.dir, snap_of(10, restored=False))
-        self.assertFalse(restore.save(self.dir, snap_of(20)))
-        self.assertEqual(restore.load(self.dir)["boot"], 10)
+        restore.save(self.dir, snap_of(1000, restored=False))
+        self.assertFalse(restore.save(self.dir, snap_of(2000)))
+        self.assertEqual(restore.load(self.dir)["boot"], 1000)
+
+    def test_boot_within_60s_counts_as_the_same_boot(self):
+        restore.save(self.dir, snap_of(1000, restored=False))
+        self.assertTrue(restore.save(self.dir, snap_of(1060)))
+        self.assertFalse(restore.save(self.dir, snap_of(1121)))
 
     def test_earlier_boot_restored_is_replaced_and_same_boot_is_replaced(self):
-        restore.save(self.dir, snap_of(10, restored=True))
-        self.assertTrue(restore.save(self.dir, snap_of(20)))
-        self.assertTrue(restore.save(self.dir, snap_of(20, n=2)))
+        restore.save(self.dir, snap_of(1000, restored=True))
+        self.assertTrue(restore.save(self.dir, snap_of(2000)))
+        self.assertTrue(restore.save(self.dir, snap_of(2000, n=2)))
         self.assertEqual(len(restore.load(self.dir)["projects"]), 2)
 
     def test_boot_none_or_snapshot_none_not_saved(self):

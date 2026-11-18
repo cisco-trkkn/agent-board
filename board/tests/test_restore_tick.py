@@ -423,6 +423,78 @@ class Tick(Base):
         self.assertEqual(self.log().count("boot time unreadable"), 2)
         self.assertIsNone(restore.load(self.dir))
 
+    def test_boot_within_60s_does_not_restore(self):
+        restore.save(self.dir, snap(boot=BOOT_NEW - 30, projects=[self.project()]))
+        with mock.patch.object(restore, "snapshot", return_value=snap(boot=BOOT_NEW, projects=[self.project()])):
+            self.tick()
+        self.assertEqual(self.sh.find("/dev "), [])
+        restore._write(self.dir, snap(boot=BOOT_NEW - 61, projects=[self.project()]))
+        self.tick()
+        self.assertEqual(len(self.sh.find("/dev ")), 1)
+
+    def test_snapshot_error_logged_once_per_hour(self):
+        t = [1_800_000_000.0]
+        for _ in range(3):
+            with mock.patch.object(restore, "_snapshot", side_effect=ValueError("bad")):
+                self.tick(now=lambda: t[0])
+        self.assertEqual(self.log().count("snapshot error: ValueError: bad"), 1)
+        t[0] += 3601
+        with mock.patch.object(restore, "_snapshot", side_effect=ValueError("bad")):
+            self.tick(now=lambda: t[0])
+        self.assertEqual(self.log().count("snapshot error: ValueError: bad"), 2)
+
+    def test_zero_projects_replace_only_after_two_ticks_50s_apart(self):
+        restore.save(self.dir, snap(boot=BOOT_NEW, projects=[self.project()]))
+        t = [1_800_000_000.0]
+        zero = snap(boot=BOOT_NEW, projects=[])
+        with mock.patch.object(restore, "snapshot", return_value=zero):
+            self.tick(now=lambda: t[0])
+            self.assertEqual(len(restore.load(self.dir)["projects"]), 1)   # first sighting: kept
+            t[0] += 40
+            self.tick(now=lambda: t[0])
+            self.assertEqual(len(restore.load(self.dir)["projects"]), 1)   # under 50 s: kept
+            t[0] += 15
+            self.tick(now=lambda: t[0])
+        self.assertEqual(restore.load(self.dir)["projects"], [])           # 55 s after the first: replaced
+
+    def test_a_tick_with_projects_resets_the_zero_clock(self):
+        restore.save(self.dir, snap(boot=BOOT_NEW, projects=[self.project()]))
+        t = [1_800_000_000.0]
+        with mock.patch.object(restore, "snapshot", return_value=snap(boot=BOOT_NEW, projects=[])):
+            self.tick(now=lambda: t[0])
+        t[0] += 30
+        with mock.patch.object(restore, "snapshot", return_value=snap(boot=BOOT_NEW, projects=[self.project("n")])):
+            self.tick(now=lambda: t[0])
+        t[0] += 60
+        with mock.patch.object(restore, "snapshot", return_value=snap(boot=BOOT_NEW, projects=[])):
+            self.tick(now=lambda: t[0])
+        self.assertEqual([p["name"] for p in restore.load(self.dir)["projects"]], ["n"])
+
+    def test_server_down_never_replaces(self):
+        restore.save(self.dir, snap(boot=BOOT_NEW, projects=[self.project()]))
+        t = [1_800_000_000.0]
+        with mock.patch.object(restore, "snapshot", return_value=None):
+            for _ in range(4):
+                self.tick(now=lambda: t[0])
+                t[0] += 60
+        self.assertEqual(len(restore.load(self.dir)["projects"]), 1)
+
+    def test_again_after_a_later_tick_still_restores_the_failed_project(self):
+        restore.save(self.dir, snap(boot=BOOT_OLD, projects=[self.project()]))
+        self.sh.fail[f"/dev {self.proj_a}"] = (1, "dev failed")
+        self.tick()                                              # restore: alpha fails, snapshot marked restored
+        self.assertTrue((self.dir / "last-restore.json").exists())
+        with mock.patch.object(restore, "snapshot", return_value=snap(boot=BOOT_NEW, projects=[self.project("other")])):
+            self.tick()                                          # the next tick saves a fresh snapshot without alpha
+        self.assertEqual([p["name"] for p in restore.load(self.dir)["projects"]], ["other"])
+        self.sh.fail.clear()
+        self.sh.calls.clear()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(restore.main(["again"], run=lambda cmd, env=None, cwd=None: (0, f"{{ sec = {BOOT_NEW}, usec = 1 }}")), 0)
+        self.tick()
+        self.assertEqual(len(self.sh.find("/dev ")), 1, self.sh.lines())
+
     def test_keeps_previous_session_id_when_new_is_null(self):
         restore.save(self.dir, snap(boot=BOOT_NEW, projects=[self.project("a", lead="old-sid"), self.project("b", lead="b-sid")]))
         new = snap(boot=BOOT_NEW, projects=[self.project("a", lead=None), self.project("b", lead="b-new"),

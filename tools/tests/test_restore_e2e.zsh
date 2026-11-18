@@ -63,8 +63,12 @@ if [[ "$OSTYPE" == darwin* ]] && /sbin/route -n get default >/dev/null 2>&1; the
   rm -f "$ORCH_ARGV" "$CTL_LOG"
   cp "$TT_DIR/seed.json" "$TC_STATE/restore/snapshot.json"   # the seeded older-boot snapshot again (the second tick above replaced it)
   check "launchd env: snapshot reset has two projects" test "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["projects"]))' "$TC_STATE/restore/snapshot.json")" = 2
+  # TMUX_TMPDIR (and the real one all.zsh records) must survive env -i, and every tmux call names the scratch socket by path
+  # with -f /dev/null: a server started by mistake would otherwise load ~/.tmux.conf (continuum, resurrect) and outlive the run.
+  scratch_sock="$(S display -p '#{socket_path}')"
   env -i HOME="$HOME" PATH="$HOME/.local/bin:/opt/homebrew/bin:$HOME/.bun/bin:/usr/bin:/bin" TC_STATE="$TC_STATE" \
-    TMUX_DASH_TMUX_ARGS="$TMUX_DASH_TMUX_ARGS" TC_RESTORE_ORCH="$TC_RESTORE_ORCH" TC_RESTORE_CTL="$TC_RESTORE_CTL" \
+    ${TMUX_TMPDIR:+TMUX_TMPDIR=$TMUX_TMPDIR} ${TC_REAL_TMUX_TMPDIR:+TC_REAL_TMUX_TMPDIR=$TC_REAL_TMUX_TMPDIR} \
+    TMUX_DASH_TMUX_ARGS="-S $scratch_sock -f /dev/null" TC_RESTORE_ORCH="$TC_RESTORE_ORCH" TC_RESTORE_CTL="$TC_RESTORE_CTL" \
     TC_LAYOUT=/usr/bin/true /usr/bin/python3 "$R/board/restore.py" tick
   check "launchd env: tick exits 0" test $? -eq 0
   check "launchd env: both sessions recreated" test "$(S has-session -t "=projA" 2>&1 && S has-session -t "=projB" 2>&1; print $?)" = 0

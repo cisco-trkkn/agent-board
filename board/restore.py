@@ -137,12 +137,14 @@ def _awake(awake_file, leads, pid_alive):
         return None
 
 
-def snapshot(run=_run, tmux=None, status_dir=None, awake_file=None, now=None, pid_alive=None):
+def snapshot(run=_run, tmux=None, status_dir=None, awake_file=None, now=None, pid_alive=None, on_error=None):
     """The spec §1 snapshot dict for the tmux server; None when tmux cannot list sessions. Never raises: a failing
-    ps or status read leaves that field null/false."""
+    ps or status read leaves that field null/false. An unexpected exception is passed to on_error(exc), if given."""
     try:
         return _snapshot(run, tmux, status_dir, awake_file, now, pid_alive or _pid_alive)
-    except Exception:
+    except Exception as e:
+        if on_error:
+            on_error(e)
         return None
 
 
@@ -213,13 +215,26 @@ def _snapshot(run, tmux, status_dir, awake_file, now, pid_alive):
     return {"boot": boot_time(run), "saved_at": now, "restored": False, "awake": awake, "projects": projects}
 
 
-def load(dir):
-    """The snapshot dict saved in dir (snapshot.json); None when absent or unreadable."""
+def load_file(dir, name):
+    """The JSON dict in dir/name; None when absent or unreadable."""
     try:
-        d = json.loads((Path(dir) / "snapshot.json").read_text())
+        d = json.loads((Path(dir) / name).read_text())
         return d if isinstance(d, dict) else None
     except (OSError, ValueError):
         return None
+
+
+def load(dir):
+    """The snapshot dict saved in dir (snapshot.json); None when absent or unreadable."""
+    return load_file(dir, "snapshot.json")
+
+
+BOOT_SLACK = 60   # kern.boottime shifts by a few seconds when the clock is stepped: a boot is new only beyond this
+
+
+def _newer_boot(old, new):
+    """True when boot time new is a later boot than old (more than BOOT_SLACK seconds later)."""
+    return isinstance(old, int) and isinstance(new, int) and new - old > BOOT_SLACK
 
 
 def save(dir, snap):
@@ -233,7 +248,7 @@ def save(dir, snap):
         if not snap.get("projects"):
             return False
         ob = old.get("boot")
-        if isinstance(ob, int) and ob < snap["boot"] and not old.get("restored"):
+        if _newer_boot(ob, snap["boot"]) and not old.get("restored"):
             return False
     return _write(dir, snap)
 
@@ -394,6 +409,10 @@ def do_restore(dir, snap, cfg):
     snap["restored_at"] = cfg.now()
     snap["results"] = {n: {k: v for k, v in r.items() if k != "failures"} for n, r in results.items()}
     _write(dir, snap)
+    try:
+        (Path(dir) / "last-restore.json").write_text(json.dumps(snap, indent=1))   # what `again` replays
+    except OSError:
+        pass
     _log(dir, cfg, "restore: done")
     return results
 
@@ -489,19 +508,40 @@ def _carry_session_ids(old, snap):
             lead["session_id"] = prev[p["name"]]
 
 
-def _warn_boot(dir, cfg):
-    """Log `boot time unreadable` at most once an hour (marker file boot-warn holds the last time)."""
-    mark = Path(dir) / "boot-warn"
+def _log_hourly(dir, cfg, marker, msg):
+    """Log msg at most once an hour (the marker file in dir holds the time of the last one)."""
+    mark = Path(dir) / marker
     try:
         if cfg.now() - float(mark.read_text()) < 3600:
             return
     except (OSError, ValueError):
         pass
-    _log(dir, cfg, "boot time unreadable")
+    _log(dir, cfg, msg)
     try:
         mark.write_text(str(cfg.now()))
     except OSError:
         pass
+
+
+ZERO_WAIT = 50   # seconds between the two ticks that must both see a running server with no projects
+
+
+def _zero_projects(dir, cfg, old):
+    """A running server shows no projects. The old snapshot is replaced (True) only when an earlier tick at least
+    ZERO_WAIT seconds ago saw the same: a shutdown, with its sessions dying one by one, never spans two ticks."""
+    mark = Path(dir) / "zero_since"
+    now = cfg.now()
+    try:
+        first = float(mark.read_text())
+    except (OSError, ValueError):
+        first = None
+    if first is None or now < first:
+        try:
+            mark.write_text(str(now))
+        except OSError:
+            pass
+        return False
+    return now - first >= ZERO_WAIT
 
 
 def tick(dir, cfg=None, run=_run):
@@ -522,18 +562,28 @@ def tick(dir, cfg=None, run=_run):
         try:
             boot = boot_time(run)
             if boot is None:
-                _warn_boot(dir, cfg)
+                _log_hourly(dir, cfg, "boot-warn", "boot time unreadable")
                 return 0
             old = load(dir)
-            if old and isinstance(old.get("boot"), int) and old["boot"] < boot and not old.get("restored"):
+            if old and _newer_boot(old.get("boot"), boot) and not old.get("restored"):
                 do_restore(dir, old, cfg)
                 return 0
-            snap = snapshot(run=run, tmux=cfg.tmux, now=cfg.now())
-            if not snap:
+            snap = snapshot(run=run, tmux=cfg.tmux, now=cfg.now(),
+                            on_error=lambda e: _log_hourly(dir, cfg, "snapshot-warn", f"snapshot error: {type(e).__name__}: {e}"))
+            zero = Path(dir) / "zero_since"
+            if not snap:   # the server is down (or the read failed): the old snapshot stays, and the zero clock restarts
+                zero.unlink(missing_ok=True)
                 return 0
             _carry_session_ids(old, snap)
             names = lambda s: sorted(p.get("name") for p in (s or {}).get("projects") or [])
-            if save(dir, snap) and names(snap) != names(old):
+            if not snap["projects"] and old and old.get("projects"):
+                if not _zero_projects(dir, cfg, old):
+                    return 0
+                saved = _write(dir, snap)   # the user closed everything: the empty state replaces it
+            else:
+                zero.unlink(missing_ok=True)
+                saved = save(dir, snap)
+            if saved and names(snap) != names(old):
                 _log(dir, cfg, f"snapshot {len(snap['projects'])} projects")
         except Exception as e:   # a tick never raises into launchd
             _log(dir, cfg, f"tick error: {type(e).__name__}: {e}")
@@ -577,11 +627,15 @@ def main(argv, **seams):
         print(f"saved {len(snap['projects'])} projects" if save(d, snap) else "not saved (a guard kept the old snapshot)")
         return 0
     if a.cmd == "again":
-        snap = load(d)
+        last = load_file(d, "last-restore.json")
+        boot = boot_time(seams.get("run", _run))
+        snap = last if last is not None and boot is not None else load(d)
         if not snap:
             print("no snapshot", file=sys.stderr)
             return 1
         snap["restored"] = False
+        if snap is last:   # replay the last restore: make its boot older than this one so the next tick restores it
+            snap["boot"] = min(snap.get("boot") or boot, boot - BOOT_SLACK - 1)
         print("will restore on the next tick" if _write(d, snap) else "could not write the snapshot")
         return 0
     if a.cmd == "status":

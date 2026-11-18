@@ -59,7 +59,8 @@ def plist_text(cli_path, home, log):
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
         "EnvironmentVariables": {
-            "PATH": f"{home}/.local/bin:/opt/homebrew/bin:{home}/.bun/bin:/usr/bin:/bin"},
+            "PATH": f"{home}/.local/bin:/opt/homebrew/bin:{home}/.bun/bin:/usr/bin:/bin",
+            "LANG": os.environ.get("LANG") or "en_US.UTF-8"},   # the tmux server started under launchd gives every pane this
     })
 
 
@@ -97,10 +98,24 @@ def uninstall():
     _check_platform()
     plist = _plist_path()
     _launchctl("bootout", f"gui/{os.getuid()}/{LABEL}")
+    lines = []
     if plist.exists():
         plist.unlink()
-        return [f"removed {plist}"]
-    return ["not installed"]
+        lines.append(f"removed {plist}")
+    if _mark_restored():
+        lines.append("marked the snapshot restored, so a later install does not replay it")
+    return lines or ["not installed"]
+
+
+def _mark_restored():
+    """Mark an existing, unrestored snapshot restored; True when it changed."""
+    import restore
+    d = restore.restore_dir()
+    snap = restore.load(d)
+    if not snap or snap.get("restored"):
+        return False
+    snap["restored"] = True
+    return restore._write(d, snap)
 
 
 def _age(sec):
