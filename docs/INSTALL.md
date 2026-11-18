@@ -126,6 +126,23 @@ agent-board worktrees schedule uninstall
 
 Run it from `~/agent-board` (the main checkout), not from a worktree: the plist points at the `agent-board` beside the CLI you ran (or at `~/.local/bin/agent-board` when that link exists), and a worktree is the kind of directory the sweep removes. `install` refuses, and writes nothing, when neither is executable. `agent-board worktrees classify` and `sweep --dry-run` show what a sweep would do without removing anything.
 
+### Restore after a reboot (recommended)
+
+A forced reboot (a macOS update installed by an MDM profile, a crash) kills the `agent-board` tmux server and every lead, worker and Discord bridge in it. A LaunchAgent snapshots the server every minute (projects, leads, awake state) and, on the first tick after a new boot, restarts the server and board, reopens each project's session, resumes its lead with a prompt and posts the result to Discord.
+
+```zsh
+agent-board restore schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-restore.plist and loads it
+agent-board restore schedule status       # loaded or not loaded, the snapshot's age, boot and project names
+agent-board restore schedule uninstall
+```
+
+The job runs `agent-board restore tick` at load and every 60 s; its output goes to `~/.local/state/agent-board/restore/launchd.log` (`$TC_STATE/restore/` when set). `install` backs up an existing plist as `.bak-YYYYMMDD`. macOS only: on Linux the command prints `macOS only` and exits 2.
+
+- **Switches.** `TC_RESTORE=0` in the job's environment, or an empty file `~/.local/state/agent-board/restore/restore.off`, makes every tick do nothing; remove either to resume.
+- **`agent-board restore again`** replays the last restore (a copy kept as `restore/last-restore.json`, so it works after later ticks have saved fresh snapshots): the next tick restores once more, leaves live sessions alone (`already open`) and retries the ones that failed. Without that copy it only clears the current snapshot's `restored` flag.
+- **Closing things on purpose.** A snapshot with projects is replaced by an empty one only after two ticks at least 50 s apart both see a running server with no projects (so shutdown, with its sessions dying one by one, never wipes it); a server that is down never replaces it. `schedule uninstall` marks the snapshot restored, so a later `install` does not replay a stale one.
+- **Known limit: needs a logged-in session.** The restore runs as a user LaunchAgent, so it needs the GUI session. The MDM update path uses FileVault's authenticated restart, which logs the user in, so it restores on its own. A panic or a power loss stops at the FileVault login screen; the restore starts at the first tick after you log in.
+
 ### Usage tab statusLine (optional)
 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):
@@ -234,7 +251,7 @@ Reach a dev lead from your phone through a Discord bot. One bot per project; onl
 4. `tmux-ctl discord bridge start --ops` starts window `discord-ops` in the hidden session `_ops-bg`, running `node …/bridge.js <_ops dir> --ops`. It refuses without a token, without both channel ids, or without the bridge dependencies (`tmux-ctl discord bridge install`). `bridge stop --ops` and `start --keeper --ops` follow `_ops/bridge.stopped` exactly as for a project.
 5. `tmux-ctl discord status --ops` prints the usual lines with `command center: <id>` and `approvals: <id>` (each `none` when unset) in place of `channel:`, then the `bridge:` line. `audit --ops` reads `_ops/audit.jsonl`.
 
-**Files.** `tmux-ctl discord send [--thread <key>] <file>… [-m <text>]` posts files to the home channel (or to a spec thread with `--thread`); each path must exist and be readable, else it exits 1 and posts nothing. `tmux-ctl discord snap` posts a screenshot of the board's overview page. `snap` needs Google Chrome at `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (or `TC_CHROME` pointing at another binary) and exits 1 with `snap: Chrome not found` without it. The bridge sends at most 10 files per post, each at most 25 MB; a bigger file is not attached and the post says `<name> too large (<size>)`. The queue report and the log of a failed test run are attached automatically. A failed run's command and the last 200 lines of its log are posted to Discord as-is, so a secret printed by a test reaches Discord.
+**Files.** `tmux-ctl discord send [--thread <key>] [<file>…] [-m <text>]` posts files and/or text to the home channel (or to a spec thread with `--thread`); each path must exist and be readable, else it exits 1 and posts nothing. `tmux-ctl discord snap` posts a screenshot of the board's overview page. `snap` needs Google Chrome at `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (or `TC_CHROME` pointing at another binary) and exits 1 with `snap: Chrome not found` without it. The bridge sends at most 10 files per post, each at most 25 MB; a bigger file is not attached and the post says `<name> too large (<size>)`. The queue report and the log of a failed test run are attached automatically. A failed run's command and the last 200 lines of its log are posted to Discord as-is, so a secret printed by a test reaches Discord.
 
 Kill switches: `TC_DISCORD_BRIDGE=0` starts no bridge (`bridge start` prints `bridge: disabled (TC_DISCORD_BRIDGE=0)`); `TC_DISCORD_ALERTS=0` keeps notifier events out of the Discord feed; `TC_NOTIFY=0` still means macOS banners only. `TC_DISCORD_DIGEST_AT=HH:MM` (local time, default `08:00`) sets when the daily ops digest is posted; `TC_DISCORD_DIGEST_AT=off` disables it.
 
