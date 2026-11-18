@@ -231,6 +231,42 @@ class OnMerge(Base):
         self.assertEqual(sorted(f["path"] for f in self.evfile()["files"]), ["a.txt", "b.txt"])
         self.assertNotEqual(df.merge_key(evs[0]["refs"]), df.merge_key(evs[1]["refs"]))
 
+    def test_merge_request_from_a_spec_worktree_survives_its_removal(self):
+        # I1: --repo omitted, run inside a linked worktree; the stored repo must be the main checkout
+        self.configure()
+        git(self.repo, "checkout", "-q", "main")
+        wt = Path(self.tmp.name) / "wt"
+        git(self.repo, "worktree", "add", "-q", "-b", "spec", str(wt))
+        (wt / "w.txt").write_text("w\n")
+        git(wt, "add", "-A")
+        git(wt, "commit", "-q", "-m", "w")
+        cwd = os.getcwd()
+        os.chdir(wt)
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                rc = dm.main(["request", "--project", "proj", "--task", "7", "--spec", "spec-x", "--branch", "spec",
+                              "--tests", "ok", "--verdict", "Approved"])
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(rc, 0)
+        self.assertEqual(os.path.realpath(self.evfile()["repo"]), os.path.realpath(self.repo))
+        git(self.repo, "worktree", "remove", "--force", str(wt))
+        src = [e for e in self.feed() if e.get("kind") == "merge_approval"][-1]
+        src = f"merge:7:{self.evfile()['sha'][:8]}"
+        out = dm.on_merge("proj", src, self.rec(src), self.add, NOW + 5)
+        self.assertEqual(out["result"], "merged")
+        self.assertEqual(self.lines, [("proj", "[Discord] merge approved for spec-x")])
+
+    def test_diffs_ignore_user_git_config_color_and_external_diff(self):
+        # M1: a real git run with color.ui=always and diff.external set; the stored output must be plain
+        self.commit_files({"a.txt": "1\n"})
+        env = {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "color.ui", "GIT_CONFIG_VALUE_0": "always",
+               "GIT_CONFIG_KEY_1": "diff.external", "GIT_CONFIG_VALUE_1": "false"}
+        with mock.patch.dict(os.environ, env):
+            ev = dm.evidence(str(self.repo), "feat", "main")
+        self.assertNotIn("\x1b", "".join(ev["stat"]) + ev["diffs"]["a.txt"])
+        self.assertIn("+1", ev["diffs"]["a.txt"])
+
     def test_branch_gone_is_stale_without_a_new_request(self):
         src = self.posted()
         git(self.repo, "checkout", "-q", "main")

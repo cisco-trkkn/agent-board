@@ -68,16 +68,16 @@ def evidence(repo, branch, target):
         raise ValueError("branch not found")
     rng = f"{target}...{branch}"
     files = []
-    raw = _git(repo, "diff", "--numstat", "--no-renames", "-z", rng, "--").stdout
+    raw = _git(repo, "diff", "--no-ext-diff", "--no-color", "--numstat", "--no-renames", "-z", rng, "--").stdout
     for ent in filter(None, raw.split("\0")):
         add, dele, path = ent.split("\t", 2)
         files.append({"path": path, "add": int(add) if add.isdigit() else 0, "del": int(dele) if dele.isdigit() else 0})
-    stat = _git(repo, "diff", "--stat=200,200", "--no-renames", rng, "--").stdout.splitlines()
+    stat = _git(repo, "diff", "--no-ext-diff", "--no-color", "--stat=200,200", "--no-renames", rng, "--").stdout.splitlines()
     if stat and files:
         stat = stat[:-1]   # the trailing "N files changed" summary: the post carries its own totals
     diffs = {}
     for f in files[:FILES_SHOWN]:
-        d = _git(repo, "diff", "--no-renames", rng, "--", f["path"]).stdout
+        d = _git(repo, "diff", "--no-ext-diff", "--no-color", "--no-renames", rng, "--", f["path"]).stdout
         diffs[f["path"]] = d[:DIFF_MAX] + DIFF_NOTE if len(d) > DIFF_MAX else d
     return {"sha": sha, "files": files, "stat": stat, "diffs": diffs}
 
@@ -198,8 +198,9 @@ def main(argv):
         return 2
     repo = o["repo"]
     if not repo:
-        r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-        repo = r.stdout.strip() if r.returncode == 0 else ""
+        # the main checkout, not a spec worktree that may be removed before the tap: the parent of the common git dir
+        r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True)
+        repo = os.path.dirname(r.stdout.strip().rstrip("/")) if r.returncode == 0 and r.stdout.strip() else ""
     if not repo:
         print("merge-request: not inside a git repository (use --repo)", file=sys.stderr)
         return 2
