@@ -78,7 +78,7 @@ def _state(block):
             yield None
             return
         st = _load(d / "ops-state.json")
-        for k in ("offsets", "approvals", "questions", "queues"):
+        for k in ("offsets", "approvals", "questions", "queues", "paused_by_ops"):
             if not isinstance(st.get(k), dict):
                 st[k] = {}
         if not isinstance(st.get("mirrored"), list):
@@ -371,6 +371,23 @@ def _line_all(st, prefix, line, add_line):
     names = [p for p, q in sorted(st["queues"].items()) if str(q).startswith(prefix)]
     for p in names:
         add_line(p, line)
+    return names
+
+
+def _pause_all(st, add_line, now):
+    """Pause every running queue and remember it: the pause is a lead line, so the task list still reads running."""
+    names = _line_all(st, "queue: running", PAUSE_LINE, add_line)
+    for p in names:
+        st["paused_by_ops"][p] = now
+    return len(names)
+
+
+def _resume_all(st, add_line):
+    """Resume every project whose queue reads paused or that this bot paused; clear the paused_by_ops entries."""
+    names = {p for p, q in st["queues"].items() if str(q).startswith("queue: paused")} | set(st["paused_by_ops"])
+    for p in sorted(names):
+        add_line(p, RESUME_LINE)
+        st["paused_by_ops"].pop(p, None)
     return len(names)
 
 
@@ -392,9 +409,9 @@ def _click(d, user, cid, st, add_line, now, on_merge):
             return "ignored"
         if now - ms / 1000 > CONFIRM_S:
             return "expired"
-        return f"queued {_line_all(st, 'queue: running', PAUSE_LINE, add_line)}"
+        return f"queued {_pause_all(st, add_line, now)}"
     if act == "resume-all":
-        return f"queued {_line_all(st, 'queue: paused', RESUME_LINE, add_line)}"
+        return f"queued {_resume_all(st, add_line)}"
     if act in ("merge", "keep"):
         rec = st["approvals"].get(k)
         if not rec or rec.get("kind") != "merge":

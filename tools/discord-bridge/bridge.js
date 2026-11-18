@@ -433,7 +433,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       read(id);
       return;
     }
-    if (id.startsWith('ab:ops:pause-all-confirm:')) await answer(i, 'Sent.', []);
+    if (id.startsWith('ab:ops:pause-all-confirm:') || id === 'ab:ops:resume-all') await answer(i, 'Sent.', []);
     else { try { await i.deferUpdate(); } catch (e) { say(`ack failed: ${snip(e?.message)}`); } }
     ev({ type: 'click', custom_id: id, message_id: i.message?.id, channel_id: i.channelId });
     say(`event ${snip(id)}`);

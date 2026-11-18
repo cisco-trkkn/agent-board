@@ -284,9 +284,17 @@ test('pause-all-confirm replies Sent. and writes a click event', async () => {
   assert.deepStrictEqual(evs.map((e) => [e.type, e.custom_id]), [['click', id]]);
 });
 
-test('resume-all, allow, deny, merge, keep: deferUpdate and one click event with the custom_id', async () => {
+test('resume-all replies Sent. and writes a click event', async () => {
   const s = setup();
-  const idsClicked = ['ab:ops:resume-all', 'ab:ops:allow:ak', 'ab:ops:deny:ak', 'ab:ops:merge:k1', 'ab:ops:keep:k1'];
+  const i = await click(s, { customId: 'ab:ops:resume-all', ephemeral: true });
+  assert.deepStrictEqual(i.replies.length + i.updates.length, 1);
+  assert.strictEqual((i.replies[0] || i.updates[0]).content, 'Sent.');
+  assert.deepStrictEqual(s.events().map((e) => [e.type, e.custom_id]), [['click', 'ab:ops:resume-all']]);
+});
+
+test('allow, deny, merge, keep: deferUpdate and one click event with the custom_id', async () => {
+  const s = setup();
+  const idsClicked = ['ab:ops:allow:ak', 'ab:ops:deny:ak', 'ab:ops:merge:k1', 'ab:ops:keep:k1'];
   for (const id of idsClicked) {
     const i = await click(s, { customId: id });
     assert.strictEqual(i.deferred, 1, id);
