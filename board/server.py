@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_feed, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_digest, discord_feed, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -513,7 +513,6 @@ def feed_tick(records, now):
             print(f"tmux-dash: discord controls failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     if ops_on:
         ops_tick(records, tasks_by_project, now)
-    # (the daily digest, Task 8, runs here: after the ops tick and consume, before the overview returns)
 
 
 def ops_tick(records, tasks_by_project, now):
@@ -522,15 +521,19 @@ def ops_tick(records, tasks_by_project, now):
     for p in (r["project"] for r in records):
         tasks_by_project.setdefault(p, [])   # a project whose lead list could not be read still appears on the card
     try:
-        try:
-            limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-        except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
-            limits = None
+        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+    except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
+        limits = None
+    try:
         discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line)
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     try:
         discord_ops.consume(COMMENTS.add_line, lambda argv: run_script(argv, timeout=20), now, on_merge=discord_merge.on_merge)
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    try:
+        discord_digest.tick(records, limits, now)
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
