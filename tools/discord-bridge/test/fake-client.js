@@ -11,7 +11,9 @@ class FakeClient extends EventEmitter {
     this.seq = 0;
     this.chans = new Map();
     this.messages = new Map();
-    this.user = { id: 'BOT' };
+    this.presences = [];
+    this.presenceError = null;
+    this.user = { id: 'BOT', setPresence: (p) => { this.presences.push(p); if (this.presenceError) throw this.presenceError; return {}; } };
     this.channels = { fetch: (id) => this._fetchChannel(id) };
     this.application = { commands: { set: async (payload, guildId) => { this._record('setCommands', guildId, payload); this._maybeFail('setCommands'); return payload; } } };
   }

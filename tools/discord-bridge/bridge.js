@@ -291,7 +291,19 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     }
   }
 
-  const handlers = { approval: opApproval, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  // Presence: the bot's custom status. The last text is re-applied on every (re)connect.
+  const PRESENCE_MAX = 128;
+  let presenceText = null;
+  function applyPresence() {
+    if (presenceText === null || !client.user?.setPresence) return;
+    client.user.setPresence({ activities: [{ type: 4, name: 'custom', state: presenceText }], status: 'online' });
+  }
+  async function opPresence(op) {
+    if (typeof op.text !== 'string' || !op.text) throw new Error('presence text must be a non-empty string');
+    presenceText = op.text.slice(0, PRESENCE_MAX);
+    try { applyPresence(); say(`presence ${snip(presenceText)}`); } catch (e) { say(`presence failed: ${snip(e?.message)}`); }
+  }
+  const handlers = { presence: opPresence, approval: opApproval, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -353,6 +365,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     try { ch = await home(); } catch (e) { say(`ready: home channel fetch failed: ${snip(e?.message)}`); }
     st.connected = true; save();
     await register(ch);
+    try { applyPresence(); } catch (e) { say(`presence failed: ${snip(e?.message)}`); }
     say('connected');
   }
 
