@@ -22,6 +22,7 @@ DISCORD_PLUGIN = "plugin:discord@claude-plugins-official"
 BOOT_RE = re.compile(r"\bsec\s*=\s*(\d+)")
 BRIDGE_RE = re.compile(r"(?:^|\s)node\s+\S*discord-bridge/bridge\.js\b")
 SKIP_NAMES = {"overseer"}
+SYSCTL, ROUTE = "/usr/sbin/sysctl", "/sbin/route"   # not on the LaunchAgent PATH (~/.local/bin:/opt/homebrew/bin:~/.bun/bin:/usr/bin:/bin)
 
 
 def _run(cmd):
@@ -41,7 +42,7 @@ def restore_dir():
 def boot_time(run=_run):
     """Seconds since the epoch of the last boot, from `sysctl -n kern.boottime`; None when unreadable."""
     try:
-        rc, out = run(["sysctl", "-n", "kern.boottime"])
+        rc, out = run([SYSCTL, "-n", "kern.boottime"])
     except Exception:
         return None
     m = BOOT_RE.search(out or "") if rc == 0 else None
@@ -312,11 +313,6 @@ def _log(dir, cfg, msg):
         pass
 
 
-def _session_name(path):
-    """The session name bin/dev gives a project folder: the folder name with . and : replaced by _."""
-    return Path(path).name.replace(".", "_").replace(":", "_")
-
-
 def _lead_pid(cfg, session):
     """pid of the claude process in session's claude window, else None."""
     rows = _rows(cfg.sh, list(cfg.tmux) + ["list-panes", "-a", "-F", "#{session_name}\t#{window_name}\t#{pane_id}\t#{pane_pid}"])
@@ -364,7 +360,7 @@ def do_restore(dir, snap, cfg):
     others. Marks the snapshot restored (with restored_at and results) even after failures; returns the results
     {project: {"status", "failures", "error"?}}."""
     _log(dir, cfg, f"restore: boot {snap.get('boot')}, {len(snap.get('projects') or [])} projects")
-    ok = _poll(cfg, NET_WAIT, NET_POLL, lambda: cfg.sh(["route", "-n", "get", "default"])[0] == 0)
+    ok = _poll(cfg, NET_WAIT, NET_POLL, lambda: cfg.sh([ROUTE, "-n", "get", "default"])[0] == 0)
     _log(dir, cfg, "network: up" if ok else "network: not up after 300 s, carrying on")
     shared = []
     _step(dir, cfg, "board", "dash start", shared, _safe(cfg.sh, list(cfg.dash_ctl) + ["dash", "start"], cwd=cfg.home))
@@ -414,9 +410,10 @@ def _restore_project(dir, cfg, p, name, path, res, fails, opened):
         fails.append(("open", f"folder {path} is gone"))
         _log(dir, cfg, f"{name}: folder {path} is gone")
         return
-    session = _session_name(path)
+    session = name   # the snapshot name is the session (or group) to find; bin/dev is given the path only
     if cfg.sh(list(cfg.tmux) + ["has-session", "-t", f"={session}"])[0] == 0:
         res["status"] = "already open"
+        opened[name] = session
         _log(dir, cfg, f"{name}: already open")
         return
     env = {k: v for k, v in os.environ.items()
@@ -429,6 +426,10 @@ def _restore_project(dir, cfg, p, name, path, res, fails, opened):
         env["DEV_NO_LEAD"] = "1"
     _step(dir, cfg, name, "open", fails, _safe(cfg.sh, [cfg.dev, path], env=env, cwd=cfg.home))
     if fails:
+        return
+    if cfg.sh(list(cfg.tmux) + ["has-session", "-t", f"={session}"])[0] != 0:
+        fails.append(("session name", f"dev did not create {session}"))
+        _log(dir, cfg, f"{name}: session name: dev did not create {session}")
         return
     res["status"] = "restored"
     opened[name] = session
@@ -488,6 +489,21 @@ def _carry_session_ids(old, snap):
             lead["session_id"] = prev[p["name"]]
 
 
+def _warn_boot(dir, cfg):
+    """Log `boot time unreadable` at most once an hour (marker file boot-warn holds the last time)."""
+    mark = Path(dir) / "boot-warn"
+    try:
+        if cfg.now() - float(mark.read_text()) < 3600:
+            return
+    except (OSError, ValueError):
+        pass
+    _log(dir, cfg, "boot time unreadable")
+    try:
+        mark.write_text(str(cfg.now()))
+    except OSError:
+        pass
+
+
 def tick(dir, cfg=None, run=_run):
     """One LaunchAgent tick: restore when a newer boot found an unrestored snapshot, else snapshot. Always 0."""
     cfg = cfg or default_cfg()
@@ -506,6 +522,7 @@ def tick(dir, cfg=None, run=_run):
         try:
             boot = boot_time(run)
             if boot is None:
+                _warn_boot(dir, cfg)
                 return 0
             old = load(dir)
             if old and isinstance(old.get("boot"), int) and old["boot"] < boot and not old.get("restored"):

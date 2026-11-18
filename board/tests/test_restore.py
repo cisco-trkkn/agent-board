@@ -1,6 +1,7 @@
 """board/restore.py part 1: boot_time, snapshot and the save guards. Every external read goes through a fake run()."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -27,7 +28,7 @@ class Fake:
     def __call__(self, cmd):
         self.calls.append(list(cmd))
         for key, out in (("sysctl", BOOT_LINE), ("list-sessions", self.sessions), ("list-panes", self.panes), ("ps", self.ps)):
-            if key in cmd:
+            if key in cmd or os.path.basename(cmd[0]) == key:
                 return (1, "") if key in self.fail else (0, out)
         return 1, ""
 
@@ -73,6 +74,22 @@ class BootTime(unittest.TestCase):
         b = restore.boot_time()
         self.assertIsInstance(b, int)
         self.assertGreater(b, 1_000_000_000)
+
+    def test_sysctl_called_by_absolute_path(self):
+        seen = []
+        restore.boot_time(run=lambda c: (seen.append(c), (0, BOOT_LINE))[1])
+        self.assertEqual(seen[0][0], "/usr/sbin/sysctl")
+
+    @unittest.skipUnless(sys.platform == "darwin", "kern.boottime is macOS")
+    def test_real_boot_time_under_the_launchd_environment(self):
+        home = os.environ.get("HOME", "")
+        plist_path = f"{home}/.local/bin:/opt/homebrew/bin:{home}/.bun/bin:/usr/bin:/bin"
+        board = str(Path(restore.__file__).resolve().parent)
+        code = f"import sys; sys.path.insert(0, {board!r}); import restore; print(restore.boot_time())"
+        r = subprocess.run(["/usr/bin/env", "-i", f"HOME={home}", f"PATH={plist_path}", sys.executable, "-I", "-c", code],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertGreater(int(r.stdout.strip()), 1_000_000_000)
 
     def test_none_when_unreadable_or_failing(self):
         self.assertIsNone(restore.boot_time(run=lambda c: (0, "garbage")))

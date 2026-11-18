@@ -54,6 +54,7 @@ def plist_text(cli_path, home, log):
         "ProgramArguments": [str(cli_path), "restore", "tick"],
         "RunAtLoad": True,
         "StartInterval": 60,
+        "AbandonProcessGroup": True,   # else launchd kills the board, ttyd and caffeinate the tick started
         "WorkingDirectory": str(home),
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),

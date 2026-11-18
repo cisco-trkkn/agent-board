@@ -54,6 +54,7 @@ class Install(Base):
         self.assertIs(d["RunAtLoad"], True)
         self.assertEqual(d["StartInterval"], 60)
         self.assertNotIn("StartCalendarInterval", d)
+        self.assertIs(d["AbandonProcessGroup"], True)
         self.assertEqual(d["WorkingDirectory"], str(self.home))
         self.assertEqual(d["ProgramArguments"], [str(cli), "restore", "tick"])
         h = str(self.home)

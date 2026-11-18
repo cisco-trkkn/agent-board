@@ -29,6 +29,7 @@ class Sh:
         self.route_ok_after = 0    # route fails this many times first
         self.routes = 0
         self.fail = {}             # substring of " ".join(cmd) -> (rc, out)
+        self.dev_makes = lambda path: Path(path).name   # session name bin/dev would create (None: none)
         self.panes = ""            # list-panes output
         self.ps = ""
 
@@ -38,7 +39,12 @@ class Sh:
         for k, v in self.fail.items():
             if k in line:
                 return v
-        if cmd[:2] == ["route", "-n"]:
+        if cmd[0] == "/dev":
+            made = self.dev_makes(cmd[1])
+            if made:
+                self.live.add(made)
+            return 0, ""
+        if cmd[0] == "/sbin/route":
             self.routes += 1
             return (0, "") if self.routes > self.route_ok_after else (1, "")
         if "has-session" in cmd:
@@ -176,11 +182,20 @@ class Restore(Base):
         self.assertEqual(self.sh.find("bridge start"), [])
         self.assertEqual(res["alpha"]["status"], "already open")
 
-    def test_session_name_from_path(self):
-        d = self.root / "my.proj"
-        d.mkdir()
-        self.run_restore(snap(projects=[self.project("my.proj", d)]))
-        self.assertIn("=my_proj", self.sh.find("has-session")[0][0])
+    def test_session_checked_by_snapshot_name_not_path(self):
+        sub = self.root / "repo" / "sub"
+        sub.mkdir(parents=True)
+        self.sh.dev_makes = lambda path: "alpha"
+        res = self.run_restore(snap(projects=[self.project("alpha", sub, bridge=True)]))
+        self.assertEqual({c[-1] for c, _, _ in self.sh.find("has-session")}, {"=alpha"})
+        self.assertEqual(res["alpha"]["status"], "restored")
+        self.assertEqual(len(self.sh.find("bridge start")), 1)
+
+    def test_dev_that_creates_another_session_is_a_failure(self):
+        self.sh.dev_makes = lambda path: "other"
+        res = self.run_restore(snap(projects=[self.project(bridge=True)]))
+        self.assertIn("session name: dev did not create alpha", res["alpha"]["error"])
+        self.assertEqual(self.sh.find("bridge start"), [])
 
     def test_failure_does_not_stop_others(self):
         b = self.root / "beta"
@@ -209,6 +224,10 @@ class Network(Base):
         dash = self.sh.find("dash start")
         self.assertEqual(dash[0][0], ["/agent-board", "dash", "start"])
         self.assertEqual(dash[0][2], str(self.home))
+
+    def test_route_called_by_absolute_path(self):
+        self.run_restore(snap())
+        self.assertEqual(self.sh.calls[0][0], ["/sbin/route", "-n", "get", "default"])
 
     def test_times_out_after_300s_and_carries_on(self):
         self.sh.route_ok_after = 10**6
@@ -243,6 +262,12 @@ class Awake(Base):
         self.sh.calls.clear()
         self.run_restore(snap(projects=[self.project()], awake={"lid": True, "queue": True, "project": "alpha"}))
         self.assertEqual(self.awake_args(), [["/ctl", "awake", "on", "--queue", "--lid"]])
+
+    def test_already_open_lead_pid_is_found_by_name(self):
+        self.pane_fixture()
+        self.sh.live.add("alpha")
+        self.run_restore(snap(projects=[self.project()], awake={"lid": False, "queue": False, "project": "alpha"}))
+        self.assertEqual(self.awake_args(), [["/ctl", "awake", "on", "--pid", "101"]])
 
     def test_no_awake_no_call(self):
         self.run_restore(snap(projects=[self.project()]))
@@ -327,7 +352,7 @@ class Marking(Base):
 class Tick(Base):
     def tick(self, run=None, **kw):
         def run_(cmd, env=None, cwd=None):
-            return (0, f"{{ sec = {BOOT_NEW}, usec = 1 }} x\n") if "sysctl" in cmd else (1, "")
+            return (0, f"{{ sec = {BOOT_NEW}, usec = 1 }} x\n") if cmd[0] == "/usr/sbin/sysctl" else (1, "")
         return restore.tick(self.dir, self.cfg(**kw), run=run or run_)
 
     def test_off_switches(self):
@@ -380,6 +405,17 @@ class Tick(Base):
             self.assertEqual(self.tick(), 0)
         self.assertIsNone(restore.load(self.dir))
         self.assertEqual(self.tick(run=lambda cmd, env=None, cwd=None: (1, "")), 0)
+        self.assertIsNone(restore.load(self.dir))
+
+    def test_boot_unreadable_logs_once_per_hour(self):
+        bad = lambda cmd, env=None, cwd=None: (1, "")
+        t = [1_800_000_000.0]
+        for _ in range(3):
+            self.tick(run=bad, now=lambda: t[0])
+        self.assertEqual(self.log().count("boot time unreadable"), 1)
+        t[0] += 3601
+        self.tick(run=bad, now=lambda: t[0])
+        self.assertEqual(self.log().count("boot time unreadable"), 2)
         self.assertIsNone(restore.load(self.dir))
 
     def test_keeps_previous_session_id_when_new_is_null(self):
