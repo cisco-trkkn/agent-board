@@ -41,8 +41,11 @@ def _log_path():
     return tc_env.agent_base() / "restore" / "launchd.log"
 
 
-def _cli_path():
-    return Path(__file__).resolve().parent.parent / "bin" / "agent-board"
+def _cli_path(home):
+    """~/.local/bin/agent-board when executable, else the one beside this checkout (never a bare worktree
+    path blindly: worktree_safety raises RuntimeError when neither is executable)."""
+    import worktree_safety
+    return worktree_safety.agent_board_path(home)
 
 
 def plist_text(cli_path, home, log):
@@ -70,6 +73,7 @@ def _launchctl(*args):
 def install():
     _check_platform()
     home = _home()
+    target = _cli_path(home)   # before anything is written
     plist = _plist_path(home)
     log = _log_path()
     plist.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +83,7 @@ def install():
         bak = plist.with_name(f"{plist.name}.bak-{datetime.now():%Y%m%d}")
         shutil.copy2(plist, bak)
         lines.append(f"backed up the old plist to {bak}")
-    plist.write_bytes(plist_text(_cli_path(), home, log))
+    plist.write_bytes(plist_text(target, home, log))
     uid = os.getuid()
     _launchctl("bootout", f"gui/{uid}/{LABEL}")   # not loaded yet is fine
     r = _launchctl("bootstrap", f"gui/{uid}", str(plist))

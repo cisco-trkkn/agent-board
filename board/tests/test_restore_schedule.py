@@ -34,6 +34,11 @@ class Base(unittest.TestCase):
         p.start()
         os.environ.pop("TC_STATE", None)
         self.addCleanup(p.stop)
+        bindir = self.home / ".local" / "bin"
+        bindir.mkdir(parents=True)
+        self.cli = bindir / "agent-board"
+        self.cli.write_text("#!/bin/sh\n")
+        self.cli.chmod(0o755)
         self.plist = self.home / "Library" / "LaunchAgents" / "com.user.agent-board-restore.plist"
 
     def calls(self):
@@ -44,7 +49,7 @@ class Install(Base):
     def test_plist_keys(self):
         rs.install()
         d = plistlib.loads(self.plist.read_bytes())
-        cli = Path(rs.__file__).resolve().parent.parent / "bin" / "agent-board"
+        cli = self.cli
         self.assertEqual(d["Label"], "com.user.agent-board-restore")
         self.assertIs(d["RunAtLoad"], True)
         self.assertEqual(d["StartInterval"], 60)
@@ -58,6 +63,26 @@ class Install(Base):
         self.assertEqual(d["StandardOutPath"], log)
         self.assertEqual(d["StandardErrorPath"], log)
         self.assertTrue(Path(log).parent.is_dir())
+
+    def test_no_executable_cli_raises_and_writes_nothing(self):
+        self.cli.chmod(0o644)
+        empty = Path(self.tmp) / "empty"
+        empty.mkdir()
+        with mock.patch.dict(os.environ, {"AW_BIN_DIR": str(empty)}):
+            with self.assertRaisesRegex(RuntimeError, "no executable agent-board"):
+                rs.install()
+        self.assertFalse(self.plist.exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_falls_back_to_cli_beside_module(self):
+        self.cli.unlink()
+        beside = Path(self.tmp) / "beside"
+        beside.mkdir()
+        (beside / "agent-board").write_text("#!/bin/sh\n")
+        (beside / "agent-board").chmod(0o755)
+        with mock.patch.dict(os.environ, {"AW_BIN_DIR": str(beside)}):
+            rs.install()
+        self.assertEqual(plistlib.loads(self.plist.read_bytes())["ProgramArguments"][0], str(beside / "agent-board"))
 
     def test_bootout_then_bootstrap(self):
         rs.install()
