@@ -128,6 +128,8 @@ def run_script(args, cwd=None, extra_env=None, timeout=30):
     out = (r.stdout + r.stderr).strip()
     if r.returncode != 0:
         raise RuntimeError(out or f"exit {r.returncode}")
+    if len(args) > 3 and str(args[1]) == "dialog" and str(args[3]) == "rows":
+        return r.stdout   # `dialog <pane> rows`: its rows become `type --expect`, so the first row's leading indent must survive
     return out
 
 

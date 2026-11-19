@@ -1033,6 +1033,28 @@ class RealShowTest(unittest.TestCase):
             raise RuntimeError(out or f"exit {r.returncode}")
         return out
 
+    def test_indented_first_row_survives_run_script_into_type(self):
+        # mutation: re-add the .strip() for `dialog rows` in server.run_script -> the first row loses its indent and `type` is refused
+        os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")   # server.py reads it at import
+        import server
+        src =(FX / "approve" / "no-prompt.txt").read_text(encoding="utf-8").split("\n")
+        rule = next(i for i, r in enumerate(src) if r.startswith("─" * 10))
+        first = next(i for i, r in enumerate(src[:rule]) if r.strip())
+        src[first] = "  " + src[first].lstrip()   # Claude Code indents continuation rows
+        f = Path(self.tmp.name) / "indented.txt"
+        f.write_text("\n".join(src), encoding="utf-8")
+        self.t("new-window", "-d", "-t", "=tt:", "-n", "ind", f"cat {f}; sleep 600")
+        pid = self.t("display", "-p", "-t", "=tt:ind", "#{pane_id}").strip()
+        for _ in range(100):
+            if "❯" in self.t("capture-pane", "-p", "-t", pid):
+                break
+            time.sleep(0.05)
+        with mock.patch.object(server, "tmux_env", return_value=self.env):
+            run = lambda argv: server.run_script(argv, timeout=20)  # noqa: E731
+            got = dd._rows(run, pid)
+            self.assertTrue(got and got[0].startswith("  ") and not got[0].startswith("   "), got)
+            self.assertEqual(run([TC, "dialog", pid, "type", "--expect", "\n".join(got), "--text", "banana"]), f"dialog: {pid}: typed")
+
     def test_real_show_feeds_scan(self):
         ids = {}
         for w in ("win", "idle"):
