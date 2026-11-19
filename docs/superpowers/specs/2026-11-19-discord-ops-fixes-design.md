@@ -45,7 +45,7 @@ An old bridge that never writes `presence` therefore gets one resend a minute, n
 
 ### 4. `/pause`, `/resume` share `paused_by_ops` (`board/discord_ops.py`, `board/discord_controls.py`)
 
-`handle_event(st, d, ev, add_line, allow)` already receives `st` as a parameter slot; the slash branch now uses it: `/pause <p>` sets `st["paused_by_ops"][p] = now`, `/resume <p>` pops it, both before `add_line`. `consume` passes its `st`. The reaction-controls path (`discord_controls.py:161`, `_ops(...)`) loads the ops state under the same lock `consume` uses, passes it, and saves it, so a 🛑 / ▶️ on a project's message updates the record too. Resume all then resumes every project paused by either route.
+`handle_event(project, d, ev, add_line, allow)` gains an optional `st=None` parameter; when given, the slash branch uses it: `/pause <p>` sets `st["paused_by_ops"][p] = now`, `/resume <p>` pops it, both before `add_line`. `consume` passes its `st`. The reaction-controls path (`discord_controls.py:161`, `_ops(...)`) loads the ops state under the same lock `consume` uses, passes it, and saves it, so a 🛑 / ▶️ on a project's message updates the record too. Resume all then resumes every project paused by either route.
 
 ### 5. `/ideas` keeps the list and replies (`board/discord_ideas.py`, `tools/discord-bridge/bridge.js`)
 
