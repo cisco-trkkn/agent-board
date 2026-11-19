@@ -293,7 +293,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   // Presence: the bot's custom status. The last text is re-applied on every (re)connect.
   const PRESENCE_MAX = 128;
-  let presenceText = null;
+  let presenceText = typeof st.presence === 'string' && st.presence ? st.presence : null;
   function applyPresence() {
     if (presenceText === null || !client.user?.setPresence) return;
     client.user.setPresence({ activities: [{ type: 4, name: 'custom', state: presenceText }], status: 'online' });
@@ -301,6 +301,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   async function opPresence(op) {
     if (typeof op.text !== 'string' || !op.text) throw new Error('presence text must be a non-empty string');
     presenceText = op.text.slice(0, PRESENCE_MAX);
+    st.presence = presenceText; save();   // a restarted process re-applies it on ready
     try { applyPresence(); say(`presence ${snip(presenceText)}`); } catch (e) { say(`presence failed: ${snip(e?.message)}`); }
   }
   const handlers = { presence: opPresence, approval: opApproval, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };

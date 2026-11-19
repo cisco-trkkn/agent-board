@@ -681,6 +681,20 @@ test('onReady re-applies the last presence; before any presence op it does not',
   assert.deepStrictEqual(s.client.presences, [custom('wk 2%'), custom('wk 2%')]);
 });
 
+test('a restarted bridge re-applies the saved presence on ready; a fresh dir does not', async () => {
+  const s = setup();
+  s.put({ op: 'presence', text: 'wk 4%' });
+  await s.bridge.tick();
+  assert.strictEqual(s.st().presence, 'wk 4%');
+  const client2 = new FakeClient({ guildId: 'G1' });
+  const b2 = createBridge({ dir: s.dir, client: client2, log: () => {}, now: () => s.clock.t });
+  await b2.onReady();
+  assert.deepStrictEqual(client2.presences, [custom('wk 4%')]);
+  const f = setup();
+  await f.bridge.onReady();
+  assert.deepStrictEqual(f.client.presences, []);
+});
+
 test('a presence op is cut to 128 characters', async () => {
   const s = setup();
   s.put({ op: 'presence', text: 'x'.repeat(200) });
