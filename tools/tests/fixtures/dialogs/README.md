@@ -43,8 +43,8 @@ answers a permission prompt with no Enter; Down/Enter also works; the "always"/"
 |---|---|---|---|---|
 | permission | digit `n` alone (approve README) | n/a | the digit itself | n/a |
 | single question | digit `n` alone answers at once (`2` → Pear) | n/a | the digit itself | `3` focuses the Other row (cursor `❯ 3.`, the row turns into the input), type `hello` (`send-keys -l`), `Enter` submits → `→ hello`. Digit `3` alone does NOT submit |
-| multi-select | a digit only toggles `[ ]`↔`[✔]` (pressed `1` twice: on, off; `2` on); the cursor `❯` stays where it was | digit `n` (`4` toggled the Other row on with empty text; pressed again to clear) | `Down` x (rows+1) onto `Submit` then `Enter`, which opens a review screen `Review your answers`, `1. Submit answers` / `2. Cancel`; digit `1` there submitted | not exercised; row 4 toggles like the others (typing into it not probed) |
-| two-question | digit `n` answers question 1 at once and advances to the tab of question 2 (`←  ☒ Fruit  ☐ Size  ✔ Submit  →`) | n/a | after the last question the same review screen appears; `1` submits, `2` cancels (pressed `2`, nothing submitted) | same as single: `3`, text, `Enter` (per question; not run separately) |
+| multi-select | a digit only toggles `[ ]`↔`[✔]` (pressed `1` twice: on, off; `2` on); the cursor `❯` stays where it was | digit `n` (`4` toggled the Other row on with empty text; pressed again to clear) | `Down` x (rows+1) onto `Submit` then `Enter`, which opens a review screen `Review your answers`, `1. Submit answers` / `2. Cancel`; digit `1` there submitted | digit `4` toggles the row but typed text then goes nowhere (the cursor stays on row 1); instead `Down` x3 onto `❯ 4. [ ] Type something`, type `hello` (`send-keys -l`): the row becomes `❯ 4. [✔] hello` (auto-checked), then `Down` to `Submit`, `Enter`, review screen, `1` → `Which fruit? → hello` |
+| two-question | digit `n` answers question 1 at once and advances to the tab of question 2 (`←  ☒ Fruit  ☐ Size  ✔ Submit  →`) | n/a | after the last question the same review screen appears; `1` submits, `2` cancels (pressed `2`, nothing submitted) | on the second question (after `1` on the first): `3`, type `medium`, `Enter` → review screen `Which size? → medium`, `1` submits → `· Which fruit? → Apple · Which size? → medium` |
 | trust | `Down` then `Enter` for Yes (cursor starts on `No, exit`); a digit `2` does NOT move the cursor (still `❯ No, exit` after `2`) | n/a | `Enter` | n/a |
 | plan | not probed with a digit; left with `Esc` (back to the prompt in plan mode, nothing executed) | n/a | n/a | n/a |
 | resume | `Esc` closes the picker (back to the shell pane) | n/a | n/a | n/a |
@@ -54,7 +54,6 @@ answers a permission prompt with no Enter; Down/Enter also works; the "always"/"
 - **login expiry** (login always): needs the user's account logged out; not attempted and not invented.
 - Permission prompts were not re-captured here: `fixtures/approve/` already holds them (claude 2.1.321 and the teammate captures).
 - The key that picks a plan option was not sent (only `Esc`); digits on the plan dialog are unverified.
-- Typing text into the multi-select Other row and the Other row of the second question were not exercised.
 
 ## Redaction
 
