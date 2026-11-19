@@ -29,6 +29,7 @@ ANSWERED = "answered at the terminal"
 NOT_PARSED = "(dialog not parsed)"
 _NONE = "dialog: none in"   # stderr of `tmux-ctl dialog <win> show` when the pane shows no dialog (tools/lib/dialog.zsh)
 ERROR = "error"
+_HOLDS_TEXT = "the input line holds text"   # stderr of `type` when the rows match but the input line holds typed text (tools/lib/dialog.zsh)
 _CHANGED = ("dialog: the dialog in", "dialog: the screen in")   # stderr start of `press` / `type` when the screen no longer matches --expect (tools/lib/dialog.zsh)
 IDLE = "idle"
 REMOTE_S = 43200   # a remote marker (<state>/remote/<session id>) younger than 12 h means the user is away from the terminals
@@ -358,6 +359,8 @@ def _finish(rec, key, dialogs, run, args, label, now, verb="press"):
                 rows = _rows(run, rec["pane"])
                 if not rows:
                     text = "the screen changed; nothing to re-send"
+        elif _HOLDS_TEXT in first:   # typed text sits in the input line: the screen did not change, so nothing is re-sent
+            result, text = "not typed: the input line holds text", "⚠️ not typed: the input line holds text; clear it at the terminal"
         else:
             result, text = f"not pressed: {first}"[:200], f"⚠️ not pressed: {first}"[:300]
     del dialogs[key]
@@ -397,8 +400,15 @@ def click(d, user, cid, ev, run, now):
         if kind == "submit":
             picks = ev.get("picks")
             if not (multi and isinstance(picks, list) and picks and len(set(picks)) == len(picks)
-                    and all(type(p) is int and p in ok and not ok[p].get("permanent") for p in picks)):
+                    and all(type(p) is int and p in ok for p in picks)):
                 return "ignored"
+            if any(ok[p].get("permanent") for p in picks):   # a permanent row is answered at the terminal: say so, press nothing
+                try:
+                    discord_feed.outbox_write(Path(rec["dir"]), {"op": "edit", "key": key, "text": f"{rec['header']}\n⚠️ not pressed: needs the terminal"})
+                except Exception as e:  # noqa: BLE001
+                    _warn(f"edit failed ({key})", e)
+                del dialogs[key]
+                return "not pressed: needs the terminal"
             return _finish(rec, key, dialogs, run, [x for p in picks for x in ("--option", str(p))],
                            ", ".join(_label(ok[p]) for p in picks), now)
         o = ok.get(n)

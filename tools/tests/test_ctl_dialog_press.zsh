@@ -177,7 +177,7 @@ sed -e '/^──────/{n;s/^❯.*/❯ half typed/;}' $FXA/no-prompt.txt >
 replayk p-tytx $S/typed.txt
 dl p-tytx type --expect "$R5" --text "x"
 # mutation: skip the input-text check → rc 0 and the text is sent
-check "type over typed text: rc 1 + message"             test $rc -eq 1 -a "$err" = "dialog: the screen in p-tytx changed"
+check "type over typed text: rc 1 + message"             test $rc -eq 1 -a "$err" = "dialog: p-tytx: the input line holds text"
 check "type over typed text: nothing sent"               test "$(gotk p-tytx)" = GOT:NONE
 
 replayk p-tynone $FXA/bash-git.txt

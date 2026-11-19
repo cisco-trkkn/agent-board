@@ -660,7 +660,11 @@ class RefusedTest(ConsumerBase):
     def test_picks_with_a_permanent_option_press_nothing(self):
         show = {**MULTI, "options": [{**o, "permanent": o["n"] == 2} for o in MULTI["options"]]}
         key = self.post(show)
-        self.check(self.click(f"ab:dlg:{key}:submit", picks=[1, 2]), "ignored")
+        # mutation: return "ignored" again -> no edit, the user sees nothing happen
+        self.assertEqual(self.click(f"ab:dlg:{key}:submit", picks=[1, 2]), "not pressed: needs the terminal")
+        self.assertEqual(self.run.presses, [])
+        self.assertEqual([o["text"].split("\n")[1] for o in self.edits()], ["⚠️ not pressed: needs the terminal"])
+        self.assertEqual(self.state(), {})
 
     def test_picks_on_a_single_choice_dialog_press_nothing(self):
         key = self.post(SINGLE)
@@ -946,6 +950,15 @@ class IdleTest(ConsumerBase):
         del self.run.rows[self.PID]   # `rows` now fails: no input box
         self.assertEqual(self.reply(self.key(), "x"), "changed")
         self.assertEqual(self.edits()[-1]["text"].split("\n")[1], "the screen changed; nothing to re-send")
+        self.assertEqual(len([o for o in self.ops() if o["op"] == "dialog"]), 1)
+
+    def test_an_input_line_holding_text_is_said_so_and_nothing_is_re_posted(self):
+        # mutation: drop the `holds text` branch in _finish -> the edit reads `not pressed: dialog: …` (and no friendly text)
+        self.marker()
+        self.scan("working"); self.scan("ready", 10)
+        self.run.press_result = RuntimeError("dialog: %12: the input line holds text")
+        self.assertEqual(self.reply(self.key(), "x"), "not typed: the input line holds text")
+        self.assertEqual(self.edits()[-1]["text"].split("\n")[1], "⚠️ not typed: the input line holds text; clear it at the terminal")
         self.assertEqual(len([o for o in self.ops() if o["op"] == "dialog"]), 1)
 
     def test_a_failed_idle_post_is_retried_on_the_next_scan(self):

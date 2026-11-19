@@ -511,11 +511,13 @@ _dlg_type() {
   [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
   _dlg_rows_above "$pane" "$n"
   [[ -n "$HASTEXT" ]] || { print -u2 "dialog: $win: no input box"; return 1 }
-  [[ "$HASTEXT" == 0 && "$ROWS_" == "$expect" ]] || { print -u2 "dialog: the screen in $win changed"; return 1 }
+  [[ "$ROWS_" == "$expect" ]] || { print -u2 "dialog: the screen in $win changed"; return 1 }
+  [[ "$HASTEXT" == 0 ]] || { print -u2 "dialog: $win: the input line holds text"; return 1 }
   [[ -n "$TC_DIALOG_BEFORE_SEND" ]] && eval "$TC_DIALOG_BEFORE_SEND" >/dev/null 2>&1
   [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
   _dlg_rows_above "$pane" "$n"
-  [[ "$HASTEXT" == 0 && "$ROWS_" == "$expect" ]] || { print -u2 "dialog: the screen in $win changed"; return 1 }
+  [[ "$ROWS_" == "$expect" ]] || { print -u2 "dialog: the screen in $win changed"; return 1 }
+  [[ "$HASTEXT" == 0 ]] || { print -u2 "dialog: $win: the input line holds text"; return 1 }
   [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
   t send-keys -t "$pane" -l -- "$text"; t send-keys -t "$pane" Enter
   print -r -- "dialog: $win: typed"
