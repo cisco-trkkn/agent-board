@@ -28,6 +28,7 @@
 #   tmux-ctl idea  <text>                  file an idea for after the plan (never act on it now)
 #   tmux-ctl context show|path|add <section> "<entry>"
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
+#   tmux-ctl context search <words…>       entries of the core and the archive containing every word
 #   tmux-ctl awake on [--queue | --pid N] [--lid]|off|status|sleeps <since> [--all]|lid-setup
 #                                          hold the Mac awake (caffeinate) while the queue runs (--queue: bound to the tmux server, survives a relay); sleeps lists the real sleep periods since a time (--all: every Sleep/Wake line)
 #   tmux-ctl approve <win> show           print the prompt's tool (T:) and its --expect lines (P:); read-only
@@ -547,7 +548,10 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
         [[ -n "$1" && -n "$2" ]] || die 'usage: tmux-ctl context add <Map|How to run|Gotchas|Decisions> "<entry>"'
         sec="$1"; shift
         python3 -I "${0:A:h:h}/board/context.py" add --project "$FEEDKEY" --section "$sec" -- "$*" ;;
-      *) die 'usage: tmux-ctl context show | path | add <section> "<entry>"' ;;
+      search)
+        [[ -n "$1" ]] || die 'usage: tmux-ctl context search <words…>'
+        python3 -I "${0:A:h:h}/board/context.py" search --project "$FEEDKEY" -- "$@" ;;
+      *) die 'usage: tmux-ctl context show | path | add <section> "<entry>" | search <words…>' ;;
     esac ;;
 
   awake)
@@ -642,7 +646,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

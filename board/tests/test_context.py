@@ -181,5 +181,123 @@ class ContextAddTest(unittest.TestCase):
         self.assertEqual(r.stdout, self.read())
 
 
+HOLD = "import fcntl,sys,time;lk=open(sys.argv[1],'w');fcntl.lockf(lk,fcntl.LOCK_EX);print('held',flush=True);time.sleep(float(sys.argv[2]))"
+
+
+class ArchiveAndSearchTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_env = os.environ.get("TC_CONTEXT_DIR")
+        self.old_home = os.environ.get("HOME")
+        os.environ["TC_CONTEXT_DIR"] = self.tmp.name
+        os.environ["HOME"] = self.tmp.name
+        self.p = Path(self.tmp.name) / "p.md"
+        self.holders = []
+
+    def tearDown(self):
+        for h in self.holders:
+            h.kill()
+            h.wait()
+        os.environ["HOME"] = self.old_home
+        if self.old_env is None:
+            os.environ.pop("TC_CONTEXT_DIR", None)
+        else:
+            os.environ["TC_CONTEXT_DIR"] = self.old_env
+        self.tmp.cleanup()
+
+    def hold(self, secs):
+        h = subprocess.Popen([sys.executable, "-c", HOLD, f"{self.p}.lock", str(secs)], stdout=subprocess.PIPE, text=True)
+        self.holders.append(h)
+        self.assertEqual(h.stdout.readline().strip(), "held")
+        return h
+
+    def cli(self, *a, timeout=15):
+        return subprocess.run([sys.executable, "-I", str(HERE / "context.py"), *a],
+                              env={**os.environ, "TC_CONTEXT_DIR": self.tmp.name}, capture_output=True, text=True,
+                              timeout=timeout)
+
+    def test_cap_and_archive_path(self):
+        self.assertEqual(context.CAP, 8192)
+        self.assertEqual(context.archive_path("p"), Path(self.tmp.name) / "p.archive.md")
+        with self.assertRaises(ValueError):
+            context.archive_path("a/b")
+
+    def test_lock_wait_times_out(self):
+        # Mutation: a blocking lockf instead of the polling loop -> the child outlives its own 5 s deadline.
+        self.hold(8)
+        code = ("import sys;sys.path.insert(0,sys.argv[1]);import context\n"
+                "try:\n    context.locked('p', wait=0.5).__enter__()\nexcept ValueError: print('timeout')")
+        r = subprocess.run([sys.executable, "-c", code, str(HERE)], env={**os.environ}, capture_output=True,
+                           text=True, timeout=5)
+        self.assertEqual(r.stdout.strip(), "timeout")
+
+    def test_add_waits_for_a_short_hold(self):
+        # Mutation: wait=0 in add -> ValueError.
+        self.hold(1)
+        t = time.monotonic()
+        line = context.add("p", "Map", "waited", now=T0)
+        self.assertIn("waited", line)
+        self.assertGreaterEqual(time.monotonic() - t, 0.5)
+
+    def test_add_exits_2_when_held_past_the_default_bound(self):
+        self.hold(8)
+        t = time.monotonic()
+        r = self.cli("add", "--project", "p", "--section", "Map", "--", "x", timeout=7.5)
+        self.assertLess(time.monotonic() - t, 7.5)
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stderr.strip(),
+                         "context: locked by another writer (the nightly run?); retry in a moment")
+
+    def test_over_cap_notice(self):
+        # Mutation: len(text) instead of the byte size -> a '·'-heavy core between the two counts gets no notice.
+        context.add("p", "Map", "seed", now=T0)
+        pad = "- " + "·" * 4040 + "\n"          # 4040 chars, 8080 bytes
+        with open(self.p, "a") as f:
+            f.write(pad)
+        r = self.cli("add", "--project", "p", "--section", "Map", "--", "more words to cross")
+        n = self.p.stat().st_size
+        self.assertGreater(n, 8192)
+        self.assertLessEqual(len(self.p.read_text()), 8192)
+        lines = r.stdout.splitlines()
+        self.assertEqual(lines[1], f"context: core over 8 KB ({n}), the nightly run will condense it")
+
+    def test_no_notice_at_cap(self):
+        # Mutation: >= instead of > -> a core of exactly 8192 bytes prints the notice.
+        context.add("p", "Map", "seed", now=T0)
+        context.add("q", "Map", "seed", now=T0)
+        q = Path(self.tmp.name) / "q.md"
+        before = q.stat().st_size
+        context.add("q", "Map", "last words", now=T0)
+        growth = q.stat().st_size - before
+        pad = 8192 - growth - self.p.stat().st_size
+        with open(self.p, "a") as f:
+            f.write("- " + "x" * (pad - 3) + "\n")
+        self.assertEqual(self.p.stat().st_size, 8192 - growth)
+        r = self.cli("add", "--project", "p", "--section", "Map", "--", "last words")
+        self.assertEqual(self.p.stat().st_size, 8192)
+        self.assertEqual(len(r.stdout.splitlines()), 1)
+
+    def test_search_all_words_both_files(self):
+        # Mutation: any instead of all -> three rows.
+        self.p.write_text("# p: shared agent context\nLast curated: 2026-11-18\n\n## Map\n- usage tap row\n"
+                          "- usage only\n## Gotchas\n- nothing\n")
+        (Path(self.tmp.name) / "p.archive.md").write_text("# p\n\n## Decisions\n- Usage TAP archived\n")
+        self.assertEqual(context.search("p", ["usage", "tap"]),
+                         [("core", "Map", "- usage tap row"), ("archive", "Decisions", "- Usage TAP archived")])
+        self.assertEqual(context.entries(self.p.read_text())[-1], ("Gotchas", "- nothing"))
+
+    def test_search_no_archive_file(self):
+        self.p.write_text("## Map\n- usage tap\n")
+        self.assertEqual(context.search("p", ["usage"]), [("core", "Map", "- usage tap")])
+        self.assertEqual(context.search("nofile", ["x"]), [])
+
+    def test_search_cli(self):
+        self.p.write_text("## Map\n- usage tap\n")
+        r = self.cli("search", "--project", "p", "--", "usage", "tap")
+        self.assertEqual((r.returncode, r.stdout), (0, "[core] Map: - usage tap\n"))
+        r = self.cli("search", "--project", "p", "--", "zzz")
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", "context: no entries match\n"))
+
+
 if __name__ == "__main__":
     unittest.main()

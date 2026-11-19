@@ -17,6 +17,8 @@ before you report. Invoke each one with the Skill tool.
 Don't run `brainstorming`, and don't invoke `task-observer` or write to its log: put any skill
 findings in your final report instead. The design is settled.
 
+Before relearning something about a file, run `tmux-ctl context search <words>`: it searches the project's shared context and its archive.
+
 Keep changes to what the task needs. A pre-existing bug or a cleanup you notice is a follow-up in your
 report, not a change on this branch.
 
