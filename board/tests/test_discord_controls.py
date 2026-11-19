@@ -299,5 +299,35 @@ class FilesTest(Base):
         self.assertEqual(self.audit()[-1]["result"], "rejected")
 
 
+class DreamClickTest(Base):
+    CID = "ab:dream:revert:p:20261119-0300"
+
+    def click(self, name, cid, user="U1"):
+        self.event(name, {"type": "click", "custom_id": cid, "user": user, "message_id": "m", "channel_id": "c", "ts": 1})
+
+    def test_allowlisted_click_runs_and_is_audited(self):   # mutation: no ab:dream: branch -> audit says "ignored"
+        self.click("1-a.json", self.CID)
+        with mock.patch.object(dc.dream_discord, "click", return_value="reverted") as c:
+            self.step(Runner())
+        c.assert_called_once()
+        self.assertEqual(c.call_args.args[:3], ("p", "U1", self.CID))
+        self.assertEqual([(a["action"], a["target"], a["result"]) for a in self.audit()], [("click", self.CID, "reverted")])
+        self.assertEqual(list((self.d / "events").glob("*.json")), [])
+
+    def test_other_user_rejected_and_nothing_runs(self):
+        self.click("1-a.json", self.CID, user="X")
+        with mock.patch.object(dc.dream_discord, "click") as c:
+            self.step(Runner())
+        c.assert_not_called()
+        self.assertEqual(self.audit()[-1]["result"], "rejected")
+        self.assertEqual(list((self.d / "events").glob("*.json")), [])
+
+    def test_other_project_and_malformed(self):
+        self.click("1-a.json", "ab:dream:revert:other:20261119-0300")
+        self.click("2-b.json", "ab:dream:revert:p:nope")
+        self.step(Runner())
+        self.assertEqual([a["result"] for a in self.audit()], ["ignored", "unknown"])
+
+
 if __name__ == "__main__":
     unittest.main()

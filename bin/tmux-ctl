@@ -31,6 +31,8 @@
 #   tmux-ctl context search <words…>       entries of the core and the archive containing every word
 #   tmux-ctl context dream <project>|--all [--dry-run] [--force]  the nightly consolidation run (works outside tmux; --dry-run changes nothing)
 #   tmux-ctl context dream-report [project]  the last run's record, summary, proposals and contradictions
+#   tmux-ctl context dream-file [project]  file the last run's proposals as ideas and observer notes, each once (prints filed <n>)
+#   tmux-ctl context dream-revert <project> <run>  put back the core and archive of that run (prints reverted | already reverted | stale: … | unknown)
 #   tmux-ctl awake on [--queue | --pid N] [--lid]|off|status|sleeps <since> [--all]|lid-setup
 #                                          hold the Mac awake (caffeinate) while the queue runs (--queue: bound to the tmux server, survives a relay); sleeps lists the real sleep periods since a time (--all: every Sleep/Wake line)
 #   tmux-ctl approve <win> show           print the prompt's tool (T:) and its --expect lines (P:); read-only
@@ -291,8 +293,16 @@ if [[ "$cmd" == discord ]]; then   # no tmux needed
   source "${0:A:h:h}/tools/lib/discord.zsh"
   discord_cmd "$@"; exit $?
 fi
-if [[ "$cmd" == context && ( "$1" == dream || "$1" == dream-report ) ]]; then   # no tmux needed (launchd runs it)
+if [[ "$cmd" == context && ( "$1" == dream || "$1" == dream-report || "$1" == dream-file || "$1" == dream-revert ) ]]; then   # no tmux needed (launchd runs it)
   dsub="$1"; shift
+  if [[ "$dsub" == dream-file ]]; then
+    [[ -n "${1:-$FEEDKEY}" ]] || die 'usage: tmux-ctl context dream-file [project]'
+    python3 -I "${0:A:h:h}/board/dream.py" file "${1:-$FEEDKEY}"; exit $?
+  fi
+  if [[ "$dsub" == dream-revert ]]; then
+    [[ -n "$1" && -n "$2" ]] || die 'usage: tmux-ctl context dream-revert <project> <run>'
+    python3 -I "${0:A:h:h}/board/dream.py" revert "$1" "$2"; exit $?
+  fi
   if [[ "$dsub" == dream ]]; then
     [[ -n "$1" ]] || die 'usage: tmux-ctl context dream <project>|--all [--dry-run] [--force]'
     python3 -I "${0:A:h:h}/board/dream.py" run "$@"; exit $?
@@ -657,7 +667,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

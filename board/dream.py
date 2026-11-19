@@ -24,8 +24,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import context  # noqa: E402
-import discord_feed  # noqa: E402,F401  (Task 5's notify posts through it)
+import dream_actions  # noqa: E402
 import dream_check  # noqa: E402
+import dream_discord  # noqa: E402
 import dream_paths as P  # noqa: E402
 import metrics  # noqa: E402
 import relay  # noqa: E402
@@ -339,7 +340,8 @@ def record_metrics(root, rec):
 
 
 def notify(result):
-    """Task 5 posts to Discord here."""
+    """Post the night to the project's Discord channel (G11); `posted` is set on result for run.json."""
+    dream_discord.notify(result)
 
 
 def _json_safe_write(path, obj):
@@ -460,6 +462,11 @@ def _attempt(res, project, now, root, state, run_dir, run, dry_run):
     return None
 
 
+def _write_run_json(out, res):
+    keys = ("project", "run", "outcome", "check", "counts", "cost_usd", "tokens", "duration_s", "proposals", "contradictions", "posted")
+    _json_safe_write(out / "run.json", {k: res[k] for k in keys})
+
+
 def _finish(res, project, state, root, now, run_dir, run):
     """Bookkeeping of a real run: dream.json, out/ files, metrics, prune, notify. Errors here never fail the run."""
     out = Path(run_dir) / "out" if run_dir else None
@@ -481,9 +488,8 @@ def _finish(res, project, state, root, now, run_dir, run):
     try:
         if out and res["diff"] is not None:
             (out / "diff.txt").write_text(res["diff"])
-        keys = ("project", "run", "outcome", "check", "counts", "cost_usd", "tokens", "duration_s", "proposals", "contradictions", "posted")
         if out:
-            _json_safe_write(out / "run.json", {k: res[k] for k in keys})
+            _write_run_json(out, res)
     except OSError as e:
         print(f"dream: could not write run files: {e}", file=sys.stderr)
     try:
@@ -498,6 +504,8 @@ def _finish(res, project, state, root, now, run_dir, run):
             print(f"dream: prune failed: {e}", file=sys.stderr)
     try:
         notify(res)
+        if res["posted"] and out:
+            _write_run_json(out, res)
     except Exception as e:
         print(f"dream: notify failed: {e}", file=sys.stderr)
 
@@ -557,7 +565,22 @@ def main(argv=None, now=None):
     r.add_argument("--root")
     rp = sub.add_parser("report")
     rp.add_argument("project")
+    fp = sub.add_parser("file")
+    fp.add_argument("project")
+    fp.add_argument("run", nargs="?")
+    rv = sub.add_parser("revert")
+    rv.add_argument("project")
+    rv.add_argument("run")
     a = ap.parse_args(argv)
+    if a.cmd in ("file", "revert"):
+        try:
+            context.context_path(a.project)
+        except ValueError as e:
+            print(f"dream: {e}", file=sys.stderr)
+            return 2
+        result = dream_actions.file_proposals(a.project, a.run) if a.cmd == "file" else dream_actions.revert(a.project, a.run)
+        print(result)
+        return 1 if result == "busy" or result == "unknown" or result.startswith("stale") else 0
     if a.cmd == "report":
         try:
             context.context_path(a.project)

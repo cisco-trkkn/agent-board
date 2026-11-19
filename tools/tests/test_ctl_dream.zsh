@@ -41,6 +41,19 @@ out="$(TMUX= TMUX_PANE= $C context show 2>&1)"; rc=$?
 check "context show outside tmux still dies"  zsh -c '[[ $1 == *"not inside tmux"* ]]' _ "$out"
 check "help lists context dream"              sh -c "$C help | grep -q 'tmux-ctl context dream '"
 check "help lists context dream-report"       sh -c "$C help | grep -q 'tmux-ctl context dream-report'"
+check "help lists context dream-file"        sh -c "$C help | grep -q 'tmux-ctl context dream-file'"
+check "help lists context dream-revert"      sh -c "$C help | grep -q 'tmux-ctl context dream-revert'"
 check "help still ends at the blank line"     test "$($C help | tail -1)" = ""
+run="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"])' "$TC_CONTEXT_DIR/tt.dream.json")"
+out="$(TMUX= TMUX_PANE= $C context dream-file tt)"; rc=$?
+check "dream-file prints its result with TMUX unset"  test $rc -eq 0 -a "$out" = "no proposals"
+out="$(TMUX= TMUX_PANE= $C context dream-revert tt 20200101-0000)"; rc=$?
+check "dream-revert of an unknown run"        test $rc -eq 1 -a "$out" = "unknown"
+$C context dream-revert tt >/dev/null 2>&1; rc=$?
+check "dream-revert needs a run"              test $rc -ne 0
+out="$(TMUX= TMUX_PANE= $C context dream-revert tt $run)"
+check "dream-revert reverts the run"          test "$out" = "reverted"
+out="$(TMUX= TMUX_PANE= $C context dream-revert tt $run)"
+check "a second dream-revert changes nothing" test "$out" = "already reverted"
 rm -rf "$T"
 tt_done
