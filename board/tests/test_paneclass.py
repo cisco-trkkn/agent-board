@@ -271,6 +271,26 @@ class DialogFixturesTest(unittest.TestCase):
         rows = quoted + ["", "  3/14 tasks done · 1 in progress"] + [f"  ◻ Task {i}" for i in range(11)]
         self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
 
+    def test_teammate_divider_under_the_task_list_is_stripped_first(self):
+        # the last row of a pane with teammates is a status divider (real shape: approve/bash-teammate-divider.txt, `──…── @gate-tap ─`)
+        # mutation: drop the divider strip in _above_tasklist -> the list is not the last rows, the pane reads ready
+        rows = self.tall() + ["─" * 99 + " @gate-tap ─"]
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "waiting"))
+        rows = self.tall() + ["──── orchestrator @x ─"]   # fewer than 10 rule characters: not a divider for dialog.zsh either
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
+    QUOTED = [" Do you want to proceed?", " Esc to cancel · Tab to amend", "", "  0/14 tasks done · 1 in progress"]
+
+    def test_cursor_row_inside_the_list_means_it_is_not_a_task_list(self):
+        # mutation: drop the cursor check in _above_tasklist -> the rows are skipped and the prompt quoted above makes it waiting
+        rows = self.QUOTED + [f"  ◻ Task {i}" for i in range(6)] + ["  ❯ Task 6"] + [f"  ◻ Task {i}" for i in range(7, 14)]
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
+    def test_divider_inside_the_list_means_it_is_not_a_task_list(self):
+        # mutation: drop the divider check in _above_tasklist -> the rows are skipped and the prompt quoted above makes it waiting
+        rows = self.QUOTED + [f"  ◻ Task {i}" for i in range(6)] + ["  " + "─" * 40] + [f"  ◻ Task {i}" for i in range(7, 14)]
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
     def test_task_list_above_an_input_box_is_not_skipped(self):
         # mutation: drop the "only indented rows follow" check in _above_tasklist -> the prompt quoted above the list makes it waiting
         rows = ([" Do you want to proceed?", " ❯ 1. Yes", " Esc to cancel · Tab to amend", "", "  0/9 tasks done · 1 in progress"]
