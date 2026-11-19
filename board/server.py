@@ -337,6 +337,8 @@ def discord_leads(leads):
 
 def _overseer_sessions(every, rows_by):
     """[session] for the overseer's `claude` window, for line delivery only (build_state keeps it off the cards)."""
+    if not COMMENTS.pending(OVERSEER_SESSION):
+        return []   # no waiting line: skip the per-pane capture
     panes = []
     for f in every:
         if f[0] == OVERSEER_SESSION and f[3] == "claude":

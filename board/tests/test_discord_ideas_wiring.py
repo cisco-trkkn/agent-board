@@ -138,6 +138,8 @@ class OverseerDelivery(Base):
     def test_overseer_session_gets_delivery_but_no_card(self):   # mutation: deliver_comments(out) only
         layout = "\n".join([row("proj", "claude", "%1"), row("overseer", "claude", "%9")])
         got = []
+        server.COMMENTS.add_line("overseer", "[Discord] /ideas abcd1234: group")   # a waiting line is what makes the overseer deliverable
+        self.addCleanup(lambda: server.COMMENTS.pending("overseer") and server.COMMENTS.deliver("overseer", "%9", "claude", "idle", lambda p, t: None))
         with mock.patch.object(server, "tmux", return_value=layout), \
              mock.patch.object(server, "capture_panes", side_effect=lambda ids: {i: [] for i in ids}), \
              mock.patch.object(server, "cached_worktrees", return_value=None), \
@@ -159,6 +161,30 @@ class OverseerDelivery(Base):
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][0], "%9")
         self.assertIn("/ideas abcd1234", sent[0][1])
+
+    def _build(self):
+        layout = "\n".join([row("proj", "claude", "%1"), row("overseer", "claude", "%9")])
+        calls = []
+
+        def fake_tmux(*a):
+            calls.append(a)
+            return layout + server.MARK + "%1\nhello"
+        with mock.patch.object(server, "tmux", side_effect=fake_tmux), \
+             mock.patch.object(server, "cached_worktrees", return_value=None), \
+             mock.patch.object(server.relay, "root_for", side_effect=lambda p: p), \
+             mock.patch.object(server, "deliver_comments"):
+            server._last["panes"] = ["%1"]
+            server.build_state()
+        return calls
+
+    def test_idle_overseer_costs_no_extra_tmux_call(self):   # mutation: _overseer_sessions captures without checking pending
+        self.assertFalse(server.COMMENTS.pending("overseer"))
+        self.assertEqual(len(self._build()), 1)
+
+    def test_pending_overseer_line_still_captures_its_pane(self):   # mutation: early return always []
+        server.COMMENTS.add_line("overseer", "[Discord] /ideas abcd1234: group")
+        self.addCleanup(lambda: server.COMMENTS.pending("overseer") and server.COMMENTS.deliver("overseer", "%9", "claude", "idle", lambda p, t: None))
+        self.assertGreater(len(self._build()), 1)
 
 
 if __name__ == "__main__":

@@ -159,6 +159,8 @@ def post(doc, now, dry_run=False):
             if not (isinstance(g, dict) and all(isinstance(g.get(k), str) for k in ("title", "emoji", "project"))):
                 skipped += len(raw)
                 continue
+            title = " ".join(g["title"].split())[:80]
+            emoji = g["emoji"].strip()[:8]
             rows = []
             for i in raw:
                 row = avail.get(i) if isinstance(i, str) else None
@@ -168,7 +170,7 @@ def post(doc, now, dry_run=False):
                 seen.add(i)
                 rows.append(row)
             if rows:
-                groups.append((g, rows))
+                groups.append((dict(g, title=title, emoji=emoji), rows))
         if dry_run:
             return 0, f"would post {len(groups)} groups, skipped {skipped}"
         bridge = r.get("bridge", "_ops")
@@ -254,7 +256,7 @@ def click(user, cid, add_line, now):
         try:
             discord_feed.outbox_write(_box(st.get("bridge", "_ops")), edit)
         except (OSError, ValueError):
-            return "error: edit failed"
+            return f"{result} (edit failed)"   # the action ran; only the message edit was lost
     return result
 
 

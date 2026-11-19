@@ -116,6 +116,21 @@ class TestPost(Base):
             {"label": "Park", "style": 2, "custom_id": f"ab:ideas:park:{req}:0"},
             {"label": "Drop", "style": 4, "custom_id": f"ab:ideas:drop:{req}:0"}])
 
+    def test_title_newlines_collapsed_and_capped(self):   # mutation: title used raw
+        req = self.ask()
+        i = self.ids("alpha")
+        rc, msg = di.post(self.doc(req, [self.grp(i[:1], title="a\n  b\n"), self.grp(i[1:], title="x" * 2500)]), 1010.0)
+        self.assertEqual(rc, 0, msg)
+        ops = self.outbox()
+        self.assertTrue(ops[0]["text"].startswith("🔧 **a b** · alpha"))
+        self.assertTrue(ops[1]["text"].startswith("🔧 **" + "x" * 80 + "** · alpha"))
+
+    def test_emoji_stripped_and_capped(self):   # mutation: emoji used raw
+        req = self.ask()
+        rc, msg = di.post(self.doc(req, [self.grp(self.ids("alpha"), emoji=" \n" + "e" * 30)]), 1010.0)
+        self.assertEqual(rc, 0, msg)
+        self.assertTrue(self.outbox()[0]["text"].startswith("e" * 8 + " **T**"))
+
     def test_posts_to_request_bridge(self):
         req = self.ask(bridge="alpha")
         self.assertEqual(di.post(self.doc(req, [self.grp(self.ids("alpha"))]), 1010.0)[0], 0)
@@ -311,10 +326,18 @@ class TestClickEditFailure(TestClick):
     def test_edit_failure_after_next_still_marks_done(self):
         self.lines.clear()
         with mock.patch.object(discord_feed, "outbox_write", side_effect=OSError("disk full")):
-            self.assertEqual(di.click("u1", self.cid("next"), self.add, 1020.0), "error: edit failed")
+            self.assertEqual(di.click("u1", self.cid("next"), self.add, 1020.0), "queued (edit failed)")
         self.assertEqual(len(self.lines), 1)
         self.assertEqual(di.click("u1", self.cid("next"), self.add, 1030.0), "unknown")
         self.assertEqual(len(self.lines), 1)
+
+    def test_edit_write_failure_after_action_reports_result(self):   # mutation: always "error: edit failed"
+        with mock.patch.object(discord_feed, "outbox_write", side_effect=OSError("disk full")):
+            self.assertEqual(di.click("u1", self.cid("park"), self.add, 1020.0), "parked (edit failed)")
+
+    def test_precheck_failure_still_plain_error(self):   # mutation: precheck returns "... (edit failed)"
+        with mock.patch.object(discord_feed, "_check", side_effect=ValueError("bad")):
+            self.assertEqual(di.click("u1", self.cid("park"), self.add, 1020.0), "error: edit failed")
 
     def test_failure_before_action_leaves_buttons_live(self):
         def boom(*a):
