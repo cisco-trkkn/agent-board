@@ -129,7 +129,7 @@ class ShapeTest(Base):
         self.assertEqual(self.buttons(op), [
             {"label": "1. Apple", "style": 2, "custom_id": f"ab:dlg:{key}:1"},
             {"label": "2. Pear", "style": 2, "custom_id": f"ab:dlg:{key}:2"},
-            {"label": "3. Type something.", "style": 2, "custom_id": f"ab:dlg:{key}:3"},
+            # mutation: no free-text filter in _buttonable -> a `3. Type something.` button appears here (Reply covers that row)
             {"label": "4. Chat about this", "style": 2, "custom_id": f"ab:dlg:{key}:4"},
             {"label": "Reply", "style": 1, "custom_id": f"ab:dlg:{key}:reply"}])
         self.assertEqual(r.calls, [[TC, "dialog", "%12", "show"]])
@@ -163,14 +163,21 @@ class ShapeTest(Base):
         op = self.ops()[0]
         self.assertTrue(op["text"].startswith("❓ proj · win: Claude has written up a plan and is ready to execute. Would you like to proceed?\n"))
         self.assertEqual([(b["label"], b["style"]) for b in self.buttons(op)],
-                         [("1. Yes, and use auto mode", 4), ("2. Yes, manually approve edits", 2), ("3. Tell Claude what to change", 2), ("Reply", 1)])
+                         [("1. Yes, and use auto mode", 4), ("2. Yes, manually approve edits", 2), ("Reply", 1)])   # no button for the free-text row 3
+
+    def test_free_text_label_keeps_its_button_when_the_dialog_takes_no_text(self):
+        # mutation: filter the free-text labels whatever `other` says -> the row has neither a button nor a Reply
+        show = dict(SINGLE, other=False)
+        dd.scan([sess()], 100.0, Runner({"%12": show}))
+        self.assertEqual([b["label"] for b in self.buttons(self.ops()[0])], ["1. Apple", "2. Pear", "3. Type something.", "4. Chat about this"])
 
     def test_multi_select_writes_toggles_submit_and_reply(self):
         dd.scan([sess()], 100.0, Runner({"%12": MULTI}))
         key = key_of("%12", MULTI["lines"])
+        # no toggle for a row press cannot toggle (tools/lib/dialog.zsh: `option 5 is not a checkbox of this multi-select`).
+        # mutation: drop the `Chat about this` filter for multi-selects in _buttonable -> a t5 toggle; drop the free-text one -> t4
         self.assertEqual([(b["label"], b["style"], b["custom_id"]) for b in self.buttons(self.ops()[0])], [
             ("1. Apple", 2, f"ab:dlg:{key}:t1"), ("2. Pear", 2, f"ab:dlg:{key}:t2"), ("3. Plum", 2, f"ab:dlg:{key}:t3"),
-            ("4. Type something", 2, f"ab:dlg:{key}:t4"), ("5. Chat about this", 2, f"ab:dlg:{key}:t5"),
             ("Submit", 1, f"ab:dlg:{key}:submit"), ("Reply", 1, f"ab:dlg:{key}:reply")])
 
     def test_no_reply_button_without_other(self):
@@ -181,7 +188,22 @@ class ShapeTest(Base):
     def test_multi_select_without_other_has_submit_and_no_reply(self):
         show = dict(MULTI, other=False)
         dd.scan([sess()], 100.0, Runner({"%12": show}))
-        self.assertEqual([b["custom_id"].rsplit(":", 1)[1] for b in self.buttons(self.ops()[0])], ["t1", "t2", "t3", "t4", "t5", "submit"])
+        self.assertEqual([b["custom_id"].rsplit(":", 1)[1] for b in self.buttons(self.ops()[0])], ["t1", "t2", "t3", "t4", "submit"])
+
+    def test_cap_and_more_count_run_on_the_buttonable_rows(self):
+        # 21 options plus the free-text row: 21 buttonable rows, so 20 buttons and `1 more`.
+        # mutation: count the more line on every option (len(opts) of the unfiltered list) -> `… 2 more options`
+        opts = [{"n": n, "label": f"opt {n}", "permanent": False} for n in range(1, 22)] + [{"n": 22, "label": "Type something.", "permanent": False}]
+        dd.scan([sess()], 100.0, Runner({"%12": dict(SINGLE, options=opts)}))
+        op = self.ops()[0]
+        self.assertEqual(op["text"].split("\n")[-1], "… 1 more options: answer at the terminal")
+        self.assertEqual(len([b for b in self.buttons(op) if not b["custom_id"].endswith(":reply")]), 20)
+
+    def test_20_buttonable_rows_plus_the_free_text_row_have_no_more_line(self):
+        # mutation: count the more line on the unfiltered option list -> a `… 1 more options` line
+        opts = [{"n": n, "label": f"opt {n}", "permanent": False} for n in range(1, 21)] + [{"n": 21, "label": "Type something.", "permanent": False}]
+        dd.scan([sess()], 100.0, Runner({"%12": dict(SINGLE, options=opts)}))
+        self.assertEqual(self.ops()[0]["text"].count("more options"), 0)
 
     def test_23_options_give_20_buttons_and_the_more_line(self):
         show = dict(SINGLE, options=[{"n": n, "label": f"opt {n}", "permanent": False} for n in range(1, 24)])
@@ -264,6 +286,7 @@ class RoutingTest(Base):
         self.assertEqual([str(p) for p in Path(self.tmp.name).rglob("outbox/*.json")], [])
 
     def test_half_configured_ops_is_not_configured(self):
+        # mutation: target_dir takes "ops bridge.json exists" for configured -> a dialog op in the ops dir
         tc_env.ops_dir().mkdir(parents=True)
         (tc_env.ops_dir() / "bridge.json").write_text(json.dumps({"command_center": "1"}))
         dd.scan([sess(name="peer")], 100.0, Runner({"%12": SINGLE}))
@@ -412,6 +435,7 @@ class RawTest(Base):
         self.assertEqual(self.state(), {})
 
     def test_raw_pane_whose_show_errors_keeps_its_key(self):
+        # mutation: in _sweep treat ERROR like "no dialog" (drop ERROR from the kept set) -> an edit op, and the key is gone
         dd.scan(self.raw(), 100.0, Runner({}))
         dd.scan(self.raw(), 110.0, Runner({"%12": RuntimeError("dialog: %12 is in copy mode")}))
         self.assertEqual([o["op"] for o in self.ops()], ["dialog"])
@@ -424,13 +448,31 @@ class RawTest(Base):
         self.assertEqual(list(self.state()), [key_of("%12", SINGLE["lines"])])
 
     def test_waiting_pane_with_an_empty_preview_posts_nothing(self):
+        # mutation: _raw returns its stand-in even with no preview rows -> a dialog op with an empty code block
         dd.scan(self.raw(preview=[]), 100.0, Runner({}))
         self.assertEqual(self.ops(), [])
 
     def test_show_output_that_is_not_a_dialog_object_is_an_error_not_a_raw_post(self):
+        # mutation: _show returns None (no dialog) for output that is not JSON or not a dialog object -> a raw post per bad output
         for out in ("not json", "[]", json.dumps({"kind": "question", "lines": []}), json.dumps({"kind": "question", "lines": ["a"], "options": "x"})):
             dd.scan(self.raw(), 100.0, Runner({"%12": out}))
         self.assertEqual(self.ops(), [])
+
+    def test_show_result_without_kind_is_an_error(self):
+        # mutation: drop the `kind` check in _show -> the op is written on every scan (the record never is: KeyError in _post)
+        nokind = {k: v for k, v in SINGLE.items() if k != "kind"}
+        with mock.patch.object(sys, "stderr"):
+            for now in (100.0, 110.0, 120.0):
+                dd.scan([sess()], now, Runner({"%12": nokind}))
+        self.assertEqual(self.ops(), [])
+        self.assertEqual(self.state(), {})
+
+    def test_show_result_without_kind_keeps_a_known_key(self):
+        # mutation: drop the `kind` check in _show -> the key of the kind-less lines differs or the sweep edits the message
+        dd.scan([sess()], 100.0, Runner({"%12": SINGLE}))
+        dd.scan([sess()], 110.0, Runner({"%12": {"question": "x", "lines": ["other"], "options": []}}))
+        self.assertEqual([o["op"] for o in self.ops()], ["dialog"])
+        self.assertEqual(list(self.state()), [key_of("%12", SINGLE["lines"])])
 
 
 class ConcurrencyTest(Base):
@@ -521,7 +563,7 @@ class RealShowTest(unittest.TestCase):
         ops = [json.loads(f.read_text(encoding="utf-8")) for f in sorted((tc_env.discord_dir("tt") / "outbox").glob("*.json"))]
         self.assertEqual([o["key"] for o in ops], [key_of(ids["win"], SINGLE["lines"]), key_of(ids["idle"], ["x"])])   # the fake's lines are the real ones
         self.assertTrue(ops[0]["text"].startswith("❓ tt · win: Which fruit?\n"))
-        self.assertEqual([len(r) for r in ops[0]["rows"]], [4, 1])   # four options, then Reply
+        self.assertEqual([len(r) for r in ops[0]["rows"]], [3, 1])   # Apple, Pear, Chat about this; then Reply for the free-text row
         self.assertTrue(ops[1]["text"].startswith("❓ tt · idle: (dialog not parsed)"))
         st = json.loads((tc_env.agent_base() / "dialogs" / "state.json").read_text(encoding="utf-8"))["dialogs"]
         self.assertEqual({k: st[ops[0]["key"]]["show"][k] for k in ("kind", "question", "options", "multi", "other")},

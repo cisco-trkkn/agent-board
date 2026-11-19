@@ -250,6 +250,33 @@ class DialogFixturesTest(unittest.TestCase):
                 self.assertEqual(self.status(p), ("claude", "ready"))
         print(f"dialog fixtures checked: {len(waiting)} waiting, {len(ready)} ready, {len(waiting) + len(ready)} in all", file=sys.stderr)
 
+    def tall(self, n=14):
+        """EXTENDED fixture (hand-made rows): the real lead-tasklist-more-lines.txt with n more `◻` task rows appended in the
+        capture's own row format, so the prompt's footer is more than 12 rows above the bottom."""
+        rows = server._rows((self.FX / "approve" / "lead-tasklist-more-lines.txt").read_text(encoding="utf-8"))
+        self.assertEqual(rows[-1].strip(), "◻ Delta")
+        return rows + [f"  ◻ Task {i}" for i in range(n)]
+
+    def test_prompt_above_a_long_task_list_is_waiting(self):
+        # mutation: classify takes rows[-12:] without _above_tasklist -> ready (and "working" stays unaffected)
+        rows = self.tall()
+        self.assertFalse(paneclass.WAITING_RE.search("\n".join(rows[-12:])))   # the plain 12-row tail holds only task rows
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "waiting"))
+        self.assertEqual(paneclass.classify("claude", rows, False, mod="ready"), ("claude", "waiting"))
+        self.assertEqual(paneclass.classify("claude", rows + ["     … +13 pending"], False), ("claude", "waiting"))
+
+    def test_idle_pane_with_a_long_task_list_stays_ready(self):
+        # mutation: read rows[-30:] instead of skipping the list -> the quoted prompt 20 rows up makes it waiting
+        quoted = ["⏺ The pane showed:", " Do you want to proceed?", " ❯ 1. Yes", " Esc to cancel · Tab to amend"] + [f"⏺ later output {i}" for i in range(14)]
+        rows = quoted + ["", "  3/14 tasks done · 1 in progress"] + [f"  ◻ Task {i}" for i in range(11)]
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
+    def test_task_list_above_an_input_box_is_not_skipped(self):
+        # mutation: drop the "only indented rows follow" check in _above_tasklist -> the prompt quoted above the list makes it waiting
+        rows = ([" Do you want to proceed?", " ❯ 1. Yes", " Esc to cancel · Tab to amend", "", "  0/9 tasks done · 1 in progress"]
+                + [f"  ◻ Task {i}" for i in range(9)] + ["─" * 78, "❯ ", "─" * 78, "  Opus 5.5 · ctx 4% · 5h 16%", "  ⏸ manual mode on"])
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
 
 class InputTextTest(unittest.TestCase):
     RULE = "─" * 78

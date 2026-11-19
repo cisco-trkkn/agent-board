@@ -44,7 +44,7 @@ def _show(run, pane):
         d = json.loads(out)
     except ValueError:
         return ERROR
-    if not (isinstance(d, dict) and isinstance(d.get("lines"), list) and d["lines"] and all(isinstance(l, str) for l in d["lines"])
+    if not (isinstance(d, dict) and isinstance(d.get("kind"), str) and isinstance(d.get("lines"), list) and d["lines"] and all(isinstance(l, str) for l in d["lines"])
             and isinstance(d.get("options", []), list) and all(isinstance(o, dict) and "n" in o for o in d.get("options", []))):
         return ERROR
     return d
@@ -80,10 +80,22 @@ def _button(key, suffix, label, style):
     return {"label": label[:LABEL_MAX], "style": style, "custom_id": f"ab:dlg:{key}:{suffix}"}
 
 
+FREE_TEXT = ("Type something.", "Type something", "Tell Claude what to change")   # the free-text rows, as tools/lib/dialog.zsh names them
+CHAT = "Chat about this"   # in a multi-select it is not a checkbox: `dialog press` refuses to toggle it
+
+
+def _buttonable(show):
+    """The options that get a button: not the free-text row when the dialog takes text (Reply covers it), and in a multi-select
+    not the `Chat about this` row either, so no button is one `tmux-ctl dialog … press` would refuse."""
+    multi, other = bool(show.get("multi")), bool(show.get("other"))
+    return [o for o in show.get("options") or []
+            if not (other and o.get("label") in FREE_TEXT) and not (multi and o.get("label") == CHAT)]
+
+
 def message(key, head, show):
-    """(text, rows) of the dialog message: the header, the dialog's lines in a code block, one button per option (a toggle for a
-    multi-select, red for a permanent row), then Submit for a multi-select and Reply when the dialog takes free text."""
-    opts = show.get("options") or []
+    """(text, rows) of the dialog message: the header, the dialog's lines in a code block, one button per buttonable option (a
+    toggle for a multi-select, red for a permanent row), then Submit for a multi-select and Reply when the dialog takes free text."""
+    opts = _buttonable(show)
     multi = bool(show.get("multi"))
     buttons = [_button(key, f"t{o['n']}" if multi else str(o["n"]), f"{o['n']}. {o.get('label', '')}",
                        4 if o.get("permanent", True) and not multi else 2) for o in opts[:OPTIONS_MAX]]

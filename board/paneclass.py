@@ -139,12 +139,31 @@ def is_claude_cmd(cmd):
     return bool(VERSION_RE.match(cmd)) or "claude" in cmd.lower()
 
 
+TASKS_HEAD_RE = re.compile(r"^ +\d+/\d+ tasks done")
+TASKS_ROW_RE = re.compile(r"^  +\S")
+
+
+def _above_tasklist(rows):
+    """rows without a task list drawn as the last rows: a `N/M tasks done` row followed only by rows indented by two or more
+    (the rule of tasklist() in tools/lib/dialog.zsh). A session with tasks draws the list under an open prompt's footer, so the
+    prompt can sit any number of rows above the bottom; above an input box the list is not the last rows and stays."""
+    for n in range(len(rows) - 1, -1, -1):
+        if TASKS_HEAD_RE.match(rows[n]):
+            if not all(TASKS_ROW_RE.match(r) for r in rows[n + 1:]):
+                return rows
+            n -= 1
+            while n >= 0 and not rows[n].strip():
+                n -= 1
+            return rows[:n + 1]
+    return rows
+
+
 def classify(cmd, rows, bell, mod=None):
     """kind: claude | shell | program ; status: waiting | working | ready | idle | running.
     mod: the pane's fresh agent-status state (mod_states()), preferred over pane text for a claude pane."""
     is_claude = is_claude_cmd(cmd)
     # Claude draws its prompts and spinner at the bottom; older scrollback may quote prompt text.
-    tail = "\n".join(rows[-12:])
+    tail = "\n".join(_above_tasklist(rows)[-12:])
     if cmd in SHELLS:
         return "shell", "idle"
     if is_claude:
