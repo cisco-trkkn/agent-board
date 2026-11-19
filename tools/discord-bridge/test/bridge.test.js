@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createBridge } = require('../bridge');
+const { createBridge, DLG_RE } = require('../bridge');
 const { FakeClient, fakeInteraction, fakeMessage, fakeReaction, fakeReply } = require('./fake-client');
 
 const TOKEN = 'TESTTOKEN.abc123.SECRETSECRETSECRET';
@@ -726,10 +726,10 @@ test('a presence op without a non-empty string text goes to failed/', async () =
 // ---- dialog op, confirm step, toggles, replies ----
 const KEY = 'p12-0123456789abcdef';
 const ID = (suffix) => `ab:dlg:${KEY}:${suffix}`;
-test('dialog custom-id grammar: the sample ids the Python side reuses', () => {
-  const RE = /^ab:dlg:(p[0-9]+-[0-9a-f]{16}):(t?[0-9]{1,2}|submit|reply)(?::(confirm|cancel))?$/;
-  for (const id of [ID('1'), ID('2:confirm'), ID('2:cancel'), ID('t3'), ID('submit'), ID('reply')]) assert.ok(RE.test(id), id);
-  assert.deepStrictEqual([ID('1'), ID('t3'), ID('submit'), ID('reply'), ID('2:confirm'), ID('2:cancel')].length, 6);
+test('dialog custom-id grammar: the sample ids the Python side reuses match the bridge DLG_RE', () => {
+  // Mutation: break DLG_RE (e.g. drop the `t?`) -> a sample id stops matching and this test fails.
+  for (const id of [ID('1'), ID('2:confirm'), ID('2:cancel'), ID('t3'), ID('submit'), ID('reply')]) assert.ok(DLG_RE.test(id), id);
+  for (const id of [ID('x'), ID('t3:cancel:x'), 'ab:dlg:p12-0123456789abcde:1', 'ab:dlg:q12-0123456789abcdef:1']) assert.ok(!DLG_RE.test(id), id);
 });
 const btn = (suffix, style, label) => ({ label, style, custom_id: ID(suffix) });
 const dlg = (extra = {}) => ({ op: 'dialog', key: KEY, text: 'Pick one', mention_user: false, rows: [[btn('1', 1, '1. Yes'), btn('2', 4, '2. Always')]], ...extra });
@@ -832,6 +832,15 @@ test('toggle: updates in place, flips only that button 2<->3, no event', async (
   await s.bridge.onInteraction(j);
   const want2 = toggleRows(); want2[0].components[1].style = 2;
   assert.deepStrictEqual(j.updates[0].components, want2);
+});
+
+test('click on the t3 sample id toggles button 3 in place', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const rows = plainRows([[btn('t3', 2, 'C')]]);
+  const i = fakeInteraction({ customId: ID('t3'), user: 'U1', component: { style: 2, label: 'C' }, components: rows });
+  await s.bridge.onInteraction(i);
+  assert.strictEqual(i.updates[0].components[0].components[0].style, 3);
+  assert.deepStrictEqual(events(s), []);
 });
 
 test('submit: one click event with picks = style-3 toggles ascending', async () => {

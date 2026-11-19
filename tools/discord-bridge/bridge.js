@@ -641,5 +641,5 @@ function main() {
   client.login(token).catch((e) => { log(`login failed: ${scrub(e?.message)}`); process.exit(1); });
 }
 
-module.exports = { createBridge, readToken };
+module.exports = { createBridge, readToken, DLG_RE };
 if (require.main === module) main();
