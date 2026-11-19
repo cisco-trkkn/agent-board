@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import json
+import re
 import os
 import stat
 import subprocess
@@ -248,8 +249,39 @@ class FileTest(Base):
     def test_observer_note_written(self):
         A.file_proposals("p")
         f = next(self.obs.glob("*.md"))
-        self.assertTrue(f.read_text().strip())
+        self.check_note(f, "0001")
         self.assertIn("spec-a", f.read_text())
+
+    def check_note(self, f, prefix):
+        """The shape the task-observer log requires: frontmatter (id = the file's NNNN prefix, status open, non-empty
+        siblings_checked, quoted prose values) then Issue / Suggested improvement / Principle."""
+        t = f.read_text()
+        head, body = t.split("\n---\n", 1)
+        self.assertTrue(head.startswith("---\n"), t)
+        fm = dict(l.split(":", 1) for l in head.splitlines()[1:] if re.match(r"^[a-z_]+:", l))
+        self.assertEqual(int(fm["id"]), int(prefix))
+        self.assertEqual(fm["status"].strip(), "open")
+        self.assertTrue(fm["siblings_checked"].strip().startswith('"'))
+        for k in ("title", "area", "session_context"):
+            self.assertRegex(fm[k].strip(), r'^".+"$')
+        self.assertRegex(fm["date"].strip(), r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(body, r"(?s)\*\*Issue:\*\*.*\*\*Suggested improvement:\*\*.*\*\*Principle:\*\*")
+
+    def test_real_observer_script_makes_a_valid_note(self):   # one unpatched run of the deciding external command
+        import glob, pwd
+        home = pwd.getpwuid(os.getuid()).pw_dir   # HOME is patched to a temp dir; the plugin copy is read, never written
+        found = glob.glob(os.path.join(home, ".claude/plugins/**/task-observer/scripts/new-observation.sh"), recursive=True)
+        if not found:
+            self.skipTest("no task-observer script under ~/.claude/plugins")
+        os.environ["TC_OBSERVER_SCRIPT"] = max(found, key=os.path.getmtime)
+        ws = self.tmp / "ws"
+        (ws / "skill-observations/observation-log/archive").mkdir(parents=True)
+        os.environ["TASK_OBSERVER_WORKSPACE"] = str(ws)
+        self.assertEqual(A.file_proposals("p"), "filed 3")
+        notes = list((ws / "skill-observations/observation-log").glob("*.md"))
+        self.assertEqual(len(notes), 1)
+        self.check_note(notes[0], notes[0].name[:4])
+        self.assertTrue(notes[0].name.startswith("0001-dream-"))
 
     def test_observer_timeout_is_ten_seconds(self):
         os.environ["TC_OBSERVER_SCRIPT"] = str(self.tmp / "slow.sh")

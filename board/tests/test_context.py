@@ -299,5 +299,13 @@ class ArchiveAndSearchTest(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", "context: no entries match\n"))
 
 
+class AppendMissingTest(unittest.TestCase):
+    def test_appends_to_the_end_of_each_section(self):
+        text = context.skeleton("p")
+        out = context.append_missing(text, [("Gotchas", "- g · 2026-11-01"), ("Map", "- m · 2026-11-02")])
+        self.assertEqual([(s, l) for s, l in context.entries(out)], [("Map", "- m · 2026-11-02"), ("Gotchas", "- g · 2026-11-01")])
+        self.assertEqual(context.append_missing(out, [("Map", "- m · 2026-11-02")]).count("- m ·"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

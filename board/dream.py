@@ -250,17 +250,6 @@ def run_model(run_dir, project, now):
     return None, info
 
 
-def append_missing(text, rows):
-    """`text` with each (section, line) of `rows` that it lacks appended at the end of its section (G8's re-append).
-    Never call context.add for this inside context.locked: lockf is per process and a nested add drops the lock."""
-    have = {l for _, l in context.entries(text)}
-    for section, line in rows:
-        if line not in have:
-            text = context._insert(text, section, line)
-            have.add(line)
-    return text
-
-
 def _restore(project, run, core_before, had_archive):
     """Put both live files back from the backups; plain writes, never os.replace (that is what may have failed)."""
     context.context_path(project).write_bytes(P.backup_core(project, run).read_bytes())
@@ -294,7 +283,7 @@ def commit(project, snapshot, new_core, new_archive, run, run_dir):
             extra = [(s, l) for s, l in rows if l not in snap_lines]
             if not extra:
                 return "files changed during the run", None, None
-            new_core = append_missing(new_core, extra)
+            new_core = context.append_missing(new_core, extra)
         P.backups_dir().mkdir(parents=True, exist_ok=True)
         P.backup_core(project, run).write_text(live_core)
         P.backup_archive(project, run).write_text(live_arch or "")

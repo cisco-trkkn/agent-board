@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,15 +27,6 @@ def _atomic(path, text):
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(text)
     os.replace(tmp, path)
-
-
-def _append_missing(text, rows):
-    have = {l for _, l in context.entries(text)}
-    for section, line in rows:
-        if line not in have:
-            text = context._insert(text, section, line)
-            have.add(line)
-    return text
 
 
 def revert(project, run):
@@ -61,7 +53,7 @@ def revert(project, run):
         live_arch = ap.read_text() if ap.is_file() else None
         kept = {l for _, l in context.entries(after.read_text())}
         extra = [(s, l) for s, l in context.entries(live_core) if l not in kept]
-        new_core = _append_missing(bc.read_text(), extra)
+        new_core = context.append_missing(bc.read_text(), extra)
         arch_before = ba.read_text()
         for path, text in ((P.backups_dir() / f"{project}.md.{run}.pre-revert", live_core),
                            (P.backups_dir() / f"{project}.archive.md.{run}.pre-revert", live_arch or "")):
@@ -101,7 +93,37 @@ def _slug(text, ident):
     return f"dream-{words}-{ident[:6]}" if words else f"dream-{ident}"
 
 
-def _file_observer(script, p):
+def _note(path, p, run):
+    """The note the task-observer log requires (SKILL.md "File format"): frontmatter, then Issue / Suggested improvement /
+    Principle. The script created the empty file; `id` is copied from its NNNN- prefix. Prose values are double-quoted (JSON
+    strings are valid YAML)."""
+    q = json.dumps
+    m = re.match(r"(\d+)-", os.path.basename(path))
+    ev = "; ".join(str(e) for e in p.get("evidence", [])) or "none cited"
+    text = " ".join(str(p["text"]).split())
+    return "\n".join([
+        "---",
+        f"id: {int(m.group(1)) if m else 0}",
+        f"title: {q('Nightly memory run: ' + text[:100])}",
+        "status: open",
+        "type: internal",
+        "skill: []",
+        "proposes_skill: []",
+        "target_file: []",
+        'siblings_checked: "none — a proposal from the nightly memory run; no skill family was checked"',
+        'area: "agent workflow (nightly memory consolidation)"',
+        f"date: {time.strftime('%Y-%m-%d')}",
+        f"session_context: {q('nightly memory consolidation run ' + run)}",
+        "parked_until:", "resolved:", "resolution:",
+        "reference:",
+        "commands_verified: none",
+        "---", "",
+        f"**Issue:** The nightly memory run saw this recur across specs: {ev}.", "",
+        f"**Suggested improvement:** {text}", "",
+        "**Principle:** Evidence that recurs across specs is a candidate for a rule in the workflow, not only a line in the shared context.", ""])
+
+
+def _file_observer(script, p, run):
     """-> None when written, else the reason the proposal stays unfiled."""
     ws = os.environ.get("TASK_OBSERVER_WORKSPACE") or str(Path.home() / ".task-observer")
     try:
@@ -112,9 +134,8 @@ def _file_observer(script, p):
     out = (r.stdout.strip().splitlines() or [""])[-1]
     if r.returncode != 0 or not out.startswith("/"):
         return "script failed"
-    ev = "\n".join(f"- {e}" for e in p.get("evidence", []))
     with open(out, "a") as f:
-        f.write(f"{p['text']}\n\nEvidence (nightly memory run):\n{ev}\n")
+        f.write(_note(out, p, run))
     return None
 
 
@@ -165,7 +186,7 @@ def file_proposals(project, run=None):
                     skipped += 1
                     reason = "no task-observer script"
                     continue
-                why = _file_observer(script, p)
+                why = _file_observer(script, p, run)
                 if why:
                     skipped += 1
                     reason = why

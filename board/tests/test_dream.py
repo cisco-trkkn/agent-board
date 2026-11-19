@@ -579,13 +579,5 @@ class ReportTest(DreamBase):
             self.assertIn(s, out.getvalue())
 
 
-class AppendMissingTest(unittest.TestCase):
-    def test_appends_to_the_end_of_each_section(self):
-        text = "# p\nLast curated: 2026-01-01\n\n" + dream_check.SKELETON
-        out = dream.append_missing(text, [("Gotchas", "- g · 2026-11-01"), ("Map", "- m · 2026-11-02")])
-        self.assertEqual([(s, l) for s, l in context.entries(out)], [("Map", "- m · 2026-11-02"), ("Gotchas", "- g · 2026-11-01")])
-        self.assertEqual(dream.append_missing(out, [("Map", "- m · 2026-11-02")]).count("- m ·"), 1)
-
-
 if __name__ == "__main__":
     unittest.main()

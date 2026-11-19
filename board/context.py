@@ -133,6 +133,18 @@ def _insert(text, section, line, now=None):
     return out
 
 
+def append_missing(text, rows):
+    """`text` with each (section, line) of `rows` that it lacks appended at the end of its section.
+    The re-append of the nightly commit (G8) and of Revert. Call this, never `add`, inside `locked`: lockf is per process
+    and a nested `add` would drop the lock when it exits."""
+    have = {l for _, l in entries(text)}
+    for section, line in rows:
+        if line not in have:
+            text = _insert(text, section, line)
+            have.add(line)
+    return text
+
+
 def add(project, section, entry, now=None):
     if section not in SECTIONS:
         raise ValueError(f"unknown section {section!r}; one of: {', '.join(SECTIONS)}")
