@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": ["Read", "Grep", "Glob", "Edit(core.md)", "Edit(archive.md)", "Edit(out/**)"],
+    "deny": ["Bash", "WebFetch", "WebSearch", "Agent", "Skill", "NotebookEdit"]
+  }
+}
