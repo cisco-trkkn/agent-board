@@ -4,6 +4,23 @@ Date: 2026-11-10 · Stage 2 of `docs/superpowers/specs/2026-11-10-pcee-decomposi
 Related: `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` (run log, `metrics gate`),
 `claude/orchestrator.md` (Queue mode), `claude/skills/writing-plans-extras/SKILL.md`
 
+## Revised 2026-11-19
+
+The user decided on Discord, 2026-11-19 (numbers are the decision numbers of the revision; this block and the sections it
+names are the only changes to this spec):
+
+1. "Metrics: the built Python metrics stays in agent-board; porting to Node comes later." Stage 1 is built and merged
+   (`board/metrics.py`). `board/metrics.py` stays the only code that writes `runs.jsonl`.
+2. "The engine is Node.js in a new `engine/` folder of this repo, next to `tools/discord-bridge/`." The registry is code
+   in `engine/`, not `board/registry.py`.
+3. Spec order: this revision, then "remote means Discord-only", then phone escalation.
+7. "Planning in stage 2 stays with the lead (planner agents the lead starts); the engine takes it at stage 5."
+9. "`tmux-ctl registry …` and `tmux-ctl engine …` wrap Node the way `tmux-ctl metrics` wraps Python."
+10. "runs.jsonl has one writer": Python, with a file lock; Node calls `tmux-ctl metrics append <kind> …` for its own kinds.
+11. "SQLite: Node's built-in `node:sqlite`, `engines: node >= 22.13`." (The registry stores nothing in this stage.)
+12. "`engine/` has its own `package.json` and `node --test` suite; `install.sh` runs `npm ci` for it, and Node becomes a
+    required dependency." This spec ships the package and the install wording (section 8).
+
 ## Problem
 
 PCEE schedules plans from their manifests: what each plan depends on, writes and reads. Three of its premises are
@@ -33,8 +50,13 @@ what happened. Execution order and concurrency of implementation do not change.
   after the run, and one that was not an append counts as a manifest miss.
 - **K1's recall is measured on files that existed when the plan was written** (modified and appended). Recall on
   created files is reported, not gated.
-- **Queue order of 2026-11-10:** this spec runs third (after queue-metrics and fast-test-suite). The four specs
-  after it run with up-front plans and manifests; `pcee-engine` (stage 3) runs last, if K1 passes.
+- **Queue order:** the order of 2026-11-10 (this spec third, the next four with up-front plans) is obsolete: the
+  queue has changed. K1 counts the specs that actually run with manifests after this one, at least 4; the lead
+  names them at the first boundary after this spec merges. `pcee-engine` (stage 3) runs after them, if K1 passes.
+- **Where it lives (revision 2026-11-19):** the registry is Node code in `engine/` (section 8), called through
+  `tmux-ctl registry <sub>`. The built Python metrics stays; the registry never opens `runs.jsonl`.
+- **Planning stays with the lead** (revision 2026-11-19): planner agents are started by the lead as below; the engine
+  takes up-front planning over at stage 5.
 
 ## Design
 
@@ -63,12 +85,14 @@ Every plan carries one fenced block tagged `json:manifest` after its header:
   every plan gets a manifest, up front or just in time: the block's fields; every path in any task's `files` is
   in `writes` or `reads`; fixtures and docs the tasks will create are listed as `create`; when unsure between
   `modify` and `append`, write `modify`.
-- **Validation:** `tmux-ctl registry validate <plan>` checks the JSON, the modes against `base` (`create` paths
+- **Validation:** `tmux-ctl registry validate <plan>` (a wrapper over `engine/`, section 8) checks the JSON, the modes against `base` (`create` paths
   absent, the others present), and that the tasks' `files` are covered. Exit 0, or 1 with one line per defect.
 
 ### 2. Up-front planning
 
-One rule replaces "plan each spec when its turn comes" in Queue mode:
+Planning stays with the lead: the planner agents below are started by the lead, as today (revision 2026-11-19; the
+engine takes planning over at stage 5, with its own spec). One rule replaces "plan each spec when its turn comes" in
+Queue mode:
 
 > Before running the next spec, if any pending `Plan & run:` spec that has no entry gate (section 6) has no
 > plan yet, plan all of them up front.
@@ -115,9 +139,9 @@ Before a spec runs (its turn in the queue), in its own worktree:
 
 ### 4. Registry, graphs and waves
 
-`board/registry.py`, run through `tmux-ctl registry <sub>` as `tmux-ctl overview` runs its module. The registry
-is the set of manifests of a batch's plans, read from the plan files on their branches. Nothing is stored in a
-database in this stage.
+The registry is Node code under `engine/lib/registry/` (section 8), run through `tmux-ctl registry <sub>` the way
+`tmux-ctl metrics <sub>` runs `board/metrics.py`. The registry is the set of manifests of a batch's plans, read from
+the plan files on their branches. Nothing is stored in a database in this stage.
 
 - **Dependency graph:** an edge per `depends_on` entry, and per relation of kind `order`.
 - **Conflict graph**, per lock policy:
@@ -134,7 +158,8 @@ database in this stage.
   - `docs/superpowers/metrics/analysis/<batch>.md`: the manifest table, the two graphs as edge lists (relations
     from the cross-plan pass marked as such, with their `why`), clusters, waves per policy, hot files (written
     by three or more plans);
-  - one `analysis` line in the run log:
+  - one `analysis` line in the run log, appended by `tmux-ctl metrics append analysis --json '<object>'` (section 8:
+    the registry never opens `runs.jsonl`):
     `{"kind": "analysis", "batch": …, "specs": n, "waves": {"strict": n, "append": n, "writes_only": n},
     "parallelism": x, "parallelism_strict": x, "parallelism_writes_only": x, "appends_verified": bool,
     "clusters": n, "relations": n}`. A later line for the same batch supersedes an earlier
@@ -142,7 +167,10 @@ database in this stage.
 
 ### 5. What each run record gains, and prediction against outcome
 
-`metrics record` fills these when the spec's plan has a manifest:
+`metrics record` (Python) fills these when the spec's plan has a manifest. The manifest part is computed by Node:
+`metrics record` runs `tmux-ctl registry facts <spec> --base <sha> --head <sha>`, which prints one JSON object with
+`recall_existing`, `recall_created`, `append_violations`, `refreshes`, `stale_paths` and the manifest's `writes`,
+and copies it into the run line. One implementation, in `engine/`; `metrics record` keeps writing the line.
 
 - `manifest` is computed from the manifest's `writes` instead of the tasks' `files`, and gains
   `recall_existing` (of the touched files that existed at the spec's base, the share listed as `modify` or
@@ -188,6 +216,7 @@ analysis document:
   appends; the morning report runs it again, which is harmless) and then `tmux-ctl metrics gate <id>`. Exit 0: the spec is planned and run. Any other exit: the spec is not planned; its
   task is completed with `failed — gate <id>: <the command's output line>` and it is recorded with
   `metrics record … --outcome failed`.
+- `metrics gate` is the Python evaluator and reads the `analysis` line the registry appended through `metrics append`.
 - `analysis.parallelism` is the append-aware ratio, and K1 is `too early` until the batch's analysis line has
   `appends_verified` true (the gate's `where` for that condition), that is until `registry report` has run after
   the batch's specs.
@@ -207,6 +236,30 @@ A running lead keeps the rules it started with. So the plan's last task states, 
 after the merge: hand off to a fresh lead (`agent-board:handoff`; in Queue mode it relays without asking). The
 new lead starts with the new rules and applies the boundary rule before the next spec.
 
+### 8. Where it lives, and what the Python side gains (revision 2026-11-19)
+
+- **Layout.** `engine/` at the repository root, next to `tools/discord-bridge/`: `engine/package.json`
+  (`"private": true`, `"type": "commonjs"`, `"engines": {"node": ">=22.13"}`, `"scripts": {"test": "node --test
+  test/*.test.js"}`, no runtime dependency in this stage), `engine/bin/registry.js` (the entry `tmux-ctl registry`
+  runs), `engine/lib/registry/` (manifest, validate, graphs, waves, facts), `engine/test/`.
+- **CLI.** `tmux-ctl registry <validate|analyse|stale|report|facts>` is a zsh case in `bin/tmux-ctl` that runs
+  `node engine/bin/registry.js "$@"`, as `metrics)` runs `python3 -I board/metrics.py`. Exit codes are those of
+  sections 1 to 6. `tmux-ctl engine …` is added the same way by stage 3.
+- **Install.** `install.sh` runs `npm ci --omit=dev` in `engine/` as it does for the bridge, and `install.sh --check`
+  prints `node >= 22.13` as required (it prints `ok <path>` or fails the check). `docs/INSTALL.md` row for node
+  and npm changes from "optional; only the Discord bridge needs it" to "required: the engine (`engine/`) and the
+  Discord bridge (`tools/discord-bridge`)", version 22.13+ (the engine uses `node:sqlite`).
+- **One writer for `runs.jsonl`.** Only `board/metrics.py` writes the log, and `_append_to` takes an exclusive
+  `fcntl.flock` on a sibling lock file (`runs.jsonl.lock`) around each append. The registry and, later, the engine
+  never open the file. Python gains two subcommands:
+  - `tmux-ctl metrics append <kind> --json '<object>' [--batch <id>]`: validates that the object is a JSON object,
+    sets `kind`, refuses the stage 1 kinds (`batch`, `start`, `run`, `defect`, which have their own commands), and
+    appends under the lock. Exit 0, or 1 with one line.
+  - `tmux-ctl metrics has <kind> [--spec <spec>] [--batch <id>]`: exit 0 when the log holds a line of that kind for
+    them, else 1. It is how the engine checks that a record exists (stage 3, section 10.4) without reading the file.
+- **Records that stay with Python.** `metrics start`, `record`, `gate`, `compare`, `report`, `status` run as before.
+  Engine records are rare (per spec, per analysis); the engine's live state is its own SQLite (stage 3).
+
 ## Error handling
 
 - Analysis never blocks the queue: a `registry` command that fails prints one line (`registry: <sub>: <reason>`),
@@ -219,6 +272,8 @@ new lead starts with the new rules and applies the boundary rule before the next
 
 ## Testing
 
+- **Runner (revision 2026-11-19):** the registry's tests are `node --test` files under `engine/test/`, run by a job in
+  `tools/tests/all.zsh`; the Python side adds tests for `metrics append`, `metrics has` and the lock (section 8).
 - **Manifest:** parsing, each validation defect (bad JSON, a `create` path that exists, a `modify` path that does
   not, a task file not covered), on fixture plans.
 - **Graphs and waves:** unit tests per policy on small fixtures (append-only pairs, write against read, a hard
@@ -233,7 +288,10 @@ new lead starts with the new rules and applies the boundary rule before the next
   creates a path the manifest lists as `create`.
 - **Record fields:** `recall_existing` and `recall_created` on a scratch repository; `manifest_tokens` from a
   fixture usage database with `refresh-…` and `crossplan-…` agent rows.
-- **Gate:** the K1 file through `metrics gate` for pass, fail on each condition, and too early.
+- **Gate:** the K1 file through `metrics gate` for pass, fail on each condition, and too early; one fixture
+  `analysis` line, appended by `metrics append` from a Node test, read by `metrics gate`.
+- **Facts handoff:** `metrics record` against a scratch repository with `registry facts` stubbed by a fixture JSON and
+  by the real command; both give the same run line.
 - **Suites:** no new failures beyond those known on `main` when this runs.
 - **First live use:** the four specs after this one. Evidence, as a user gate in the morning report: four plans
   with valid manifests committed before the first of them ran, the analysis document with Prediction against
@@ -242,7 +300,7 @@ new lead starts with the new rules and applies the boundary rule before the next
 ## Out of scope
 
 - Any change to the order or concurrency of implementation; locks; the scheduler; SQLite; the worker pool
-  (stage 3 onward).
+  (stage 3 onward). Engine-run planning (stage 5). Porting `board/metrics.py` to Node (later). Any Discord path.
 - Read and write sets finer than files (modules, interfaces as lock targets): `produces` and `consumes` are
   recorded and shown, not used in the graphs, except through the cross-plan pass.
 - Semantic-conflict detection.

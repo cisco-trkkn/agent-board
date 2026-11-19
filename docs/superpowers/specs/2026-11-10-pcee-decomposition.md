@@ -8,6 +8,20 @@ Related: `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` (sub-projec
 This is not a spec to implement. It fixes the target, the order of the sub-projects and the checkpoints at which
 the build is adjusted or stopped. Each sub-project (stage) gets its own brainstorm, spec, plan and run.
 
+## Revised 2026-11-19
+
+The user decided on Discord, 2026-11-19 (only this block, the Status table and the two stage entries below change):
+
+- Stage 1 is built and merged: `board/metrics.py` (Python) stays in agent-board; porting to Node comes later. The
+  run log has one writer, `board/metrics.py`, with a file lock; other code calls `tmux-ctl metrics append|has`.
+- Stages 2 and 3 are Node.js code in a new `engine/` folder of this repository, next to `tools/discord-bridge/`
+  (`tmux-ctl registry …` and `tmux-ctl engine …` wrap Node as `tmux-ctl metrics` wraps Python). One engine process per
+  queue; `node:sqlite`; the engine is built behind a strategy interface (a pure function) and a backend interface
+  (tmux windows first, the Agent SDK later).
+- Stage 3 keeps the core, durable execution, the inbox and parking; approval holds and schedules move to stage 7.
+- Planning stays with the lead (planner agents) until stage 5, when the engine takes it.
+- Telegram is deleted. Order of the next specs: this revision, then "remote means Discord-only", then phone escalation.
+
 ## Status
 
 One row per stage (a stage is a sub-project below). The lead updates state, evidence and date at each morning
@@ -17,12 +31,13 @@ passes.
 
 | Stage | Spec | Gate | State | Evidence | Date |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` | — | queued (1st) | — | 2026-11-10 |
-| 2 | `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` | K1 | queued (3rd) | — | 2026-11-10 |
-| 3 | `docs/superpowers/specs/2026-11-10-pcee-engine-design.md` | K2 | queued (8th and 9th: two parts), entry gated by K1 | — | 2026-11-10 |
+| 1 | `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` | — | passed | merged: `board/metrics.py`, `tmux-ctl metrics`, `docs/superpowers/metrics/runs.jsonl` | 2026-11-19 |
+| 2 | `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` | K1 | queued (revised 2026-11-19: Node, `engine/`) | — | 2026-11-19 |
+| 3 | `docs/superpowers/specs/2026-11-10-pcee-engine-design.md` | K2 | queued (two parts, revised 2026-11-19: Node, interfaces), entry gated by K1 | — | 2026-11-19 |
 | 4 | — | K3 | not started | — | 2026-11-10 |
 | 5 | — | K4 | not started | — | 2026-11-10 |
 | 6 | — | — | not started | — | 2026-11-10 |
+| 7 | — | — | not started (Discord interface; takes approval holds and schedules from the engine spec) | — | 2026-11-19 |
 
 Stages 2 and 3 are specced now. Stages 4 to 6 are designed when their gates pass, from real results. Stage 3
 does not start unless K1 passes: its queue run checks `tmux-ctl metrics gate K1` before `writing-plans` and
@@ -88,7 +103,8 @@ metrics, the baseline from the queue already run, and the decision rule every ch
 
 ### 2. Plan registry, manifests and graphs: analysis only
 
-All queued specs are planned up front. Each plan gets a manifest. The dependency and conflict graphs, the clusters
+All queued specs are planned up front, by planner agents the lead starts (the engine takes planning over at stage 5).
+Each plan gets a manifest; the registry is Node code in `engine/`. The dependency and conflict graphs, the clusters
 and the predicted waves are computed and reported. The queue still runs as it does today, so this sub-project
 tests PCEE's premises before any engine exists.
 
@@ -114,8 +130,9 @@ the engine being built on it.
 
 ### 3. Execution state, scheduler and worker pool at concurrency 1
 
-SQLite execution state, the deterministic scheduler and disposable workers. The engine replaces the lead as the
-queue runner, in today's order, one spec at a time.
+SQLite execution state, the deterministic scheduler and disposable workers, as a Node.js engine in `engine/` behind
+a strategy interface and a backend interface. The engine replaces the lead as the queue runner, in today's order, one
+spec at a time.
 
 **Checkpoint K2:** tokens-per-task index at most 1.0 against baseline, and the lead share below the baseline's
 range (48 to 74%). If tokens per task rise, the engine is reworked or stopped.

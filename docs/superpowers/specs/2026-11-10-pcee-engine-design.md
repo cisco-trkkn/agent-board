@@ -4,7 +4,35 @@ Date: 2026-11-10 · Stage 3 of `docs/superpowers/specs/2026-11-10-pcee-decomposi
 Entry gate: K1
 Related: `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` (run log, decision rule, gates),
 `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` (manifests, up-front plans, entry gates),
-`claude/orchestrator.md` (Queue mode), `claude/worker.md`, `claude/skills/subagent-driven-development-extras/SKILL.md`
+`claude/orchestrator.md` (Queue mode), `claude/worker.md`, `claude/skills/subagent-driven-development-extras/SKILL.md`;
+`engine/` layout, install and the `metrics append|has` commands: registry spec section 8
+
+## Revised 2026-11-19
+
+The user decided on Discord, 2026-11-19 (this block and the sections it names are the only changes to this spec; text
+marked "moved to stage 7" stays in place as the design to carry):
+
+1. "Metrics: the built Python metrics stays in agent-board; porting to Node comes later." Stage 1 is built and merged.
+2. "The engine is Node.js in a new `engine/` folder of this repo, next to `tools/discord-bridge/`." Telegram is gone.
+3. Spec order: this revision, then "remote means Discord-only", then phone escalation.
+4. "One engine process per queue, started in the project's `-bg` window when a queue starts. A localhost API comes
+   later, when Discord needs it."
+5. "Stage 3 scope: the core plus durable execution, the inbox and parking (sections 10-12). Approval holds (13) and
+   schedules (14) move to stage 7."
+6. "Strategy = a pure function `(state, event) -> [commands]` that holds no state. Backend = an event source with
+   `start / close / resume`; tmux windows of agent-board first, the Agent SDK later. Tests use a fake backend."
+7. Planning stays with the lead; the engine takes it at stage 5.
+8. "The spec-driven strategy covers the job graph. Integrate (merge, revert, ledger, `metrics record`), the architect
+   pass, budgets and state are engine core, shared by every strategy."
+9. "`tmux-ctl registry …` and `tmux-ctl engine …` wrap Node the way `tmux-ctl metrics` wraps Python."
+10. "runs.jsonl has one writer": `board/metrics.py`, with a file lock (registry spec section 8). The engine never
+    opens the file: it calls `tmux-ctl metrics append|has|start|record|gate`.
+11. "SQLite: Node's built-in `node:sqlite`, `engines: node >= 22.13`."
+12. "`engine/` has its own `package.json` and `node --test` suite; `install.sh` runs `npm ci` for it, and Node becomes a
+    required dependency" (the registry spec's section 8 ships the package, the install step and the INSTALL.md wording).
+13. "Discord in stage 3 goes only through the existing file contracts (feed JSONL out, inbox rows in, written by the
+    board's Python controls)." The "remote means Discord-only" spec redesigns that next.
+14. "The engine-hold hook calls `node engine/bin/hold.js`. It moves with holds to stage 7."
 
 ## Problem
 
@@ -23,14 +51,19 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
 ## Decisions
 
 - **Engine process with SQLite state**; jobs as **disposable, visible workers**; today's review policy as **code**;
-  an **architect job** for a fixed list of escalation cases.
+  an **architect job** for a fixed list of escalation cases. (Revised 2026-11-19) The engine is a Node.js program in
+  `engine/`, **one process per queue**, built behind two interfaces from the start: the **strategy** (a pure function
+  `(state, event) -> [commands]`, holding no state; today's review policy is the `spec-driven` strategy) and the
+  **backend** (an event source with `start`, `close`, `resume`; tmux windows of agent-board first, the Agent SDK later).
+  State, integrate, the architect pass and budgets are **engine core**, shared by every strategy. SQLite is
+  `node:sqlite` (`engines: node >= 22.13`).
 - **Split queues** until K2 is decided: half the specs under the lead, half under the engine, assigned by code,
   one spec at a time.
 - **One spec, two plans in sequence:** part 1 `engine run <spec>` (one spec end to end), part 2 the queue runner.
 - **Durable execution, Temporal-shaped, in our own code** (user, 2026-11-13; sections 10 and 11): heartbeat and
   progress timeouts, retry policies as data, durable waits (`awaiting_you` parking, signals, timers), an
   intent/result journal for every side effect, a policy version per spec, and a replay check of the event log. No
-  Temporal server or SDK: the same SQLite file, standard library only, Temporal's names and shapes so a later move
+  Temporal server or SDK: the same SQLite file, Node's standard library only (`node:sqlite`), Temporal's names and shapes so a later move
   to Temporal (stage 4 or 5) is a mapping, not a redesign.
 - **Park, don't fail** (user, 2026-11-13): a case the engine may not decide alone parks the spec as `awaiting_you`
   and the queue moves on; an answered parked spec resumes before the next queued spec; still unanswered at the end
@@ -42,7 +75,8 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
   durable **inbox** that every wake-up source writes to and only the engine drains; **approval holds** that deny a
   stop-class tool call in a worker, park the spec, and resume the worker's session with a one-time pass when the
   user approves; **schedules** as rows in `timers`, fired by one launchd heartbeat (`engine wake`). The engine stays
-  a queue runner, not a process that runs all the time.
+  a queue runner, not a process that runs all the time. (Revised 2026-11-19) Of these, the inbox (section 12) is in
+  this stage; **approval holds (13) and schedules (14) are moved to stage 7** and are not built or tested here.
 
 ## How Queue mode runs this spec
 
@@ -73,15 +107,21 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
 
 - One SQLite database per project: `~/.local/state/agent-board/engine/<project>.sqlite` (`TC_ENGINE_DIR`
   overrides the directory; tests use it). Not the temporary directory. WAL mode; every state change is one
-  transaction that also appends its event.
+  transaction that also appends its event. Opened with `node:sqlite` (`DatabaseSync`). The engine writes no other
+  durable file of its own: it never opens `runs.jsonl` (it calls `tmux-ctl metrics …`, registry spec section 8).
 - Tables:
   - `specs`: spec id, queue position, runner (`lead` or `engine`), integration answer and push consent, batch id,
-    state, outcome, worktree, branch, plan path.
+    state, outcome, worktree, branch, plan path, `strategy` (default `spec-driven`) and `backend` (default
+    `claude-tmux`). Of the common contract's six fields (intent, strategy, constraints, ownership, verification,
+    lifecycle) these columns and the existing ones carry: intent = the spec and plan path, strategy, constraints =
+    integration answer, push consent and limits, ownership = runner, verification = the tasks' `verifyCommand`s,
+    lifecycle = state.
   - `jobs`: id, spec, kind, task number, tier, model, effort, state, attempt, brief path, report path, window and
     pane, base and head commits, start and end times.
   - `events`: append-only: time, spec, job, kind, detail. This is the ledger; `Ruling:` lines are events of kind
     `ruling`.
-  - `steps`, `timers`, `waits`, `retry_policies`: section 10; `inbox`: section 12; `holds`: section 13.
+  - `steps`, `timers`, `waits`, `retry_policies`: section 10; `inbox`: section 12; `holds`: section 13 (moved to
+    stage 7; no table in this stage).
   - `specs` also stores `policy_version` and `policy_hash` (section 10.5).
 - Spec states: `queued`, `planning`, `running`, `final_review`, `integrating`, `awaiting_you`, `done`. Job states:
   `pending`, `running`, `backoff`, `done`, `failed`, `escalated`.
@@ -92,6 +132,13 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
 
 #### 2. Workers
 
+- **Backend interface (revised 2026-11-19).** The engine talks to workers only through a backend: an object with
+  `start(job) -> handle`, `close(handle)` and `resume(handle, text)`, and an event source that emits
+  `{handle, type}` events: `started`, `status` (a state change such as `busy`, `ready`, `needs-you`, with its
+  timestamps), `report` (a report file appeared) and `gone` (the window or process ended). The engine never reads
+  tmux, agent-status files or panes itself. This stage ships the `claude-tmux` backend, described by the rest of this
+  section; a `fake` backend (scripted events, no process) serves the tests. The Agent SDK backend and a second
+  tool backend come later and need an adapter only.
 - One job is one fresh Claude in its own tmux window in the project's session, in the spec's worktree, started
   from a brief file on the model and effort its tier maps to (`docs/superpowers/model-routing.json`), with
   `claude/worker.md` as its rules. Nothing runs hidden.
@@ -103,8 +150,8 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
     "task": n, "text": "…"}]}`
   - architect: `{"decision": "proceed" | "retry_higher_tier" | "park" | "fail_spec", "ruling": "…",
     "cost_if_wrong": "…"}`
-- **Finish detection.** The engine reads the agent-status file whose `pane` is the worker's pane (the mod
-  already writes it). State `ready` with a valid report: the job is done and the engine kills that window by the
+- **Finish detection.** The `claude-tmux` backend reads the agent-status file whose `pane` is the worker's pane (the
+  mod already writes it) and emits it as `status` events. State `ready` with a valid report: the job is done and the engine kills that window by the
   pane id it started. `ready` with no valid report: one line typed with `tmux-ctl tell` naming the report path;
   a second `ready` without it fails the attempt. A window that is gone without a report fails the attempt.
 - **Waiting on the user.** A worker in `needs-you` is left alone (the board shows it) and every timeout clock of
@@ -118,7 +165,18 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
 #### 3. The job graph and its policy
 
 `engine run <spec>` takes a spec whose plan and manifest exist (stage 2) and compiles the plan's `.tasks.json`
-into jobs. Policy is code; it mirrors `subagent-driven-development` with the extras:
+into jobs. Policy is code; it mirrors `subagent-driven-development` with the extras.
+
+**Revised 2026-11-19: this policy is the `spec-driven` strategy.** A strategy is a pure function
+`(state, event) -> [commands]` that holds no state: `state` is a snapshot of one spec's rows, `event` one row of
+`events` (a job `done`, a green check result, a review verdict, a timer), and the commands are `start_job`,
+`run_check`, `record_ruling`, `park`, `escalate(case)`, `set_state` and `request_integrate`. The engine core applies
+the commands in one transaction with their events. Steps 1 to 6 below are the strategy. Step 7 (integrate), the
+architect pass of section 4, retry policies (10.2) and budgets are **engine core**, shared by every strategy: a strategy
+asks for them (`request_integrate`, `escalate`) and receives their results as events. Other strategies (stage 9) plug in
+the same way; this stage ships only `spec-driven`. Strategy tests feed events and compare commands; no process runs.
+
+The steps:
 
 1. **Stale check** by `tmux-ctl registry stale`; a `refresh` job when stale.
 2. **Per task, in the plan's order:** an `implement` job on the task's tier, its brief built from the task's text
@@ -136,15 +194,18 @@ into jobs. Policy is code; it mirrors `subagent-driven-development` with the ext
    findings are logged as deferred.
 6. **Final review** of the whole branch on the frontier tier, pointed at the deferred and parked events; one
    `fix wave` job for all its findings; one `re-review`. Residual findings are an escalation.
-7. **Integrate:** the project's test command (`docs/superpowers/engine.json`, `{"test": "<command>"}`; in this
+7. **Integrate (engine core, requested by the strategy):** the project's test command (`docs/superpowers/engine.json`, `{"test": "<command>"}`; in this
    repo `zsh tools/tests/all.zsh`; without the file, every task's `verifyCommand` in order) before the merge, the stored integration answer (`merge`, `mr`, `keep`),
    the tests after it on the merged result, the ledger archive (`docs/superpowers/ledgers/<plan-basename>/progress.md`
    rendered from the events, same line forms as today so `metrics record` reads it), `metrics record`, worktree
-   cleanup. The live-checkout checks of Queue mode apply: no merge while another session is mid-change there.
-   The engine never pushes without stored consent and never to `main` or `master`.
+   cleanup. `metrics start` and `metrics record` run as `tmux-ctl metrics …` (Python). The live-checkout checks of
+   Queue mode apply: no merge while another session is mid-change there. The engine never pushes without stored
+   consent and never to `main` or `master`.
 
 #### 4. The architect job
 
+- Engine core (revised 2026-11-19): a strategy returns `escalate(case)`; the engine runs the architect job and feeds
+  its decision back as an event, whatever the strategy.
 - A fresh session on the frontier tier, given a case file only: the task or finding text, the relevant report
   and review, the spec's Decisions section, and the spec's events so far.
 - Cases, and nothing else: fix rounds exhausted; an implementer reporting `blocked`; a verify command red after
@@ -160,6 +221,9 @@ into jobs. Policy is code; it mirrors `subagent-driven-development` with the ext
   never a reset) and keeps the branch.
 
 #### 5. Commands (part 1)
+
+`tmux-ctl engine <sub>` is a zsh case in `bin/tmux-ctl` that runs `node engine/bin/engine.js "$@"`, as `metrics)` runs
+`python3 -I board/metrics.py` (revised 2026-11-19). Exit codes are the ones stated here.
 
 | Command | Does |
 | --- | --- |
@@ -182,8 +246,10 @@ clone, with no lead turn in between.
   `tmux-ctl metrics batch start --config upfront-seq --config engine-c1 <specs>` (the metrics spec's assignment
   by hash, gated specs left out), then `tmux-ctl engine enqueue <spec> --runner lead|engine --integration … [--push]
   --batch <id>` for every spec in queue order, then `tmux-ctl engine start`.
-- `engine start` runs the engine as a long-lived process in a window `engine` of the hidden `<project>-bg`
-  session. It takes the specs in queue order, one at a time:
+- `engine start` runs the engine as one Node process per queue, in a window `engine` of the hidden `<project>-bg`
+  session; it exits after the morning report, and `engine start` is how the next queue starts it again. It has no
+  network listener in this stage: a localhost API comes later, when Discord needs it (revised 2026-11-19). It takes
+  the specs in queue order, one at a time:
   - runner `engine`: `engine run` as in part 1;
   - runner `lead`: it types one line into the lead's window, `[Engine] your turn: <spec>`, and waits for
     `tmux-ctl engine done <spec> --outcome <outcome>`, which the lead runs after its usual finishing step.
@@ -205,8 +271,9 @@ clone, with no lead turn in between.
   `tmux-ctl artifact`.
 - The lead's part of the report: its own specs' rulings, which it appends when the engine's line arrives, and
   the Status table update.
-- The engine stamps `metrics start` and `metrics record` for its specs. Records gain `control_tokens`: the
-  lead's attributed tokens plus the spec's architect jobs (found by window name), and `control_share`.
+- The engine stamps `metrics start` and `metrics record` for its specs by running `tmux-ctl metrics start|record`.
+  Records gain `control_tokens`: the lead's attributed tokens plus the spec's architect jobs (found by window name),
+  and `control_share`; `metrics record` (Python) computes both from the usage index (revised 2026-11-19).
 - `docs/superpowers/metrics/configs/engine-c1.md`: `{"id": "engine-c1", "baseline": false, "targets":
   [{"metric": "tokens_per_task", "max": 1.0}, {"metric": "control_share", "max": 0.5}]}`. For a baseline record
   `control_share` is its `lead_share`.
@@ -249,8 +316,9 @@ transaction with its event, as section 1 requires.
 
 ##### 10.1 Heartbeat and progress timeouts
 
-The heartbeat is the worker pane's agent-status file (the mod writes `updatedAt` every few seconds while the
-process lives, and `state`, `tool`, `lastToolAt`, `turnStartedAt`). Per running job, each tick:
+The heartbeat is the backend's `status` events; for `claude-tmux` they come from the worker pane's agent-status file
+(the mod writes `updatedAt` every few seconds while the process lives, and `state`, `tool`, `lastToolAt`,
+`turnStartedAt`), and the fields below are read from the latest event (revised 2026-11-19). Per running job, each tick:
 
 | Timeout | Fires when | Then |
 | --- | --- | --- |
@@ -319,7 +387,7 @@ writes `done` with the result. Kinds and their checks, run on resume for every r
 | `close_window` | the pane is gone |
 | `merge` | the branch head is an ancestor of the integration target |
 | `revert`, `commit_report`, `commit_ledger` | a commit on the target carries the trailer `Engine-Step: <key>` |
-| `metrics_start`, `metrics_record` | `runs.jsonl` has the record for the spec id and batch |
+| `metrics_start`, `metrics_record` | `tmux-ctl metrics has start --spec <id> --batch <id>` (or `has run`) exits 0 (the engine never opens `runs.jsonl`) |
 | `push` | the remote ref equals the recorded local sha (`git ls-remote`) |
 | `worktree_remove` | the worktree path is gone from `git worktree list` |
 
@@ -329,7 +397,7 @@ writes `done` with the result. Kinds and their checks, run on resume for every r
 
 ##### 10.5 Policy version
 
-- `engine.py` holds `POLICY_VERSION` (an integer, raised whenever section 3's or 10's behaviour changes); `policy_hash`
+- `engine/lib/policy.js` holds `POLICY_VERSION` (an integer, raised whenever section 3's or 10's behaviour changes); `policy_hash`
   is the sha256 of the loaded `engine.json` (or of `{}` without the file). Both are stored on the spec when it
   starts running.
 - On resume, a spec whose stored version or hash differs from the current one parks with the question
@@ -373,14 +441,16 @@ engine is its only reader. This replaces the `signals` table.
   writers use `INSERT OR IGNORE`, so a repeated event is one row.
 - **Writers** insert one row and exit; none calls the engine or writes another table:
   - `user`: `tmux-ctl engine signal …` (`source_id` a fresh uuid) and the Discord controls' buttons (`source_id` the
-    interaction id, so a double tap counts once). Section 10.3's signal rules are unchanged; they now apply when the
+    interaction id, so a double tap counts once). In stage 3 Discord reaches the engine only through the existing file
+    contracts: the board's Python controls (`board/discord_controls.py`) run `tmux-ctl engine signal` for a button
+    and never write the database (revised 2026-11-19; the "remote means Discord-only" spec redesigns this). Section 10.3's signal rules are unchanged; they now apply when the
     row is drained.
   - `timer`: the tick moves each due `timers` row in, `source_id` `<timer id>@<due_at>`.
   - `worker`: the tick reads each running job's agent-status file and inserts one row per change of `state`, or when
     the file goes stale or the window goes away, `source_id` `<pane>:<state>:<updatedAt>`. Sections 2 and 10.1 act on
     these rows instead of reading the files themselves.
-  - `approval`: the hold hook (section 13).
-  - `schedule`: `engine wake` (section 14).
+  - `approval`: the hold hook (section 13; moved to stage 7, no writer in this stage).
+  - `schedule`: `engine wake` (section 14; moved to stage 7, no writer in this stage).
 - **Drain:** each tick, after the timer and worker rows are in, every `new` row is handled oldest first, each in one
   transaction that sets it `done` (or `dropped`, with the reason, when it no longer applies: an answer for a spec that
   is not waiting, a status change for a job already finished) and appends its event. Rows that arrive during a job wait
@@ -390,11 +460,14 @@ engine is its only reader. This replaces the `signals` table.
 
 #### 13. Approval holds (Part 1)
 
+**Moved to stage 7 (revised 2026-11-19): not built or tested in this stage; the text below stays as the design to
+carry.** The hook runs as `node engine/bin/hold.js`, not as a shell script.
+
 Added 2026-11-16. Claude Code's `defer` decision for `PreToolUse` only works in `claude -p` with one tool call per turn
 (hooks reference), and engine workers are visible interactive windows, so a held call is denied and later retried
 under a one-time pass.
 
-- **Hook:** `claude/hooks/engine-hold.sh`, a `PreToolUse` hook that does nothing unless `ENGINE_JOB` is set (the engine
+- **Hook:** `claude/hooks/engine-hold.sh` (a thin shell entry that runs `node engine/bin/hold.js`), a `PreToolUse` hook that does nothing unless `ENGINE_JOB` is set (the engine
   sets it, with `ENGINE_DIR`, for every worker it starts). It matches the call against `engine.json` key `holds`, a list
   of `{"tool": "<name>", "pattern": "<regex on the command or path>", "outside_worktree": true|false}`. Defaults: Bash
   `git push`; Bash `git reset --hard`, `git branch -D`, `git clean`; Bash `rm -r…` on a path outside the worktree;
@@ -418,6 +491,9 @@ under a one-time pass.
 - The hook never answers a permission prompt and never allows a call it did not hold.
 
 #### 14. Schedules (Part 2)
+
+**Moved to stage 7 (revised 2026-11-19): not built or tested in this stage; the text below stays as the design to
+carry.**
 
 Added 2026-11-16. Recurring jobs live in the engine's `timers` table and are fired by one launchd heartbeat; the
 engine still runs only for a queue or a short pass.
@@ -460,6 +536,12 @@ engine still runs only for a queue or a short pass.
 
 ## Testing
 
+- **Runner (revised 2026-11-19):** `node --test` files under `engine/test/`, one job in `tools/tests/all.zsh`; the
+  Python additions (`metrics append`, `metrics has`, the lock) are tested in `board/tests`. Tests use the `fake` backend
+  (scripted events), not a process, except the real runs below.
+- **Strategy:** table tests of `(state, event) -> [commands]` for every edge of section 3, no database and no backend.
+- **Backend conformance:** one suite run against `fake` and `claude-tmux` (scratch tmux server): `start`, `close`,
+  `resume`, and each event type.
 - **Compiler and transitions:** unit tests with a fake worker (a script that writes a report and status block
   and exits) for every edge of section 3: bounce, third red, review pass, findings and fix rounds, round 5
   exhausted, batch review, final review with and without findings, each architect decision, each integration
@@ -497,12 +579,12 @@ engine still runs only for a queue or a short pass.
   first in one tick; three user answers arriving during a job handled together on the next tick; an inbox writer
   (`engine signal`) never writing any table but `inbox`; the engine killed mid-drain resumes without handling a row
   twice; `rebuild --check` exits 0 after a drain.
-- **Holds (section 13):** a fake worker making each default hold pattern's call is denied with the hold id and the
+- **Holds (section 13; moved to stage 7, not run in this stage):** a fake worker making each default hold pattern's call is denied with the hold id and the
   spec parks with the exact call as its question; a call inside the worktree is not held; `approve` resumes the
   session (a fake `claude --resume` records its arguments) and the hook allows exactly that call once, then denies a
   second identical call; a pass older than 1 h is refused; `deny` resumes with the note; an unresumable session gets
   a fresh worker with the answer; the hook does nothing outside an engine worker (`ENGINE_JOB` unset).
-- **Schedules (section 14):** each rule form's next occurrence (including across a DST change); a wake after a missed
+- **Schedules (section 14; moved to stage 7, not run in this stage):** each rule form's next occurrence (including across a DST change); a wake after a missed
   day fires once and moves to the next future occurrence; `skip_if_weekly_usage` skips and logs; a wake while the
   engine lock is held only inserts the inbox row; a wake with no lock runs the job in a scratch `<project>-bg` and
   exits; `schedule migrate` against fixture plists in a temporary `LaunchAgents` directory (never the real one).
@@ -511,6 +593,8 @@ engine still runs only for a queue or a short pass.
 ## Out of scope
 
 - Concurrency above 1; locks and clusters; the merge queue and change packages; adaptive concurrency.
+- Approval holds and schedules (sections 13 and 14: stage 7); a second backend, other strategies, strategy switching,
+  the localhost API and any Discord path beyond the file contracts (stages 7 to 10); porting `board/metrics.py` to Node.
 - The board as a view of engine state beyond `tmux-ctl engine status` (the tasks window keeps showing the
   lead's task list; the lead mirrors the queue's `Plan & run:` tasks from the `[Engine]` lines).
 - Engine-run planning: plans and the cross-plan pass stay with stage 2's planners under the lead.
@@ -522,8 +606,8 @@ engine still runs only for a queue or a short pass.
 
 Every event the engine appends to its `events` table is also appended, in the same transaction's aftermath (after
 commit, best effort, never failing the job), as one line of `${TC_STATE}/feed/<project>.jsonl` in the feed schema of
-`docs/superpowers/specs/2026-11-11-discord-bridge-visibility-design.md` §11, with `tier` from this map: `fail_spec`,
+`docs/superpowers/specs/2026-11-11-discord-bridge-visibility-design.md` §11 (the engine's Node code writes the file; the
+board's Python `board/discord_feed.py` reads it), with `tier` from this map: `fail_spec`,
 `engine_error` → critical; a job or ruling that needs the user → decision; job done, review verdict, merge → progress;
 everything else → routine. When the engine runs a spec, the board stops deriving that spec's progress events from task
-lists (the engine is the source), so nothing is posted twice. If the Discord specs have not merged when this runs,
-write the file anyway; it has no reader yet.
+lists (the engine is the source), so nothing is posted twice.
