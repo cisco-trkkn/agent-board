@@ -229,6 +229,28 @@ class SpinnerLayoutsTest(unittest.TestCase):
         self.assertEqual(self.cls(rows), ("claude", "waiting"))
 
 
+class DialogFixturesTest(unittest.TestCase):
+    """Every real captured dialog screen classifies as waiting (TC_PROMPT_RE), so discord_dialogs.scan sees its pane.
+    Rows are read the way the board reads a pane: server._rows (right-stripped, trailing empty rows dropped)."""
+    FX = HERE.parent / "tools" / "tests" / "fixtures"
+
+    def status(self, path):
+        return paneclass.classify("claude", server._rows(path.read_text(encoding="utf-8")), False)
+
+    def test_dialog_fixtures_are_waiting_and_idle_ones_stay_ready(self):
+        waiting = sorted((self.FX / "dialogs").glob("*.txt")) + [
+            self.FX / "approve" / n for n in ("bash-git.txt", "write.txt", "bash-teammate-divider.txt", "lead-tasklist-more-lines.txt")]
+        ready = [self.FX / "approve" / n for n in ("no-prompt.txt", "after-yes.txt")]
+        self.assertEqual(len(waiting), 11)   # 7 dialogs + 4 permission prompts: a fixture that is gone must not pass quietly
+        for p in waiting:
+            with self.subTest(fixture=p.name):
+                self.assertEqual(self.status(p), ("claude", "waiting"))
+        for p in ready:   # mutation: add `❯` alone to TC_PROMPT_RE -> both fail
+            with self.subTest(fixture=p.name):
+                self.assertEqual(self.status(p), ("claude", "ready"))
+        print(f"dialog fixtures checked: {len(waiting)} waiting, {len(ready)} ready, {len(waiting) + len(ready)} in all", file=sys.stderr)
+
+
 class InputTextTest(unittest.TestCase):
     RULE = "─" * 78
     # rows captured read-only from a live Claude Code 2.1.301 lead pane (empty input, agent list below)
