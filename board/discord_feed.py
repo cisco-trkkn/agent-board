@@ -29,6 +29,16 @@ _last_ms = 0
 _ms_lock = threading.Lock()   # the overview thread and the notifier sink both write
 
 
+def _check_rows(rows):
+    """At most 5 rows of at most 5 {label, style, custom_id}; custom_id at most 100 characters."""
+    if not (isinstance(rows, list) and len(rows) <= 5 and all(
+            isinstance(r, list) and len(r) <= 5 and all(
+                isinstance(b, dict) and set(b) == {"label", "style", "custom_id"} and isinstance(b["label"], str)
+                and isinstance(b["custom_id"], str) and len(b["custom_id"]) <= 100 and type(b["style"]) is int
+                for b in r) for r in rows)):
+        raise ValueError("rows must be at most 5 lists of at most 5 {label, style, custom_id}")
+
+
 def _check(op):
     if not isinstance(op, dict):
         raise ValueError("op must be a dict")
@@ -38,7 +48,8 @@ def _check(op):
               "thread": ({"op", "key", "title"}, set()),
               "archive": ({"op", "key"}, set()),
               "prompt": ({"op", "key", "window", "tool", "lines", "tier", "mention_user"}, set()),
-              "edit": ({"op", "key", "text"}, set()),
+              "edit": ({"op", "key", "text"}, {"rows"}),
+              "dialog": ({"op", "key", "text", "rows", "mention_user"}, set()),
               "presence": ({"op", "text"}, set()),
               "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"})}
     if kind not in shapes:
@@ -47,7 +58,7 @@ def _check(op):
     keys = set(op)
     if not need <= keys or keys - need - opt:
         raise ValueError(f"bad keys for {kind}: {sorted(keys)}")
-    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons"}:
+    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons", "rows"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
     if kind == "presence" and (not op["text"] or len(op["text"]) > PRESENCE_MAX):
@@ -59,6 +70,10 @@ def _check(op):
             raise ValueError("mention_user must be a bool")
         if not (isinstance(op["lines"], list) and all(isinstance(l, str) for l in op["lines"])):
             raise ValueError("lines must be a list of strings")
+    if "rows" in op:
+        _check_rows(op["rows"])
+    if kind == "dialog" and not isinstance(op["mention_user"], bool):
+        raise ValueError("mention_user must be a bool")
     if kind == "approval":
         if op["kind"] not in APPROVAL_KINDS:
             raise ValueError(f"kind {op['kind']!r} is not an approval kind")
@@ -105,7 +120,7 @@ def _enforce_cap(box):
             op = {}
         infos.append((f, op))
     for victim in ([f for f, o in infos if o.get("op") == "card"]
-                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive", "prompt", "edit", "approval") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
+                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive", "prompt", "edit", "approval", "dialog") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
         if over <= 0:
             break
         try:

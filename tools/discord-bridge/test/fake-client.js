@@ -111,10 +111,12 @@ function fakeReaction({ emoji, message, partial = false }) {
 }
 
 // A fake interaction: a component click or other. ephemeral: the clicked message is an ephemeral reply
-// (flags 64); values: the picked options of a select menu. reply/followUp/update are recorded in replies.
-function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer, values, ephemeral = false } = {}) {
-  const i = { customId, user: { id: user }, message: { id: messageId, flags: ephemeral ? 64 : 0 }, channelId, replies: [], updates: [], followUps: [], deferred: 0 };
+// (flags 64); values: the picked options of a select menu; component: the clicked button {style, label};
+// components: the clicked message's rows (plain {type:1, components:[{type:2, style, label, custom_id}]}). reply/followUp/update are recorded in replies.
+function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer, values, ephemeral = false, component, components } = {}) {
+  const i = { customId, user: { id: user }, message: { id: messageId, flags: ephemeral ? 64 : 0, ...(components ? { components } : {}) }, channelId, replies: [], updates: [], followUps: [], deferred: 0 };
   if (values) i.values = values;
+  if (component) i.component = component; // the clicked button: {style, label}
   i.deferUpdate = async () => { if (onDefer) onDefer(); i.deferred++; };
   i.reply = async (x) => { i.replies.push(x); };
   i.followUp = async (x) => { i.followUps.push(x); };
@@ -143,4 +145,9 @@ function fakeModal({ customId, fields = {}, user = 'U1' } = {}) {
   return i;
 }
 
-module.exports = { fakeCommand, fakeModal, FakeClient, fakeInteraction, fakeMessage, fakeReaction };
+module.exports = { fakeCommand, fakeModal, FakeClient, fakeInteraction, fakeMessage, fakeReaction, fakeReply };
+
+// A messageCreate message: authorId/bot, content, the replied-to message id (ref).
+function fakeReply({ id = 'r1', authorId = 'U1', bot = false, content = 'hi', ref = 'm1' } = {}) {
+  return { id, author: { id: authorId, bot }, content, reference: ref ? { messageId: ref } : null };
+}

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createBridge } = require('../bridge');
-const { FakeClient, fakeInteraction, fakeMessage, fakeReaction } = require('./fake-client');
+const { FakeClient, fakeInteraction, fakeMessage, fakeReaction, fakeReply } = require('./fake-client');
 
 const TOKEN = 'TESTTOKEN.abc123.SECRETSECRETSECRET';
 let seq = 0;
@@ -374,10 +374,10 @@ test('interactions: other customId is ignored (no file, no reply)', async () => 
   assert.strictEqual(i.deferred, 0); assert.deepStrictEqual(i.replies, []);
 });
 
-test('messages are ignored: the bridge registers no message listener', () => {
+test('attach wires one interactionCreate and one messageCreate listener', () => {
   const s = setup();
   s.bridge.attach();
-  assert.strictEqual(s.client.listenerCount('messageCreate'), 0);
+  assert.strictEqual(s.client.listenerCount('messageCreate'), 1);
   assert.strictEqual(s.client.listenerCount('interactionCreate'), 1);
 });
 
@@ -721,4 +721,182 @@ test('a presence op without a non-empty string text goes to failed/', async () =
   await s.bridge.tick();
   assert.strictEqual(s.failed().filter((n) => n.endsWith('.json')).length, 3);
   assert.deepStrictEqual(s.client.presences, []);
+});
+
+// ---- dialog op, confirm step, toggles, replies ----
+const KEY = 'p12-0123456789abcdef';
+const ID = (suffix) => `ab:dlg:${KEY}:${suffix}`;
+test('dialog custom-id grammar: the sample ids the Python side reuses', () => {
+  const RE = /^ab:dlg:(p[0-9]+-[0-9a-f]{16}):(t?[0-9]{1,2}|submit|reply)(?::(confirm|cancel))?$/;
+  for (const id of [ID('1'), ID('2:confirm'), ID('2:cancel'), ID('t3'), ID('submit'), ID('reply')]) assert.ok(RE.test(id), id);
+  assert.deepStrictEqual([ID('1'), ID('t3'), ID('submit'), ID('reply'), ID('2:confirm'), ID('2:cancel')].length, 6);
+});
+const btn = (suffix, style, label) => ({ label, style, custom_id: ID(suffix) });
+const dlg = (extra = {}) => ({ op: 'dialog', key: KEY, text: 'Pick one', mention_user: false, rows: [[btn('1', 1, '1. Yes'), btn('2', 4, '2. Always')]], ...extra });
+const plainRows = (rows) => rows.map((r) => ({ type: 1, components: r.map((b) => ({ type: 2, style: b.style, label: b.label, custom_id: b.custom_id })) }));
+
+test('dialog op in project mode: sent to the home channel with the rows, id kept in dialogs', async () => {
+  const s = setup();
+  s.put(dlg());
+  await s.bridge.tick();
+  const sent = s.client.callsOf('send')[0];
+  assert.strictEqual(sent.target, 'C1');
+  assert.strictEqual(sent.payload.content, 'Pick one');
+  assert.deepStrictEqual(sent.payload.components, plainRows(dlg().rows));
+  assert.strictEqual(s.st().dialogs[KEY], 'm1');
+  assert.deepStrictEqual(s.files(), []);
+});
+
+test('dialog op: mention_user prepends <@user>, text cut to 2000, 200 newest ids kept', async () => {
+  const s = setup();
+  s.put(dlg({ mention_user: true, text: 'x'.repeat(3000) }));
+  await s.bridge.tick();
+  const p = s.client.callsOf('send')[0].payload;
+  assert.strictEqual(p.content.length, 2000);
+  assert.ok(p.content.startsWith('<@U1> xxx'));
+  assert.deepStrictEqual(p.allowedMentions, { users: ['U1'] });
+  for (let n = 0; n < 205; n++) { s.put(dlg({ key: `p${n}-0123456789abcdef`, rows: [] })); }
+  await s.bridge.tick();
+  assert.strictEqual(Object.keys(s.st().dialogs).length, 200);
+  assert.ok(!(KEY in s.st().dialogs));
+});
+
+test('dialog op in ops mode goes to #approvals, not the command center', async () => {
+  const s = setup({ ops: true });
+  fs.writeFileSync(path.join(s.dir, 'bridge.json'), JSON.stringify({ command_center: 'CC', approvals: 'AP', user: 'U1' }));
+  s.put(dlg());
+  await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('send')[0].target, 'AP');
+});
+
+test('edit finds a dialog key: with rows keeps those components, without removes them', async () => {
+  const s = setup();
+  s.put(dlg()); await s.bridge.tick();
+  const rows = [[btn('submit', 3, 'Submit')]];
+  s.put({ op: 'edit', key: KEY, text: 'Picked', rows }); await s.bridge.tick();
+  let e = s.client.callsOf('edit').pop();
+  assert.strictEqual(e.target, 'm1');
+  assert.deepStrictEqual([e.payload.content, e.payload.components], ['Picked', plainRows(rows)]);
+  s.put({ op: 'edit', key: KEY, text: 'Done' }); await s.bridge.tick();
+  e = s.client.callsOf('edit').pop();
+  assert.deepStrictEqual(e.payload.components, []);
+});
+
+test('click on a style-4 option: ephemeral confirm step, no event', async () => {
+  // Mutation: write the click event at once for style 4 -> the "no events" assertion fails.
+  const s = setup(); allow(s, ['U1']);
+  const i = fakeInteraction({ customId: ID('2'), user: 'U1', component: { style: 4, label: '2. Always allow npm' } });
+  await s.bridge.onInteraction(i);
+  assert.deepStrictEqual(events(s), []);
+  assert.strictEqual(i.replies.length, 1);
+  const r = i.replies[0];
+  assert.strictEqual(r.content, 'this allows Always allow npm from now on');
+  assert.strictEqual(r.flags, 64);
+  assert.deepStrictEqual(r.components, [{ type: 1, components: [
+    { type: 2, style: 4, label: 'Confirm', custom_id: ID('2:confirm') },
+    { type: 2, style: 2, label: 'Cancel', custom_id: ID('2:cancel') },
+  ] }]);
+});
+
+test('click on a non-permanent option: deferred, one click event', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const i = fakeInteraction({ customId: ID('1'), user: 'U1', messageId: 'm5', component: { style: 1, label: '1. Yes' } });
+  await s.bridge.onInteraction(i);
+  assert.strictEqual(i.deferred, 1);
+  assert.deepStrictEqual(readEv(s, events(s)[0]), { type: 'click', custom_id: ID('1'), user: 'U1', message_id: 'm5', channel_id: 'C1', ts: s.clock.t });
+});
+
+test('confirm: ephemeral becomes Sent. and one click event with the full id; cancel: Cancelled., no event', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const c = fakeInteraction({ customId: ID('2:confirm'), user: 'U1', ephemeral: true });
+  await s.bridge.onInteraction(c);
+  assert.strictEqual(c.updates[0].content, 'Sent.'); assert.deepStrictEqual(c.updates[0].components, []);
+  assert.strictEqual(events(s).length, 1);
+  assert.strictEqual(readEv(s, events(s)[0]).custom_id, ID('2:confirm'));
+  const x = fakeInteraction({ customId: ID('2:cancel'), user: 'U1', ephemeral: true });
+  await s.bridge.onInteraction(x);
+  assert.strictEqual(x.updates[0].content, 'Cancelled.');
+  assert.strictEqual(events(s).length, 1);
+});
+
+const toggleRows = () => plainRows([[btn('t1', 2, 'A'), btn('t2', 3, 'B'), btn('t3', 2, 'C')], [btn('submit', 1, 'Submit')]]);
+test('toggle: updates in place, flips only that button 2<->3, no event', async () => {
+  // Mutation: flip every button -> the "others unchanged" assertion fails.
+  const s = setup(); allow(s, ['U1']);
+  const i = fakeInteraction({ customId: ID('t1'), user: 'U1', component: { style: 2, label: 'A' }, components: toggleRows() });
+  await s.bridge.onInteraction(i);
+  assert.deepStrictEqual(events(s), []);
+  const want = toggleRows(); want[0].components[0].style = 3;
+  assert.deepStrictEqual(i.updates[0].components, want);
+  const j = fakeInteraction({ customId: ID('t2'), user: 'U1', component: { style: 3, label: 'B' }, components: toggleRows() });
+  await s.bridge.onInteraction(j);
+  const want2 = toggleRows(); want2[0].components[1].style = 2;
+  assert.deepStrictEqual(j.updates[0].components, want2);
+});
+
+test('submit: one click event with picks = style-3 toggles ascending', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const rows = plainRows([[btn('t1', 3, 'A'), btn('t2', 2, 'B'), btn('t10', 3, 'C')], [btn('submit', 1, 'Submit')]]);
+  const i = fakeInteraction({ customId: ID('submit'), user: 'U1', messageId: 'm5', components: rows });
+  await s.bridge.onInteraction(i);
+  assert.strictEqual(events(s).length, 1);
+  const ev = readEv(s, events(s)[0]);
+  assert.deepStrictEqual([ev.type, ev.custom_id, ev.picks], ['click', ID('submit'), [1, 10]]);
+});
+
+test('reply button arms the message; no event', async () => {
+  const s = setup(); allow(s, ['U1']);
+  const i = fakeInteraction({ customId: ID('reply'), user: 'U1', messageId: 'm7' });
+  await s.bridge.onInteraction(i);
+  assert.strictEqual(i.replies[0].content, 'Reply to that message with your answer.');
+  assert.strictEqual(i.replies[0].flags, 64);
+  assert.deepStrictEqual(events(s), []);
+  assert.strictEqual(s.st().reply_armed.m7, KEY);
+});
+
+test('reply by an allowlisted user to an armed message: one reply event, then disarmed', async () => {
+  // Mutation: skip the disarm -> the second reply writes an event.
+  const s = setup(); allow(s, ['U1']);
+  await s.bridge.onInteraction(fakeInteraction({ customId: ID('reply'), user: 'U1', messageId: 'm7' }));
+  await s.bridge.onMessage(fakeReply({ id: 'r1', content: '  the answer  ', ref: 'm7' }));
+  assert.strictEqual(events(s).length, 1);
+  assert.deepStrictEqual(readEv(s, events(s)[0]), { type: 'reply', key: KEY, text: 'the answer', user: 'U1', message_id: 'm7', ts: s.clock.t });
+  assert.deepStrictEqual(s.st().reply_armed, {});
+  await s.bridge.onMessage(fakeReply({ id: 'r2', content: 'again', ref: 'm7' }));
+  assert.strictEqual(events(s).length, 1);
+});
+
+test('reply text is cut to 1000 characters', async () => {
+  const s = setup(); allow(s, ['U1']);
+  await s.bridge.onInteraction(fakeInteraction({ customId: ID('reply'), user: 'U1', messageId: 'm7' }));
+  await s.bridge.onMessage(fakeReply({ content: 'y'.repeat(1500), ref: 'm7' }));
+  assert.strictEqual(readEv(s, events(s)[0]).text.length, 1000);
+});
+
+test('messages that write nothing: unarmed, non-allowlisted (mutation: skip the allowlist), bot, empty', async () => {
+  const s = setup(); allow(s, ['U1']);
+  await s.bridge.onInteraction(fakeInteraction({ customId: ID('reply'), user: 'U1', messageId: 'm7' }));
+  await s.bridge.onMessage(fakeReply({ ref: 'm8' }));                       // unarmed
+  await s.bridge.onMessage(fakeReply({ ref: null }));                       // no reference
+  await s.bridge.onMessage(fakeReply({ authorId: 'U2', ref: 'm7' }));       // not allowlisted
+  await s.bridge.onMessage(fakeReply({ bot: true, ref: 'm7' }));            // a bot
+  await s.bridge.onMessage(fakeReply({ content: '   ', ref: 'm7' }));       // empty
+  assert.deepStrictEqual(events(s), []);
+  assert.strictEqual(s.st().reply_armed.m7, KEY);                           // still armed after all of those
+});
+
+test('dlg and gate clicks of an allowlisted user become click events in both modes; others get Not authorized.', async () => {
+  for (const ops of [false, true]) {
+    const s = setup({ ops }); allow(s, ['U1']);
+    for (const id of [ID('submit'), 'ab:gate:p3-0123456789abcdef:ok']) {
+      const i = fakeInteraction({ customId: id, user: 'U1', components: [] });
+      await s.bridge.onInteraction(i);
+      assert.strictEqual(i.deferred, 1, `${ops} ${id}`);
+    }
+    assert.strictEqual(events(s).length, 2);
+    const n = fakeInteraction({ customId: ID('2:confirm'), user: 'U2', ephemeral: true });
+    await s.bridge.onInteraction(n);
+    assert.strictEqual(n.replies[0].content, 'Not authorized.');
+    assert.strictEqual(events(s).filter((f) => readEv(s, f).user === 'U2').length, 0);
+  }
 });
