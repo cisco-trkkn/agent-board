@@ -503,6 +503,53 @@ class AllTest(DreamBase):
         self.assertIn("ok", lines[2])
 
 
+class UnexpectedErrorTest(DreamBase):
+    def test_exception_in_one_project_is_a_failed_night_and_all_goes_on(self):
+        for name in ("a", "b"):
+            (self.D / f"{name}.md").write_text(core_text(name))
+        self.core.unlink()
+        real = dream.prepare
+
+        def boom(run_dir, project, *args, **kw):
+            if project == "a":
+                raise OSError("disk exploded")
+            return real(run_dir, project, *args, **kw)
+        with mock.patch.object(dream, "prepare", boom):
+            rc, out = self.run_dream("--all", project=None)
+        self.assertEqual(rc, 1)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "dream: a failed — error: OSError: disk exploded")
+        self.assertTrue(lines[1].startswith("dream: b ok"), out)
+        d = json.loads((self.D / "a.dream.json").read_text())
+        self.assertEqual(d["failures"], 1)
+        rd = next(p for p in (self.D / "dream/a").iterdir() if p.is_dir())
+        run = json.loads((rd / "out/run.json").read_text())
+        self.assertEqual((run["outcome"], run["check"]), ("failed", "error: OSError: disk exploded"))
+
+    def test_exception_before_the_run_dir_still_counts(self):
+        with mock.patch.object(dream, "digest", side_effect=RuntimeError("no git")):
+            rc, out = self.run_dream()
+        self.assertEqual((rc, out), (1, "dream: p failed — error: RuntimeError: no git\n"))
+        self.assertEqual(self.dj()["failures"], 1)
+
+
+class KillGroupTest(DreamBase):
+    def test_term_ignoring_grandchild_holding_the_pipe_does_not_hang(self):
+        """The leader dies on TERM at once, but a grandchild that ignores TERM keeps the stdout pipe open."""
+        fake = self.tmp / "stubborn"
+        fake.write_text(f"#!/bin/sh\n(trap '' TERM; sleep 30) &\necho $! > {self.tmp}/gc.pid\nsleep 30\n")
+        fake.chmod(0o755)
+        os.environ["TC_DREAM_CLAUDE"] = str(fake)
+        t0 = time.monotonic()
+        with mock.patch.object(dream, "TIMEOUT", 1), mock.patch.object(dream, "GRACE", 1), mock.patch.object(dream, "REAP", 2):
+            rc, out = self.run_dream()
+        self.assertLess(time.monotonic() - t0, 15)
+        self.assertIn("model timeout", out)
+        time.sleep(0.3)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((self.tmp / "gc.pid").read_text()), 0)
+
+
 class ReportTest(DreamBase):
     def test_report_prints_last_run(self):
         out = io.StringIO()

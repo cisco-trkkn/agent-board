@@ -34,6 +34,8 @@ import usage  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]   # the agent-board checkout that holds this file (F5)
 TIMEOUT = 900
+GRACE = 3    # seconds between TERM and KILL of the model's process group
+REAP = 5     # seconds to collect the killed child's pipes
 WEEKLY_MAX = 85
 KEEP_DAYS = 14
 FIRST_RUN_DAYS = 30
@@ -185,16 +187,28 @@ def prepare(run_dir, project, root, state, core, archive, now):
 
 
 def _kill_group(proc):
-    for sig, wait in ((signal.SIGTERM, 3), (signal.SIGKILL, 0)):
-        try:
-            os.killpg(proc.pid, sig)
-        except (ProcessLookupError, PermissionError):
-            return
-        if wait:
+    """TERM the child's process group, give the leader a short grace, then KILL the group whether or not the leader
+    is still alive (a grandchild may ignore TERM and hold the pipes), and reap with a bound: never hangs the night."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(GRACE)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.communicate(timeout=REAP)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        for f in (proc.stdout, proc.stderr, proc.stdin):
             try:
-                proc.wait(wait)
-                return
-            except subprocess.TimeoutExpired:
+                f and f.close()
+            except OSError:
                 pass
 
 
@@ -216,7 +230,6 @@ def run_model(run_dir, project, now):
         out, _ = proc.communicate(prompt, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
-        proc.communicate()
         return "model timeout", {}
     if proc.returncode != 0:
         return f"model exit {proc.returncode}", {}
@@ -381,6 +394,16 @@ def run_project(project, now, dry_run=False, force=False, root=None):
         if not dry_run:
             _finish(res, project, state, root, now, run_dir, run)
         return res
+    except Exception as e:   # one project's surprise (git missing, an OSError copying an input) is a failed night, not a crash
+        res["check"] = f"error: {type(e).__name__}: {e}"
+        res["outcome"] = "failed"
+        res["duration_s"] = round(time.monotonic() - t0, 3)
+        if not dry_run:
+            try:
+                _finish(res, project, state, root, now, run_dir, run)
+            except Exception as e2:
+                print(f"dream: bookkeeping failed: {e2}", file=sys.stderr)
+        return res
     finally:
         if dry_run and run_dir:
             shutil.rmtree(run_dir, ignore_errors=True)
@@ -439,8 +462,9 @@ def _attempt(res, project, now, root, state, run_dir, run, dry_run):
 
 def _finish(res, project, state, root, now, run_dir, run):
     """Bookkeeping of a real run: dream.json, out/ files, metrics, prune, notify. Errors here never fail the run."""
-    out = Path(run_dir) / "out"
-    out.mkdir(parents=True, exist_ok=True)
+    out = Path(run_dir) / "out" if run_dir else None
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
     ok = res["outcome"] in ("ok", "unchanged")
     d = dict(state)
     d["root"] = root
@@ -448,16 +472,18 @@ def _finish(res, project, state, root, now, run_dir, run):
         d.update({"last_run": res["at"], "sources_digest": digest(project, root), "last_report": str(out / "report.json"),
                   "run": run, "failures": 0, "reverted": None})
     else:
-        d["failures"] = res["failures"] = res["failures"] + 1
+        n = state.get("failures")
+        d["failures"] = res["failures"] = (n if isinstance(n, int) else 0) + 1
         d.setdefault("reverted", None)
     if ok:
         res["failures"] = 0
     P.save(project, d)
     try:
-        if res["diff"] is not None:
+        if out and res["diff"] is not None:
             (out / "diff.txt").write_text(res["diff"])
         keys = ("project", "run", "outcome", "check", "counts", "cost_usd", "tokens", "duration_s", "proposals", "contradictions", "posted")
-        _json_safe_write(out / "run.json", {k: res[k] for k in keys})
+        if out:
+            _json_safe_write(out / "run.json", {k: res[k] for k in keys})
     except OSError as e:
         print(f"dream: could not write run files: {e}", file=sys.stderr)
     try:
@@ -559,7 +585,10 @@ def main(argv=None, now=None):
         return 2
     rc = 0
     for n in names:
-        res = run_project(n, now, a.dry_run, a.force, a.root)
+        try:
+            res = run_project(n, now, a.dry_run, a.force, a.root)
+        except Exception as e:   # before the project's own guard (root lookup, lock file): still a failed night, and --all goes on
+            res = {"outcome": "failed", "project": n, "check": f"error: {type(e).__name__}: {e}"}
         sys.stdout.write(render(res))
         sys.stdout.flush()
         if res["outcome"] == "failed":
