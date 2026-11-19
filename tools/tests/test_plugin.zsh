@@ -61,13 +61,20 @@ j = [k for k, c in enumerate(cmds) if c.endswith("/scripts/sdd-call-guard.sh\" -
 assert len(i) == 1 and len(j) == 1 and i[0] > j[0] and hs[i[0]]["timeout"] == 10, cmds
 PY
 check "agent-name-guard.sh is executable" test -x "$P/scripts/agent-name-guard.sh"
-check "plugin.json description names agent-name-guard" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF "plan-handoff-guard, sdd-call-guard, agent-name-guard and context-inject hooks"' _ "$P/.claude-plugin/plugin.json"
+check "plugin.json description names agent-name-guard" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF "plan-handoff-guard, sdd-call-guard, agent-name-guard, context-inject and context-recall hooks"' _ "$P/.claude-plugin/plugin.json"
 check "hooks.json registers context-inject on SessionStart (no matcher: every source), --scoped, timeout 5" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["SessionStart"]
 hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/context-inject.sh\" --scoped")]
 assert len(hit) == 1 and hit[0][0] is None and hit[0][1]["timeout"] == 5, hit
 PY
+check "hooks.json registers context-recall on UserPromptSubmit (no matcher), --scoped, timeout 5" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"]
+hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/context-recall.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] is None and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
+PY
+check "context-recall.sh is executable" test -x "$P/scripts/context-recall.sh"
 check "hooks.json registers shutdown-record on PostToolUse SendMessage, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
