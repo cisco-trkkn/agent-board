@@ -6,7 +6,7 @@
 _DC_TOOLS="${${(%):-%x}:A:h:h}"   # file scope: tools/
 _dc_root() { print -r -- "${TC_STATE:-$HOME/.local/state/agent-board}/discord" }
 _dc_ops_dir() { print -r -- "$(_dc_root)/_ops" }
-_dc_usage() { print -u2 "usage: tmux-ctl discord [--ops] token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|ops-channels <command-center id> <approvals id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>]|merge-request --project <p> --task <id> --spec <s> --branch <b> [--target main] --tests <line> --verdict <text> [--finding <line>]…|send [--thread <key>] [<file>…] [-m <text>]|snap [<project>] (the token is read from stdin)"; return 2 }
+_dc_usage() { print -u2 "usage: tmux-ctl discord [--ops] token|pair <code>|deny <code>|policy pairing|allowlist|disabled|allow <id>|remove <id>|forget|status|channel <id>|ops-channels <command-center id> <approvals id>|bridge install|start [--keeper]|stop|audit [--since <ISO>] [--project <name>]|merge-request --project <p> --task <id> --spec <s> --branch <b> [--target main] --tests <line> --verdict <text> [--finding <line>]…|ideas-list [<project>]|ideas-post <file|-> [--dry-run]|send [--thread <key>] [<file>…] [-m <text>]|snap [<project>] (the token is read from stdin)"; return 2 }
 _dc_tokenish() { [[ "$1" == *.* && ${#1} -ge 50 ]] }
 
 discord_cmd() {
@@ -17,6 +17,7 @@ discord_cmd() {
   fi
   [[ "$sub" == (send|snap) ]] && { _dc_send "$sub" "$@"; return $? }   # files out: paths and a message, never a token
   [[ "$sub" == merge-request ]] && { python3 -I "${_DC_TOOLS:h}/board/discord_merge.py" request "$@"; return $? }   # the queue's merge approval: free text (tests, verdict, findings) goes to Python's argv, never a token check or a shell
+  [[ "$sub" == (ideas-list|ideas-post) ]] && { python3 -I "${_DC_TOOLS:h}/board/discord_ideas.py" "${sub#ideas-}" "$@"; return $? }   # /ideas: free-text argv goes to Python, never a token check
   [[ "$sub" == migrate ]] && { _dc_migrate; return 0 }   # machine cleanup: no project
   local -a pos=()
   while (( $# )); do

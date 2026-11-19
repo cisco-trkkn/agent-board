@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_digest, discord_feed, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_digest, discord_feed, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -335,6 +335,18 @@ def discord_leads(leads):
     return on
 
 
+def _overseer_sessions(every, rows_by):
+    """[session] for the overseer's `claude` window, for line delivery only (build_state keeps it off the cards)."""
+    if not COMMENTS.pending(OVERSEER_SESSION):
+        return []   # no waiting line: skip the per-pane capture
+    panes = []
+    for f in every:
+        if f[0] == OVERSEER_SESSION and f[3] == "claude":
+            kind, status = classify(f[9], rows_by.get(f[7]) or capture_panes([f[7]]).get(f[7], []), f[4] == "1", None)
+            panes.append({"id": f[7], "kind": kind, "status": status})
+    return [{"name": OVERSEER_SESSION, "windows": [{"name": "claude", "panes": panes}]}] if panes else []
+
+
 def build_state():
     fmt = SEP.join([
         "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}",
@@ -386,7 +398,7 @@ def build_state():
         s["windows"] = sorted(s["windows"].values(), key=lambda w: w["index"])
         s["worktrees"] = cached_worktrees(s["path"])
     out.sort(key=lambda s: (not s["attached"], s["name"]))
-    deliver_comments(out)
+    deliver_comments(out + _overseer_sessions(every, rows_by))   # the overseer gets queued lines (/ideas) but never a card
     snap = INDEXER.snapshot() if INDEXER else []
     usage.card_alerts(out, snap)
     usage.card_labels(out, snap)
@@ -542,6 +554,10 @@ def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=N
         discord_ops.consume(COMMENTS.add_line, lambda argv: run_script(argv, timeout=20), now, on_merge=discord_merge.on_merge)
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    try:
+        discord_ideas.expire(time.time())
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: ideas expire failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     try:
         discord_digest.tick(records, limits, now)
     except Exception as e:   # noqa: BLE001

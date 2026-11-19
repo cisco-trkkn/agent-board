@@ -1,0 +1,213 @@
+# Discord /ideas Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** `/ideas [project]` on Discord posts the open ideas grouped by theme (grouped by the overseer), one message per group with the buttons Brainstorm next / Park / Drop.
+
+**Architecture:** A new board module `board/discord_ideas.py` owns everything about one `/ideas` request: the request file, the overseer line, the validation and rendering of the overseer's groups, the outbox posts, the button clicks and the time-out. The bridges gain `/ideas` and an optional `buttons` field on the `post` op. The existing event consumers (`discord_ops.handle_event`, `discord_ops._click`, `discord_controls.consume_events`) only route to it. `tmux-ctl discord ideas-list|ideas-post` are the overseer's two commands.
+
+**Tech Stack:** Python 3 (board, unittest), zsh (`tmux-ctl`, `tools/tests`), Node.js (discord.js bridge, `node --test`).
+
+**Spec:** `docs/superpowers/specs/2026-11-17-discord-ideas-command-design.md`
+
+## Global Constraints
+
+- Idea id = `sha1(project + "\0" + key)[:10]` (hex), where `key` is `ideas.load(project)[i]["key"]` (`"<ts> · <raw>"`, which is the idea line without its `- [ ] ` checkbox). Every component computes it only through `discord_ideas.idea_id`.
+- Open idea = `ideas.load()` entry with `status == "open"`. Projects for "all" = the basenames of `*.md` files in `ideas.ideas_dir()`.
+- State lives under `tc_env.ops_dir() / "ideas"`: `req-<id>.json`, `post-<id>.json`, and the lock file `state.lock` (fcntl `flock`, exclusive). **Never** take the ops-state lock (`discord_ops._state`) inside `discord_ideas`: `discord_ops.consume` already holds it while it calls `_click`, and a second `flock` on a new descriptor in the same process blocks forever.
+- Request id: `secrets.token_hex(4)`. Request file: `{"id", "project": str|null, "bridge": "_ops"|<project>, "ts": <epoch float>, "state": "open"|"answered"|"closed"}`.
+- `bridge` names the bridge whose channel the command was typed in: `"_ops"` → outbox dir `tc_env.ops_dir()`, otherwise `tc_env.discord_dir(bridge)`. A bridge value that is neither `_ops` nor a `discord_ops.PROJECT_RE` name with an existing discord dir is refused (`invalid bridge`).
+- Overseer line, sent with `add_line("overseer", line)`: `[Discord] /ideas <id>: group the open ideas of <project|all projects>, then run tmux-ctl discord ideas-post with the groups JSON`.
+- Groups document: `{"request": "<id>", "groups": [{"title": str, "emoji": str, "project": str, "ideas": ["<idea id>", …]}]}`.
+- Limits: answer valid only while the request is `open` and < 600 s old; time-out at 180 s (`overseer didn't answer /ideas`, request → `closed`; a later `ideas-post` → rc 1); at most 10 groups (extra groups are dropped and counted in the skipped line); idea text cut to 120 chars; group text cut to 1900 chars with `… <n> more`.
+- Group post text: line 1 `<emoji> **<title>** · <project> · <n>`, then `• <text>` per idea. Post op: `{"op": "post", "text", "tier", "mention_user": false, "key": "ideas-<req>-<g>", "buttons": [...]}`, `g` = 0-based group index. Buttons: `{"label": "Brainstorm next", "style": 1, "custom_id": "ab:ideas:next:<req>:<g>"}`, `{"label": "Park", "style": 2, "custom_id": "ab:ideas:park:<req>:<g>"}`, `{"label": "Drop", "style": 4, "custom_id": "ab:ideas:drop:<req>:<g>"}`. `tier`: the value `discord_ops` uses for its plain (non-alert) posts.
+- Skipped ids (unknown, closed, wrong project, repeated): one extra post `skipped: <n> ids` after the groups, only when n > 0. A request with no open ideas left after validation posts `no open ideas`.
+- Click results (the post edit keeps line 1 of the group text, then a second line): Next → `add_line(project, "regroup: <title> — ideas: <id>, …")`, second line `→ sent to <project>'s lead to brainstorm`, audit `queued`. Park → `parked`, no file change, audit `parked`. Drop → `ideas.set_status(project, key, "dropped")` for each id still open (a `ValueError` or an id no longer open counts as changed), second line `dropped <n>` plus `, <m> already changed` when m > 0, audit `dropped <n>`. A group already acted on, or an unknown/closed request or group → audit `unknown`, nothing changes.
+- Only allowlisted users act; every click is audited by its consumer (`discord_feed.audit_append`).
+- Commit messages: conventional with scope (`feat(board): …`, `feat(bridge): …`, `feat(tmux-ctl): …`, `feat(overseer): …`); end with the attribution trailer your harness specifies.
+
+**User decisions (already made):**
+- Claude (the overseer) does the grouping, not stored tags.
+- `/ideas` covers every project; `/ideas <project>` covers one. The answer goes in the channel where the command was typed.
+- Each group carries the buttons Brainstorm next / Park / Drop.
+
+**Rulings (lead, at plan time; each with its cost if wrong):**
+- R1. The spec's "second tap gets the ephemeral reply `already done`" is replaced by: the acting edit removes the buttons (the bridge's `opEdit` sends `components: []`), so a second tap is not possible; a stale one is audited `unknown`. The bridge already `deferUpdate`s every non-`ab:ops` click before the board sees it, so the board cannot answer ephemerally. Cost if wrong: one more bridge round trip later, no data risk.
+- R2. `/ideas` never takes a default project, also in a project channel (the user decision "covers every project" wins over the other commands' default-to-own-channel rule). Cost if wrong: a one-line change in `commands.js`.
+- R3. `discord_ideas` uses its own lock `<_ops>/ideas/state.lock`, not the ops-state lock (deadlock, see Global Constraints). Cost if wrong: none known.
+- R4. The edit keeps line 1 (the group header) so the user still sees which group was acted on. Cost if wrong: text only.
+- R5. The overseer cannot Write files (its settings deny Write), so `ideas-post` reads the groups JSON from stdin (`-`) as well as from a file path. Task 4 probes that the overseer's permission rule admits the stdin form.
+
+---
+
+### Task 1: `board/discord_ideas.py` core and the `buttons` post field
+
+**Goal:** One module computes idea ids, lists open ideas, opens requests, validates and posts groups, expires requests and handles clicks; `discord_feed` accepts a `buttons` list on `post`.
+
+**Files:**
+- Create: `board/discord_ideas.py`
+- Modify: `board/discord_feed.py` (`_POST_OPT`, `_check`)
+- Test: `board/tests/test_discord_ideas.py`
+
+**Acceptance Criteria:**
+- [ ] `idea_id(project, key)` equals `hashlib.sha1(f"{project}\0{key}".encode()).hexdigest()[:10]`, and `open_ideas(project)` / `open_ideas(None)` return `(id, project, text)` for exactly the open ideas (tested on a fixture ideas dir with open, dropped, done and detail lines, two projects).
+- [ ] `request(project, bridge, add_line, now)` writes `req-<id>.json` and calls `add_line("overseer", <the Global Constraints line>)`; an unknown project or invalid bridge writes nothing and returns `unknown project` / `invalid bridge`.
+- [ ] `post(doc, now, dry_run=False)` returns `(0, summary)` and writes one outbox op per group (format, buttons and limits exactly as Global Constraints) plus the skipped line; drops unknown / closed / wrong-project / repeated ids; returns `(1, reason)` for an unknown, answered, closed or ≥ 600 s old request; `dry_run=True` validates and writes no outbox op and no state.
+- [ ] Group text: 1900-char cut with `… <n> more`, 120-char idea cut, at most 10 groups; `no open ideas` when nothing is left.
+- [ ] `expire(now)` posts `overseer didn't answer /ideas` to the request's bridge and closes every request open ≥ 180 s; a later `post` for it returns rc 1.
+- [ ] `click(user, cid, add_line, now)`: Next writes the regroup line and edits; Park edits and leaves the ideas file byte-identical; Drop marks exactly the listed open lines `- [-]` and counts a line changed since the post as `already changed`; a second click on the same group returns `unknown` and changes nothing; a click for an unknown request returns `unknown`.
+- [ ] `discord_feed._check` accepts `buttons` (a list of `{label, style, custom_id}` dicts, ≤ 5) on `post` and rejects any other shape; existing `test_discord_feed*` tests still pass.
+- [ ] Every test isolates state: `TC_STATE` and `TC_IDEAS_DIR` point at a temp dir (see `test-driven-development-extras`), and a leak check after the run shows nothing written under the real `~/.local/state/agent-board`.
+
+**Verify:** `python3 -m unittest board.tests.test_discord_ideas board.tests.test_discord_feed -v 2>&1 | tail -3`
+
+**Steps:**
+
+- [ ] **Step 1:** Read `board/ideas.py` (`load`, `set_status`, `ideas_dir`), `board/discord_feed.py` (`_check`, `outbox_write`, `audit_append`), `board/tc_env.py` (`ops_dir`, `discord_dir`), and `board/discord_ops.py` (`_known`, `PROJECT_RE`, the `tier` its plain posts use). Run `superpowers-extended-cc:test-driven-development` with `test-driven-development-extras`.
+- [ ] **Step 2:** Write the failing tests for each acceptance criterion. Mutations each guard test must catch (run them in the RED step and report the failure): remove the "already acted" check → `test_second_click_unknown` fails; remove the request-age check → `test_post_expired_request_refused` fails; make `dry_run` write the outbox → `test_dry_run_writes_nothing` fails (it asserts on the outbox dir listing and prints how many files it checked); skip the "still open" check in Drop → `test_drop_leaves_changed_line` fails.
+- [ ] **Step 3:** Implement. The public surface (later tasks call exactly these):
+
+```python
+def idea_id(project: str, key: str) -> str
+def open_ideas(project: str | None) -> list[tuple[str, str, str]]   # (id, project, text)
+def request(project: str | None, bridge: str, add_line, now: float) -> str   # "asked" | "unknown project" | "invalid bridge"
+def post(doc: dict, now: float, dry_run: bool = False) -> tuple[int, str]
+def expire(now: float) -> int   # requests closed
+def click(user: str, cid: str, add_line, now: float) -> str   # audit result
+def main(argv=None) -> int   # list [project] | post <file|-> [--dry-run]; prints list rows as "<id>\t<project>\t<text>"
+```
+
+Lock pattern (state files are read and written only inside it):
+
+```python
+@contextlib.contextmanager
+def _locked():
+    d = tc_env.ops_dir() / "ideas"
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "state.lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        yield d
+```
+
+- [ ] **Step 4:** Run the Verify command; all green.
+- [ ] **Step 5:** Commit `board/discord_ideas.py board/discord_feed.py board/tests/test_discord_ideas.py` (path-scoped `git add`) as `feat(board): discord_ideas: /ideas requests, groups, buttons`.
+
+```json:metadata
+{"files": ["board/discord_ideas.py", "board/discord_feed.py", "board/tests/test_discord_ideas.py"], "verifyCommand": "python3 -m unittest board.tests.test_discord_ideas board.tests.test_discord_feed -v 2>&1 | tail -3", "acceptanceCriteria": ["idea_id and open_ideas match the fixture", "request writes req file and the overseer line; refuses unknown project and invalid bridge", "post validates, renders, writes one op per group plus skipped; rc 1 for unknown/answered/closed/old; dry_run writes nothing", "1900/120/10 limits and no open ideas", "expire posts the time-out and closes; late post rc 1", "click next/park/drop/second/unknown as specified", "discord_feed accepts buttons on post only in the given shape", "tests isolated with a leak check"], "modelTier": "standard"}
+```
+
+### Task 2: Bridge `/ideas` and post buttons
+
+**Goal:** Both bridge modes register `/ideas` (optional `project`), answer it with an ephemeral `asked the overseer, about 1 min`, write the slash event, and render a `post` op's `buttons`.
+
+**Files:**
+- Modify: `tools/discord-bridge/lib/commands.js`, `tools/discord-bridge/bridge.js` (`opPost`)
+- Test: the bridge's existing test files for commands and ops (under `tools/discord-bridge/`; add cases there, following their fakes)
+
+**Acceptance Criteria:**
+- [ ] `payload(true)` and `payload(false)` both contain `ideas` with an optional `project` option (`required: false` in both modes).
+- [ ] `/ideas` with no project writes `{type: "slash", command: "ideas", project: null, bridge: <basename of ctx.dir>, user, ts}` in both modes (R2: no default project in a project channel); `/ideas x` writes `project: "x"`; an unknown given project is answered `Unknown project: x` and writes no slash event.
+- [ ] The ack is ephemeral (`flags: 64` through `ctx.answer`) and reads exactly `asked the overseer, about 1 min`.
+- [ ] `opPost` with `buttons` sends one action row of those buttons (`type: 2`, the given `style`, `label`, `custom_id`) and records the message under `st.posts[op.key]` so a later `edit` op finds it and clears the buttons; a post without `buttons` is unchanged.
+- [ ] `npm test` in `tools/discord-bridge` is all green.
+
+**Verify:** `cd tools/discord-bridge && npm test 2>&1 | grep -E '^# (pass|fail)'`
+
+**Steps:**
+
+- [ ] **Step 1:** Read `lib/commands.js`, `bridge.js` (`opPost`, `opEdit`, `onInteraction`) and their tests. Use `superpowers-extended-cc:test-driven-development` with `test-driven-development-extras`.
+- [ ] **Step 2:** Failing tests for each criterion. Mutation: keep the default `project = own` for `ideas` → the project-mode "no project" test fails.
+- [ ] **Step 3:** Implement: add `ideas: 'Group the open ideas'` to `DESCRIPTIONS`, `ideas` to `ACTIONS` (unknown given project rejected up front), not to `NEEDS_PROJECT`; for `ideas` use `project = given` only; answer, then `event({type: 'slash', command: 'ideas', project, bridge: own})`. In `opPost`, `if (Array.isArray(op.buttons) && op.buttons.length) payload.components = [{type: 1, components: op.buttons.slice(0, 5).map((b) => ({type: 2, style: Number(b.style) || 2, label: String(b.label).slice(0, 80), custom_id: String(b.custom_id)}))}]`, and make sure the keyed post is stored in `st.posts`.
+- [ ] **Step 4:** Run the Verify command; all green.
+- [ ] **Step 5:** Commit the two source files and the test files (path-scoped) as `feat(bridge): /ideas command and post buttons`.
+
+```json:metadata
+{"files": ["tools/discord-bridge/lib/commands.js", "tools/discord-bridge/bridge.js"], "verifyCommand": "cd tools/discord-bridge && npm test 2>&1 | grep -E '^# (pass|fail)'", "acceptanceCriteria": ["ideas registered in both modes with optional project", "slash event shape with bridge and no default project", "ephemeral ack text exact", "post buttons rendered and keyed post editable", "npm test green"], "modelTier": "standard"}
+```
+
+### Task 3: Board wiring and `tmux-ctl discord ideas-list|ideas-post`
+
+**Goal:** The slash event reaches `discord_ideas.request`, `ab:ideas:*` clicks reach `discord_ideas.click` from both the ops and the project consumers, the board tick runs `discord_ideas.expire`, and `tmux-ctl discord ideas-list [project]` / `ideas-post <file|-> [--dry-run]` call the module's CLI.
+
+**Files:**
+- Modify: `board/discord_ops.py` (`handle_event`, `_click`), `board/discord_controls.py` (`consume_events`), `board/server.py` (the tick next to `discord_ops.consume`), `tools/lib/discord.zsh` (dispatch before the token check, as `merge-request` is)
+- Test: `board/tests/test_discord_ideas_wiring.py`, `tools/tests/test_discord_ideas_cli.zsh` (register it the way the other `tools/tests/test_*.zsh` files are picked up by `run-all.zsh` / `all.zsh`)
+
+**Acceptance Criteria:**
+- [ ] `handle_event` with `{type: "slash", command: "ideas", project: null|<p>, bridge}` calls `discord_ideas.request` **before** the `_known(project)` check (a null project is valid here) and audits its result; other slash commands are unchanged (existing `test_discord_ops*` pass).
+- [ ] `discord_ops._click` returns `discord_ideas.click(...)` for `ab:ideas:*`; `discord_controls.consume_events` does the same for a `click` event whose `custom_id` starts `ab:ideas:` from an allowlisted user and audits the result; other clicks unchanged.
+- [ ] The board tick calls `discord_ideas.expire(now)` once per consume pass, and an exception there is logged and never stops the tick.
+- [ ] A line queued with `COMMENTS.add_line("overseer", …)` is delivered to the overseer session's `claude` pane by `deliver_comments` (a test proves it with a fake session list; if the overseer session is filtered out before `deliver_comments`, include it).
+- [ ] `tmux-ctl discord ideas-list` prints `<id>\t<project>\t<text>` rows and rc 0; `ideas-post` rc 0 on a valid doc, rc 1 on a refused one, rc 2 on bad argv; `ideas-post -` reads stdin; no argument is ever run through `_dc_tokenish`.
+- [ ] Tests isolated (`TC_STATE`, `TC_IDEAS_DIR` temp; scratch tmux server via `tools/tests/lib.zsh` if any tmux is needed), leak check after.
+
+**Verify:** `python3 -m unittest board.tests.test_discord_ideas_wiring board.tests.test_discord_ops board.tests.test_discord_controls 2>&1 | tail -3 && zsh tools/tests/test_discord_ideas_cli.zsh; echo rc=$?`
+
+**Steps:**
+
+- [ ] **Step 1:** Read the call sites named above and `tools/lib/discord.zsh` lines 13-40 (dispatch order). Use `superpowers-extended-cc:test-driven-development` with `test-driven-development-extras`.
+- [ ] **Step 2:** Failing tests. Mutation: put the ideas branch after the `_known` check → the null-project slash test fails with `unknown project`.
+- [ ] **Step 3:** Implement. Dispatch line in `discord.zsh`, next to `merge-request`:
+
+```zsh
+[[ "$sub" == (ideas-list|ideas-post) ]] && { python3 -I "${_DC_TOOLS:h}/board/discord_ideas.py" "${sub#ideas-}" "$@"; return $? }
+```
+
+- [ ] **Step 4:** Run the Verify command; all green. Also run `zsh tools/tests/all.zsh; echo rc=$?` once and report its summary line (rc 4 alone = the time budget).
+- [ ] **Step 5:** Commit the modified and new files (path-scoped) as `feat(board): route /ideas events and clicks; tmux-ctl discord ideas-list/ideas-post`.
+
+```json:metadata
+{"files": ["board/discord_ops.py", "board/discord_controls.py", "board/server.py", "tools/lib/discord.zsh", "board/tests/test_discord_ideas_wiring.py", "tools/tests/test_discord_ideas_cli.zsh"], "verifyCommand": "python3 -m unittest board.tests.test_discord_ideas_wiring board.tests.test_discord_ops board.tests.test_discord_controls 2>&1 | tail -3 && zsh tools/tests/test_discord_ideas_cli.zsh; echo rc=$?", "acceptanceCriteria": ["slash ideas reaches request before _known", "ab:ideas clicks routed from ops and project consumers", "tick runs expire and survives its errors", "overseer lines are delivered", "ideas-list/ideas-post argv, stdin and exit codes", "tests isolated with leak check"], "modelTier": "standard"}
+```
+
+### Task 4: Overseer instructions, permission, and the real-state check
+
+**Goal:** The overseer knows how to answer an `/ideas` line and is allowed to run exactly the two commands; a read-only run against the user's live ideas proves the pipeline end to end without posting.
+
+**Files:**
+- Modify: `claude/overseer.md`, `claude/overseer-settings.json`
+- Test: `tools/tests/test_overseer_settings.zsh` if it exists (extend), else add the check to `tools/tests/test_discord_ideas_cli.zsh`
+
+**Acceptance Criteria:**
+- [ ] `overseer.md` has a short `/ideas` section: on a `[Discord] /ideas <id>: …` line, run `tmux-ctl discord ideas-list [<project>]`, group by theme into 3–8 groups (≤ 10), every listed id in exactly one group, a group holds ideas of one project only, never write idea text by hand, then `tmux-ctl discord ideas-post - <<'EOF'` with the groups JSON; report nothing else in Discord.
+- [ ] `overseer-settings.json` allows `Bash(tmux-ctl discord ideas-list*)` and `Bash(tmux-ctl discord ideas-post*)` and still denies everything it denied before (a test diffs the deny list against the previous one).
+- [ ] Probe (extras §9), output quoted in the report: in a scratch overseer-like session (`claude -p` with `--settings claude/overseer-settings.json --setting-sources project,local`, `TC_STATE`/`TC_IDEAS_DIR` pointing at a temp fixture), the stdin form `tmux-ctl discord ideas-post --dry-run - <<'EOF' … EOF` runs without a permission denial. If it is denied, switch the documented form to whatever the probe shows is allowed and say so.
+- [ ] Real-state check, read-only: `tmux-ctl discord ideas-list agent-board | wc -l` equals the number of `- [ ]` lines in the live `~/.local/state/agent-board/ideas/agent-board.md` (both numbers quoted), and a groups doc built from those ids passes `ideas-post --dry-run` with rc 0 and writes nothing (outbox listing before/after quoted, with its file count). The dry run needs an open request: create it with `discord_ideas.request` under a temp `TC_STATE` copy, never under the live state.
+
+**Verify:** `zsh tools/tests/test_discord_ideas_cli.zsh; echo rc=$?`
+
+**Steps:**
+
+- [ ] **Step 1:** Read `claude/overseer.md`, `claude/overseer-settings.json`, `bin/claude-overseer`.
+- [ ] **Step 2:** Write the settings test (deny list unchanged, two allows present); RED.
+- [ ] **Step 3:** Edit the two files; GREEN.
+- [ ] **Step 4:** Run the probe and the real-state check; quote outputs in the report.
+- [ ] **Step 5:** Commit (path-scoped) as `feat(overseer): answer /ideas with ideas-list and ideas-post`.
+
+```json:metadata
+{"files": ["claude/overseer.md", "claude/overseer-settings.json", "tools/tests/test_discord_ideas_cli.zsh"], "verifyCommand": "zsh tools/tests/test_discord_ideas_cli.zsh; echo rc=$?", "acceptanceCriteria": ["overseer.md /ideas section", "two allows added, deny list unchanged", "stdin ideas-post probe under overseer settings, output quoted", "live ideas-list count matches the live file; dry-run post rc 0 writes nothing"], "modelTier": "standard"}
+```
+
+### Task 5: User gate — /ideas on the phone
+
+**Goal:** The user runs `/ideas` on the phone, sees the groups, and presses Brainstorm next, Park and Drop once each on test groups.
+
+> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it "verified inline", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.
+
+**Files:** none (runs on the merged `main` after, in order: `agent-board dash stop && agent-board dash start`, `tmux-ctl discord bridge stop && tmux-ctl discord bridge start`, `tmux-ctl discord bridge --ops stop && tmux-ctl discord bridge --ops start`, and `bin/tmux-overseer stop --force`; the board's ensure brings the overseer back, rereading `claude/overseer.md` and its settings)
+
+**Acceptance Criteria:**
+- [ ] `/ideas` in #command-center posts the groups there within about 1 min.
+- [ ] Brainstorm next reaches the project's lead as a `regroup:` line.
+- [ ] Park changes nothing in the ideas file.
+- [ ] Drop marks the group's lines `- [-]` in the ideas file.
+
+**Verify:** `tail -5 ~/.local/state/agent-board/discord/_ops/audit.jsonl; grep -c '^- \[-\]' ~/.local/state/agent-board/ideas/agent-board.md`
+
+```json:metadata
+{"files": [], "verifyCommand": "tail -5 ~/.local/state/agent-board/discord/_ops/audit.jsonl; grep -c '^- \\[-\\]' ~/.local/state/agent-board/ideas/agent-board.md", "acceptanceCriteria": ["groups posted within ~1 min", "next reaches the lead as regroup line", "park changes nothing", "drop marks lines - [-]"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"]}
+```
+
+## Order
+
+Task 1 and Task 2 touch disjoint files and run in parallel. Task 3 needs Task 1. Task 4 needs Task 3. Task 5 is a user gate, run after the merge.
