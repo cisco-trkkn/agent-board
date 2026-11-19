@@ -34,6 +34,27 @@ marked "moved to stage 7" stays in place as the design to carry):
     board's Python controls)." The "remote means Discord-only" spec redesigns that next.
 14. "The engine-hold hook calls `node engine/bin/hold.js`. It moves with holds to stage 7."
 
+## Revised 2026-11-19 (2): the second backend is the Claude Agent SDK
+
+The user decided on Discord, 2026-11-19 ("Amend the spec", after "Should pcee use claude sdk and not implement claude
+headless"):
+
+15. The backend after `claude-tmux` is the **Claude Agent SDK (TypeScript)**, run in the engine's Node process. The engine
+    does not drive `claude -p` (headless CLI) itself, and no backend parses `--output-format stream-json`. Reasons:
+    the SDK's `canUseTool` callback hands every permission request and question to the engine, which can route it
+    to Discord and wait, where `-p` has only static allow/deny rules; typed messages (tool calls, results, cost,
+    session id) replace pane and agent-status parsing; resume, interrupt, max turns and budgets are first-class.
+16. Stage 3 is unchanged: it ships `claude-tmux` and the `fake` backend. The `claude-sdk` backend is decomposition stage 8,
+    planned after stage 3 passes K2. It implements the same `start / close / resume` interface and event types
+    (`started`, `status`, `report`, `gone`), so the engine core and strategies do not change.
+17. Stage 8 starts with a spike whose results gate the build: (a) whether SDK runs bill against the user's Claude
+    subscription like the CLI or need an API key; (b) that a job loads the same setup as a CLI worker (settings,
+    plugins, the superpowers and extras skills, the agent-board mods and hooks, the model-routing gates); (c) that
+    `canUseTool` reaches Discord and returns an answer, including AskUserQuestion. If (a) or (b) fails, the user
+    decides before the build continues.
+18. With the SDK backend, approval holds (section 13, stage 7) answer through `canUseTool` instead of a deny and a
+    later retry under a one-time pass; the hook design stays for `claude-tmux` jobs.
+
 ## Problem
 
 One Opus lead session runs the whole queue. On the 12 baseline specs it is 48 to 74% of each spec's cost, nearly
@@ -137,8 +158,8 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
   `{handle, type}` events: `started`, `status` (a state change such as `busy`, `ready`, `needs-you`, with its
   timestamps), `report` (a report file appeared) and `gone` (the window or process ended). The engine never reads
   tmux, agent-status files or panes itself. This stage ships the `claude-tmux` backend, described by the rest of this
-  section; a `fake` backend (scripted events, no process) serves the tests. The Agent SDK backend and a second
-  tool backend come later and need an adapter only.
+  section; a `fake` backend (scripted events, no process) serves the tests. The Agent SDK backend (`claude-sdk`,
+  stage 8, revision decisions 15-18) and a second tool backend come later and need an adapter only.
 - One job is one fresh Claude in its own tmux window in the project's session, in the spec's worktree, started
   from a brief file on the model and effort its tier maps to (`docs/superpowers/model-routing.json`), with
   `claude/worker.md` as its rules. Nothing runs hidden.

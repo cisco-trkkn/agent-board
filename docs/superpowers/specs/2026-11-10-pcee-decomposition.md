@@ -21,6 +21,10 @@ The user decided on Discord, 2026-11-19 (only this block, the Status table and t
 - Stage 3 keeps the core, durable execution, the inbox and parking; approval holds and schedules move to stage 7.
 - Planning stays with the lead (planner agents) until stage 5, when the engine takes it.
 - Telegram is deleted. Order of the next specs: this revision, then "remote means Discord-only", then phone escalation.
+- (Second revision, same day, "Amend the spec".) The backend after tmux windows is the Claude Agent SDK
+  (TypeScript), not the headless CLI (`claude -p`). It is a new stage 8, planned after stage 3 passes K2, and opens
+  with a spike: subscription billing, the same setup as a CLI worker (plugins, skills, mods, routing gates), and
+  `canUseTool` routed to Discord. Engine spec, "Revised 2026-11-19 (2)", decisions 15-18.
 
 ## Status
 
@@ -38,6 +42,7 @@ passes.
 | 5 | — | K4 | not started | — | 2026-11-10 |
 | 6 | — | — | not started | — | 2026-11-10 |
 | 7 | — | — | not started (Discord interface; takes approval holds and schedules from the engine spec) | — | 2026-11-19 |
+| 8 | — | — | not started (Claude Agent SDK backend after stage 3 passes K2; opens with a spike: billing, setup parity, `canUseTool` to Discord) | — | 2026-11-19 |
 
 Stages 2 and 3 are specced now. Stages 4 to 6 are designed when their gates pass, from real results. Stage 3
 does not start unless K1 passes: its queue run checks `tmux-ctl metrics gate K1` before `writing-plans` and
@@ -161,6 +166,16 @@ sub-project 4's sequential engine.
 
 Concurrency paced against the weekly limit, model optimisation, selective ensemble review, the board as a view
 of engine state.
+
+### 8. Claude Agent SDK backend (added 2026-11-19)
+
+A `claude-sdk` backend behind the engine's backend interface (`start / close / resume`, events `started`, `status`,
+`report`, `gone`), running each job through the TypeScript Agent SDK in the engine process instead of a tmux window.
+Permission requests and questions reach the engine through `canUseTool` and go to Discord; approval holds use the
+same path. The engine never drives `claude -p` itself. Planned after stage 3 passes K2. A spike gates the build:
+SDK runs bill like CLI runs on the user's subscription (else an API-key cost model is the user's call), a job loads
+the same settings, plugins, skills, mods and routing gates as a CLI worker, and a `canUseTool` question round-trips
+through Discord. The board shows the SDK event stream where a tmux pane used to be. Engine spec decisions 15-18.
 
 ## The five specs queued on 2026-11-10
 
