@@ -194,7 +194,7 @@ def _locked():
 
 > **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it "verified inline", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.
 
-**Files:** none (runs on the merged `main` with both bridges restarted: `tmux-ctl discord bridge stop && tmux-ctl discord bridge start`, and the same with `bridge --ops`, then the overseer restarted so it reads the new `overseer.md`)
+**Files:** none (runs on the merged `main` after, in order: `agent-board dash stop && agent-board dash start`, `tmux-ctl discord bridge stop && tmux-ctl discord bridge start`, `tmux-ctl discord bridge --ops stop && tmux-ctl discord bridge --ops start`, and `bin/tmux-overseer stop --force`; the board's ensure brings the overseer back, rereading `claude/overseer.md` and its settings)
 
 **Acceptance Criteria:**
 - [ ] `/ideas` in #command-center posts the groups there within about 1 min.
