@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Fake `claude -p` for the dream tests. $FAKE_DREAM_MODE picks the behaviour; $FAKE_DREAM_LOG records the call."""
+import datetime
+import json
+import os
+import re
+import sys
+import time
+
+NAMES = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_MESSAGING_SOCKET",
+         "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_CHILD_SESSION", "TMUX", "TMUX_PANE")
+RESULT = {"is_error": False, "total_cost_usd": 0.01, "duration_ms": 5,
+          "usage": {"input_tokens": 1, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 4}}
+mode = os.environ.get("FAKE_DREAM_MODE", "good")
+stdin = sys.stdin.read()
+log = os.environ.get("FAKE_DREAM_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": stdin,
+                            "env": {k: os.environ[k] for k in NAMES if k in os.environ},
+                            "pid": os.getpid()}) + "\n")
+HEADS = ("## Map", "## How to run", "## Gotchas", "## Decisions")
+
+
+def split(text):
+    """(preamble lines, {heading: [entry lines]})"""
+    pre, secs, cur = [], {h: [] for h in HEADS}, None
+    for l in text.split("\n"):
+        if l in HEADS:
+            cur = l
+        elif cur is None:
+            pre.append(l)
+        elif l.startswith("- "):
+            secs[cur].append(l)
+    return pre, secs
+
+
+def join(pre, secs):
+    out = [l for l in pre]
+    while out and not out[-1].strip():
+        out.pop()
+    out.append("")
+    for h in HEADS:
+        out += [h] + secs[h] + [""]
+    return "\n".join(out)
+
+
+def report(merged=(), archived=0):
+    os.makedirs("out", exist_ok=True)
+    with open("out/report.json", "w") as f:
+        json.dump({"changed": {"merged": list(merged), "archived": archived, "stale": 0, "added": 0},
+                   "contradictions": [], "proposals": [], "summary": "fake summary"}, f)
+
+
+def consolidate(merge=False):
+    today = datetime.date.today().isoformat()
+    cp, cs = split(open("core.md").read())
+    ap, a_s = split(open("archive.md").read())
+    merged = []
+    for h in HEADS:
+        keep, rest = cs[h][:2], cs[h][2:]
+        if merge and h == "## Map" and len(keep) == 2:
+            a, b = keep
+            fa = re.search(r"\(files: ([^)]*)\)", a)
+            fb = re.search(r"\(files: ([^)]*)\)", b)
+            files = sorted({x.strip() for m in (fa, fb) if m for x in m.group(1).split(",")})
+            date = max(re.search(r"(\d{4}-\d{2}-\d{2})", a).group(1), re.search(r"(\d{4}-\d{2}-\d{2})", b).group(1))
+            into = f"- merged fact of both entries (files: {', '.join(files)}) · {date}"
+            merged.append({"into": into[:60], "from": [a[:60], b[:60]]})
+            keep = [into]
+        cs[h] = keep
+        a_s[h] += [f"{l} · archived {today}" for l in rest]
+    open("core.md", "w").write(join(cp, cs))
+    open("archive.md", "w").write(join(ap, a_s))
+    report(merged, sum(len(v) for v in a_s.values()))
+
+
+def lose():
+    consolidate()
+    for fn in ("core.md", "archive.md"):
+        t = open(fn).read().split("\n")
+        i = next(i for i, l in enumerate(t) if l.startswith("- "))
+        del t[i]
+        open(fn, "w").write("\n".join(t))
+        break
+
+
+if mode == "exit1":
+    sys.exit(1)
+if mode == "hang":
+    time.sleep(60)
+elif mode in ("good", "slow"):
+    if mode == "slow":
+        entered, release = os.environ.get("FAKE_DREAM_ENTERED"), os.environ.get("FAKE_DREAM_RELEASE")
+        if entered and release:   # real sync: tell the test we are in the model step, wait (bounded) until it has mutated the files
+            open(entered, "w").close()
+            end = time.monotonic() + 60
+            while not os.path.exists(release) and time.monotonic() < end:
+                time.sleep(0.05)
+        else:
+            time.sleep(float(os.environ.get("FAKE_DREAM_SLEEP", "1")))
+    consolidate()
+elif mode == "merged":
+    consolidate(merge=True)
+elif mode == "overcap":
+    report()
+elif mode == "lost":
+    lose()
+elif mode == "badreport":
+    consolidate()
+    open("out/report.json", "w").write("not json")
+elif mode == "noreport":
+    consolidate()
+    os.remove("out/report.json")
+elif mode == "unchanged":
+    report()
+elif mode == "errorjson":
+    print(json.dumps(dict(RESULT, is_error=True)))
+    sys.exit(0)
+print(json.dumps(RESULT))

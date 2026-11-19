@@ -28,6 +28,12 @@
 #   tmux-ctl idea  <text>                  file an idea for after the plan (never act on it now)
 #   tmux-ctl context show|path|add <section> "<entry>"
 #                                          the project's shared agent context file (lead curates; sections Map, How to run, Gotchas, Decisions)
+#   tmux-ctl context search <words…>       entries of the core and the archive containing every word
+#   tmux-ctl context dream <project>|--all [--dry-run] [--force]  the nightly consolidation run (works outside tmux; --dry-run changes nothing)
+#   tmux-ctl context dream-report [project]  the last run's record, summary, proposals and contradictions
+#   tmux-ctl context dream-file [project]  file the last run's proposals as ideas and observer notes, each once (prints filed <n>)
+#   tmux-ctl context dream-revert <project> <run>  put back the core and archive of that run (prints reverted | already reverted | stale: … | unknown)
+#   tmux-ctl context dream-schedule install|status|uninstall  the LaunchAgent that runs context dream --all at 03:30 (macOS only; status prints loaded | not loaded first)
 #   tmux-ctl awake on [--queue | --pid N] [--lid]|off|status|sleeps <since> [--all]|lid-setup
 #                                          hold the Mac awake (caffeinate) while the queue runs (--queue: bound to the tmux server, survives a relay); sleeps lists the real sleep periods since a time (--all: every Sleep/Wake line)
 #   tmux-ctl approve <win> show           print the prompt's tool (T:) and its --expect lines (P:); read-only
@@ -89,7 +95,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord ]] || die "not inside tmux"   # discord works outside tmux with --project
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) ]] || die "not inside tmux"   # discord and context dream* work outside tmux
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -287,6 +293,27 @@ cmd="$1"; shift 2>/dev/null
 if [[ "$cmd" == discord ]]; then   # no tmux needed
   source "${0:A:h:h}/tools/lib/discord.zsh"
   discord_cmd "$@"; exit $?
+fi
+if [[ "$cmd" == context && ( "$1" == dream || "$1" == dream-report || "$1" == dream-file || "$1" == dream-revert || "$1" == dream-schedule ) ]]; then   # no tmux needed (launchd runs it)
+  dsub="$1"; shift
+  if [[ "$dsub" == dream-schedule ]]; then
+    [[ "$1" == (install|status|uninstall) ]] || die 'usage: tmux-ctl context dream-schedule install|status|uninstall'
+    python3 -I "${0:A:h:h}/board/dream_schedule.py" "$1"; exit $?
+  fi
+  if [[ "$dsub" == dream-file ]]; then
+    [[ -n "${1:-$FEEDKEY}" ]] || die 'usage: tmux-ctl context dream-file [project]'
+    python3 -I "${0:A:h:h}/board/dream.py" file "${1:-$FEEDKEY}"; exit $?
+  fi
+  if [[ "$dsub" == dream-revert ]]; then
+    [[ -n "$1" && -n "$2" ]] || die 'usage: tmux-ctl context dream-revert <project> <run>'
+    python3 -I "${0:A:h:h}/board/dream.py" revert "$1" "$2"; exit $?
+  fi
+  if [[ "$dsub" == dream ]]; then
+    [[ -n "$1" ]] || die 'usage: tmux-ctl context dream <project>|--all [--dry-run] [--force]'
+    python3 -I "${0:A:h:h}/board/dream.py" run "$@"; exit $?
+  fi
+  [[ -n "${1:-$FEEDKEY}" ]] || die 'usage: tmux-ctl context dream-report [project]'
+  python3 -I "${0:A:h:h}/board/dream.py" report "${1:-$FEEDKEY}"; exit $?
 fi
 # _done runs when a lane's command ends (the lane looks idle then); help needs no tmux
 if [[ "$cmd" != (_done|_append|help|-h|--help|"") ]]; then
@@ -547,7 +574,10 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
         [[ -n "$1" && -n "$2" ]] || die 'usage: tmux-ctl context add <Map|How to run|Gotchas|Decisions> "<entry>"'
         sec="$1"; shift
         python3 -I "${0:A:h:h}/board/context.py" add --project "$FEEDKEY" --section "$sec" -- "$*" ;;
-      *) die 'usage: tmux-ctl context show | path | add <section> "<entry>"' ;;
+      search)
+        [[ -n "$1" ]] || die 'usage: tmux-ctl context search <words…>'
+        python3 -I "${0:A:h:h}/board/context.py" search --project "$FEEDKEY" -- "$@" ;;
+      *) die 'usage: tmux-ctl context show | path | add <section> "<entry>" | search <words…>' ;;
     esac ;;
 
   awake)
@@ -642,7 +672,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
