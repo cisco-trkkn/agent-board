@@ -24,7 +24,7 @@ PRESENCE_EVERY = 60
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
 APPROVAL_KINDS = ("perm", "question", "merge", "other")
-_POST_OPT = {"key": str, "thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool}
+_POST_OPT = {"key": str, "thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool, "buttons": list}
 _last_ms = 0
 _ms_lock = threading.Lock()   # the overview thread and the notifier sink both write
 
@@ -47,7 +47,7 @@ def _check(op):
     keys = set(op)
     if not need <= keys or keys - need - opt:
         raise ValueError(f"bad keys for {kind}: {sorted(keys)}")
-    for k in keys - {"op", "mention_user", "files", "lines", "delete_files"}:
+    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
     if kind == "presence" and (not op["text"] or len(op["text"]) > PRESENCE_MAX):
@@ -73,6 +73,12 @@ def _check(op):
             raise ValueError("files must be absolute paths")
         if "delete_files" in op and not isinstance(op["delete_files"], bool):
             raise ValueError("delete_files must be a bool")
+        if "buttons" in op:
+            b = op["buttons"]
+            if not (isinstance(b, list) and len(b) <= 5 and all(
+                    isinstance(x, dict) and set(x) == {"label", "style", "custom_id"} and isinstance(x["label"], str)
+                    and isinstance(x["custom_id"], str) and type(x["style"]) is int for x in b)):
+                raise ValueError("buttons must be a list of at most 5 {label, style, custom_id}")
 
 
 def _next_ms():
