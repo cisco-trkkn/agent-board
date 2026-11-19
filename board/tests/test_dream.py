@@ -372,6 +372,26 @@ class FailTest(DreamBase):
         self.assertIn("files changed during the run", out)
         self.assertIn("Map FACT 0", self.core.read_text())
 
+    def test_archive_rewrite_during_run_fails(self):
+        os.environ["FAKE_DREAM_SLEEP"] = "2"
+        arch = self.D / "p.archive.md"
+        arch.write_text("# p: archived agent context\n\n" + dream_check.SKELETON)
+
+        def rewrite():
+            time.sleep(0.7)
+            arch.write_text(arch.read_text() + "\n")
+        t = threading.Thread(target=rewrite)
+        t.start()
+        before_core = self.core.read_bytes()
+        rc, out = self.run_dream(mode="slow")
+        t.join()
+        self.assertEqual(rc, 1)
+        self.assertIn("files changed during the run", out)
+        self.assertEqual(self.core.read_bytes(), before_core)
+        self.assertTrue(arch.read_text().endswith("\n\n"))
+        self.assertFalse((self.D / "backups").exists())
+        self.assertEqual(self.dj()["failures"], 1)
+
     def test_write_failure_restores(self):
         (self.D / "p.archive.md").write_text("# p: archived agent context\n\n" + dream_check.SKELETON)
         old_core, old_arch = self.core.read_bytes(), (self.D / "p.archive.md").read_bytes()
