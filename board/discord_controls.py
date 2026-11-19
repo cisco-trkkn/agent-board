@@ -9,9 +9,11 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import discord_feed
+import discord_ideas
 import tc_env
 
 BIN = Path(__file__).resolve().parent.parent / "bin"
@@ -157,6 +159,9 @@ def consume_events(d, project, state, run, add_line):
                 discord_feed.audit_append(d, user, "react", str(ev.get("emoji") or ""), result)
             elif kind in ("slash", "modal", "read", "rejected"):
                 _ops("handle_event", project, d, ev, add_line, allow)
+            elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:ideas:"):
+                cid = str(ev.get("custom_id"))
+                discord_feed.audit_append(d, user, "click", cid, discord_ideas.click(user, cid, add_line, time.time()) if user in allow else "rejected")
             else:
                 discord_feed.audit_append(d, user, "click", str(ev.get("custom_id") or ""), "ignored" if user in allow else "rejected")
         finally:

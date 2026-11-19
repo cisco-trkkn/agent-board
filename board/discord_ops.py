@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import discord_feed
+import discord_ideas
 import ideas
 import tc_env
 
@@ -339,12 +340,20 @@ def handle_event(project, d, ev, add_line, allow):
     """slash / modal / read / rejected: act, audit in <d>/audit.jsonl, return the audit result. `project` is the default
     when the event names none (events forwarded from a project's controls)."""
     user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
-    project = ev.get("project") or project
+    ideas_slash = kind == "slash" and ev.get("command") == "ideas"
+    if ideas_slash:   # /ideas never defaults to the channel's project: a null project means every project
+        project = ev.get("project")
+    else:
+        project = ev.get("project") or project
     target = str(ev.get("command") or ev.get("form") or ev.get("what") or "")
     if kind == "rejected" or user not in allow:
         result = "rejected"
     elif kind == "read":
         result = "answered"
+    elif ideas_slash:
+        result = discord_ideas.request(ev.get("project"), ev.get("bridge"), add_line, time.time())
+        discord_feed.audit_append(d, user, kind, f"ideas:{ev.get('project') or 'all'}", result)
+        return result
     elif not _known(project):
         result = "unknown project"
     elif kind == "slash":
@@ -411,6 +420,8 @@ def _resume_all(st, add_line):
 
 def _click(d, user, cid, st, add_line, now, on_merge):
     parts = cid.split(":")
+    if parts[:2] == ["ab", "ideas"]:
+        return discord_ideas.click(user, cid, add_line, now)
     if parts[:2] != ["ab", "ops"] or len(parts) < 3:
         return "ignored"
     act, k = parts[2], ":".join(parts[3:])
