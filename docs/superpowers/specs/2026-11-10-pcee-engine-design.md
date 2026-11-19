@@ -54,6 +54,9 @@ headless"):
     decides before the build continues.
 18. With the SDK backend, approval holds (section 13, stage 7) answer through `canUseTool` instead of a deny and a
     later retry under a one-time pass; the hook design stays for `claude-tmux` jobs.
+19. (Same day, third revision.) A project owner sits above the engine (decomposition stage 10); the engine and the
+    architect pass do not change in this stage. Until stage 10 the lead plays the owner: an architect decision that
+    would need a push, a protected path or spend far over the estimate is an `escalate`, never a ruling.
 
 ## Problem
 

@@ -25,6 +25,10 @@ The user decided on Discord, 2026-11-19 (only this block, the Status table and t
   (TypeScript), not the headless CLI (`claude -p`). It is a new stage 8, planned after stage 3 passes K2, and opens
   with a spike: subscription billing, the same setup as a CLI worker (plugins, skills, mods, routing gates), and
   `canUseTool` routed to Discord. Engine spec, "Revised 2026-11-19 (2)", decisions 15-18.
+- (Third revision, same day, "Amend the spec".) A **project owner** layer sits above the engine, one per project: new
+  stage 10. It is code with short LLM calls, not a long-running session. The architect stays an engine job inside
+  one run; what it cannot decide within the owner's policy and budget goes up to the owner, then to the user.
+  Engine spec decision 19.
 
 ## Status
 
@@ -43,6 +47,7 @@ passes.
 | 6 | — | — | not started | — | 2026-11-10 |
 | 7 | — | — | not started (Discord interface; takes approval holds and schedules from the engine spec) | — | 2026-11-19 |
 | 8 | — | — | not started (Claude Agent SDK backend after stage 3 passes K2; opens with a spike: billing, setup parity, `canUseTool` to Discord) | — | 2026-11-19 |
+| 10 | — | — | not started (project owner above the engine; after stage 6) | — | 2026-11-19 |
 
 Stages 2 and 3 are specced now. Stages 4 to 6 are designed when their gates pass, from real results. Stage 3
 does not start unless K1 passes: its queue run checks `tmux-ctl metrics gate K1` before `writing-plans` and
@@ -176,6 +181,26 @@ same path. The engine never drives `claude -p` itself. Planned after stage 3 pas
 SDK runs bill like CLI runs on the user's subscription (else an API-key cost model is the user's call), a job loads
 the same settings, plugins, skills, mods and routing gates as a CLI worker, and a `canUseTool` question round-trips
 through Discord. The board shows the SDK event stream where a tmux pane used to be. Engine spec decisions 15-18.
+
+### 10. Project owner above the engine (added 2026-11-19)
+
+One project owner per project, above its engine. Layers, top down: the user; the project owner; the engine core
+(state, scheduler, integrate, budgets, retries, architect pass) with its strategy; the backend (an adapter only, no
+judgment, so backends stay swappable).
+
+- **What it owns:** what gets built and in what order (the queue it hands the engine), the policy (what may merge,
+  push or deploy without the user, which paths need the user, spend caps), the project's budget and pacing, the
+  project's memory, and the conversation with the user (Discord).
+- **What it is:** code with short LLM calls, not a long-running LLM session. The policy is a rules file checked by
+  code on every action. A model is called with a short, fresh context only to turn a plain-language ask into a
+  structured policy or spec that the user confirms, to settle what the rules do not, and to talk to the user.
+  Reason: an always-on Opus lead is 48 to 74% of each spec's cost, almost all re-reading its own context.
+- **Relation to the architect:** the architect is an engine job inside one approved run, spawned for a fixed list
+  of escalation cases; it rules within the owner's policy and budget and never talks to the user or changes
+  policy. A ruling that would break the policy or the budget (a push, a protected path, a cost far over estimate)
+  goes up to the owner, which applies the rules or asks the user.
+- **Order:** after stage 6, when the engine runs reliably at concurrency above 1. Until then the lead plays the
+  owner. Federation (several owners cooperating, the long-term idea) builds on this stage and is not part of it.
 
 ## The five specs queued on 2026-11-10
 
