@@ -273,7 +273,7 @@ def _lead_question(d, st, record, link, now):
         _edit_ops(d, key, f"{p}: answered")
 
 
-def tick(records, tasks_by_project, limits, now, add_line):
+def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=None):
     """One ops pass. None when ops is not configured or another tick holds the lock."""
     if not configured():
         return None
@@ -296,6 +296,16 @@ def tick(records, tasks_by_project, limits, now, add_line):
         if card:
             discord_feed.outbox_write(d, card)
             st["card_text"], st["card_ts"] = text, now
+        if live is not None:   # the ops bot's custom status; a bad line or op is logged and never stops the views
+            try:
+                import ticker
+                pline = ticker.ops_line(records, live, limits, tasks_by_project, now, floors=floors, lead_sids=lead_sids or {})
+                pres = discord_feed.presence_op_due(st, pline, now)
+                if pres:
+                    discord_feed.outbox_write(d, pres)
+                    st["presence_text"], st["presence_ts"] = pline, now
+            except Exception as e:   # noqa: BLE001 -- ValueError from _check, or anything ticker raised
+                print(f"discord_ops: presence skipped: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         st["queue_ts"] = now
         status = {"_all": text}
         status.update({r["project"]: _project_line(r, tasks_by_project.get(r["project"]), links[r["project"]], floors[r["project"]]) for r in records})

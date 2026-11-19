@@ -138,7 +138,37 @@ class FeedTickWiringTest(Base):
              mock.patch.object(server.discord_controls, "step"):
             server.feed_tick([rec("p")], 1000.0)
         raw.assert_called_once_with(server.HOME / ".claude", "sid", 5, 6)
-        self.assertEqual(tick.call_args[1], {"lead_tasks": tasks, "list_id": "session-sid"})
+        self.assertEqual(tick.call_args[1], {"lead_tasks": tasks, "list_id": "session-sid", "live": None, "limits": mock.ANY, "lead_sid": "sid"})
+
+    def test_tick_and_ops_get_live_limits_and_lead_ids(self):
+        self.configure("p")
+        live = [{"session_id": "s1"}]
+        lim = {"seven_day": {}}
+        with mock.patch.object(server.planview, "lead_entry", return_value=("sid", 5, 6)), \
+             mock.patch.object(server.planview, "raw_live_list", return_value=("l", [])), \
+             mock.patch.object(server.usage, "tap_entries", return_value=[]), \
+             mock.patch.object(server.usage, "plan_limits", return_value=lim) as pl, \
+             mock.patch.object(server.discord_ops, "configured", return_value=True), \
+             mock.patch.object(server.discord_feed, "tick") as tick, \
+             mock.patch.object(server.discord_controls, "step"), \
+             mock.patch.object(server, "ops_tick") as ot:
+            server.feed_tick([rec("p"), rec("nochan")], 1000.0, live=live)
+        pl.assert_called_once()
+        self.assertEqual(tick.call_args[1]["live"], live)
+        self.assertIs(tick.call_args[1]["limits"], lim)
+        self.assertEqual(tick.call_args[1]["lead_sid"], "sid")
+        self.assertEqual(ot.call_args[1], {"limits": lim, "live": live, "lead_sids": {"p": "sid", "nochan": "sid"}})
+
+    def test_overview_payload_passes_indexer_snapshot(self):
+        ov = {"generated": 1.0, "projects": [rec("p")]}
+        idx = mock.Mock()
+        idx.snapshot.return_value = [{"session_id": "x"}]
+        with mock.patch.object(server, "build_overview", return_value=ov), mock.patch.object(server, "INDEXER", idx), \
+             mock.patch.object(server, "ensure_overseer"), mock.patch.object(server, "ensure_discord_bridges"), \
+             mock.patch.object(server, "feed_tick") as ft:
+            server._overview_cache.update(at=0.0, value=None)
+            server.overview_payload()
+        self.assertEqual(ft.call_args[1], {"live": [{"session_id": "x"}]})
 
 
 class FeedStepWiringTest(Base):

@@ -381,6 +381,15 @@ def primed():
     return {"primed": True, "seen": []}
 
 
+class PresenceDueTest(unittest.TestCase):
+    def test_due(self):
+        st = {"presence_text": "a", "presence_ts": 1000.0}
+        self.assertIsNone(df.presence_op_due(st, "a", 1300.0))
+        self.assertIsNone(df.presence_op_due(st, "b", 1059.0))
+        self.assertEqual(df.presence_op_due(st, "b", 1060.0), {"op": "presence", "text": "b"})
+        self.assertEqual(df.presence_op_due({}, "b", NOW), {"op": "presence", "text": "b"})
+
+
 class DeriveBase(Base):
     def setUp(self):
         super().setUp()
@@ -722,6 +731,49 @@ class TickTest(DeriveBase):
             self.tick([self.run_task], now=NOW + 200)
         self.assertEqual(len(df.read_events("proj", 0)[0]), feed_n)   # nothing re-derived or re-appended
         self.assertEqual(len([o for o in self.outbox() if o["op"] != "card"]), len([o for o in self.outbox()[:n] if o["op"] != "card"]))
+
+    def presence(self):
+        return [o for o in self.outbox() if o["op"] == "presence"]
+
+    def ptick(self, now, spend, live=()):
+        r = rec()
+        r["spend_today"] = spend
+        return df.tick("proj", r, self.root, now, lead_tasks=self.prime, live=list(live), limits=None)
+
+    def test_presence_throttled_60s_and_on_change(self):
+        # mutation: drop the 60 s check in presence_op_due -> the t+30 assertion fails
+        self.ptick(NOW, 1.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 30, 2.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 61, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        self.assertIn("$2.00", self.presence()[1]["text"])
+        self.ptick(NOW + 120, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
+        self.assertEqual((st["presence_text"], st["presence_ts"]), (self.presence()[1]["text"], NOW + 61))
+
+    def test_no_presence_when_live_is_none(self):
+        self.tick(self.prime)
+        self.assertEqual(self.presence(), [])
+        st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
+        self.assertNotIn("presence_text", st)
+
+    def test_bad_presence_op_is_logged_and_does_not_block_card(self):
+        # mutation: save presence_text although the write raised -> presence_text in state
+        with mock.patch("ticker.project_line", return_value=""), mock.patch("sys.stderr") as err:
+            df.tick("proj", rec(), self.root, NOW, lead_tasks=self.prime, live=[], limits=None)
+        self.assertEqual(self.presence(), [])
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
+        self.assertNotIn("presence_text", st)
+
+    def test_line_failure_never_stops_card(self):
+        with mock.patch("ticker.project_line", side_effect=RuntimeError("boom")), mock.patch("sys.stderr") as err:
+            df.tick("proj", rec(), self.root, NOW, lead_tasks=self.prime, live=[], limits=None)
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        self.assertIn("boom", "".join(c[0][0] for c in err.write.call_args_list))
 
     def test_held_lock_skips_tick(self):
         d = tc_env.discord_dir("proj")

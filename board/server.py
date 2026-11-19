@@ -487,23 +487,32 @@ def ensure_discord_bridges(records):
         print(f"tmux-dash: discord bridge ensure failed (ops): {e}", file=sys.stderr, flush=True)
 
 
-def feed_tick(records, now):
+def feed_tick(records, now, live=None):
     """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (prompt buttons, inbound events).
     A failure in one project is logged and never breaks the overview or the next project."""
     home = HOME / ".claude"
     ops_on = discord_ops.configured()
+    try:
+        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+    except Exception:   # noqa: BLE001 -- no taps: the lines show "?"
+        limits = None
+    lead_sids = {}
     tasks_by_project = {}   # the ops card and views cover every project, with or without a channel of its own
     for r in records:
         p = r["project"]
         try:
             if not discord_feed.channel_of(p):
                 if ops_on:
-                    tasks_by_project[p] = planview.raw_live_list(home, *planview.lead_entry(p, home, tmux))[1]
+                    sid, pid, started = planview.lead_entry(p, home, tmux)
+                    lead_sids[p] = sid
+                    tasks_by_project[p] = planview.raw_live_list(home, sid, pid, started)[1]
                 continue
             sid, pid, started = planview.lead_entry(p, home, tmux)
+            lead_sids[p] = sid
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
             tasks_by_project[p] = tasks
-            discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id)
+            discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id,
+                              live=live, limits=limits, lead_sid=sid)
         except Exception as e:   # noqa: BLE001
             print(f"tmux-dash: discord feed failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         try:
@@ -512,20 +521,21 @@ def feed_tick(records, now):
         except Exception as e:   # noqa: BLE001 -- a tick error does not skip the controls step, and vice versa
             print(f"tmux-dash: discord controls failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     if ops_on:
-        ops_tick(records, tasks_by_project, now)
+        ops_tick(records, tasks_by_project, now, limits=limits, live=live, lead_sids=lead_sids)
 
 
-def ops_tick(records, tasks_by_project, now):
+def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=None):
     """The ops bot: one tick (card, views, approvals) then one pass over its events, after every project's step.
     A failure in either is logged and never breaks the overview."""
     for p in (r["project"] for r in records):
         tasks_by_project.setdefault(p, [])   # a project whose lead list could not be read still appears on the card
+    if limits is None:
+        try:
+            limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+        except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
+            limits = None
     try:
-        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-    except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
-        limits = None
-    try:
-        discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line)
+        discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line, live=live, lead_sids=lead_sids)
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     try:
@@ -558,7 +568,7 @@ def overview_payload():
         _overview_cache.update(at=time.monotonic(), value=value)
     ensure_overseer()   # once per fresh build, outside the lock: its run_script can take up to 20 s and must not stall /api/overview
     ensure_discord_bridges(ov["projects"])
-    feed_tick(ov["projects"], ov["generated"])
+    feed_tick(ov["projects"], ov["generated"], live=INDEXER.snapshot() if INDEXER else [])
     return value
 
 

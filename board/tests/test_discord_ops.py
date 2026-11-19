@@ -342,6 +342,53 @@ class Tick(Base):
         self.tick([rec("a")])
         self.assertEqual([a["key"] for a in json.loads((self.ops / "views.json").read_text())["approvals"]], ["fresh"])
 
+    def presence(self):
+        return [o for o in self.outbox() if o["op"] == "presence"]
+
+    def ptick(self, now, spend, live=()):
+        return ops.tick([rec("a", spend=spend)], {}, None, now, self.add, live=list(live))
+
+    def test_presence_throttled_60s_and_on_change(self):
+        # mutation: drop the 60 s check in presence_op_due -> the t+30 assertion fails
+        self.configure()
+        self.project("a")
+        self.ptick(NOW, 1.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 30, 2.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 61, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        self.ptick(NOW + 120, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        st = self.state()
+        self.assertEqual((st["presence_text"], st["presence_ts"]), (self.presence()[1]["text"], NOW + 61))
+
+    def test_no_presence_when_live_is_none(self):
+        self.configure()
+        self.tick([rec("a")])
+        self.assertEqual(self.presence(), [])
+        self.assertNotIn("presence_text", self.state())
+
+    def test_presence_needs_ops_configured(self):
+        self.assertIsNone(self.ptick(NOW, 1.0))
+        self.assertFalse((self.ops / "outbox").exists())
+
+    def test_bad_presence_does_not_block_card_or_views(self):
+        self.configure()
+        with mock.patch("ticker.ops_line", return_value=""), mock.patch("sys.stderr"):
+            self.ptick(NOW, 1.0)
+        self.assertEqual(self.presence(), [])
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        self.assertNotIn("presence_text", self.state())
+        self.assertTrue((self.ops / "views.json").exists())
+
+    def test_line_failure_never_stops_card(self):
+        self.configure()
+        with mock.patch("ticker.ops_line", side_effect=RuntimeError("boom")), mock.patch("sys.stderr") as err:
+            self.ptick(NOW, 1.0)
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        self.assertIn("boom", "".join(c[0][0] for c in err.write.call_args_list))
+
     def test_lock_held_returns_none(self):
         import fcntl
         self.configure()

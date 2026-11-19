@@ -20,6 +20,7 @@ CAP = 200
 CARD_MAX = 1900
 PRESENCE_MAX = 128
 CARD_EVERY = 30
+PRESENCE_EVERY = 60
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
 APPROVAL_KINDS = ("perm", "question", "merge", "other")
@@ -263,6 +264,15 @@ def card_op_due(state, text, now):
     if now - state.get("card_ts", 0) < CARD_EVERY:
         return None
     return {"op": "card", "text": text}
+
+
+def presence_op_due(state, text, now):
+    """A presence op when text changed and at least PRESENCE_EVERY seconds passed since state['presence_ts'], else None."""
+    if text == state.get("presence_text"):
+        return None
+    if now - state.get("presence_ts", 0) < PRESENCE_EVERY:
+        return None
+    return {"op": "presence", "text": text}
 
 
 def audit_append(dir, user, action, target, result):
@@ -515,11 +525,12 @@ def _load(p):
         return {}
 
 
-def tick(project, record, root, now, lead_tasks=None, list_id=""):
+def tick(project, record, root, now, lead_tasks=None, list_id="", live=None, limits=None, lead_sid=""):
     """One feed pass for a project under flock(<dir>/feed-state.lock); None when another tick holds it.
     derive -> append events to the feed file -> read every feed event since state["feed_offset"] (so events appended by
     other writers flow through too) -> outbox ops -> the card op when due -> feed-state.json.
-    `lead_tasks` are the raw lead task dicts and `list_id` their task-list directory name (planview.raw_live_list)."""
+    `lead_tasks` are the raw lead task dicts and `list_id` their task-list directory name (planview.raw_live_list).
+    `live` (the indexer rows; None = no presence op), `limits` and `lead_sid` feed the ticker line of the throttled presence op."""
     import tc_env
     d = tc_env.discord_dir(project)
     d.mkdir(parents=True, exist_ok=True)
@@ -547,15 +558,31 @@ def tick(project, record, root, now, lead_tasks=None, list_id=""):
         card = card_op_due(st, text, now)
         if card:
             ops.append(card)
+        pres, pline = None, ""
+        if live is not None:
+            try:
+                import ticker
+                pline = ticker.project_line(record, live, limits, lead_tasks or [], now,
+                                            floor=st.get("spec_floor", {}).get(st.get("running_thread_key")), lead_sid=lead_sid)
+                pres = presence_op_due(st, pline, now)
+            except Exception as e:   # noqa: BLE001 -- a bad line never stops the card or the other ops
+                print(f"discord_feed: presence line failed ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            if pres:
+                ops.append(pres)
         written = 0
+        pres_written = False
         for op in ops:
             try:
                 outbox_write(d, op)
                 written += 1
+                if op is pres:
+                    pres_written = True
             except ValueError as e:
                 print(f"discord_feed: skipped bad op ({project}): {e}", file=sys.stderr, flush=True)
         if card:
             st["card_text"], st["card_ts"] = text, now
+        if pres_written:
+            st["presence_text"], st["presence_ts"] = pline, now
         tmp = sp.with_name(sp.name + ".tmp")
         tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, sp)
