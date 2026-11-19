@@ -33,7 +33,8 @@ What it does:
   `Reply to that message with your answer.` and arms the message (`reply_armed[message id] = key`); the next message
   from an allowlisted user that replies to it writes `{type:"reply", key, text, user, message_id, ts}` (text trimmed,
   at most 1000 characters, `message_id` = the dialog message) and disarms it. `ab:dlg:` and `ab:gate:` clicks are
-  events in project and in ops mode; this needs the `MessageContent` intent.
+  events in project and in ops mode; this needs the `MessageContent` intent: every bot whose bridge runs (project and
+  ops) must have **Message Content Intent** switched on in the Developer Portal, and a bot without it exits at login.
 - Turns component clicks whose `customId` starts with `ab:` into `<dir>/events/<ts>-<id>.json`. The user must be in
   `<dir>/access.json` `allowFrom` (re-read on every click; missing file = nobody); otherwise the reply is an
   ephemeral `Not authorized.` and nothing is written. Allowed clicks are deferred first, then written:
