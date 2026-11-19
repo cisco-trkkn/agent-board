@@ -142,4 +142,50 @@ sed -e 's/^❯ 1\./  1./' -e 's/^  5\. Chat about this/❯ 5. Chat about this/' 
 pshow p-m5 $S/multi-chat.txt; pr p-m5 --option 1
 check "VARIANT cursor on Chat about this: toggle, Up, Enter"  test $rc -eq 0 -a "$(gotk p-m5)" = "GOT:31${UP}${ENTER}"
 
+# --- tmux-ctl dialog <win> type --expect <rows> --text <reply>: types a reply into an idle prompt (spec C Task 9).
+# `rows <win> [--n N]` prints the last N (default 8) non-empty rows above the input box's rule; type sends only when the last
+# (as many as --expect has) rows equal --expect byte for byte, the pane is not in copy mode and the input line holds no text.
+# Mutation: skip the input-text check → the typed-text case sends. TY = Enter after the text.
+python3 -I - $FXA/no-prompt.txt > $S/rows5.txt <<'PY'
+import re, sys
+rows = [l.rstrip() for l in open(sys.argv[1], encoding="utf-8").read().split("\n")]
+rows = [r for r in rows if r]
+rule = [i for i, r in enumerate(rows) if re.match(r"^─{10,}", r)][0]   # the rule above the input line
+print("\n".join(rows[:rule][-5:]))
+PY
+R5="$(<$S/rows5.txt)"
+replayk p-ty $FXA/no-prompt.txt
+dl p-ty rows --n 5
+check "rows: the last 5 rows above the rule, rc 0"       test $rc -eq 0 -a "$out" = "$R5"
+dl p-ty type --expect "$R5" --text "option 2"
+check "type: rc 0 and its message"                       test $rc -eq 0 -a "$out" = "dialog: p-ty: typed"
+check "type: the text, then Enter"                       test "$(gotk p-ty)" = "GOT:$(print -rn -- 'option 2' | xxd -p | tr -d '\n')${ENTER}"
+
+replayk p-tyoff $FXA/no-prompt.txt
+dl p-tyoff type --expect "${R5/$'\n'/X$'\n'}" --text "x"
+check "type, one row different: rc 1 + message"          test $rc -eq 1 -a "$err" = "dialog: the screen in p-tyoff changed"
+check "type, one row different: nothing sent"            test "$(gotk p-tyoff)" = GOT:NONE
+
+replayk p-tycp $FXA/no-prompt.txt
+export TC_DIALOG_BEFORE_SEND="$TT_BIN copy-mode -t '=tt:p-tycp'"
+dl p-tycp type --expect "$R5" --text "x"; unset TC_DIALOG_BEFORE_SEND
+check "type in copy mode: rc 1"                          test $rc -eq 1
+tt send-keys -t '=tt:p-tycp' -X cancel 2>/dev/null
+check "type in copy mode: nothing sent"                  test "$(gotk p-tycp)" = GOT:NONE
+
+sed -e '/^──────/{n;s/^❯.*/❯ half typed/;}' $FXA/no-prompt.txt > $S/typed.txt
+replayk p-tytx $S/typed.txt
+dl p-tytx type --expect "$R5" --text "x"
+# mutation: skip the input-text check → rc 0 and the text is sent
+check "type over typed text: rc 1 + message"             test $rc -eq 1 -a "$err" = "dialog: the screen in p-tytx changed"
+check "type over typed text: nothing sent"               test "$(gotk p-tytx)" = GOT:NONE
+
+replayk p-tynone $FXA/bash-git.txt
+dl p-tynone type --expect "x" --text "x"
+check "type with no input box on screen: rc 1, nothing sent"  test $rc -eq 1 -a "$(gotk p-tynone)" = GOT:NONE
+replayk p-tyu $FXA/no-prompt.txt
+dl p-tyu type --text "x";               check "type without --expect: rc 2"  test $rc -eq 2
+dl p-tyu type --expect "$R5";           check "type without --text: rc 2"    test $rc -eq 2
+check "type usage errors: nothing sent"                  test "$(gotk p-tyu)" = GOT:NONE
+
 tt_done

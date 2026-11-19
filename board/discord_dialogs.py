@@ -4,7 +4,9 @@ scan(sessions, now, run) reads each waiting `claude` pane with `tmux-ctl dialog 
 dialog (key: pane number plus a hash of the dialog's lines) to the project's outbox, or to the ops dir when the session has no channel,
 and edits a message to `answered at the terminal` when its dialog left the screen. State: <agent_base>/dialogs/state.json under its own
 flock (state.lock); never the ops-state lock. `run(argv) -> str` raises on a non-zero exit (server.run_script).
-Test: tests/test_discord_dialogs.py."""
+gates() posts pending user-gate tasks (Done / Not yet); scan() also posts an idle item (a claude pane that turned ready while a remote
+marker is fresh) with Reply only, and a reply to an idle or raw item is typed with `tmux-ctl dialog <pane> type`.
+Test: tests/test_discord_dialogs.py, tests/test_discord_gates.py."""
 import contextlib
 import fcntl
 import hashlib
@@ -27,7 +29,14 @@ ANSWERED = "answered at the terminal"
 NOT_PARSED = "(dialog not parsed)"
 _NONE = "dialog: none in"   # stderr of `tmux-ctl dialog <win> show` when the pane shows no dialog (tools/lib/dialog.zsh)
 ERROR = "error"
-_CHANGED = "dialog: the dialog in"   # stderr start of `press` when the screen no longer matches --expect (tools/lib/dialog.zsh)
+_CHANGED = ("dialog: the dialog in", "dialog: the screen in")   # stderr start of `press` / `type` when the screen no longer matches --expect (tools/lib/dialog.zsh)
+IDLE = "idle"
+REMOTE_S = 43200   # a remote marker (<state>/remote/<session id>) younger than 12 h means the user is away from the terminals
+IDLE_WORDS = "is waiting for your reply"
+REPLY_LABEL = 60
+CRITERIA_MAX = 1500
+GATE_RE = re.compile(r"ab:gate:(g[0-9a-f]{12}):(done|notyet)")
+GATES_KEEP = 500
 REPLY_MAX = 1000
 _N = re.compile(r"[1-9][0-9]?")
 _C0 = re.compile(r"[\x00-\x1f\x7f]")
@@ -139,26 +148,73 @@ def _waiting(pane):
     return pane.get("kind") == "claude" and pane.get("status") == "waiting"
 
 
-def _post(dialogs, key, pane, project, window, show, now):
+def _post(dialogs, key, pane, project, window, show, now, head=None):
     if key in dialogs:
         return
     d = target_dir(project)
     if d is None:
         return
-    head = header(project, window, show)
+    head = head or header(project, window, show)
     text, rows = message(key, head, show)
     discord_feed.outbox_write(d, {"op": "dialog", "key": key, "text": text, "rows": rows, "mention_user": True})
     dialogs[key] = {"pane": pane, "window": window, "project": project, "dir": str(d), "kind": show["kind"], "show": show,
                     "header": head, "ts": now}
 
 
-def _raw(pane):
-    """The stand-in `show` result of a waiting pane whose dialog does not parse: its preview rows, free text only."""
-    lines = [r for r in pane.get("preview") or [] if isinstance(r, str)]
+def _rows(run, pid, n=None):
+    """The last rows above the pane's input box (`tmux-ctl dialog <pane> rows`), the rows `type --expect` compares; None when the
+    pane shows no input box or the call failed."""
+    try:
+        out = run([str(BIN / "tmux-ctl"), "dialog", pid, "rows"] + (["--n", str(n)] if n else []))
+    except Exception:  # noqa: BLE001
+        return None
+    rows = [r for r in out.split("\n") if r]
+    return rows or None
+
+
+def _raw(pane, run):
+    """The stand-in `show` result of a waiting pane whose dialog does not parse: its rows above the input box (the rows a reply is
+    typed against), else its preview rows; free text only."""
+    lines = _rows(run, pane.get("id")) or [r for r in pane.get("preview") or [] if isinstance(r, str)]
     return {"kind": "raw", "question": NOT_PARSED, "options": [], "multi": False, "other": True, "lines": lines} if lines else None
 
 
-def _scan(dialogs, sessions, now, run):
+def _remote_fresh(now):
+    """True when a marker <state>/remote/<session id> is younger than 12 h (by mtime)."""
+    try:
+        with os.scandir(tc_env.state_dir() / "remote") as it:
+            return any(now - e.stat().st_mtime < REMOTE_S for e in it if e.is_file())
+    except OSError:
+        return False
+
+
+def _idle_track(last, sessions, now):
+    """Update last[pane id] (the status at the previous scan) for every claude pane that is not in a teammate or worker window and
+    has no Discord channel of its own; the (pane, project, window) triples that turned `ready` from `working` or `waiting` while a
+    remote marker is fresh. A pane with no entry yet (the first scan) never counts."""
+    fresh, seen, out = _remote_fresh(now), set(), []
+    for s in sessions or []:
+        for w in s.get("windows") or []:
+            for p in w.get("panes") or []:
+                pid = p.get("id")
+                if not pid:
+                    continue
+                seen.add(pid)
+                if p.get("kind") != "claude" or w.get("worker") or w.get("teammate") or p.get("discord"):
+                    last.pop(pid, None)
+                    continue
+                status, prev = p.get("status"), last.get(pid)
+                last[pid] = status
+                if fresh and status == "ready" and prev in ("working", "waiting"):
+                    out.append((pid, s.get("name") or "", w.get("name") or ""))
+    for pid in [k for k in last if k not in seen]:
+        del last[pid]
+    return out
+
+
+def _scan(dialogs, sessions, now, run, last=None):
+    last = last if last is not None else {}
+    idle = _idle_track(last, sessions, now)
     cache, live, panes = {}, {}, {}   # pane id -> show result; pane id -> the key on its screen now, or ERROR; pane id -> pane
 
     def show(pid):
@@ -175,12 +231,21 @@ def _scan(dialogs, sessions, now, run):
         if got is ERROR:
             live[pid] = ERROR
             continue
-        got = got if got is not None else _raw(pane)
+        got = got if got is not None else _raw(pane, run)
         if got is None:
             continue
         live[pid] = key_of(pid, got["lines"])
         found.append((live[pid], pid, project, window, got))
-    _sweep(dialogs, live, panes, show)   # before the posts: a changed dialog's old message is closed above its new one
+    _sweep(dialogs, live, panes, show, run)   # before the posts: a changed dialog's old message is closed above its new one
+    for pid, project, window in idle:
+        try:
+            rows = _rows(run, pid)
+            if rows:
+                _post(dialogs, key_of(pid, rows), pid, project, window,
+                      {"kind": IDLE, "question": "", "options": [], "multi": False, "other": True, "lines": rows}, now,
+                      head=f"❓ {project} · {window} {IDLE_WORDS}")
+        except Exception as e:  # noqa: BLE001
+            _warn(f"idle post failed ({project} {window} {pid})", e)
     for key, pid, project, window, got in found:
         try:
             _post(dialogs, key, pid, project, window, got, now)
@@ -188,7 +253,7 @@ def _scan(dialogs, sessions, now, run):
             _warn(f"post failed ({project} {window} {pid})", e)
 
 
-def _sweep(dialogs, live, panes, show):
+def _sweep(dialogs, live, panes, show, run):
     """Edit and drop every known dialog that is no longer on its pane's screen. A pane whose `show` failed keeps its keys this
     tick; a pane that no longer classifies as waiting is shown once more, so a dialog the classifier missed is not called answered."""
     for key, rec in list(dialogs.items()):
@@ -196,7 +261,13 @@ def _sweep(dialogs, live, panes, show):
             del dialogs[key]
             continue
         pid = rec.get("pane")
-        if pid in panes and pid not in live and rec.get("kind") != "raw":
+        if rec.get("kind") == IDLE:   # alive while the pane is still `ready` and shows the same rows above its input box
+            lines = (rec.get("show") or {}).get("lines") or []
+            if pid in panes and panes[pid].get("status") == "ready":
+                now_rows = _rows(run, pid, len(lines)) if lines else None
+                if now_rows is None or now_rows == lines:   # None: the read failed, keep it for this tick
+                    continue
+        elif pid in panes and pid not in live and rec.get("kind") != "raw":
             got = show(pid)
             live[pid] = ERROR if got is ERROR else key_of(pid, got["lines"]) if got else None
         if live.get(pid) in (ERROR, key):
@@ -214,8 +285,9 @@ def state_path():
 
 
 @contextlib.contextmanager
-def _locked():
-    """The dialog state (key -> record) under flock on state.lock; saved with a temp file and os.replace on the way out."""
+def _locked_state():
+    """The whole state file ({dialogs, gates, last_status}) under flock on state.lock; saved with a temp file and os.replace on the
+    way out."""
     sp = state_path()
     sp.parent.mkdir(parents=True, exist_ok=True)
     with open(sp.with_name("state.lock"), "w") as lock:
@@ -224,20 +296,29 @@ def _locked():
             st = json.loads(sp.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             st = {}
-        dialogs = st.get("dialogs") if isinstance(st, dict) else None
-        dialogs = dialogs if isinstance(dialogs, dict) else {}
+        st = st if isinstance(st, dict) else {}
+        for k in ("dialogs", "gates", "last_status"):
+            if not isinstance(st.get(k), dict):
+                st[k] = {}
         try:
-            yield dialogs
+            yield st
         finally:
             tmp = sp.with_name(sp.name + ".tmp")
-            tmp.write_text(json.dumps({"dialogs": dialogs}, ensure_ascii=False), encoding="utf-8")
+            tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, sp)
+
+
+@contextlib.contextmanager
+def _locked():
+    """The dialog records (key -> record) of the state file, under its lock."""
+    with _locked_state() as st:
+        yield st["dialogs"]
 
 
 def scan(sessions, now, run):
     """One pass over every waiting claude pane of `sessions` (build_state()["sessions"]): post new dialogs, retire answered ones."""
-    with _locked() as dialogs:
-        _scan(dialogs, sessions, now, run)
+    with _locked_state() as st:
+        _scan(st["dialogs"], sessions, now, run, st["last_status"])
 
 
 def _record(dialogs, key, need_show=True):
@@ -258,10 +339,10 @@ def _label(o):
     return _one_line(o.get("label", ""), LABEL_MAX)
 
 
-def _finish(rec, key, dialogs, run, args, label, now):
+def _finish(rec, key, dialogs, run, args, label, now, verb="press"):
     """Press through `tmux-ctl dialog <pane> press --expect <lines> <args>`, edit the message to the outcome, drop the key (every
     outcome: a press is never retried); returns the audit result."""
-    argv = [str(BIN / "tmux-ctl"), "dialog", rec["pane"], "press", "--expect", "\n".join(rec["show"]["lines"]), *args]
+    argv = [str(BIN / "tmux-ctl"), "dialog", rec["pane"], verb, "--expect", "\n".join(rec["show"]["lines"]), *args]
     try:
         run(argv)
         result, text = f"pressed: {label}", f"→ {label} (from Discord)"
@@ -330,10 +411,12 @@ def reply(d, user, ev, run, now):
             return "ignored"
         if not rec["show"].get("other") or not text.strip():
             return "ignored"
+        if rec["show"].get("kind") in ("raw", IDLE):   # no dialog to press: type the reply into the unchanged prompt
+            return _finish(rec, key, dialogs, run, ["--text", text], _one_line(text, REPLY_LABEL), now, verb="type")
         return _finish(rec, key, dialogs, run, ["--text", text], _one_line(text, LABEL_MAX), now)
 
 
-def consume_event(d, ev, allow, run, now):
+def consume_event(d, ev, allow, run, now, add_line=None):
     """(audit action, audit target, result) for a dialog event of an events dir, or None when `ev` is not one (a `reply`, or a
     click on an `ab:dlg:` id). The one place that checks allowFrom for dialog events: a user outside `allow` gets `rejected`."""
     user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
@@ -344,6 +427,101 @@ def consume_event(d, ev, allow, run, now):
     elif kind == "click" and cid.startswith("ab:dlg:"):
         action, target = "dialog", cid
         go = lambda: click(d, user, cid, ev, run, now)  # noqa: E731
+    elif kind == "click" and GATE_RE.match(cid):
+        action, target = "gate", cid
+        go = lambda: gate_click(d, user, cid, add_line, now)  # noqa: E731
+    elif kind == "click" and cid.startswith("ab:gate:"):
+        action, target = "gate", cid
+        go = lambda: "ignored"  # noqa: E731
     else:
         return None
     return action, target, go() if user in allow else "rejected"
+
+
+def _is_gate(t, by_id):
+    """A pending lead task that is a user gate (metadata userGate true, or a subject starting `User gate:`) whose blockedBy tasks are
+    all completed (a blocker no longer in the list counts as completed)."""
+    if not isinstance(t, dict) or t.get("status") != "pending" or not str(t.get("subject") or "").strip():
+        return False
+    meta = t.get("metadata")
+    if not ((isinstance(meta, dict) and meta.get("userGate") is True) or str(t["subject"]).startswith("User gate:")):
+        return False
+    return all((by_id.get(str(b)) or {}).get("status", "completed") == "completed" for b in t.get("blockedBy") or [])
+
+
+def gkey(project, subject):
+    return "g" + hashlib.sha1((project + "\0" + subject).encode("utf-8")).hexdigest()[:12]
+
+
+def _criteria(t):
+    """The acceptance criteria as `- ` lines: metadata acceptanceCriteria, else the lines under `**Acceptance Criteria:**` in the
+    description (up to the next blank line or bold heading); cut to CRITERIA_MAX characters."""
+    meta = t.get("metadata")
+    items = meta.get("acceptanceCriteria") if isinstance(meta, dict) else None
+    if not (isinstance(items, list) and any(isinstance(i, str) and i.strip() for i in items)):
+        items, on = [], False
+        for ln in str(t.get("description") or "").split("\n"):
+            if ln.strip().startswith("**Acceptance Criteria:**"):
+                on = True
+            elif on and (not ln.strip() or ln.strip().startswith("**")):
+                break
+            elif on:
+                items.append(re.sub(r"^\s*-\s*(\[[ xX]\]\s*)?", "", ln))
+    return "\n".join("- " + _one_line(i, 400) for i in items if isinstance(i, str) and i.strip())[:CRITERIA_MAX]
+
+
+def gates(project, tasks, now):
+    """Post each pending, unblocked user-gate task of `tasks` (the lead's task list as raw_live_list returns it) once per project and
+    subject: `🚧 <project> · user gate: <subject>`, its criteria, Done / Not yet. Keyed on project + subject, not the task id, so a
+    relay's new list does not repost."""
+    by_id = {str(t.get("id")): t for t in tasks or [] if isinstance(t, dict)}
+    todo = [t for t in by_id.values() if _is_gate(t, by_id)]
+    if not todo:
+        return
+    with _locked_state() as st:
+        g = st["gates"]
+        for t in todo:
+            k = gkey(project, t["subject"])
+            if k in g:
+                continue
+            d = target_dir(project)
+            if d is None:
+                return
+            head = f"🚧 {project} · user gate: {_one_line(t['subject'], QUESTION_MAX)}"
+            crit = _criteria(t)
+            rows = [[_button_gate(k, "done", "Done", 3), _button_gate(k, "notyet", "Not yet", 2)]]
+            try:
+                discord_feed.outbox_write(d, {"op": "dialog", "key": k, "text": head + ("\n" + crit if crit else ""), "rows": rows,
+                                              "mention_user": True})
+            except Exception as e:  # noqa: BLE001 -- retried next tick
+                _warn(f"gate post failed ({project})", e)
+                continue
+            g[k] = {"project": project, "subject": t["subject"], "dir": str(d), "header": head, "state": "open", "ts": now}
+        for k in sorted(g, key=lambda x: g[x].get("ts", 0))[:-GATES_KEEP]:
+            del g[k]
+
+
+def _button_gate(k, act, label, style):
+    return {"label": label, "style": style, "custom_id": f"ab:gate:{k}:{act}"}
+
+
+def gate_click(d, user, cid, add_line, now):
+    """The audit result of one `ab:gate:<gkey>:done|notyet` click: Done queues `[Discord] gate done <subject>` for the lead and edits
+    the message; Not yet only audits. The caller has checked allowFrom."""
+    m = GATE_RE.fullmatch(str(cid))
+    if not m or add_line is None:
+        return "ignored"
+    k, act = m.groups()
+    with _locked_state() as st:
+        rec = st["gates"].get(k)
+        if not isinstance(rec, dict) or rec.get("state") != "open":
+            return "already answered"
+        if act == "notyet":
+            return "not yet"
+        add_line(rec["project"], f"[Discord] gate done {rec['subject']}")   # a failure leaves the gate open
+        rec["state"] = "done"
+        try:
+            discord_feed.outbox_write(Path(rec["dir"]), {"op": "edit", "key": k, "text": f"{rec['header']}\n→ Done (from Discord)"})
+        except Exception as e:  # noqa: BLE001 -- the line is queued: the gate is done
+            _warn(f"gate edit failed ({k})", e)
+        return "done"

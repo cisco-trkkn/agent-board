@@ -506,11 +506,23 @@ class ConcurrencyTest(Base):
 class PressRunner(Runner):
     """Runner whose `press` calls are recorded in .presses; press_result is returned, or raised when it is an Exception."""
 
-    def __init__(self, shows=None, press_result='dialog: %12: chose "Yes"', delay=0.0):
+    def __init__(self, shows=None, press_result='dialog: %12: chose "Yes"', delay=0.0, rows=None):
         super().__init__(shows, delay)
-        self.presses, self.press_result = [], press_result
+        self.presses, self.press_result, self.rows, self.types = [], press_result, rows if rows is not None else {}, []
 
     def __call__(self, argv):
+        if len(argv) > 3 and argv[3] == "rows":   # `rows`: the text of the rows above the input box, or the error to raise
+            self.calls.append(list(argv))
+            v = self.rows.get(argv[2], f"dialog: {argv[2]}: no input box")
+            if v.startswith("dialog:"):
+                raise RuntimeError(v)
+            return v
+        if len(argv) > 3 and argv[3] == "type":
+            self.calls.append(list(argv))
+            self.types.append(list(argv))
+            if isinstance(self.press_result, Exception):
+                raise self.press_result
+            return "dialog: %12: typed"
         if len(argv) > 3 and argv[3] == "press":
             self.calls.append(list(argv))
             self.presses.append(list(argv))
@@ -813,6 +825,133 @@ class RoutingConsumeTest(ConsumerBase):
         self.assertEqual(self.audit(d), [("dialog", "evil", "rejected"), ("dialog-reply", "evil", "rejected")])
         self.assertEqual(self.run.presses, [])
         self.assertIn(key, self.state())
+
+
+class IdleTest(ConsumerBase):
+    """A claude pane that turns ready after working while a remote marker is fresh: one message with Reply; the reply is typed."""
+    NOW = 1_000_000.0
+    ROWS = ["⏺ Done. Which file next?", "✻ Brewed for 4s · done 4:20 PM"]
+    PID = "%12"
+
+    def setUp(self):
+        super().setUp()
+        self.run = PressRunner(rows={self.PID: "\n".join(self.ROWS)})
+
+    def marker(self, age=60.0, sid="s1"):
+        p = tc_env.state_dir() / "remote" / sid
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("")
+        os.utime(p, (self.NOW - age, self.NOW - age))
+
+    def scan(self, status, t=0.0, **kw):
+        s = sess(panes=[pane(self.PID, status=status, preview=["preview row"])])
+        w = s["windows"][0]
+        w.update({k: v for k, v in kw.items() if k in ("worker", "teammate")})
+        if kw.get("discord"):
+            w["panes"][0]["discord"] = True
+        dd.scan([s], self.NOW + t, self.run)
+
+    def key(self):
+        return key_of(self.PID, self.ROWS)
+
+    def test_working_to_ready_with_a_fresh_marker_posts_once_with_only_reply(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10); self.scan("ready", 20)
+        ops = [o for o in self.ops() if o["op"] == "dialog"]
+        self.assertEqual(len(ops), 1)
+        op = ops[0]
+        self.assertEqual(op["key"], self.key())
+        self.assertTrue(op["text"].startswith("❓ proj · win is waiting for your reply\n```\n"), op["text"])
+        for r in self.ROWS:
+            self.assertIn(r, op["text"])
+        self.assertEqual(self.buttons(op), [{"label": "Reply", "style": 1, "custom_id": f"ab:dlg:{self.key()}:reply"}])
+        self.assertIs(op["mention_user"], True)
+
+    def test_waiting_to_ready_posts(self):
+        self.marker()
+        self.scan("waiting"); self.scan("ready", 10)   # the waiting scan posts a raw item (no dialog parses); it is closed, the idle item posts
+        self.assertEqual([o["key"] for o in self.ops() if o["op"] == "dialog" and "waiting for your reply" in o["text"]], [self.key()])
+
+    def test_ready_at_first_sight_posts_nothing(self):
+        # mutation: treat a missing last_status as working -> this posts
+        self.marker()
+        self.scan("ready"); self.scan("ready", 10)
+        self.assertEqual(self.ops(), [])
+
+    def test_teammate_worker_and_discord_panes_post_nothing(self):
+        self.marker()
+        for kw in ({"teammate": True}, {"worker": True}, {"discord": True}):
+            self.scan("working", **kw); self.scan("ready", 10, **kw)
+            self.assertEqual(self.ops(), [], kw)
+
+    def test_no_marker_or_only_an_old_one_posts_nothing(self):
+        # mutation: skip the freshness check -> the 13 h old marker posts
+        self.scan("working"); self.scan("ready", 10)
+        self.assertEqual(self.ops(), [])
+        self.marker(age=13 * 3600)
+        self.scan("working", 20); self.scan("ready", 30)
+        self.assertEqual(self.ops(), [])
+
+    def test_pane_working_again_edits_to_answered_at_the_terminal(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10); self.scan("working", 20)
+        e = [o for o in self.ops() if o["op"] == "edit"]
+        self.assertEqual([o["text"] for o in e], [f"❓ proj · win is waiting for your reply\n{ANSWERED}"])
+        self.assertEqual(self.state(), {})
+
+    def test_screen_changing_edits_to_answered_at_the_terminal(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10)
+        self.run.rows[self.PID] = "something else\nentirely"
+        self.scan("ready", 20)
+        self.assertEqual([o["op"] for o in self.ops()], ["dialog", "edit"])
+
+    def test_reply_types_the_rows_shown_and_edits(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10)
+        r = self.reply(self.key(), "option 2")
+        self.assertEqual(r, "pressed: option 2")
+        self.assertEqual(self.run.types, [[TC, "dialog", "%12", "type", "--expect", "\n".join(self.ROWS), "--text", "option 2"]])
+        self.assertEqual(self.run.presses, [])
+        self.assertEqual(self.edits()[-1]["text"], "❓ proj · win is waiting for your reply\n→ option 2 (from Discord)")
+        self.assertEqual(self.state(), {})
+
+    def test_reply_text_in_the_edit_is_cut_to_60(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10)
+        self.reply(self.key(), "y" * 100)
+        self.assertEqual(self.edits()[-1]["text"].split("\n")[1], f"→ {'y' * 60} (from Discord)")
+
+    def test_a_changed_screen_edits_to_resent_below(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10)
+        self.run.press_result = RuntimeError("dialog: the screen in %12 changed")
+        self.assertEqual(self.reply(self.key(), "x"), "changed")
+        self.assertEqual(self.edits()[-1]["text"].split("\n")[1], "the dialog changed; re-sent below")
+
+    def test_a_click_on_a_non_option_id_of_an_idle_item_presses_nothing(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10)
+        self.assertEqual(self.click(f"ab:dlg:{self.key()}:1"), "ignored")
+        self.assertEqual(self.run.calls[-1][3], "rows")
+
+
+class RawReplyTest(ConsumerBase):
+    def test_a_reply_to_a_raw_item_runs_type_with_the_rows_shown(self):
+        # mutation: leave raw replies on `press --text` -> the argv has press, not type
+        pv = ["raw one", "raw two"]
+        run = PressRunner(shows={"%12": "dialog: none in %12"}, rows={"%12": "\n".join(pv)})
+        dd.scan([sess(panes=[pane("%12", preview=["preview only"])])], 100.0, run)
+        key = key_of("%12", pv)
+        self.assertIn(key, self.state())
+        self.assertEqual(dd.reply(self.d, "u1", {"type": "reply", "key": key, "text": "hi", "user": "u1"}, run, 200.0), "pressed: hi")
+        self.assertEqual(run.types, [[TC, "dialog", "%12", "type", "--expect", "raw one\nraw two", "--text", "hi"]])
+        self.assertEqual(run.presses, [])
+
+    def test_raw_item_falls_back_to_the_preview_when_rows_fail(self):
+        run = PressRunner(shows={"%12": "dialog: none in %12"})
+        dd.scan([sess(panes=[pane("%12", preview=["a", "b"])])], 100.0, run)
+        self.assertIn(key_of("%12", ["a", "b"]), self.state())
 
 
 class RealShowTest(unittest.TestCase):

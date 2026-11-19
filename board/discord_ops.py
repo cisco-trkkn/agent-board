@@ -437,7 +437,7 @@ def consume(add_line, run, now, on_merge=None):
             try:
                 user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
                 allow = _allow(d)
-                dlg = discord_dialogs.consume_event(d, ev, allow, run, now)
+                dlg = discord_dialogs.consume_event(d, ev, allow, run, now, add_line=add_line)
                 if dlg:
                     discord_feed.audit_append(d, user, *dlg)
                 elif kind == "click":

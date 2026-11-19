@@ -173,7 +173,7 @@ dl %99999 show
 check "unknown pane id: exit 2, no stdout"     test $rc -eq 2 -a -z "$out" -a "$err" = "tmux-ctl: no pane '%99999' on this tmux server"
 
 # --- usage
-dl d-plan; check "no verb: usage, exit 2"      test $rc -eq 2 -a -z "$out" -a "$err" = "tmux-ctl: usage: tmux-ctl dialog <win> show|press"
+dl d-plan; check "no verb: usage, exit 2"      test $rc -eq 2 -a -z "$out" -a "$err" = "tmux-ctl: usage: tmux-ctl dialog <win> show|press|type|rows"
 dl d-plan show extra; check "extra argument: usage, exit 2"  test $rc -eq 2 -a -z "$out"
 dl no-such-win show; check "unknown window: exit 2"  test $rc -eq 2 -a -z "$out"
 check "help has the dialog show line"          test "$($C help | grep -c "tmux-ctl dialog <win> show")" = 1

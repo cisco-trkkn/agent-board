@@ -444,10 +444,88 @@ _dlg_press() {
   print -r -- "dialog: $win: chose \"$labels\""
 }
 
+# _dlg_input: stdin = the screen (_dlg_screen). Mirrors paneclass.input_has_text: the lowest `❯ <text>` / `> <text>` line of the last
+# 30 rows that follows a full-width rule (or sits in a `│ … │` box), a numbered menu row not counting. Prints nothing when there is
+# none; else `T:<0|1>` (the line holds typed text; the greyed `Try "…` placeholder is not text) and `R:<row>` for every row above
+# the rule (above the box top for a boxed line). Byte-literal rules, as _dlg_parse.
+_dlg_input() {
+  LC_ALL=C awk '
+    function ltrim(x) { sub(/^[ \t]+/, "", x); return x }
+    function isrule(x) { x = ltrim(x); return index(x, "──────────") == 1 || index(x, "━━━━━━━━━━") == 1 }
+    { l[NR] = $0 }
+    END {
+      lo = NR - 29; if (lo < 1) lo = 1
+      for (n = NR; n >= lo; n--) {
+        x = ltrim(l[n]); boxed = 0
+        if (index(x, "│") == 1) { boxed = 1; x = substr(x, length("│") + 1) } else if (index(x, "|") == 1) { boxed = 1; x = substr(x, 2) }
+        x = ltrim(x)
+        if (index(x, "❯") == 1) x = substr(x, length("❯") + 1); else if (index(x, ">") == 1) x = substr(x, 2); else continue
+        if (!boxed && !(n > 1 && isrule(l[n-1]))) continue
+        gsub(/\302\240/, " ", x)   # Claude Code draws the empty input line as `❯` + a no-break space
+        sub(/^[ \t]+/, "", x); sub(/[ \t]*(│|\|)?[ \t]*$/, "", x)
+        if (x ~ /^[0-9]+\.[ \t]/) continue
+        print "T:" ((x != "" && index(x, "Try \"") != 1) ? 1 : 0)
+        e = n - 1
+        if (e >= 1 && (isrule(l[e]) || index(ltrim(l[e]), "╭") == 1)) e--
+        for (i = 1; i <= e; i++) print "R:" l[i]
+        exit
+      }
+    }'
+}
+
+# _dlg_rows_above <pane> <n>: sets HASTEXT (0|1, empty when the pane shows no input box) and ROWS_ (the last <n> rows above the box,
+# newline-joined). The screen is read through _dlg_screen: the rows `type --expect` is compared with.
+_dlg_rows_above() {
+  local blk; blk="$(_dlg_screen "$1" | _dlg_input)"
+  HASTEXT="$(print -r -- "$blk" | sed -n 's/^T://p')"
+  ROWS_="$(print -r -- "$blk" | grep -a '^R:' | sed -e 's/^R://' | tail -n "$2")"
+}
+
+# dialog_rows <win> [--n N]: prints the last N (default 8) rows above the input box, for the board to show and to pass to `type --expect`.
+_dlg_rows() {
+  local win="$1" n=8 pane u="usage: tmux-ctl dialog <win> rows [--n N]"; shift
+  if (( $# )); then [[ "$1" == --n && "$2" == <-> && "$2" != 0* && $# -eq 2 ]] || die "$u"; n="$2"; fi
+  _dlg_pane "$win"; pane="$REPLY"
+  [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  _dlg_rows_above "$pane" "$n"
+  [[ -n "$HASTEXT" ]] || { print -u2 "dialog: $win: no input box"; return 1 }
+  print -r -- "$ROWS_"
+}
+
+# dialog_type <win> --expect <rows> --text <text>: types a reply into an idle prompt. Only when the last rows above the input box
+# (as many as --expect has) equal --expect byte for byte on two reads, the pane is not in copy mode and the input line holds no text.
+_dlg_type() {
+  local win="$1" pane expect="" have_expect=0 text="" have_text=0 n u="usage: tmux-ctl dialog <win> type --expect <rows> --text <text>"
+  shift
+  while (( $# )); do
+    case "$1" in
+      --expect) (( $# >= 2 )) || die "$u"; expect="$2"; have_expect=1; shift 2 ;;
+      --text)   (( $# >= 2 )) || die "$u"; text="$2"; have_text=1; shift 2 ;;
+      *) die "$u" ;;
+    esac
+  done
+  (( have_expect && have_text )) && [[ -n "$expect" && -n "$text" ]] || die "--expect <rows> and a non-empty --text are required ($u)"
+  _dlg_pane "$win"; pane="$REPLY"
+  n="${#${(@f)expect}}"
+  [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  _dlg_rows_above "$pane" "$n"
+  [[ -n "$HASTEXT" ]] || { print -u2 "dialog: $win: no input box"; return 1 }
+  [[ "$HASTEXT" == 0 && "$ROWS_" == "$expect" ]] || { print -u2 "dialog: the screen in $win changed"; return 1 }
+  [[ -n "$TC_DIALOG_BEFORE_SEND" ]] && eval "$TC_DIALOG_BEFORE_SEND" >/dev/null 2>&1
+  [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  _dlg_rows_above "$pane" "$n"
+  [[ "$HASTEXT" == 0 && "$ROWS_" == "$expect" ]] || { print -u2 "dialog: the screen in $win changed"; return 1 }
+  [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  t send-keys -t "$pane" -l -- "$text"; t send-keys -t "$pane" Enter
+  print -r -- "dialog: $win: typed"
+}
+
 dialog_cmd() {
-  local win="$1" act="$2" pane block u="usage: tmux-ctl dialog <win> show|press"
+  local win="$1" act="$2" pane block u="usage: tmux-ctl dialog <win> show|press|type|rows"
   [[ -n "$win" ]] || die "$u"
   if [[ "$act" == press ]]; then shift 2; _dlg_press "$win" "$@"; return $?; fi
+  if [[ "$act" == type ]]; then shift 2; _dlg_type "$win" "$@"; return $?; fi
+  if [[ "$act" == rows ]]; then shift 2; _dlg_rows "$win" "$@"; return $?; fi
   shift 2 2>/dev/null
   [[ "$act" == show && $# -eq 0 ]] || die "$u"
   _dlg_pane "$win"; pane="$REPLY"

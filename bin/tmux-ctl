@@ -43,6 +43,9 @@
 #                                          kind, question, options (n, label, permanent), multi, other, lines; read-only
 #   tmux-ctl dialog <win> press --expect <lines> (--option <n>... | --text <text>)  answer that dialog with the keys of its kind; refuses
 #                                          (exit 1, nothing sent) unless its lines equal --expect on two reads; --option repeats on a multi-select
+#   tmux-ctl dialog <win> rows [--n N]    print the last N (default 8) rows above the input box, the rows `type --expect` compares
+#   tmux-ctl dialog <win> type --expect <rows> --text <text>  type a reply into an idle prompt; refuses (exit 1, nothing sent) unless
+#                                          those rows are unchanged on two reads, the pane is not in copy mode and the input line is empty
 #   tmux-ctl wait-gone <name>... [--timeout S]  after shutdown_requests: wait (default 300 s) until every `✦ <name>` window of this
 #                                          session is gone; at the timeout kill the ones left (exit 3)
 #   tmux-ctl handoff-mark [--clear]        a self-started handoff marks this session as not yet relayed (the Stop guard
@@ -680,7 +683,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,65p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

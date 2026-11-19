@@ -503,6 +503,14 @@ def ensure_discord_bridges(records):
         print(f"tmux-dash: discord bridge ensure failed (ops): {e}", file=sys.stderr, flush=True)
 
 
+def _gates(project, tasks, now):
+    """The project's pending user-gate tasks as Discord messages; a failure is logged and never skips the feed tick."""
+    try:
+        discord_dialogs.gates(project, tasks, now)
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: discord gates failed ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
 def feed_tick(records, now, live=None):
     """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (inbound events); the dialog scan runs once before them.
     A failure in one project is logged and never breaks the overview or the next project."""
@@ -526,11 +534,13 @@ def feed_tick(records, now, live=None):
                     sid, pid, started = planview.lead_entry(p, home, tmux)
                     lead_sids[p] = sid
                     tasks_by_project[p] = planview.raw_live_list(home, sid, pid, started)[1]
+                    _gates(p, tasks_by_project[p], now)
                 continue
             sid, pid, started = planview.lead_entry(p, home, tmux)
             lead_sids[p] = sid
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
             tasks_by_project[p] = tasks
+            _gates(p, tasks, now)
             discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id,
                               live=live, limits=limits, lead_sid=sid)
         except Exception as e:   # noqa: BLE001

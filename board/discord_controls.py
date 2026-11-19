@@ -63,7 +63,7 @@ def consume_events(d, project, state, run, add_line):
             continue
         user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
         try:
-            dlg = discord_dialogs.consume_event(d, ev, allow, run, time.time())
+            dlg = discord_dialogs.consume_event(d, ev, allow, run, time.time(), add_line=add_line)
             if dlg:
                 discord_feed.audit_append(d, user, *dlg)
             elif kind == "perm":   # the old prompt buttons are gone: a leftover event is only audited

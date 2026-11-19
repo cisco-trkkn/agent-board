@@ -223,6 +223,27 @@ class FeedStepWiringTest(Base):
         self.assertNotIn("extra_env", rs.call_args[1])   # no TC_SESSION: the scan reads any project's panes by id
         self.assertEqual(rs.call_args[1]["timeout"], 20)
 
+    def test_each_projects_lead_tasks_go_to_gates_inside_its_own_try(self):
+        # mutation: pass [] (or skip the call) -> gates never sees the tasks
+        self.configure("a")
+        self.configure("b")
+        tasks = [{"id": "1", "subject": "User gate: x", "status": "pending"}]
+        seen = []
+
+        def gates(project, tk, now):
+            seen.append((project, tk, now))
+            if project == "a":
+                raise RuntimeError("gates broke")
+        with mock.patch.object(server.planview, "raw_live_list", return_value=("session-sid", tasks)), \
+             mock.patch.object(server.discord_dialogs, "scan"), \
+             mock.patch.object(server.discord_dialogs, "gates", side_effect=gates), \
+             mock.patch.object(server.discord_feed, "tick"), mock.patch.object(server.discord_controls, "step") as step, \
+             mock.patch("sys.stderr") as err:
+            server.feed_tick([rec("a"), rec("b")], 1000.0)
+        self.assertEqual(seen, [("a", tasks, 1000.0), ("b", tasks, 1000.0)])
+        self.assertEqual(step.call_count, 2)   # a failed gates call does not skip the controls step
+        self.assertIn("gates broke", "".join(c[0][0] for c in err.write.call_args_list))
+
     def test_dialog_scan_error_does_not_stop_the_tick(self):
         self.configure("p")
         with mock.patch.object(server.discord_dialogs, "scan", side_effect=RuntimeError("scan broke")), \
