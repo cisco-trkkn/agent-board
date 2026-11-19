@@ -39,6 +39,8 @@
 #   tmux-ctl approve <win> show           print the prompt's tool (T:) and its --expect lines (P:); read-only
 #   tmux-ctl approve <win> once|deny --expect <text>  answer the permission prompt showing in a window: the one-time Yes, or No
 #                                          (never an always/auto-mode row; refuses when there is no prompt or it changed)
+#   tmux-ctl dialog <win> show            print the Claude Code dialog showing in a window (or a pane id, %N) as JSON:
+#                                          kind, question, options (n, label, permanent), multi, other, lines; read-only
 #   tmux-ctl wait-gone <name>... [--timeout S]  after shutdown_requests: wait (default 300 s) until every `✦ <name>` window of this
 #                                          session is gone; at the timeout kill the ones left (exit 3)
 #   tmux-ctl handoff-mark [--clear]        a self-started handoff marks this session as not yet relayed (the Stop guard
@@ -459,6 +461,10 @@ case "$cmd" in
   approve)   # works on worker windows too (unlike keys): only the one-time Yes / No, by digit
     source "${0:A:h:h}/tools/lib/approve.zsh"
     approve_cmd "$@"; exit $? ;;
+
+  dialog)    # any Claude Code dialog, read from the pane text; <win> may be a pane id anywhere on the server
+    source "${0:A:h:h}/tools/lib/dialog.zsh"
+    dialog_cmd "$@"; exit $? ;;
 
   new)
     [[ -n "$1" ]] || die "usage: tmux-ctl new <win> [dir]"
