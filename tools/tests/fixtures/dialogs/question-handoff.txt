@@ -1,0 +1,50 @@
+
+⏺ Answered Claude's questions:       
+  ⎿  · Which fruit? → Pear
+
+⏺ You picked Pear.                                                                                                                                                                                      
+
+✻ Brewed for 4s · done 12:54 AM                                                                                                                                                                         
+
+❯ Use the AskUserQuestion tool once and nothing else: question "Which fruit?", header "Fruit", multiSelect false, options "Apple" (description "red") and "Pear" (description "green").                 
+
+⏺ Answered Claude's questions:
+  ⎿  · Which fruit? → hello    
+
+⏺ You didn't pick Apple or Pear. You typed "hello" as a custom answer instead.                                                                                                                          
+         
+✻ Brewed for 4s · done 12:54 AM                                                                                                                                                                         
+
+❯ Use the AskUserQuestion tool once and nothing else: question "Which fruit?", header "Fruit", multiSelect true, options "Apple" (description "red"), "Pear" (description "green") and "Plum"           
+  (description "purple").                                                                                                                                                                               
+
+⏺ Answered Claude's questions:                                                
+  ⎿  · Which fruit? → Pear
+
+⏺ You picked Pear, and nothing else.                                                                                                                                                                    
+
+✻ Worked for 4s · done 12:55 AM                                                                                                                                                                         
+
+❯ Use the AskUserQuestion tool once and nothing else, with ONE call that has two questions: first question "Which fruit?" (header "Fruit", multiSelect false, options "Apple" (description "red") and   
+  "Pear" (description "green")), second question "Which size?" (header "Size", multiSelect false, options "Small" (description "s") and "Large" (description "l")).                                     
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Which fruit? (Apple / Pear)
+     · Which size? (Small / Large)                                                                                                                                                                      
+
+❯ Use the AskUserQuestion tool once and nothing else: question "Switch to a fresh orchestrator now?", options "Yes" (description "This window restarts as a new orchestrator that starts from the doc   
+  and respawns the team. This session stays resumable.") and "Not yet" (description "Keep this session. I'll print the doc path and the command to switch later.").                                     
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Switch                                                                                                                                                                                               
+
+Switch to a fresh orchestrator now?                                                                                                                                                                     
+
+❯ 1. Yes
+     This window restarts as a new orchestrator that starts from the doc and respawns the team. This session stays resumable.
+  2. Not yet                                                               
+     Keep this session. I'll print the doc path and the command to switch later.
+  3. Type something.                                                                                                                                                                                    
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this                                                                                                                                                                                    
+                            
+Enter to select · ↑/↓ to navigate · Esc to cancel

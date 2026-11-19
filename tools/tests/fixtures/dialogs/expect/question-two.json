@@ -1,0 +1,28 @@
+{
+  "kind": "question",
+  "question": "Which fruit?",
+  "options": [
+    {
+      "n": 1,
+      "label": "Apple",
+      "permanent": false
+    },
+    {
+      "n": 2,
+      "label": "Pear",
+      "permanent": false
+    },
+    {
+      "n": 3,
+      "label": "Type something.",
+      "permanent": false
+    },
+    {
+      "n": 4,
+      "label": "Chat about this",
+      "permanent": false
+    }
+  ],
+  "multi": false,
+  "other": true
+}
