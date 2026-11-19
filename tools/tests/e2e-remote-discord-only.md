@@ -16,16 +16,16 @@ git directory opened with `dev`, with its own bot: `docs/INSTALL.md` → "Remote
    Check: `tmux-ctl discord status` shows `bridge: running` (a bridge that exits at once lacks the intent of line 3).
 5. The board: `agent-board dash stop && agent-board dash start`.
 6. The scratch project's lead, so it loads the new hooks: `agent-board lead --continue` in its `claude` window.
-   Check: `/hooks` lists `remote-ask-guard.sh` and `remote-marker.sh`.
+   Check: `/hooks` lists `remote-ask-guard.sh` (`remote-marker.sh` is not registered yet: lead ruling F13).
 7. You are away from the Mac's keyboard for items 1 to 7: answer only on the phone.
 
 ## Items
 
-- [ ] **1. The remote marker.** Send "ping" to the scratch lead from the phone. On the Mac (or ask the lead to run it):
-  `ls -l ${TMPDIR:-/tmp}/tmux-ctl-$UID/remote/` shows a file named after the lead's session id, minutes old.
+- [ ] **1. The remote marker.** From the phone, send the scratch lead: "ping, then try AskUserQuestion once to ask me yes or no". Expect its answer on Discord as a numbered list (the guard denied the dialog). On the Mac (or ask the lead to run it): `ls -l ${TMPDIR:-/tmp}/tmux-ctl-$UID/remote/` shows a file named after the lead's session id, minutes old.
 - [ ] **2. A lead asks in Discord, not in a dialog.** From the phone: "ask me which of two colours I prefer, as a
   question". Expect a numbered list in Discord, no ❓ dialog message, and the lead's reply naming the hook's text if
   it tried AskUserQuestion.
+Before item 3: clear the markers so a plain `claude` may open dialogs: `rm -f ${TMPDIR:-/tmp}/tmux-ctl-$UID/remote/*` (ask the scratch lead to run it).
 - [ ] **3. A real question dialog.** In a second window of the scratch project start a plain `claude` and type:
   "Use AskUserQuestion: which fruit, Apple or Pear?" Walk away. Expect a `❓ <project> · <window>: …` message with one
   button per option within about 20 s. Tap `2. Pear`. Expect the message to read `→ Pear (from Discord)` and the pane to
@@ -49,6 +49,7 @@ git directory opened with `dev`, with its own bot: `docs/INSTALL.md` → "Remote
   `User gate: try the gate button`. Expect within about 20 s a `🚧 <project> · user gate: User gate: try the gate button`
   message with `Done` / `Not yet`. Tap `Not yet`: the message and its buttons stay. Tap `Done`: the message reads
   `→ Done (from Discord)` and the lead receives the line `[Discord] gate done User gate: try the gate button`.
+Before item 10: repeat item 1's message to the scratch lead, so a marker is fresh again (an idle item is posted only then).
 - [ ] **10. A typed-answer wait.** In the plain `claude` window: "ask me for one word in plain text, not with
   AskUserQuestion, and wait for my answer". When it stops, expect `❓ <project> · <window> is waiting for your reply`
   with its last screen lines and only `Reply`. Reply "banana" to that message: the pane gets `banana` typed and
