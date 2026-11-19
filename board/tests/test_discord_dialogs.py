@@ -503,6 +503,304 @@ class ConcurrencyTest(Base):
         self.assertEqual(sorted(p.name for p in base.iterdir()), ["state.json", "state.lock"])   # no temp file left behind
 
 
+class PressRunner(Runner):
+    """Runner whose `press` calls are recorded in .presses; press_result is returned, or raised when it is an Exception."""
+
+    def __init__(self, shows=None, press_result='dialog: %12: chose "Yes"', delay=0.0):
+        super().__init__(shows, delay)
+        self.presses, self.press_result = [], press_result
+
+    def __call__(self, argv):
+        if len(argv) > 3 and argv[3] == "press":
+            self.calls.append(list(argv))
+            self.presses.append(list(argv))
+            if self.delay:
+                time.sleep(self.delay)
+            if isinstance(self.press_result, Exception):
+                raise self.press_result
+            return self.press_result
+        return super().__call__(argv)
+
+
+class ConsumerBase(Base):
+    def post(self, show, pid="%12"):
+        """Scan once so the dialog is in the state; returns its key."""
+        dd.scan([sess(panes=[pane(pid)])], 100.0, Runner({pid: show}))
+        return key_of(pid, show["lines"])
+
+    def click(self, cid, user="u1", picks=None, run=None, **extra):
+        ev = {"type": "click", "custom_id": cid, "user": user, "ts": 1, **extra}
+        if picks is not None:
+            ev["picks"] = picks
+        run = run or self.run
+        return dd.click(self.d, user, cid, ev, run, 200.0)
+
+    def reply(self, key, text, run=None, **extra):
+        ev = {"type": "reply", "key": key, "text": text, "user": "u1", "ts": 1, **extra}
+        return dd.reply(self.d, "u1", ev, run or self.run, 200.0)
+
+    def edits(self):
+        return [o for o in self.ops() if o["op"] == "edit"]
+
+    def setUp(self):
+        super().setUp()
+        self.run = PressRunner()
+
+
+class AcceptedShapesTest(ConsumerBase):
+    def test_single_choice_tap_presses_that_option_with_the_records_lines(self):
+        key = self.post(SINGLE)
+        r = self.click(f"ab:dlg:{key}:2")
+        self.assertEqual(r, "pressed: Pear")
+        self.assertEqual(self.run.presses, [[TC, "dialog", "%12", "press", "--expect", "\n".join(SINGLE["lines"]), "--option", "2"]])
+
+    def test_success_edits_the_message_and_drops_the_key(self):
+        key = self.post(SINGLE)
+        self.click(f"ab:dlg:{key}:1")
+        e = self.edits()
+        self.assertEqual([(o["key"], o["text"]) for o in e], [(key, "❓ proj · win: Which fruit?\n→ Apple (from Discord)")])
+        self.assertEqual(self.state(), {})
+
+    def test_permanent_row_with_confirm_presses(self):
+        key = self.post(PLAN)
+        r = self.click(f"ab:dlg:{key}:1:confirm")
+        self.assertTrue(r.startswith("pressed: "), r)
+        self.assertEqual(self.run.presses[0][-2:], ["--option", "1"])
+
+    def test_submit_presses_the_final_set_of_picks(self):
+        key = self.post(MULTI)
+        r = self.click(f"ab:dlg:{key}:submit", picks=[1, 3])
+        self.assertTrue(r.startswith("pressed: "), r)
+        self.assertEqual(self.run.presses[0][4:], ["--expect", "\n".join(MULTI["lines"]), "--option", "1", "--option", "3"])
+        self.assertIn("Apple, Plum", self.edits()[0]["text"])
+
+    def test_reply_presses_text(self):
+        key = self.post(SINGLE)
+        r = self.reply(key, "kiwi")
+        self.assertEqual(r, "pressed: kiwi")
+        self.assertEqual(self.run.presses[0][4:], ["--expect", "\n".join(SINGLE["lines"]), "--text", "kiwi"])
+        self.assertEqual(self.state(), {})
+
+    def test_reply_text_control_characters_become_spaces_and_it_is_cut(self):
+        # mutation: skip the control-character replace -> the argv text keeps the \n and \x1b
+        key = self.post(SINGLE)
+        self.reply(key, "a\nb\x1bc\td" + "x" * 2000)
+        t = self.run.presses[0][-1]
+        self.assertTrue(t.startswith("a b c d"), repr(t[:10]))
+        self.assertEqual(len(t), 1000)
+        self.assertNotRegex(t, r"[\x00-\x1f]")
+
+
+class RefusedTest(ConsumerBase):
+    def check(self, result, audit=None):
+        self.assertEqual(result, audit)
+        self.assertEqual(self.run.presses, [])
+        self.assertEqual(self.edits(), [])
+
+    def test_permanent_without_confirm_needs_confirm(self):
+        # mutation: drop the permanent check -> this presses
+        key = self.post(PLAN)
+        self.check(self.click(f"ab:dlg:{key}:1"), "needs confirm")
+        self.assertIn(key, self.state())
+
+    def test_confirm_on_a_row_that_is_not_permanent_is_ignored(self):
+        key = self.post(SINGLE)
+        self.check(self.click(f"ab:dlg:{key}:1:confirm"), "ignored")
+
+    def test_toggle_id_is_ignored(self):
+        key = self.post(MULTI)
+        self.check(self.click(f"ab:dlg:{key}:t2"), "ignored")
+
+    def test_unknown_suffixes_are_ignored(self):
+        key = self.post(SINGLE)
+        for suffix in ("reply", "t1:confirm", "cancel", "1:cancel", "x", "", "1:confirm:x"):
+            self.check(self.click(f"ab:dlg:{key}:{suffix}"), "ignored")
+
+    def test_bad_option_numbers_are_ignored(self):
+        key = self.post(SINGLE)
+        for n in ("0", "03", "99", "1e1", "-1", "１"):
+            self.check(self.click(f"ab:dlg:{key}:{n}"), "ignored")
+
+    def test_single_tap_on_a_multi_select_is_ignored(self):
+        key = self.post(MULTI)
+        self.check(self.click(f"ab:dlg:{key}:1"), "ignored")
+
+    def test_the_free_text_row_has_no_button_so_a_forged_id_presses_nothing(self):
+        key = self.post(SINGLE)
+        self.check(self.click(f"ab:dlg:{key}:3"), "ignored")
+
+    def test_key_of_another_pane_with_the_same_hash_is_already_answered(self):
+        # mutation: look the key up by its hash part only -> this presses on %12
+        key = self.post(SINGLE)
+        other = "p13-" + key.split("-")[1]
+        self.check(self.click(f"ab:dlg:{other}:1"), "already answered")
+
+    def test_unknown_key_is_already_answered(self):
+        # mutation: drop the key lookup -> KeyError or a press
+        self.post(SINGLE)   # another dialog is live: the unknown key must not fall back to it
+        self.check(self.click("ab:dlg:p12-0000000000000000:1"), "already answered")
+
+    def test_bad_picks_press_nothing(self):
+        key = self.post(MULTI)
+        for picks in ([], None, [9], [1, 1], [4], [5], ["1"], [True], "1", [1.5]):
+            self.check(self.click(f"ab:dlg:{key}:submit", picks=picks), "ignored")
+
+    def test_picks_with_a_permanent_option_press_nothing(self):
+        show = {**MULTI, "options": [{**o, "permanent": o["n"] == 2} for o in MULTI["options"]]}
+        key = self.post(show)
+        self.check(self.click(f"ab:dlg:{key}:submit", picks=[1, 2]), "ignored")
+
+    def test_picks_on_a_single_choice_dialog_press_nothing(self):
+        key = self.post(SINGLE)
+        self.check(self.click(f"ab:dlg:{key}:submit", picks=[1]), "ignored")
+
+    def test_reply_to_a_dialog_without_free_text_presses_nothing(self):
+        key = self.post(TRUST)
+        self.check(self.reply(key, "hello"), "ignored")
+
+    def test_reply_for_an_unknown_key_is_already_answered(self):
+        self.check(self.reply("p12-0000000000000000", "hello"), "already answered")
+
+    def test_reply_with_a_message_id_that_disagrees_with_the_state_is_ignored(self):
+        key = self.post(SINGLE)
+        p = tc_env.agent_base() / "dialogs" / "state.json"
+        st = json.loads(p.read_text(encoding="utf-8"))
+        st["dialogs"][key]["message_id"] = "111"
+        p.write_text(json.dumps(st), encoding="utf-8")
+        self.check(self.reply(key, "kiwi", message_id="222"), "ignored")
+        self.assertEqual(self.reply(key, "kiwi", message_id="111"), "pressed: kiwi")
+
+    def test_empty_reply_after_cleaning_presses_nothing(self):
+        key = self.post(SINGLE)
+        self.check(self.reply(key, " \n\t "), "ignored")
+
+
+class OutcomeTest(ConsumerBase):
+    def test_changed_dialog_edits_drops_the_key_and_the_next_scan_posts_the_new_one(self):
+        # mutation: remove the key before the press result is known / not on "changed" -> no edit, or the new dialog is not posted
+        key = self.post(SINGLE)
+        self.run.press_result = RuntimeError("dialog: the dialog in %12 changed")
+        self.assertEqual(self.click(f"ab:dlg:{key}:1"), "changed")
+        self.assertEqual([o["text"] for o in self.edits()], ["❓ proj · win: Which fruit?\nthe dialog changed; re-sent below"])
+        self.assertEqual(self.state(), {})
+        dd.scan([sess()], 300.0, Runner({"%12": SINGLE}))
+        self.assertEqual([o["op"] for o in self.ops()], ["dialog", "edit", "dialog"])
+
+    def test_other_error_edits_with_the_first_line_and_is_never_retried(self):
+        key = self.post(SINGLE)
+        self.run.press_result = RuntimeError("dialog: %12: no cursor in the dialog\nmore detail")
+        r = self.click(f"ab:dlg:{key}:1")
+        self.assertEqual(r, "not pressed: dialog: %12: no cursor in the dialog")
+        self.assertEqual(self.edits()[0]["text"], "❓ proj · win: Which fruit?\n⚠️ not pressed: dialog: %12: no cursor in the dialog")
+        self.assertEqual(len(self.run.presses), 1)
+        self.assertEqual(self.state(), {})
+
+    def test_a_timeout_is_a_not_pressed_outcome(self):
+        key = self.post(SINGLE)
+        self.run.press_result = subprocess.TimeoutExpired(["x"], 20)
+        self.assertTrue(self.click(f"ab:dlg:{key}:1").startswith("not pressed: "))
+        self.assertEqual(self.state(), {})
+
+
+class DeliveryTest(ConsumerBase):
+    def test_a_second_tap_on_one_button_presses_once(self):
+        key = self.post(SINGLE)
+        self.assertEqual(self.click(f"ab:dlg:{key}:1"), "pressed: Apple")
+        self.assertEqual(self.click(f"ab:dlg:{key}:1"), "already answered")
+        self.assertEqual(len(self.run.presses), 1)
+
+    def test_confirm_after_the_dialog_was_answered_at_the_terminal_is_already_answered(self):
+        key = self.post(PLAN)
+        dd.scan([sess()], 150.0, Runner({}))   # the pane shows no dialog now: swept as answered at the terminal
+        self.assertEqual(self.click(f"ab:dlg:{key}:1:confirm"), "already answered")
+        self.assertEqual(self.run.presses, [])
+
+    def test_two_dialogs_in_either_order_each_act_on_their_own_key(self):
+        dd.scan([sess(panes=[pane("%12"), pane("%13")])], 100.0, Runner({"%12": SINGLE, "%13": PLAN}))
+        a, b = key_of("%12", SINGLE["lines"]), key_of("%13", PLAN["lines"])
+        self.assertEqual(self.click(f"ab:dlg:{b}:2"), "pressed: Yes, manually approve edits")
+        self.assertEqual(self.click(f"ab:dlg:{a}:1"), "pressed: Apple")
+        self.assertEqual([p[2] for p in self.run.presses], ["%13", "%12"])
+        self.assertEqual(self.state(), {})
+
+    def test_the_same_event_file_consumed_twice_presses_once(self):
+        import discord_controls as dc
+        key = self.post(SINGLE)
+        ev = self.d / "events"
+        ev.mkdir(exist_ok=True)
+        body = json.dumps({"type": "click", "custom_id": f"ab:dlg:{key}:1", "user": "u1", "ts": 1})
+        (self.d / "access.json").write_text(json.dumps({"allowFrom": ["u1"]}))
+        for n in ("1", "2"):   # two files of one tap (a redelivered event)
+            (ev / f"{n}.json").write_text(body)
+        dc.consume_events(self.d, "proj", {}, self.run, lambda *a: None)
+        self.assertEqual(len(self.run.presses), 1)
+        lines = [json.loads(l) for l in (self.d / "audit.jsonl").read_text().splitlines()]
+        self.assertEqual([l["result"] for l in lines], ["pressed: Apple", "already answered"])
+
+    def test_two_threads_on_one_key_press_once(self):
+        # mutation: drop the lock around lookup+press in click -> both threads press
+        key = self.post(SINGLE)
+        self.run.delay = 0.3
+        out, errs = [], []
+
+        def go():
+            try:
+                out.append(self.click(f"ab:dlg:{key}:1"))
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+
+        ts = [threading.Thread(target=go) for _ in range(2)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(20)
+        self.assertEqual(errs, [])
+        self.assertEqual(sorted(out), ["already answered", "pressed: Apple"])
+        self.assertEqual(len(self.run.presses), 1)
+
+
+class RoutingConsumeTest(ConsumerBase):
+    """The controls step and the ops consume route dialog clicks and replies; allowFrom is checked first."""
+
+    def events(self, d, *evs):
+        e = d / "events"
+        e.mkdir(parents=True, exist_ok=True)
+        for n, ev in enumerate(evs):
+            (e / f"{n:03d}.json").write_text(json.dumps(ev))
+
+    def audit(self, d):
+        p = d / "audit.jsonl"
+        return [(l["action"], l["user"], l["result"]) for l in map(json.loads, p.read_text().splitlines())] if p.exists() else []
+
+    def test_controls_routes_click_and_reply_and_rejects_strangers(self):
+        import discord_controls as dc
+        key = self.post(SINGLE)
+        (self.d / "access.json").write_text(json.dumps({"allowFrom": ["u1"]}))
+        self.events(self.d,
+                    {"type": "click", "custom_id": f"ab:dlg:{key}:1", "user": "stranger", "ts": 1},
+                    {"type": "reply", "key": key, "text": "kiwi", "user": "stranger", "ts": 2},
+                    {"type": "reply", "key": key, "text": "kiwi", "user": "u1", "ts": 3},
+                    {"type": "perm", "key": "k", "choice": "allow", "user": "u1", "ts": 4})
+        dc.consume_events(self.d, "proj", {}, self.run, lambda *a: None)
+        self.assertEqual(self.audit(self.d), [("dialog", "stranger", "rejected"), ("dialog-reply", "stranger", "rejected"),
+                                              ("dialog-reply", "u1", "pressed: kiwi"), ("perm", "u1", "unknown")])
+        self.assertEqual(len(self.run.presses), 1)
+
+    def test_ops_routes_click_and_reply(self):
+        import discord_ops as ops
+        self.ops_on()
+        d = tc_env.ops_dir()
+        dd.scan([sess(name="nochan")], 100.0, Runner({"%12": SINGLE}))   # no channel: posted to the ops dir
+        key = key_of("%12", SINGLE["lines"])
+        self.assertIn(key, self.state())
+        (d / "access.json").write_text(json.dumps({"allowFrom": ["u1"]}))
+        self.events(d, {"type": "click", "custom_id": f"ab:dlg:{key}:2", "user": "u1", "ts": 1},
+                    {"type": "reply", "key": key, "text": "x", "user": "u1", "ts": 2})
+        ops.consume(lambda *a: None, self.run, 300.0)
+        self.assertEqual(self.audit(d), [("dialog", "u1", "pressed: Pear"), ("dialog-reply", "u1", "already answered")])
+        self.assertEqual(len(self.run.presses), 1)
+
+
 class RealShowTest(unittest.TestCase):
     """One real `tmux-ctl dialog <pane id> show` on a scratch tmux server (-L, -f /dev/null) showing a real captured screen:
     the argv, the JSON and the `dialog: none in` error text scan relies on are the real ones."""

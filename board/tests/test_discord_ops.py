@@ -423,44 +423,6 @@ class Tick(Base):
         self.assertTrue(self.state()["queues"]["a"].startswith("queue: running"))
 
 
-class Mirror(Base):
-    def test_mirror_prompt_posts_perm_and_resolve_edits(self):
-        self.configure()
-        lines = [f"l{i}" for i in range(20)]
-        ops.mirror_prompt("a", "%5:abc", "w1", "Bash command", lines)
-        (ap,) = self.outbox()
-        self.assertEqual((ap["op"], ap["kind"], ap["key"]), ("approval", "perm", okey("a", "%5:abc")))
-        self.assertTrue(ap["text"].startswith("🔐 a · w1 wants to run Bash command\n```\n"))
-        self.assertIn("l14", ap["text"])
-        self.assertNotIn("l15", ap["text"])
-        ops.mirror_prompt("a", "%5:abc", "w1", "Bash command", lines)   # same key: no second post
-        self.assertEqual(len(self.outbox()), 1)
-        ops.resolve("a", "%5:abc", "✅ allowed by you")
-        ed = self.outbox()[1]
-        self.assertEqual((ed["op"], ed["key"], ed["text"]), ("edit", ap["key"], "a: ✅ allowed by you"))
-        self.assertEqual(self.state()["approvals"], {})
-
-    def test_noop_when_unconfigured(self):
-        # mutation: drop the configured() guard in mirror_prompt/resolve -> the outbox appears
-        ops.mirror_prompt("a", "k", "w", "t", ["x"])
-        ops.resolve("a", "k", "x")
-        self.assertFalse((self.ops / "outbox").exists())
-
-    def test_resolve_unknown_key_edits_nothing(self):
-        self.configure()
-        ops.resolve("a", "never-mirrored", "x")
-        self.assertEqual(self.outbox(), [])
-
-    def test_resolve_removes_from_views(self):
-        self.configure()
-        self.project("a")
-        ops.mirror_prompt("a", "k1", "w", "t", ["x"])
-        self.tick([rec("a")])
-        self.assertEqual(len(json.loads((self.ops / "views.json").read_text())["approvals"]), 1)
-        ops.resolve("a", "k1", "done")
-        self.assertEqual(json.loads((self.ops / "views.json").read_text())["approvals"], [])
-
-
 class Events(Base):
     def setUp(self):
         super().setUp()
@@ -468,28 +430,13 @@ class Events(Base):
         self.pd = self.project("a")
         self.project("b")
 
-    def test_allow_forwarded_as_perm_event(self):
-        ops.mirror_prompt("a", "%5:abc", "w1", "Bash", ["x"])
-        self.event("1.json", ok(f"ab:ops:allow:{okey('a', '%5:abc')}"))
-        self.consume()
-        (f,) = (self.pd / "events").glob("*.json")
-        ev = json.loads(f.read_text())
-        self.assertEqual((ev["type"], ev["key"], ev["choice"], ev["user"]), ("perm", "%5:abc", "allow", "U1"))
-        self.assertEqual(self.audit()[-1]["result"], "forwarded")
-        self.assertEqual(list((self.ops / "events").glob("*.json")), [])
-
-    def test_deny_forwarded(self):
-        ops.mirror_prompt("a", "k", "w1", "Bash", ["x"])
-        self.event("1.json", ok(f"ab:ops:deny:{okey('a', 'k')}"))
-        self.consume()
-        (f,) = (self.pd / "events").glob("*.json")
-        self.assertEqual(json.loads(f.read_text())["choice"], "deny")
-
-    def test_allow_unknown_key_forwards_nothing(self):
-        self.event("1.json", ok("ab:ops:allow:deadbeef0000"))
+    def test_old_allow_and_deny_buttons_are_ignored_and_forward_nothing(self):
+        # mutation: restore the allow/deny branch of _click -> a perm event is written into the project's events dir
+        for n, act in enumerate(("allow", "deny")):
+            self.event(f"{n}.json", ok(f"ab:ops:{act}:deadbeef0000"))
         self.consume()
         self.assertEqual(list((self.pd / "events").glob("*.json")), [])
-        self.assertEqual(self.audit()[-1]["result"], "unknown")
+        self.assertEqual([a["result"] for a in self.audit()], ["ignored", "ignored"])
 
     def test_non_allowlisted_rejected_and_nothing_done(self):
         # mutation: drop the allowlist check -> the line is queued and the test fails
@@ -561,26 +508,6 @@ class Events(Base):
         self.consume()
         self.consume()   # files are gone: nothing more
         self.assertEqual(self.lines, [("a", PAUSE), ("a", PAUSE)])
-
-    def test_duplicate_allow_presses_once(self):
-        # drive the real controls step: the second forwarded perm event finds no prompt and presses nothing
-        import discord_controls as dc
-        src = '%5:' + hashlib.sha1(b'x').hexdigest()
-        ops.mirror_prompt("a", src, "w1", "Bash", ["x"])
-        k = okey("a", src)
-        for n in ("1.json", "2.json"):
-            self.event(n, ok(f"ab:ops:allow:{k}"))
-        self.consume()
-        presses = []
-        def run(argv):
-            if argv[3] == "show":
-                return "T:Bash\nP:x\n"
-            presses.append(argv)
-            return ""
-        (self.pd / "access.json").write_text(json.dumps({"allowFrom": ["U1"]}))
-        (self.pd / "controls-state.json").write_text(json.dumps({"prompts": {src: {"window": "w1", "pane": "%5", "tool": "Bash", "lines": ["x"], "ts": NOW}}}))
-        dc.step("a", {"needs_you": []}, NOW, run, self.add)
-        self.assertEqual(len(presses), 1)
 
     def test_events_processed_in_filename_order(self):
         # mutation: iterate an unsorted glob -> order flips on filesystems that list reverse; here sorted() removal is checked via the reversed glob
@@ -703,7 +630,7 @@ class Events(Base):
 
 
 class ControlsHooks(Base):
-    """The three hooks discord_controls has into discord_ops, driven through the real controls step."""
+    """The hook discord_controls has into discord_ops (slash/modal/read/rejected events), driven through the real controls step."""
     SRC = "%5:" + hashlib.sha1(b"x").hexdigest()
 
     def setUp(self):
@@ -724,24 +651,6 @@ class ControlsHooks(Base):
         import discord_controls as dc
         r = {"needs_you": [{"window": w, "pane": "%5", "kind": "claude", "reason": ""} for w in needs]}
         dc.step("a", r, NOW, self.run_, self.add)
-
-    def test_new_prompt_mirrored_once_and_resolved_when_gone(self):
-        # mutations: delete the mirror_prompt hook in scan_prompts / the resolve hook in _edit -> the matching assertion fails
-        self.step(needs=("w1",))
-        self.step(needs=("w1",))   # same prompt again: not mirrored twice
-        (ap,) = [o for o in self.outbox() if o["op"] == "approval"]
-        self.assertEqual((ap["kind"], ap["key"]), ("perm", okey("a", self.SRC)))
-        self.shows["w1"] = None
-        self.step(needs=())
-        (ed,) = [o for o in self.outbox() if o["op"] == "edit"]
-        self.assertEqual(ed["key"], ap["key"])
-        self.assertIn("a: 🔐 w1 wants to run Bash", ed["text"])
-
-    def test_failing_ops_call_does_not_break_the_step(self):
-        # mutation: let _ops raise (narrow its except) -> the scan aborts at w1 and w2's prompt op is lost
-        with mock.patch.object(ops, "mirror_prompt", side_effect=RuntimeError("x")):
-            self.step(needs=("w1", "w2"))
-        self.assertEqual(len([o for o in self.outbox(self.pd) if o["op"] == "prompt"]), 2)   # w2 is still scanned after w1's hook failed
 
     def test_slash_modal_read_rejected_routed_to_handle_event(self):
         # mutation: delete the routing branch in consume_events -> these fall to the click audit and the results differ

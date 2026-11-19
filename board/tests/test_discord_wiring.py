@@ -198,6 +198,42 @@ class FeedStepWiringTest(Base):
         self.assertEqual(kw["add_line"], server.COMMENTS.add_line)   # bound methods compare by (self, func)
         self.assertTrue(callable(kw["run"]))
 
+    def test_dialog_scan_runs_once_per_tick_before_the_projects_with_the_last_sessions(self):
+        # mutation: call the scan inside the per-project loop -> two calls for two projects
+        self.configure("a")
+        self.configure("b")
+        order, seen = [], {}
+        sessions = [{"name": "a", "windows": []}, {"name": "overseer", "windows": []}]
+
+        def scan(sess, now, run):
+            order.append("scan")
+            seen.update(sess=sess, now=now, run=run)
+        with mock.patch.object(server, "_dialog_sessions", sessions), \
+             mock.patch.object(server.discord_dialogs, "scan", side_effect=scan) as sc, \
+             mock.patch.object(server.discord_feed, "tick", side_effect=lambda *a, **k: order.append("tick")), \
+             mock.patch.object(server.discord_controls, "step"), \
+             mock.patch.object(server, "run_script", return_value="{}") as rs:
+            server.feed_tick([rec("a"), rec("b")], 1000.0)
+            seen["run"](["x", "y"])
+        sc.assert_called_once()
+        self.assertEqual(order, ["scan", "tick", "tick"])
+        self.assertIs(seen["sess"], sessions)
+        self.assertEqual(seen["now"], 1000.0)
+        self.assertEqual(rs.call_args[0][0], ["x", "y"])
+        self.assertNotIn("extra_env", rs.call_args[1])   # no TC_SESSION: the scan reads any project's panes by id
+        self.assertEqual(rs.call_args[1]["timeout"], 20)
+
+    def test_dialog_scan_error_does_not_stop_the_tick(self):
+        self.configure("p")
+        with mock.patch.object(server.discord_dialogs, "scan", side_effect=RuntimeError("scan broke")), \
+             mock.patch.object(server.discord_feed, "tick") as tick, \
+             mock.patch.object(server.discord_controls, "step") as step, \
+             mock.patch("sys.stderr") as err:
+            server.feed_tick([rec("p")], 1000.0)
+        tick.assert_called_once()
+        step.assert_called_once()
+        self.assertIn("discord dialogs failed: RuntimeError: scan broke", "".join(c[0][0] for c in err.write.call_args_list))
+
     def test_step_exception_isolated_per_project(self):
         self.configure("a")
         self.configure("b")

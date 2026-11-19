@@ -10,6 +10,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +27,10 @@ ANSWERED = "answered at the terminal"
 NOT_PARSED = "(dialog not parsed)"
 _NONE = "dialog: none in"   # stderr of `tmux-ctl dialog <win> show` when the pane shows no dialog (tools/lib/dialog.zsh)
 ERROR = "error"
+_CHANGED = "dialog: the dialog in"   # stderr start of `press` when the screen no longer matches --expect (tools/lib/dialog.zsh)
+REPLY_MAX = 1000
+_N = re.compile(r"[1-9][0-9]?")
+_C0 = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def key_of(pane, lines):
@@ -233,3 +238,88 @@ def scan(sessions, now, run):
     """One pass over every waiting claude pane of `sessions` (build_state()["sessions"]): post new dialogs, retire answered ones."""
     with _locked() as dialogs:
         _scan(dialogs, sessions, now, run)
+
+
+def _opt(rec, n):
+    return next((o for o in (rec.get("show") or {}).get("options") or [] if isinstance(o, dict) and o.get("n") == n), None)
+
+
+def _label(o):
+    return _one_line(o.get("label", ""), LABEL_MAX)
+
+
+def _finish(rec, key, dialogs, run, args, label, now):
+    """Press through `tmux-ctl dialog <pane> press --expect <lines> <args>`, edit the message to the outcome, drop the key (every
+    outcome: a press is never retried); returns the audit result."""
+    argv = [str(BIN / "tmux-ctl"), "dialog", rec["pane"], "press", "--expect", "\n".join(rec["show"]["lines"]), *args]
+    try:
+        run(argv)
+        result, text = f"pressed: {label}", f"→ {label} (from Discord)"
+    except Exception as e:  # noqa: BLE001 -- any failure, TimeoutExpired included, is an outcome, never a retry
+        first = (str(e).splitlines() or [""])[0] or "exit error"
+        if first.startswith(_CHANGED):
+            result, text = "changed", "the dialog changed; re-sent below"
+        else:
+            result, text = f"not pressed: {first}"[:200], f"⚠️ not pressed: {first}"[:300]
+    try:
+        discord_feed.outbox_write(Path(rec["dir"]), {"op": "edit", "key": key, "text": f"{rec['header']}\n{text}"})
+    except Exception as e:  # noqa: BLE001 -- the press happened: the key still goes
+        _warn(f"edit failed ({key})", e)
+    del dialogs[key]
+    return result
+
+
+def click(d, user, cid, ev, run, now):
+    """The audit result of one `ab:dlg:<key>:<suffix>` click event: presses (or refuses) under the state lock. Shapes: `<n>`,
+    `<n>:confirm`, `submit` (with ev["picks"]); anything else is `ignored`. The caller has checked allowFrom."""
+    parts = str(cid).split(":")
+    if parts[:2] != ["ab", "dlg"] or not 4 <= len(parts) <= 5:
+        return "ignored"
+    key, suffix = parts[2], parts[3:]
+    if suffix == ["submit"]:
+        kind, n = "submit", None
+    elif _N.fullmatch(suffix[0]) and suffix[1:] in ([], ["confirm"]):
+        kind, n = "confirm" if len(suffix) == 2 else "tap", int(suffix[0])
+    else:
+        return "ignored"
+    with _locked() as dialogs:
+        rec = dialogs.get(key)
+        if not isinstance(rec, dict) or not rec.get("pane") or not rec.get("dir") or not rec.get("header") \
+                or not isinstance((rec.get("show") or {}).get("lines"), list):
+            return "already answered"
+        show = rec["show"]
+        ok = {o["n"]: o for o in _buttonable(show) if isinstance(o.get("n"), int)}
+        multi = bool(show.get("multi"))
+        if kind == "submit":
+            picks = ev.get("picks")
+            if not (multi and isinstance(picks, list) and picks and len(set(picks)) == len(picks)
+                    and all(type(p) is int and p in ok and not ok[p].get("permanent") for p in picks)):
+                return "ignored"
+            return _finish(rec, key, dialogs, run, [x for p in picks for x in ("--option", str(p))],
+                           ", ".join(_label(ok[p]) for p in picks), now)
+        o = ok.get(n)
+        if o is None or multi:
+            return "ignored"
+        if kind == "tap" and o.get("permanent", True):
+            return "needs confirm"
+        if kind == "confirm" and not o.get("permanent", True):
+            return "ignored"
+        return _finish(rec, key, dialogs, run, ["--option", str(n)], _label(o), now)
+
+
+def reply(d, user, ev, run, now):
+    """The audit result of one `reply` event (the user's text answering the dialog `ev["key"]`); presses `--text`. The caller has
+    checked allowFrom."""
+    key = str(ev.get("key") or "")
+    text = _C0.sub(" ", str(ev.get("text") or ""))[:REPLY_MAX]
+    with _locked() as dialogs:
+        rec = dialogs.get(key)
+        if not isinstance(rec, dict) or not rec.get("pane") or not rec.get("dir") or not rec.get("header") \
+                or not isinstance((rec.get("show") or {}).get("lines"), list):
+            return "already answered"
+        mid = ev.get("message_id")
+        if mid is not None and rec.get("message_id") is not None and str(mid) != str(rec["message_id"]):
+            return "ignored"
+        if not rec["show"].get("other") or not text.strip():
+            return "ignored"
+        return _finish(rec, key, dialogs, run, ["--text", text], _one_line(text, LABEL_MAX), now)

@@ -782,6 +782,21 @@ test('edit finds a dialog key: with rows keeps those components, without removes
   assert.deepStrictEqual(e.payload.components, []);
 });
 
+test('an edit of a dialog disarms its reply: a later reply to the answered message sends no event', async () => {
+  // Mutation: drop the reply_armed cleanup in opEdit -> the reply after the edit writes a reply event.
+  const s = setup(); allow(s, ['U1']);
+  s.put(dlg()); await s.bridge.tick();
+  s.put(dlg({ key: 'p13-0123456789abcdef', rows: [] })); await s.bridge.tick();
+  await s.bridge.onInteraction(fakeInteraction({ customId: ID('reply'), user: 'U1', messageId: 'm7' }));
+  await s.bridge.onInteraction(fakeInteraction({ customId: 'ab:dlg:p13-0123456789abcdef:reply', user: 'U1', messageId: 'm8' }));
+  s.put({ op: 'edit', key: KEY, text: 'answered at the terminal' }); await s.bridge.tick();
+  assert.deepStrictEqual(s.st().reply_armed, { m8: 'p13-0123456789abcdef' });   // only the edited dialog's entry went
+  await s.bridge.onMessage(fakeReply({ id: 'r1', content: 'too late', ref: 'm7' }));
+  assert.deepStrictEqual(events(s), []);
+  await s.bridge.onMessage(fakeReply({ id: 'r2', content: 'still armed', ref: 'm8' }));
+  assert.strictEqual(events(s).length, 1);
+});
+
 test('click on a style-4 option: ephemeral confirm step, no event', async () => {
   // Mutation: write the click event at once for style 4 -> the "no events" assertion fails.
   const s = setup(); allow(s, ['U1']);

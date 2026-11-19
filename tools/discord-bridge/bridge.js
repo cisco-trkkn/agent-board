@@ -305,6 +305,8 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   async function opEdit(op) {
     const key = op.key;
+    for (const [mid, k] of Object.entries(st.reply_armed)) if (k === key) delete st.reply_armed[mid];   // an edited or answered dialog takes no reply
+    save();
     const where = [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')], [st.dialogs, () => (ops ? chan('approvals') : home())]].find(([m]) => m[key]);
     if (!where) { say(`edit ${snip(key)}: no message`); return; }
     const ch = await where[1]();
