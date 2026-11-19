@@ -143,6 +143,21 @@ The job runs `agent-board restore tick` at load and every 60 s; its output goes 
 - **Closing things on purpose.** A snapshot with projects is replaced by an empty one only after two ticks at least 50 s apart both see a running server with no projects (so shutdown, with its sessions dying one by one, never wipes it); a server that is down never replaces it. `schedule uninstall` marks the snapshot restored, so a later `install` does not replay a stale one.
 - **Known limit: needs a logged-in session.** The restore runs as a user LaunchAgent, so it needs the GUI session. The MDM update path uses FileVault's authenticated restart, which logs the user in, so it restores on its own. A panic or a power loss stops at the FileVault login screen; the restore starts at the first tick after you log in.
 
+### Nightly memory consolidation (optional)
+
+A LaunchAgent runs `tmux-ctl context dream --all` every night at 03:30 local time: it condenses each project's shared agent context to at most 8 KB, moves the rest to the archive and posts the result to Discord. It does not run at load, so a Mac that is asleep at 03:30 runs it at the next wake.
+
+```zsh
+tmux-ctl context dream-schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-dream.plist and loads it
+tmux-ctl context dream-schedule status       # first line loaded or not loaded, then one line per project: last run and failures
+tmux-ctl context dream-schedule uninstall
+```
+
+`install` backs up an existing plist as `.bak-YYYYMMDD` and points the job at `~/.local/bin/tmux-ctl`, else the `tmux-ctl` beside this checkout. Its output goes to `~/.local/state/agent-board/dream.launchd.log` (`$TC_STATE/` when set). The plist carries `TC_STATE` when it was set at install time, else the installing shell's `TMPDIR`, so the weekly-usage guard finds the statusline tap. macOS only: elsewhere the command prints `macOS only` and exits 2.
+
+- **Switches.** `TC_DREAM=0` in the job's environment, or an empty file `~/.local/state/agent-board/context/dream.off`, makes every run do nothing; remove either to resume.
+- **It runs whatever branch the main checkout holds.** The job executes the code of the checkout `tmux-ctl` links into, so keep `main` checked out there while the job is installed.
+
 ### Usage tab statusLine (optional)
 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):

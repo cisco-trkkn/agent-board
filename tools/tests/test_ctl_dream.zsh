@@ -43,6 +43,25 @@ check "help lists context dream"              sh -c "$C help | grep -q 'tmux-ctl
 check "help lists context dream-report"       sh -c "$C help | grep -q 'tmux-ctl context dream-report'"
 check "help lists context dream-file"        sh -c "$C help | grep -q 'tmux-ctl context dream-file'"
 check "help lists context dream-revert"      sh -c "$C help | grep -q 'tmux-ctl context dream-revert'"
+check "help lists context dream-schedule"    sh -c "$C help | grep -q 'tmux-ctl context dream-schedule'"
+# dream-schedule: a fake launchctl and a temp HOME; the real launchctl and ~/Library are never touched
+mkdir -p "$T/fakebin"
+print -r -- '#!/bin/sh
+echo "$@" >> "$FAKE_LAUNCHCTL_LOG"
+[ "$1" = print ] && [ -n "$FAKE_LAUNCHCTL_PRINT_FAIL" ] && exit 113
+exit 0' > "$T/fakebin/launchctl"; chmod +x "$T/fakebin/launchctl"
+export DS_LAUNCHCTL="$T/fakebin/launchctl" FAKE_LAUNCHCTL_LOG="$T/launchctl.log"
+out="$(TMUX= TMUX_PANE= $C context dream-schedule status)"; rc=$?
+if [[ "$(uname)" == Darwin ]]; then
+  check "dream-schedule status works with TMUX unset"  test $rc -eq 0 -a "$(print -r -- "$out" | head -1)" = loaded
+  check "status called the fake launchctl"             test -s "$T/launchctl.log"
+  out="$(FAKE_LAUNCHCTL_PRINT_FAIL=1 TMUX= TMUX_PANE= $C context dream-schedule status | head -1)"
+  check "status says not loaded when print fails"      test "$out" = "not loaded"
+  check "status lists the project's run"               sh -c "TMUX= $C context dream-schedule status | grep -q '^tt: last run '"
+  check "nothing written under the real Library"       test ! -e "$T/home/Library"
+else
+  check "dream-schedule off macOS prints macOS only"   test $rc -eq 2 -a "$out" = "macOS only"
+fi
 check "help still ends at the blank line"     test "$($C help | tail -1)" = ""
 run="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"])' "$TC_CONTEXT_DIR/tt.dream.json")"
 out="$(TMUX= TMUX_PANE= $C context dream-file tt)"; rc=$?
