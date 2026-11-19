@@ -56,7 +56,7 @@ _dlg_parse() {
     }
     # emit: the tagged block of rows a..b; all = 1 flags every row permanent (an unknown dialog)
     function emit(kind, qt, a, b, all,   i, x) {
-      print "K:" kind; print "Q:" qt; print "M:" (multi ? 1 : 0); print "W:" (other ? 1 : 0)
+      print "K:" kind; if (PAMB) print "A:ambiguous"; print "Q:" qt; print "M:" (multi ? 1 : 0); print "W:" (other ? 1 : 0)
       for (i = 1; i <= no; i++) print "O:" on[i] ":" ((all || op[i]) ? 1 : 0) ":" ol[i]
       for (i = a; i <= b; i++) {
         x = l[i]
@@ -127,6 +127,7 @@ _dlg_parse() {
         a = (s < q ? s + 1 : q)
       }
       addrun(q + 1, e)
+      PAMB = amb
       return emit(amb ? "unknown" : "permission", ltrim(l[q]), a, (mr ? mr : e), amb)
     }
 
@@ -239,7 +240,7 @@ _dlg_parse() {
     BEGIN { np = split(permlist, perm, "|"); for (k = 1; k <= np; k++) perm[k] = tolower(perm[k]) }
     { l[NR] = $0 }
     END {
-      N = NR; N2 = N; TDIV = 0; TLIST = 0
+      N = NR; N2 = N; TDIV = 0; TLIST = 0; PAMB = 0
       if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / @[A-Za-z0-9_.-]+ ─$/) { N2--; TDIV = 1 }   # a teammate status divider as the last row
       i = tasklist(); if (i < N2) { N2 = i; TLIST = 1 }                                   # a task list as the last rows
       if (permission() || question() || plan() || trust() || resume()) exit
@@ -283,6 +284,34 @@ _dlg_pane() {
     use_win "$1"; exists "$1"
     REPLY="$(target "$1")"
   fi
+}
+
+# _dlg_approve_view: stdin = a _dlg_parse block. For `tmux-ctl approve`: prints nothing when the block is not a permission prompt;
+# `X:ambiguous` alone when the prompt could fake its own frame (the parse's A: tag); else `T:<first row of the dialog, trimmed>`
+# (the tool title), `P:<line>` for each line --expect must equal, in order, and `O:<n>:<label>` for each option. The P: lines are
+# the command of a Bash prompt (between its two ╌ rules); any other prompt: the rows below the title down to the first ╌ rule
+# (the file path only). Never the Bash description, the question or the option rows.
+_dlg_approve_view() {
+  awk '
+    function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+    function isrule(x) { return index(x, "╌╌╌╌╌╌╌╌╌╌") == 1 }
+    { tag = substr($0, 1, 2); v = substr($0, 3)
+      if (tag == "K:") kind = v
+      else if (tag == "A:") amb = 1
+      else if (tag == "O:") { n = v; sub(/:.*/, "", n); v = substr(v, length(n) + 2); sub(/^[01]:/, "", v); o[++no] = n ":" v }
+      else if (tag == "L:") l[++nl] = v }
+    END {
+      if (amb) { print "X:ambiguous"; exit }
+      if (kind != "permission") exit
+      r1 = 0; r2 = 0
+      for (i = 1; i <= nl; i++) if (isrule(l[i])) { if (!r1) r1 = i; else if (!r2) r2 = i }
+      print "T:" trim(l[1])
+      if (r1 && r2) {
+        if (l[1] !~ /^[ \t]*Bash command/) { for (i = 2; i < r1; i++) if (trim(l[i]) != "") print "P:" trim(l[i]) }
+        else for (i = r1 + 1; i < r2; i++) if (trim(l[i]) != "") print "P:" trim(l[i])
+      }
+      for (i = 1; i <= no; i++) print "O:" o[i]
+    }'
 }
 
 # _dlg_read <pane>: sets BLOCK to the parsed screen (empty when no dialog shows) and LINES to its `lines` joined by newlines.
