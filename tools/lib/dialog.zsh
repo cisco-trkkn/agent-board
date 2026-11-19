@@ -504,7 +504,8 @@ _dlg_type() {
       *) die "$u" ;;
     esac
   done
-  (( have_expect && have_text )) && [[ -n "$expect" && -n "$text" ]] || die "--expect <rows> and a non-empty --text are required ($u)"
+  (( have_expect && have_text )) || die "--expect <rows> and --text are required ($u)"
+  [[ -n "$expect" && -n "$text" ]] || { print -u2 "dialog: $win: --expect and --text must not be empty"; return 1 }
   _dlg_pane "$win"; pane="$REPLY"
   n="${#${(@f)expect}}"
   [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }

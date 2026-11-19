@@ -188,4 +188,26 @@ dl p-tyu type --text "x";               check "type without --expect: rc 2"  tes
 dl p-tyu type --expect "$R5";           check "type without --text: rc 2"    test $rc -eq 2
 check "type usage errors: nothing sent"                  test "$(gotk p-tyu)" = GOT:NONE
 
+# empty --text / empty --expect: refused, rc 1, nothing sent (mutation: drop the empty check → "x" is typed or the compare passes)
+replayk p-tyem $FXA/no-prompt.txt
+dl p-tyem type --expect "$R5" --text ""
+check "type with empty --text: rc 1 + message"           test $rc -eq 1 -a "$err" = "dialog: p-tyem: --expect and --text must not be empty"
+dl p-tyem type --expect "" --text "x"
+check "type with empty --expect: rc 1 + message"         test $rc -eq 1 -a "$err" = "dialog: p-tyem: --expect and --text must not be empty"
+check "type with empty args: nothing sent"               test "$(gotk p-tyem)" = GOT:NONE
+
+# the screen changes between the two reads (rows differ): the second compare refuses, nothing sent
+# mutation: drop the second ROWS_ compare → the text reaches the new screen
+python3 -I - $FXA/no-prompt.txt "$(head -1 <<<"$R5")" > $S/rowdiff.txt <<'PY'
+import sys
+print(open(sys.argv[1], encoding="utf-8").read().replace(sys.argv[2], "CHANGED ROW", 1), end="")
+PY
+replayk p-tysw $FXA/no-prompt.txt
+mkpanek p-tysw2 $S/rowdiff.txt; mv $S/pane-p-tysw2.zsh $S/pane3.zsh
+export TC_DIALOG_BEFORE_SEND="$TT_BIN respawn-pane -k -t '=tt:p-tysw' 'zsh $S/pane3.zsh'; sleep 0.5"
+dl p-tysw type --expect "$R5" --text "x"; unset TC_DIALOG_BEFORE_SEND
+check "type, rows change between reads: rc 1 + message"  test $rc -eq 1 -a "$err" = "dialog: the screen in p-tysw changed"
+touch $S/stop-p-tysw2; sleep 0.5
+check "type, rows change between reads: nothing sent"    test "$(tt capture-pane -p -J -t '=tt:p-tysw' | grep -a -o 'GOT:[0-9a-fNOE]*' | tail -1)" = GOT:NONE
+
 tt_done

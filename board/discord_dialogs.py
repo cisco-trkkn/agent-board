@@ -149,11 +149,12 @@ def _waiting(pane):
 
 
 def _post(dialogs, key, pane, project, window, show, now, head=None):
+    """Post a dialog message and record it; False when there is nowhere to post it, else None."""
     if key in dialogs:
         return
     d = target_dir(project)
     if d is None:
-        return
+        return False
     head = head or header(project, window, show)
     text, rows = message(key, head, show)
     discord_feed.outbox_write(d, {"op": "dialog", "key": key, "text": text, "rows": rows, "mention_user": True})
@@ -206,7 +207,7 @@ def _idle_track(last, sessions, now):
                 status, prev = p.get("status"), last.get(pid)
                 last[pid] = status
                 if fresh and status == "ready" and prev in ("working", "waiting"):
-                    out.append((pid, s.get("name") or "", w.get("name") or ""))
+                    out.append((pid, s.get("name") or "", w.get("name") or "", prev))
     for pid in [k for k in last if k not in seen]:
         del last[pid]
     return out
@@ -237,14 +238,15 @@ def _scan(dialogs, sessions, now, run, last=None):
         live[pid] = key_of(pid, got["lines"])
         found.append((live[pid], pid, project, window, got))
     _sweep(dialogs, live, panes, show, run)   # before the posts: a changed dialog's old message is closed above its new one
-    for pid, project, window in idle:
+    for pid, project, window, prev in idle:
         try:
             rows = _rows(run, pid)
-            if rows:
-                _post(dialogs, key_of(pid, rows), pid, project, window,
-                      {"kind": IDLE, "question": "", "options": [], "multi": False, "other": True, "lines": rows}, now,
-                      head=f"❓ {project} · {window} {IDLE_WORDS}")
+            if rows and _post(dialogs, key_of(pid, rows), pid, project, window,
+                              {"kind": IDLE, "question": "", "options": [], "multi": False, "other": True, "lines": rows}, now,
+                              head=f"❓ {project} · {window} {IDLE_WORDS}") is False:
+                last[pid] = prev   # no place to post to: the working→ready transition fires again on the next scan
         except Exception as e:  # noqa: BLE001
+            last[pid] = prev   # a failed post is retried: the transition fires again on the next scan
             _warn(f"idle post failed ({project} {window} {pid})", e)
     for key, pid, project, window, got in found:
         try:
@@ -343,6 +345,7 @@ def _finish(rec, key, dialogs, run, args, label, now, verb="press"):
     """Press through `tmux-ctl dialog <pane> press --expect <lines> <args>`, edit the message to the outcome, drop the key (every
     outcome: a press is never retried); returns the audit result."""
     argv = [str(BIN / "tmux-ctl"), "dialog", rec["pane"], verb, "--expect", "\n".join(rec["show"]["lines"]), *args]
+    rows = None
     try:
         run(argv)
         result, text = f"pressed: {label}", f"→ {label} (from Discord)"
@@ -350,13 +353,24 @@ def _finish(rec, key, dialogs, run, args, label, now, verb="press"):
         first = (str(e).splitlines() or [""])[0] or "exit error"
         if first.startswith(_CHANGED):
             result, text = "changed", "the dialog changed; re-sent below"
+            if (rec.get("show") or {}).get("kind") == IDLE:
+                # a real dialog is re-posted by the next scan; an idle pane stays `ready`, so no scan would: re-post it here
+                rows = _rows(run, rec["pane"])
+                if not rows:
+                    text = "the screen changed; nothing to re-send"
         else:
             result, text = f"not pressed: {first}"[:200], f"⚠️ not pressed: {first}"[:300]
+    del dialogs[key]
     try:
         discord_feed.outbox_write(Path(rec["dir"]), {"op": "edit", "key": key, "text": f"{rec['header']}\n{text}"})
     except Exception as e:  # noqa: BLE001 -- the press happened: the key still goes
         _warn(f"edit failed ({key})", e)
-    del dialogs[key]
+    if rows:
+        try:
+            _post(dialogs, key_of(rec["pane"], rows), rec["pane"], rec.get("project") or "", rec.get("window") or "",
+                  {"kind": IDLE, "question": "", "options": [], "multi": False, "other": True, "lines": rows}, now, head=rec["header"])
+        except Exception as e:  # noqa: BLE001
+            _warn(f"idle re-post failed ({key})", e)
     return result
 
 

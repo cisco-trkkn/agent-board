@@ -922,12 +922,50 @@ class IdleTest(ConsumerBase):
         self.reply(self.key(), "y" * 100)
         self.assertEqual(self.edits()[-1]["text"].split("\n")[1], f"→ {'y' * 60} (from Discord)")
 
-    def test_a_changed_screen_edits_to_resent_below(self):
+    def test_a_changed_screen_edits_to_resent_below_and_posts_the_new_rows_once(self):
+        # mutation: drop the re-post in _finish -> no second dialog op
         self.marker()
         self.scan("working"); self.scan("ready", 10)
         self.run.press_result = RuntimeError("dialog: the screen in %12 changed")
+        new = ["⏺ A different question?", "✻ Brewed for 9s"]
+        self.run.rows[self.PID] = "\n".join(new)
         self.assertEqual(self.reply(self.key(), "x"), "changed")
         self.assertEqual(self.edits()[-1]["text"].split("\n")[1], "the dialog changed; re-sent below")
+        posts = [o for o in self.ops() if o["op"] == "dialog"]
+        self.assertEqual([o["key"] for o in posts], [self.key(), key_of(self.PID, new)])
+        for r in new:
+            self.assertIn(r, posts[-1]["text"])
+        self.assertEqual(list(self.state()), [key_of(self.PID, new)])
+        self.scan("ready", 20)   # and the next scan adds nothing
+        self.assertEqual(len([o for o in self.ops() if o["op"] == "dialog"]), 2)
+
+    def test_a_changed_screen_with_no_rows_left_does_not_promise_a_resend(self):
+        self.marker()
+        self.scan("working"); self.scan("ready", 10)
+        self.run.press_result = RuntimeError("dialog: the screen in %12 changed")
+        del self.run.rows[self.PID]   # `rows` now fails: no input box
+        self.assertEqual(self.reply(self.key(), "x"), "changed")
+        self.assertEqual(self.edits()[-1]["text"].split("\n")[1], "the screen changed; nothing to re-send")
+        self.assertEqual(len([o for o in self.ops() if o["op"] == "dialog"]), 1)
+
+    def test_a_failed_idle_post_is_retried_on_the_next_scan(self):
+        # mutation: do not restore last_status after the failed post -> the item is never posted
+        self.marker()
+        self.scan("working")
+        with mock.patch.object(dd.discord_feed, "outbox_write", side_effect=OSError("disk full")), mock.patch("sys.stderr"):
+            self.scan("ready", 10)
+        self.assertEqual(self.ops(), [])
+        self.scan("ready", 20)
+        self.assertEqual([o["key"] for o in self.ops() if o["op"] == "dialog"], [self.key()])
+
+    def test_an_idle_post_with_nowhere_to_go_is_retried_on_the_next_scan(self):
+        self.marker()
+        self.scan("working")
+        with mock.patch.object(dd, "target_dir", return_value=None):
+            self.scan("ready", 10)
+        self.assertEqual(self.ops(), [])
+        self.scan("ready", 20)
+        self.assertEqual(len([o for o in self.ops() if o["op"] == "dialog"]), 1)
 
     def test_a_click_on_a_non_option_id_of_an_idle_item_presses_nothing(self):
         self.marker()
