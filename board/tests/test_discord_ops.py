@@ -101,7 +101,7 @@ class RenderCard(Base):
         out = ops.render_card(r, tasks, self.LINKS, limits, NOW)
         lines = out.split("\n")
         self.assertEqual(lines[0], "usage: 5h 63% · week 93% · today $1.75")
-        self.assertEqual(lines[1], "**a** · queue: running x (1/2) · blockers: ctx 90% · waiting on you: 1 · <https://discord.com/channels/9/1>")
+        self.assertEqual(lines[1], "**a** · queue: running x (spec 1 of 2) · blockers: none · alerts: ctx 90% · waiting on you: 1 · <https://discord.com/channels/9/1>")
         self.assertEqual(lines[2], "**b** · queue: idle · blockers: none · waiting on you: 0")
         self.assertTrue(lines[3].startswith("updated "))
         self.assertNotIn("```", out)
@@ -122,6 +122,39 @@ class RenderCard(Base):
         self.assertLessEqual(len(out), 1900)
         self.assertRegex(out, r"… \d+ more")
         self.assertTrue(out.split("\n")[-1].startswith("updated "))
+
+
+class BlockersSplit(Base):
+    def line(self, alerts, floor=None):
+        r = rec("a"); r["alerts"] = alerts
+        return ops._project_line(r, [], "", floor)
+
+    def test_non_blocking_alert_goes_under_alerts(self):
+        # mutation: drop the kind filter -> opus@medium lands under blockers
+        self.assertIn("blockers: none · alerts: opus@medium · waiting", self.line([{"kind": "model_mismatch", "label": "opus@medium"}]))
+
+    def test_stuck_is_a_blocker_without_alerts_part(self):
+        out = self.line([{"kind": "stuck", "label": "stuck 12m"}])
+        self.assertIn("blockers: stuck 12m · waiting", out)
+        self.assertNotIn("alerts:", out)
+
+    def test_floor_reaches_the_queue_text(self):
+        tasks = [run_task(1, "x", "in_progress"), {"id": "5", "subject": "T", "status": "completed"}]
+        r = rec("a")
+        self.assertIn("(tasks 1/1 · spec 1 of 1)", ops._project_line(r, tasks, "", 2))
+        self.assertIn("(tasks 1/1 · spec 1 of 1)", ops.queue_text(tasks, 2))
+
+    def test_tick_reads_floor_from_feed_state(self):
+        self.configure()
+        d = self.project("a")
+        (d / "feed-state.json").write_text(json.dumps({"running_thread_key": "k", "spec_floor": {"k": 1}}))
+        tasks = {"a": [run_task(1, "x", "in_progress"), {"id": "5", "subject": "T", "status": "completed"}]}
+        self.tick([rec("a")], tasks)
+        self.assertEqual(self.state()["queues"]["a"], "queue: running x (tasks 1/1 · spec 1 of 1)")
+        v = json.loads((self.ops / "views.json").read_text())
+        self.assertIn("tasks 1/1", v["status"]["a"])
+        self.assertIn("tasks 1/1", v["queue"]["a"])
+        self.assertIn("tasks 1/1", v["status"]["_all"])
 
 
 class Tick(Base):
@@ -161,7 +194,7 @@ class Tick(Base):
         self.assertEqual(v["projects"], ["a"])
         self.assertIn("a", v["status"])
         self.assertIn("_all", v["status"])
-        self.assertEqual(v["queue"]["a"].split("\n"), ["queue: running y (2/3)", "✓ x — merged", "▶ y", "· z"])
+        self.assertEqual(v["queue"]["a"].split("\n"), ["queue: running y (spec 2 of 3)", "✓ x — merged", "▶ y", "· z"])
         self.assertEqual(v["approvals"], [])
         self.assertEqual(v["evidence"], {})
         self.assertFalse(list(self.ops.glob("*.tmp")))
@@ -308,6 +341,53 @@ class Tick(Base):
         (self.ops / "ops-state.json").write_text(json.dumps({"approvals": {"old": mk(NOW - 8 * 86400), "fresh": mk(NOW - 6 * 86400)}}))
         self.tick([rec("a")])
         self.assertEqual([a["key"] for a in json.loads((self.ops / "views.json").read_text())["approvals"]], ["fresh"])
+
+    def presence(self):
+        return [o for o in self.outbox() if o["op"] == "presence"]
+
+    def ptick(self, now, spend, live=()):
+        return ops.tick([rec("a", spend=spend)], {}, None, now, self.add, live=list(live))
+
+    def test_presence_throttled_60s_and_on_change(self):
+        # mutation: drop the 60 s check in presence_op_due -> the t+30 assertion fails
+        self.configure()
+        self.project("a")
+        self.ptick(NOW, 1.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 30, 2.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 61, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        self.ptick(NOW + 120, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        st = self.state()
+        self.assertEqual((st["presence_text"], st["presence_ts"]), (self.presence()[1]["text"], NOW + 61))
+
+    def test_no_presence_when_live_is_none(self):
+        self.configure()
+        self.tick([rec("a")])
+        self.assertEqual(self.presence(), [])
+        self.assertNotIn("presence_text", self.state())
+
+    def test_presence_needs_ops_configured(self):
+        self.assertIsNone(self.ptick(NOW, 1.0))
+        self.assertFalse((self.ops / "outbox").exists())
+
+    def test_bad_presence_does_not_block_card_or_views(self):
+        self.configure()
+        with mock.patch("ticker.ops_line", return_value=""), mock.patch("sys.stderr"):
+            self.ptick(NOW, 1.0)
+        self.assertEqual(self.presence(), [])
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        self.assertNotIn("presence_text", self.state())
+        self.assertTrue((self.ops / "views.json").exists())
+
+    def test_line_failure_never_stops_card(self):
+        self.configure()
+        with mock.patch("ticker.ops_line", side_effect=RuntimeError("boom")), mock.patch("sys.stderr") as err:
+            self.ptick(NOW, 1.0)
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        self.assertIn("boom", "".join(c[0][0] for c in err.write.call_args_list))
 
     def test_lock_held_returns_none(self):
         import fcntl

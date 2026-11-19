@@ -245,7 +245,7 @@ class CardTest(unittest.TestCase):
                 task(5, "Task 2: node bridge", "in_progress", "bv-node", "frontier"),
                 task(6, "Task 3: docs")]
         t = df.render_card(rec(), lead, NOW, floor=0)
-        self.assertIn("queue: running 2026-11-16-b (2/3)", t)
+        self.assertIn("queue: running 2026-11-16-b (tasks 1/3 · spec 2 of 3)", t)
         self.assertIn("✓ Task 1: feed core", t)
         self.assertRegex(t, r"▶ Task 2: node bridge .*bv-node.*frontier")
         self.assertIn("· Task 3: docs", t)
@@ -285,6 +285,54 @@ class CardTest(unittest.TestCase):
 
     def test_small_not_cut(self):
         self.assertNotIn("more", df.render_card(rec(), [], NOW))
+
+
+class SpecProgressTest(Base):
+    def lead(self):
+        runs = [task(i, f"Plan & run: docs/superpowers/specs/s{i}.md", "in_progress" if i == 2 else "completed") for i in range(2, 14)]
+        own = [task(i, f"Task {i}", "completed" if i < 16 else "pending") for i in range(14, 20)]
+        old = [task(1, "EA fix wave", "completed")]   # before the spec: at or below the floor
+        return old + runs + own
+
+    def test_progress_counts_own_tasks_above_floor(self):
+        # mutation: drop the `> floor` filter -> total includes the 12 runs and fails
+        self.assertEqual(df.spec_progress(self.lead(), 13), (2, 6))
+
+    def test_progress_none_without_floor(self):
+        self.assertIsNone(df.spec_progress(self.lead(), None))
+
+    def test_card_shows_tasks_and_spec(self):
+        t = df.render_card(rec(), self.lead(), NOW, floor=13)
+        self.assertIn("queue: running s2 (tasks 2/6 · spec 1 of 12)", t)
+
+    def test_card_without_floor(self):
+        t = df.render_card(rec(), self.lead(), NOW)
+        self.assertIn("queue: running s2 (spec 1 of 12)", t)
+
+    def test_spec_floor_reads_feed_state(self):
+        self.dir.mkdir(parents=True)
+        (self.dir / "feed-state.json").write_text(json.dumps({"running_thread_key": "3", "spec_floor": {"3": 13}}))
+        self.assertEqual(df.spec_floor("proj"), 13)
+
+    def test_spec_floor_none_when_absent_or_not_int(self):
+        self.assertIsNone(df.spec_floor("proj"))
+        self.dir.mkdir(parents=True)
+        (self.dir / "feed-state.json").write_text(json.dumps({"running_thread_key": "3", "spec_floor": {"3": None}}))
+        self.assertIsNone(df.spec_floor("proj"))
+        (self.dir / "feed-state.json").write_text(json.dumps({"running_thread_key": "3", "spec_floor": {"3": True}}))
+        self.assertIsNone(df.spec_floor("proj"))
+
+
+class PresenceCheckTest(unittest.TestCase):
+    def test_valid(self):
+        df._check({"op": "presence", "text": "x"})
+        df._check({"op": "presence", "text": "x" * 128})
+
+    def test_invalid(self):
+        for op in ({"op": "presence", "text": ""}, {"op": "presence", "text": "x" * 129}, {"op": "presence", "text": 5},
+                   {"op": "presence", "text": "x", "extra": "y"}, {"op": "presence"}):
+            with self.assertRaises(ValueError, msg=str(op)):
+                df._check(op)
 
 
 class DueTest(unittest.TestCase):
@@ -331,6 +379,15 @@ def fx(name, **over):
 
 def primed():
     return {"primed": True, "seen": []}
+
+
+class PresenceDueTest(unittest.TestCase):
+    def test_due(self):
+        st = {"presence_text": "a", "presence_ts": 1000.0}
+        self.assertIsNone(df.presence_op_due(st, "a", 1300.0))
+        self.assertIsNone(df.presence_op_due(st, "b", 1059.0))
+        self.assertEqual(df.presence_op_due(st, "b", 1060.0), {"op": "presence", "text": "b"})
+        self.assertEqual(df.presence_op_due({}, "b", NOW), {"op": "presence", "text": "b"})
 
 
 class DeriveBase(Base):
@@ -674,6 +731,49 @@ class TickTest(DeriveBase):
             self.tick([self.run_task], now=NOW + 200)
         self.assertEqual(len(df.read_events("proj", 0)[0]), feed_n)   # nothing re-derived or re-appended
         self.assertEqual(len([o for o in self.outbox() if o["op"] != "card"]), len([o for o in self.outbox()[:n] if o["op"] != "card"]))
+
+    def presence(self):
+        return [o for o in self.outbox() if o["op"] == "presence"]
+
+    def ptick(self, now, spend, live=()):
+        r = rec()
+        r["spend_today"] = spend
+        return df.tick("proj", r, self.root, now, lead_tasks=self.prime, live=list(live), limits=None)
+
+    def test_presence_throttled_60s_and_on_change(self):
+        # mutation: drop the 60 s check in presence_op_due -> the t+30 assertion fails
+        self.ptick(NOW, 1.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 30, 2.0)
+        self.assertEqual(len(self.presence()), 1)
+        self.ptick(NOW + 61, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        self.assertIn("$2.00", self.presence()[1]["text"])
+        self.ptick(NOW + 120, 2.0)
+        self.assertEqual(len(self.presence()), 2)
+        st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
+        self.assertEqual((st["presence_text"], st["presence_ts"]), (self.presence()[1]["text"], NOW + 61))
+
+    def test_no_presence_when_live_is_none(self):
+        self.tick(self.prime)
+        self.assertEqual(self.presence(), [])
+        st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
+        self.assertNotIn("presence_text", st)
+
+    def test_bad_presence_op_is_logged_and_does_not_block_card(self):
+        # mutation: save presence_text although the write raised -> presence_text in state
+        with mock.patch("ticker.project_line", return_value=""), mock.patch("sys.stderr") as err:
+            df.tick("proj", rec(), self.root, NOW, lead_tasks=self.prime, live=[], limits=None)
+        self.assertEqual(self.presence(), [])
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
+        self.assertNotIn("presence_text", st)
+
+    def test_line_failure_never_stops_card(self):
+        with mock.patch("ticker.project_line", side_effect=RuntimeError("boom")), mock.patch("sys.stderr") as err:
+            df.tick("proj", rec(), self.root, NOW, lead_tasks=self.prime, live=[], limits=None)
+        self.assertEqual([o["op"] for o in self.outbox()].count("card"), 1)
+        self.assertIn("boom", "".join(c[0][0] for c in err.write.call_args_list))
 
     def test_held_lock_skips_tick(self):
         d = tc_env.discord_dir("proj")

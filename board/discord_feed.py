@@ -18,7 +18,9 @@ from pathlib import Path
 
 CAP = 200
 CARD_MAX = 1900
+PRESENCE_MAX = 128
 CARD_EVERY = 30
+PRESENCE_EVERY = 60
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
 APPROVAL_KINDS = ("perm", "question", "merge", "other")
@@ -37,6 +39,7 @@ def _check(op):
               "archive": ({"op", "key"}, set()),
               "prompt": ({"op", "key", "window", "tool", "lines", "tier", "mention_user"}, set()),
               "edit": ({"op", "key", "text"}, set()),
+              "presence": ({"op", "text"}, set()),
               "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"})}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
@@ -47,6 +50,8 @@ def _check(op):
     for k in keys - {"op", "mention_user", "files", "lines", "delete_files"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
+    if kind == "presence" and (not op["text"] or len(op["text"]) > PRESENCE_MAX):
+        raise ValueError("presence text must be 1..128 chars")
     if kind == "prompt":
         if op["tier"] not in TIERS:
             raise ValueError(f"tier {op['tier']!r} is not a tier")
@@ -182,11 +187,30 @@ def _spec_name(subject):
     return os.path.basename(path).removesuffix(".md") + hashsep + frag
 
 
-def _queue(lead_tasks):
+def spec_progress(lead_tasks, floor):
+    """(done, total) of the running spec's own tasks: not `Plan & run:`, numeric id above floor. None when floor is None."""
+    if floor is None:
+        return None
+    own = [t for t in lead_tasks if isinstance(t, dict) and not str(t.get("subject", "")).startswith(_PLAN_RUN)
+           and (_num(t.get("id")) or 0) > floor]
+    return sum(t.get("status") == "completed" for t in own), len(own)
+
+
+def spec_floor(project):
+    """The running spec's floor from the project's feed-state.json, None when unknown."""
+    import tc_env
+    st = _load(tc_env.discord_dir(project) / "feed-state.json")
+    v = (st.get("spec_floor") or {}).get(st.get("running_thread_key") or "")
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _queue(lead_tasks, floor=None):
     runs = sorted((t for t in lead_tasks if str(t.get("subject", "")).startswith(_PLAN_RUN)), key=_tid)
     for k, t in enumerate(runs, 1):
         if t.get("status") == "in_progress":
-            return f"queue: running {_spec_name(t['subject'])} ({k}/{len(runs)})"
+            prog = spec_progress(lead_tasks, floor)
+            tasks = f"tasks {prog[0]}/{prog[1]} · " if prog else ""
+            return f"queue: running {_spec_name(t['subject'])} ({tasks}spec {k} of {len(runs)})"
     if any(t.get("status") == "pending" for t in runs):
         return "queue: paused"
     return "queue: idle"
@@ -202,7 +226,7 @@ def render_card(record, lead_tasks, now, floor=None):
     Task lines are the running spec's: tasks with a numeric id above `floor` (the highest task id when the spec started);
     with no floor known, only tasks that are not completed."""
     lead_tasks = [t for t in (lead_tasks or []) if isinstance(t, dict)]
-    head = [_queue(lead_tasks)]
+    head = [_queue(lead_tasks, floor)]
     body = []
     def of_spec(t):
         n = _num(t.get("id"))
@@ -240,6 +264,15 @@ def card_op_due(state, text, now):
     if now - state.get("card_ts", 0) < CARD_EVERY:
         return None
     return {"op": "card", "text": text}
+
+
+def presence_op_due(state, text, now):
+    """A presence op when text changed and at least PRESENCE_EVERY seconds passed since state['presence_ts'], else None."""
+    if text == state.get("presence_text"):
+        return None
+    if now - state.get("presence_ts", 0) < PRESENCE_EVERY:
+        return None
+    return {"op": "presence", "text": text}
 
 
 def audit_append(dir, user, action, target, result):
@@ -492,11 +525,12 @@ def _load(p):
         return {}
 
 
-def tick(project, record, root, now, lead_tasks=None, list_id=""):
+def tick(project, record, root, now, lead_tasks=None, list_id="", live=None, limits=None, lead_sid=""):
     """One feed pass for a project under flock(<dir>/feed-state.lock); None when another tick holds it.
     derive -> append events to the feed file -> read every feed event since state["feed_offset"] (so events appended by
     other writers flow through too) -> outbox ops -> the card op when due -> feed-state.json.
-    `lead_tasks` are the raw lead task dicts and `list_id` their task-list directory name (planview.raw_live_list)."""
+    `lead_tasks` are the raw lead task dicts and `list_id` their task-list directory name (planview.raw_live_list).
+    `live` (the indexer rows; None = no presence op), `limits` and `lead_sid` feed the ticker line of the throttled presence op."""
     import tc_env
     d = tc_env.discord_dir(project)
     d.mkdir(parents=True, exist_ok=True)
@@ -524,15 +558,31 @@ def tick(project, record, root, now, lead_tasks=None, list_id=""):
         card = card_op_due(st, text, now)
         if card:
             ops.append(card)
+        pres, pline = None, ""
+        if live is not None:
+            try:
+                import ticker
+                pline = ticker.project_line(record, live, limits, lead_tasks or [], now,
+                                            floor=st.get("spec_floor", {}).get(st.get("running_thread_key")), lead_sid=lead_sid)
+                pres = presence_op_due(st, pline, now)
+            except Exception as e:   # noqa: BLE001 -- a bad line never stops the card or the other ops
+                print(f"discord_feed: presence line failed ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            if pres:
+                ops.append(pres)
         written = 0
+        pres_written = False
         for op in ops:
             try:
                 outbox_write(d, op)
                 written += 1
+                if op is pres:
+                    pres_written = True
             except ValueError as e:
                 print(f"discord_feed: skipped bad op ({project}): {e}", file=sys.stderr, flush=True)
         if card:
             st["card_text"], st["card_ts"] = text, now
+        if pres_written:
+            st["presence_text"], st["presence_ts"] = pline, now
         tmp = sp.with_name(sp.name + ".tmp")
         tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, sp)

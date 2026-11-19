@@ -10,7 +10,7 @@ const { FakeClient, fakeInteraction, fakeMessage, fakeReaction } = require('./fa
 const TOKEN = 'TESTTOKEN.abc123.SECRETSECRETSECRET';
 let seq = 0;
 
-function setup({ t0 = 1700000000000 } = {}) {
+function setup({ t0 = 1700000000000, ops = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dbb-'));
   fs.mkdirSync(path.join(dir, 'outbox'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'bridge.json'), JSON.stringify({ channel: 'C1', user: 'U1' }));
@@ -20,7 +20,7 @@ function setup({ t0 = 1700000000000 } = {}) {
   const sleeps = [];
   const logs = [];
   const bridge = createBridge({
-    dir, client, log: (l) => logs.push(l), now: () => clock.t,
+    dir, client, ops, log: (l) => logs.push(l), now: () => clock.t,
     sleep: async (ms) => { sleeps.push(ms); clock.t += ms; },
   });
   const put = (op) => {
@@ -655,4 +655,70 @@ test('prompt without a configured user: no mention prefix and no <@undefined>', 
   assert.ok(p.content.startsWith('🔐 w1 wants to run Bash command'), p.content);
   assert.ok(!p.content.includes('undefined'));
   assert.deepStrictEqual(p.allowedMentions, { parse: [] });
+});
+
+// ---- presence op: the bot's custom status ----
+const custom = (state) => ({ activities: [{ type: 4, name: 'custom', state }], status: 'online' });
+
+for (const ops of [false, true]) {
+  test(`presence op sets the custom status once, removes the file, logs it (ops: ${ops})`, async () => {
+    const s = setup({ ops });
+    s.put({ op: 'presence', text: 'wk 1%' });
+    await s.bridge.tick();
+    assert.deepStrictEqual(s.client.presences, [custom('wk 1%')]);
+    assert.deepStrictEqual(s.files(), []); assert.deepStrictEqual(s.failed(), []);
+    assert.ok(s.logs.includes('presence wk 1%'), s.logs.join('|'));
+  });
+}
+
+test('onReady re-applies the last presence; before any presence op it does not', async () => {
+  const s = setup();
+  await s.bridge.onReady();
+  assert.deepStrictEqual(s.client.presences, []);
+  s.put({ op: 'presence', text: 'wk 2%' });
+  await s.bridge.tick();
+  await s.bridge.onReady();
+  assert.deepStrictEqual(s.client.presences, [custom('wk 2%'), custom('wk 2%')]);
+});
+
+test('a restarted bridge re-applies the saved presence on ready; a fresh dir does not', async () => {
+  const s = setup();
+  s.put({ op: 'presence', text: 'wk 4%' });
+  await s.bridge.tick();
+  assert.strictEqual(s.st().presence, 'wk 4%');
+  const client2 = new FakeClient({ guildId: 'G1' });
+  const b2 = createBridge({ dir: s.dir, client: client2, log: () => {}, now: () => s.clock.t });
+  await b2.onReady();
+  assert.deepStrictEqual(client2.presences, [custom('wk 4%')]);
+  const f = setup();
+  await f.bridge.onReady();
+  assert.deepStrictEqual(f.client.presences, []);
+});
+
+test('a presence op is cut to 128 characters', async () => {
+  const s = setup();
+  s.put({ op: 'presence', text: 'x'.repeat(200) });
+  await s.bridge.tick();
+  assert.strictEqual(s.client.presences[0].activities[0].state.length, 128);
+});
+
+test('setPresence throwing is logged and consumed; the next op still goes', async () => {
+  const s = setup();
+  s.client.presenceError = new Error('boom');
+  s.put({ op: 'presence', text: 'wk 3%' });
+  s.put(post('after'));
+  await s.bridge.tick();
+  assert.ok(s.logs.includes('presence failed: boom'), s.logs.join('|'));
+  assert.deepStrictEqual(s.files(), []); assert.deepStrictEqual(s.failed(), []);
+  assert.strictEqual(s.client.callsOf('send').length, 1);
+});
+
+test('a presence op without a non-empty string text goes to failed/', async () => {
+  const s = setup();
+  s.put({ op: 'presence', text: '' });
+  s.put({ op: 'presence', text: 5 });
+  s.put({ op: 'presence' });
+  await s.bridge.tick();
+  assert.strictEqual(s.failed().filter((n) => n.endsWith('.json')).length, 3);
+  assert.deepStrictEqual(s.client.presences, []);
 });
