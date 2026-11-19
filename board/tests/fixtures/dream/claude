@@ -91,7 +91,14 @@ if mode == "hang":
     time.sleep(60)
 elif mode in ("good", "slow"):
     if mode == "slow":
-        time.sleep(float(os.environ.get("FAKE_DREAM_SLEEP", "1")))
+        entered, release = os.environ.get("FAKE_DREAM_ENTERED"), os.environ.get("FAKE_DREAM_RELEASE")
+        if entered and release:   # real sync: tell the test we are in the model step, wait (bounded) until it has mutated the files
+            open(entered, "w").close()
+            end = time.monotonic() + 60
+            while not os.path.exists(release) and time.monotonic() < end:
+                time.sleep(0.05)
+        else:
+            time.sleep(float(os.environ.get("FAKE_DREAM_SLEEP", "1")))
     consolidate()
 elif mode == "merged":
     consolidate(merge=True)

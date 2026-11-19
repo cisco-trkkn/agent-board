@@ -102,6 +102,36 @@ class DreamBase(unittest.TestCase):
             rc = dream.main(argv, now=now)
         return rc, out.getvalue()
 
+    def run_dream_mutating(self, mutate, **kw):
+        """Run the `slow` fake model and call mutate() while it is inside the model step (after the snapshot, before the commit).
+        Synced by files, not by time: the fake writes ENTERED, waits for RELEASE. -> (rc, stdout)"""
+        entered, release = self.tmp / "entered", self.tmp / "release"
+        os.environ["FAKE_DREAM_ENTERED"], os.environ["FAKE_DREAM_RELEASE"] = str(entered), str(release)
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in ("FAKE_DREAM_ENTERED", "FAKE_DREAM_RELEASE")])
+        errs = []
+
+        def worker():
+            try:
+                end = time.monotonic() + 60
+                while not entered.exists() and time.monotonic() < end:
+                    time.sleep(0.02)
+                if not entered.exists():
+                    raise AssertionError("the model step never started")
+                mutate()
+            except BaseException as e:   # noqa: BLE001 -- surfaced in the test thread below
+                errs.append(e)
+            finally:
+                release.write_text("")
+        t = threading.Thread(target=worker)
+        t.start()
+        try:
+            return self.run_dream(mode="slow", **kw)
+        finally:
+            release.write_text("")
+            t.join()
+            if errs:
+                raise errs[0]
+
     def rundir(self):
         return next(d for d in (self.D / "dream/p").iterdir() if d.is_dir())
 
@@ -342,49 +372,34 @@ class FailTest(DreamBase):
         self.assertEqual(json.loads((self.rundir() / "out/run.json").read_text())["outcome"], "failed")
 
     def test_add_during_run_survives(self):
-        os.environ["FAKE_DREAM_SLEEP"] = "2"
         entry = "added mid run (files: docs/real.txt)"
 
         def add():
-            time.sleep(0.7)
             subprocess.run([sys.executable, str(HERE / "context.py"), "add", "--project", "p", "--section", "Gotchas", "--", entry],
                            check=True, capture_output=True)
-        t = threading.Thread(target=add)
-        t.start()
-        rc, out = self.run_dream(mode="slow")
-        t.join()
+        rc, out = self.run_dream_mutating(add)
         self.assertEqual(rc, 0, out)
         sec = re.search(r"## Gotchas\n(.*?)(?=\n## )", self.core.read_text(), re.S).group(1)
         self.assertIn(entry, sec)
 
     def test_rewrite_during_run_fails(self):
-        os.environ["FAKE_DREAM_SLEEP"] = "2"
         before = self.core.read_text()
 
         def rewrite():
-            time.sleep(0.7)
             self.core.write_text(before.replace("Map fact 0", "Map FACT 0"))
-        t = threading.Thread(target=rewrite)
-        t.start()
-        rc, out = self.run_dream(mode="slow")
-        t.join()
+        rc, out = self.run_dream_mutating(rewrite)
         self.assertEqual(rc, 1)
         self.assertIn("files changed during the run", out)
         self.assertIn("Map FACT 0", self.core.read_text())
 
     def test_archive_rewrite_during_run_fails(self):
-        os.environ["FAKE_DREAM_SLEEP"] = "2"
         arch = self.D / "p.archive.md"
         arch.write_text("# p: archived agent context\n\n" + dream_check.SKELETON)
 
         def rewrite():
-            time.sleep(0.7)
             arch.write_text(arch.read_text() + "\n")
-        t = threading.Thread(target=rewrite)
-        t.start()
         before_core = self.core.read_bytes()
-        rc, out = self.run_dream(mode="slow")
-        t.join()
+        rc, out = self.run_dream_mutating(rewrite)
         self.assertEqual(rc, 1)
         self.assertIn("files changed during the run", out)
         self.assertEqual(self.core.read_bytes(), before_core)

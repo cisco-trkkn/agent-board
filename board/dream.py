@@ -476,8 +476,9 @@ def _finish(res, project, state, root, now, run_dir, run):
     d = dict(state)
     d["root"] = root
     if ok:
-        d.update({"last_run": res["at"], "sources_digest": digest(project, root), "last_report": str(out / "report.json"),
-                  "run": run, "failures": 0, "reverted": None})
+        d.update({"last_run": res["at"], "sources_digest": digest(project, root), "failures": 0})
+        if res["outcome"] == "ok":   # `run`, `reverted` and `last_report` follow the last run that committed: an unchanged night keeps Revert possible
+            d.update({"last_report": str(out / "report.json"), "run": run, "reverted": None})
     else:
         n = state.get("failures")
         d["failures"] = res["failures"] = (n if isinstance(n, int) else 0) + 1

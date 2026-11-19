@@ -105,6 +105,17 @@ class RevertTest(Base):
         self.assertEqual(A.revert("p", a), f"stale: newer run {b}")
         self.assertEqual(self.files(), h)
 
+    def test_revert_still_works_after_an_unchanged_night(self):   # mutation: _finish sets `run` on unchanged -> stale
+        a = self.night()
+        after_a = self.core.read_text()
+        rc, out = self.run_dream("--force", mode="unchanged")
+        self.assertIn("no changes", out)
+        d = self.dj()
+        self.assertEqual((d["run"], d["failures"], d["reverted"]), (a, 0, None))
+        self.assertTrue(d["last_report"].split("/dream/p/")[1].startswith(a))
+        self.assertEqual(self.core.read_text(), after_a)
+        self.assertEqual(A.revert("p", a), "reverted")
+
     def test_unknown_runs(self):
         run = self.night()
         h = self.files()
