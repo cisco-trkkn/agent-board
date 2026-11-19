@@ -201,6 +201,29 @@ judgment, so backends stay swappable).
   goes up to the owner, which applies the rules or asks the user.
 - **Order:** after stage 6, when the engine runs reliably at concurrency above 1. Until then the lead plays the
   owner. Federation (several owners cooperating, the long-term idea) builds on this stage and is not part of it.
+- **One config file per project** (added 2026-11-19, user "Yes" on Discord), read by the owner and handed to the
+  engine. It folds in today's scattered files (`docs/superpowers/model-routing.json`, the metric configs under
+  `docs/superpowers/metrics/configs/`, the gate files), which keep working until it exists. Sections:
+  - who does the work: model and effort per tier and per role, team shape (solo, implementer + reviewer, ensemble);
+  - rigor: review policy (fix-round cap, batched mechanical review, re-review tier, final-review model), retry
+    policy, the escalation list (architect cases, owner cases, user cases);
+  - parallelism: max workers, lock granularity, pacing against the weekly limit;
+  - what is allowed: the policy rules (merge, push, deploy, protected paths, spend caps), the default integration
+    mode, approval holds and schedules (stage 7);
+  - measurement: gates and their thresholds, metric configs;
+  - the user: channel (Discord now, an adapter otherwise) and notification level (ping or log, per event kind);
+  - memory: shared-context cap, consolidation schedule, per-project vs shared;
+  - workspace: worktree per spec or per task, location, cleanup.
+- **Any model in any harness, per role** (same decision). Each role names its model, and where it needs tools, its
+  backend:
+  - worker, reviewer, architect: a backend plus a model. The architect is already a job run through the backend,
+    so it swaps with the backend; it needs a harness because it reads diffs, ledgers and reports.
+  - owner: a **model client** per call type (policy from plain language, a rule question, a reply to the user):
+    one call, a packet in, structured output back, no harness. What needs investigating becomes an engine job.
+  - The contract, not the model, makes a role swappable: a fixed input packet and a JSON schema checked by code;
+    an answer that fails it is retried once, then escalated to the user.
+  - A role moves to a cheaper model only after the experiments framework shows that model makes the same calls on
+    past decisions. The archived ledgers' `Ruling:` lines, with their cost-if-wrong, are the starting eval set.
 
 ## The five specs queued on 2026-11-10
 
