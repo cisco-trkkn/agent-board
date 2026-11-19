@@ -103,4 +103,43 @@ dl $pid press --expect "$E" --option 1
 check "pane id: rc 0, chose Yes"                      test $rc -eq 0 -a "$out" = "dialog: $pid: chose \"Yes\""
 check "pane id: digit 1"                              test "$(gotk p-id)" = GOT:31
 
+# --- fix round 1: the keys start from the cursor row of the matched read (VARIANTS: sed edits of the real captures, cursor or
+# checkbox state moved; the parser reads them like the originals). UP = Up arrow.
+# mutations: M5 navigate from row 1 (trust/resume branch ignores cur); M6 toggle every --option without reading the checked state
+UP=1b5b41
+# trust with the cursor on row 2 (`Yes, I trust this folder`)
+sed -e 's/^ ❯ No, exit/   No, exit/' -e 's/^   Yes, I trust this folder/ ❯ Yes, I trust this folder/' $FXD/trust.txt > $S/trust-row2.txt
+pshow p-t2a $S/trust-row2.txt; pr p-t2a --option 1
+check "VARIANT trust cursor row 2, option 1: chose No, exit"  test $rc -eq 0 -a "$out" = 'dialog: p-t2a: chose "No, exit"'
+check "VARIANT trust cursor row 2, option 1: Up, Enter"       test "$(gotk p-t2a)" = "GOT:${UP}${ENTER}"
+pshow p-t2b $S/trust-row2.txt; pr p-t2b --option 2
+check "VARIANT trust cursor row 2, option 2: Enter only"      test "$(gotk p-t2b)" = "GOT:${ENTER}"
+# resume with the cursor on the 2nd session: the cursor row decides the keys
+grep -n '^  ❯ ' $FXD/resume.txt >/dev/null
+sed -e 's/^  ❯ Hello.txt file plan/    Hello.txt file plan/' -e 's/^    AskUserQuestion fruit test/  ❯ AskUserQuestion fruit test/' $FXD/resume.txt > $S/resume-row2.txt
+pshow p-r2 $S/resume-row2.txt; pr p-r2 --option 1
+check "VARIANT resume cursor row 2, option 1: Up, Enter"      test $rc -eq 0 -a "$(gotk p-r2)" = "GOT:${UP}${ENTER}"
+# no cursor row in a multi-select: rc 1, nothing sent
+sed -e 's/^❯ 1\./  1./' $FXD/question-multi.txt > $S/multi-nocur.txt
+pshow p-nc $S/multi-nocur.txt; pr p-nc --option 1
+check "VARIANT multi without a cursor row: rc 1 + message"    test $rc -eq 1 -a "$err" = "dialog: p-nc: no cursor in the dialog"
+check "VARIANT multi without a cursor row: nothing sent"      test "$(gotk p-nc)" = GOT:NONE
+
+# multi-select: --option is the final set of checked rows
+sed -e 's/^❯ 1\. \[ \]/  1. [✔]/' -e 's/^  3\. \[ \]/❯ 3. [ ]/' $FXD/question-multi.txt > $S/multi-apple-row3.txt
+pshow p-m1 $S/multi-apple-row3.txt; pr p-m1 --option 1 --option 2
+check "VARIANT Apple checked, cursor row 3, --option 1 --option 2: chose Apple, Pear"  test $rc -eq 0 -a "$out" = 'dialog: p-m1: chose "Apple, Pear"'
+check "VARIANT Apple checked: toggles only Pear, Down x2 to Submit, Enter"  test "$(gotk p-m1)" = "GOT:32${DOWN}${DOWN}${ENTER}"
+pshow p-m2 $S/multi-apple-row3.txt; pr p-m2 --option 2
+check "VARIANT Apple checked, --option 2: unchecks Apple, checks Pear"  test "$(gotk p-m2)" = "GOT:3132${DOWN}${DOWN}${ENTER}"
+pshow p-m3 $FXD/question-multi.txt; pr p-m3 --option 1 --option 1
+check "duplicate --option collapses: chose Apple"             test $rc -eq 0 -a "$out" = 'dialog: p-m3: chose "Apple"'
+check "duplicate --option: one toggle"                        test "$(gotk p-m3)" = "GOT:31${DOWN}${DOWN}${DOWN}${DOWN}${ENTER}"
+sed -e 's/^❯ 1\./  1./' -e 's/^     Submit/  ❯ Submit/' $FXD/question-multi.txt > $S/multi-submit.txt
+pshow p-m4 $S/multi-submit.txt; pr p-m4 --option 2
+check "VARIANT cursor on Submit: toggle, no Down, Enter"      test $rc -eq 0 -a "$(gotk p-m4)" = "GOT:32${ENTER}"
+sed -e 's/^❯ 1\./  1./' -e 's/^  5\. Chat about this/❯ 5. Chat about this/' $FXD/question-multi.txt > $S/multi-chat.txt
+pshow p-m5 $S/multi-chat.txt; pr p-m5 --option 1
+check "VARIANT cursor on Chat about this: toggle, Up, Enter"  test $rc -eq 0 -a "$(gotk p-m5)" = "GOT:31${UP}${ENTER}"
+
 tt_done

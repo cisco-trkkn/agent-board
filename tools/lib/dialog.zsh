@@ -291,24 +291,28 @@ _dlg_read() {
   LINES_="$(print -r -- "$BLOCK" | grep -a '^L:' | sed -e 's/^L://')"
 }
 
-# _dlg_press_keys <pane> <kind> <multi> <ncheck> <cur> <opts…>: sends the keys of tools/tests/fixtures/dialogs/README.md `## Key probes`.
-#   opts = option numbers (several only on a multi-select). ncheck = the checkbox rows of a multi-select (its options but the
-#   last, `Chat about this`); cur = the row under the cursor in the dialog just read (1 when none is marked).
+# _dlg_nav <pane> <delta>: Down x delta, or Up x -delta.
+_dlg_nav() { local i; for (( i = 0; i < $2; i++ )); do t send-keys -t "$1" Down; done; for (( i = 0; i < -($2); i++ )); do t send-keys -t "$1" Up; done }
+
+# _dlg_press_keys <pane> <kind> <multi> <ncheck> <cur> <plan> <opts…>: sends the keys of tools/tests/fixtures/dialogs/README.md `## Key probes`.
+#   multi: opts = the rows to toggle (already the difference between the checked rows and the wanted set), ncheck = its checkbox
+#   rows, cur = the cursor position of the read (row n for a checkbox row, ncheck+1 on `Submit`, ncheck+2 on `Chat about this`).
+#   trust|resume|login: opts = the option wanted, cur = the option under the cursor. Else: a digit (plan: then Enter).
 _dlg_press_keys() {
-  local pane="$1" kind="$2" multi="$3" ncheck="$4" cur="$5" n i; shift 5
+  local pane="$1" kind="$2" multi="$3" ncheck="$4" cur="$5" plan="$6" n; shift 6
   if [[ "$multi" == 1 ]]; then
-    for n in "$@"; do t send-keys -t "$pane" -l -- "$n"; done                      # a digit only toggles; the cursor stays
-    for (( i = 0; i < ncheck - cur + 1; i++ )); do t send-keys -t "$pane" Down; done   # onto `Submit`
-    t send-keys -t "$pane" Enter                                                    # the review screen is a new dialog: never pressed here
+    for n in "$@"; do t send-keys -t "$pane" -l -- "$n"; done          # a digit only toggles; the cursor stays
+    _dlg_nav "$pane" $(( ncheck + 1 - cur ))                           # onto `Submit`
+    t send-keys -t "$pane" Enter                                       # the review screen is a new dialog: never pressed here
     return
   fi
   n="$1"
   case "$kind" in
-    trust|resume|login)   # rows without digits: the cursor starts on row 1
-      for (( i = 1; i < n; i++ )); do t send-keys -t "$pane" Down; done; t send-keys -t "$pane" Enter ;;
+    trust|resume|login)   # rows without digits: from the cursor row of the read to row n, then Enter
+      _dlg_nav "$pane" $(( n - cur )); t send-keys -t "$pane" Enter ;;
     *)
       t send-keys -t "$pane" -l -- "$n"
-      [[ "$PLAN" == 1 ]] && t send-keys -t "$pane" Enter ;;
+      [[ "$plan" == 1 ]] && t send-keys -t "$pane" Enter ;;
   esac
 }
 
@@ -316,7 +320,7 @@ _dlg_press_keys() {
 # --expect), checks copy mode after each read, then sends the keys; the label of each option comes from that same read.
 _dlg_press() {
   local win="$1" pane expect="" have_expect=0 text="" have_text=0 opts=() u="usage: tmux-ctl dialog <win> press --expect <lines> (--option <n>... | --text <text>)"
-  local first kind multi other ncheck cur ol i line labels n found other_n PLAN
+  local first kind multi other ncheck cur ol i line labels n found other_n PLAN tog
   shift
   while (( $# )); do
     case "$1" in
@@ -340,7 +344,24 @@ _dlg_press() {
   other="$(print -r -- "$first" | sed -n 's/^W://p')"
   ol=("${(@f)$(print -r -- "$first" | sed -n 's/^O://p')}")   # n:perm:label
   ncheck=$(( ${#ol} - 1 ))
-  cur=1; for line in "${(@f)LINES_}"; do [[ "$line" =~ '^[[:space:]]*❯[[:space:]]+([0-9]+)\.' ]] && { cur="${match[1]}"; break }; done
+  # the cursor of the read: a multi-select counts checkbox rows 1..ncheck, `Submit` ncheck+1, `Chat about this` ncheck+2;
+  # trust, resume and login rows have no numbers, so the cursor row is the option whose label is on the `❯` row
+  typeset -A chk; cur=0
+  for line in "${(@f)LINES_}"; do
+    if [[ "$multi" == 1 ]]; then
+      if [[ "$line" =~ '^[[:space:]]*(❯[[:space:]]+)?([0-9]+)\.[[:space:]]+\[(✔| )\] ' ]]; then
+        [[ "${match[3]}" == "✔" ]] && chk[${match[2]}]=1
+      fi
+      if [[ "$line" =~ '^[[:space:]]*❯[[:space:]]+([0-9]+)\.' ]]; then (( match[1] > ncheck )) && cur=$(( ncheck + 2 )) || cur="${match[1]}"
+      elif [[ "$line" =~ '^[[:space:]]*❯[[:space:]]+Submit$' ]]; then cur=$(( ncheck + 1 ))
+      fi
+    elif (( cur == 0 )) && [[ "$kind" == (trust|resume|login) && "$line" =~ '^[[:space:]]*❯[[:space:]]+(.*)$' ]]; then
+      for n in "${ol[@]}"; do [[ "${n#*:*:}" == "${match[1]}" ]] && { cur="${n%%:*}"; break }; done
+    fi
+  done
+  if (( cur == 0 )) && [[ "$multi" == 1 || "$kind" == (trust|resume|login) ]] && (( ! have_text || multi == 1 )); then
+    print -u2 "dialog: $win: no cursor in the dialog"; return 1
+  fi
   # the plan-approval dialog is the one whose free-text row is "Tell Claude what to change": a digit only moves its cursor, so Enter follows
   PLAN=0; [[ "$first" == *$'\n'"O:"<->":"[01]":Tell Claude what to change"* ]] && PLAN=1
   # option / text validation (usage errors, nothing sent): numbers of the dialog's options only
@@ -355,6 +376,7 @@ _dlg_press() {
     (( other_n )) || die "no free-text row found"
     labels="$text"
   else
+    [[ "$multi" == 1 ]] && opts=(${(onu)opts})   # the --option set is the final set of checked rows: duplicates collapse
     if (( ${#opts} > 1 )) && [[ "$multi" != 1 ]]; then die "--option repeated: only a multi-select takes several"; fi
     for n in "${opts[@]}"; do
       found=0
@@ -367,21 +389,26 @@ _dlg_press() {
     if [[ "$multi" == 1 ]]; then for n in "${opts[@]}"; do (( n <= ncheck )) || die "option $n is not a checkbox of this multi-select"; done; fi
   fi
   [[ -n "$TC_DIALOG_BEFORE_SEND" ]] && eval "$TC_DIALOG_BEFORE_SEND" >/dev/null 2>&1
-[[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
   _dlg_read "$pane"
   [[ "$BLOCK" == "$first" && "$LINES_" == "$expect" ]] || { print -u2 "dialog: the dialog in $win changed"; return 1 }
-[[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
   if (( have_text )); then
     if [[ "$multi" == 1 ]]; then
-      for (( i = cur; i < other_n; i++ )); do t send-keys -t "$pane" Down; done
+      _dlg_nav "$pane" $(( other_n - cur ))
       t send-keys -t "$pane" -l -- "$text"
-      for (( i = other_n; i <= ncheck; i++ )); do t send-keys -t "$pane" Down; done   # Other row onto Submit
+      _dlg_nav "$pane" $(( ncheck + 1 - other_n ))   # Other row onto Submit
       t send-keys -t "$pane" Enter
     else
       t send-keys -t "$pane" -l -- "$other_n"; t send-keys -t "$pane" -l -- "$text"; t send-keys -t "$pane" Enter
     fi
   else
-    _dlg_press_keys "$pane" "$kind" "$multi" "$ncheck" "$cur" "${opts[@]}"
+    if [[ "$multi" == 1 ]]; then   # toggle only the rows whose checked state differs from the wanted set
+      tog=(); for (( i = 1; i <= ncheck; i++ )); do (( ${+chk[$i]} == (${opts[(Ie)$i]} > 0) )) || tog+=("$i"); done
+      _dlg_press_keys "$pane" "$kind" "$multi" "$ncheck" "$cur" "$PLAN" "${tog[@]}"
+    else
+      _dlg_press_keys "$pane" "$kind" "$multi" "$ncheck" "$cur" "$PLAN" "${opts[@]}"
+    fi
   fi
   print -r -- "dialog: $win: chose \"$labels\""
 }
