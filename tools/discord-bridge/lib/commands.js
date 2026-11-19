@@ -6,11 +6,11 @@ const path = require('node:path');
 
 const REPLY_MAX = 2000;
 const PROJECT_MAX = 60; // ab:modal:new-spec:<project> stays under Discord's 100-char custom_id limit
-const ACTIONS = new Set(['pause', 'resume', 'idea', 'new-spec']); // rejected up front; read commands answer it and still write their read event
+const ACTIONS = new Set(['pause', 'resume', 'idea', 'new-spec', 'ideas']); // rejected up front; read commands answer it and still write their read event
 const NEEDS_PROJECT = new Set(['queue', 'pause', 'resume', 'idea', 'new-spec']);
 const DESCRIPTIONS = {
   status: 'Show the board status', queue: 'Show a project queue', pause: "Pause a project's queue",
-  resume: "Resume a project's queue", idea: 'Add an idea', 'new-spec': 'Ask the lead for a new spec', approvals: 'List open decisions',
+  resume: "Resume a project's queue", idea: 'Add an idea', 'new-spec': 'Ask the lead for a new spec', ideas: 'Group the open ideas', approvals: 'List open decisions',
 };
 const NOT_SET_UP = 'Ops bot not set up (tmux-ctl discord ops-channels).';
 const FORMS = {
@@ -52,7 +52,7 @@ async function handleCommand(i, ctx) {
   const event = (e) => ctx.writeEvent({ ...e, user, ts: ctx.now() });
   const own = path.basename(ctx.dir);
   const given = i.options?.getString?.('project') || null;
-  const project = given || (ctx.ops ? null : own);
+  const project = name === 'ideas' ? given : (given || (ctx.ops ? null : own)); // /ideas covers every project unless one is given (R2)
 
   if (NEEDS_PROJECT.has(name) && !project) { await ctx.answer(i, 'Pick a project.'); return; }
   const data = ctx.views();
@@ -70,6 +70,11 @@ async function handleCommand(i, ctx) {
   if (name === 'pause' || name === 'resume') {
     await ctx.answer(i, `Sent to ${project}.`);
     event({ type: 'slash', command: name, project });
+    return;
+  }
+  if (name === 'ideas') {
+    await ctx.answer(i, 'asked the overseer, about 1 min');
+    event({ type: 'slash', command: 'ideas', project, bridge: own });
     return;
   }
   // Read-only: answered from views.json.

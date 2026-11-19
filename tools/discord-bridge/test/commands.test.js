@@ -37,14 +37,14 @@ function setup({ ops = true, views = VIEWS, opsViews = true } = {}) {
 }
 const evShape = (s) => s.events().map((e) => { const { ts, ...r } = e; return r; });
 
-test('payload: 7 chat-input commands; project option required per mode', () => {
-  const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'approvals'];
+test('payload: 8 chat-input commands; project option required per mode', () => {
+  const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'ideas', 'approvals'];
   const o = commands.payload(true), p = commands.payload(false);
   assert.deepStrictEqual(o.map((c) => c.name), names);
   assert.ok(o.every((c) => c.type === 1));
   const req = (list) => Object.fromEntries(list.map((c) => [c.name, c.options?.find((x) => x.name === 'project')?.required ?? null]));
-  assert.deepStrictEqual(req(o), { status: false, queue: true, pause: true, resume: true, idea: true, 'new-spec': true, approvals: null });
-  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, approvals: null });
+  assert.deepStrictEqual(req(o), { status: false, queue: true, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null });
+  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, ideas: false, approvals: null });
   assert.ok(o.every((c) => (c.options || []).every((x) => x.type === 3)));
 });
 
@@ -54,7 +54,7 @@ test('ready registers the commands once for the guild; a resume after disconnect
   const c = s.client.callsOf('setCommands');
   assert.strictEqual(c.length, 1);
   assert.strictEqual(c[0].target, 'G1');
-  assert.strictEqual(c[0].payload.length, 7);
+  assert.strictEqual(c[0].payload.length, 8);
   s.bridge.onDisconnect();
   await s.bridge.onReady();
   assert.strictEqual(s.client.callsOf('setCommands').length, 2);
@@ -237,4 +237,29 @@ test('/status with an unknown project answers Unknown project and still writes e
   const i = await s.run(fakeCommand({ name: 'status', options: { project: 'nope' } }));
   assert.strictEqual(i.replies[0].content, 'Unknown project: nope');
   assert.deepStrictEqual(evShape(s), [{ type: 'read', what: '/status', user: 'U1' }]);
+});
+
+const ACK = 'asked the overseer, about 1 min';
+
+test('/ideas with no project: ephemeral ack, slash event with project null and bridge _ops (ops mode)', async () => {
+  const s = setup();
+  const i = await s.run(fakeCommand({ name: 'ideas' }));
+  assert.deepStrictEqual([i.replies[0].content, i.replies[0].flags], [ACK, 64]);
+  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'ideas', project: null, bridge: '_ops', user: 'U1' }]);
+});
+
+test('/ideas with no project in a project channel takes no default project (R2)', async () => {
+  const s = setup({ ops: false });
+  const i = await s.run(fakeCommand({ name: 'ideas' }));
+  assert.strictEqual(i.replies[0].content, ACK);
+  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'ideas', project: null, bridge: 'myproj', user: 'U1' }]);
+});
+
+test('/ideas <project> writes that project; an unknown one is answered and writes no event', async () => {
+  const s = setup();
+  await s.run(fakeCommand({ name: 'ideas', options: { project: 'alpha' } }));
+  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'ideas', project: 'alpha', bridge: '_ops', user: 'U1' }]);
+  const u = await s.run(fakeCommand({ name: 'ideas', options: { project: 'nope' } }));
+  assert.strictEqual(u.replies[0].content, 'Unknown project: nope');
+  assert.strictEqual(s.events().length, 1);
 });

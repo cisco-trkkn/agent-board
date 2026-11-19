@@ -328,3 +328,33 @@ test('ops mode edit of a prompt key is unaffected (prompts looked up first)', as
   await s.bridge.tick();
   assert.deepStrictEqual(s.client.callsOf('edit').map((c) => c.payload.content), ['gone']);
 });
+
+test('post with buttons sends one action row; the keyed post is editable and the edit clears it', async () => {
+  const s = setup();
+  const buttons = [
+    { label: 'Brainstorm next', style: 1, custom_id: 'ab:ideas:next:r1:0' },
+    { label: 'Park', style: 2, custom_id: 'ab:ideas:park:r1:0' },
+    { label: 'Drop', style: 4, custom_id: 'ab:ideas:drop:r1:0' },
+  ];
+  s.put({ op: 'post', text: 'group', tier: 'progress', mention_user: false, key: 'ideas-r1-0', buttons });
+  await s.bridge.tick();
+  const [c] = sentTo(s, 'CC');
+  assert.strictEqual(c.payload.components.length, 1);
+  assert.strictEqual(c.payload.components[0].type, 1);
+  assert.deepStrictEqual(c.payload.components[0].components.map((b) => [b.type, b.style, b.label, b.custom_id]),
+    buttons.map((b) => [2, b.style, b.label, b.custom_id]));
+  assert.ok(s.st().posts['ideas-r1-0']);
+  s.put({ op: 'edit', key: 'ideas-r1-0', text: 'group\ndone' });
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.client.callsOf('edit').map((e) => e.payload.components), [[]]);
+});
+
+test('post buttons: at most 5, label cut to 80', async () => {
+  const s = setup();
+  const buttons = Array.from({ length: 7 }, (_, n) => ({ label: 'L'.repeat(100), style: 2, custom_id: `ab:ideas:x:${n}` }));
+  s.put({ op: 'post', text: 'g', tier: 'progress', mention_user: false, buttons });
+  await s.bridge.tick();
+  const row = sentTo(s, 'CC')[0].payload.components[0].components;
+  assert.strictEqual(row.length, 5);
+  assert.strictEqual(row[0].label.length, 80);
+});
