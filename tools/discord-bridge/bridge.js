@@ -21,6 +21,10 @@ const APPROVALS_KEEP = 500;
 const FILES_PAGE = 10;
 const SELECT_MAX = 25;
 const REPLY_MAX = 2000;
+const REPLY_TEXT_MAX = 1000;
+const DIALOGS_KEEP = 200;
+// The dialog custom-id grammar: ab:dlg:<key>:<n>, :<n>:confirm|cancel, :t<n>, :submit, :reply.
+const DLG_RE = /^ab:dlg:(p[0-9]+-[0-9a-f]{16}):(?:t([0-9]{1,2})|([0-9]{1,2})(?::(confirm|cancel))?|(submit|reply))$/;
 const REACT_EMOJI = new Set(['✅', '❌', '🛑', '▶', '⏭']);
 
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
@@ -200,6 +204,25 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     say(`post ${op.thread_key || 'home'} ${snip(op.text)}`);
   }
 
+  const toRows = (rows) => rows.map((r) => ({ type: 1, components: r.map((b) => ({ type: 2, style: Number(b.style) || 2, label: String(b.label).slice(0, 80), custom_id: String(b.custom_id) })) }));
+
+  async function opDialog(op) {
+    const c = cfg();
+    let text = String(op.text ?? '');
+    const payload = { content: '', allowedMentions: { parse: [] }, components: toRows(Array.isArray(op.rows) ? op.rows : []) };
+    if (op.mention_user && c.user) {
+      text = `<@${c.user}> ${text}`;
+      payload.allowedMentions = { users: [String(c.user)] };
+    }
+    payload.content = text.slice(0, 2000);
+    const ch = await (ops ? chan('approvals') : home());
+    const sent = await ch.send(payload);
+    st.dialogs[op.key] = sent.id;
+    trim(st.dialogs, DIALOGS_KEEP);
+    save();
+    say(`dialog ${snip(op.key)}`);
+  }
+
   async function opPrompt(op) {
     const c = cfg();
     const lines = (Array.isArray(op.lines) ? op.lines : []).map(String);
@@ -282,12 +305,15 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   async function opEdit(op) {
     const key = op.key;
-    const where = [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')]].find(([m]) => m[key]);
+    let cleared = false;
+    for (const [mid, k] of Object.entries(st.reply_armed)) if (k === key) { delete st.reply_armed[mid]; cleared = true; }   // an edited or answered dialog takes no reply
+    if (cleared) save();
+    const where = [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')], [st.dialogs, () => (ops ? chan('approvals') : home())]].find(([m]) => m[key]);
     if (!where) { say(`edit ${snip(key)}: no message`); return; }
     const ch = await where[1]();
     try {
       const msg = await ch.messages.fetch(where[0][key]);
-      await msg.edit({ content: String(op.text ?? '').slice(0, 2000), components: [] });
+      await msg.edit({ content: String(op.text ?? '').slice(0, 2000), components: Array.isArray(op.rows) ? toRows(op.rows) : [] });
     } catch (e) {
       if (e?.code !== UNKNOWN_MESSAGE) throw e;
       say(`edit ${snip(key)}: no message`);
@@ -307,7 +333,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     st.presence = presenceText; save();   // a restarted process re-applies it on ready
     try { applyPresence(); say(`presence ${snip(presenceText)}`); } catch (e) { say(`presence failed: ${snip(e?.message)}`); }
   }
-  const handlers = { presence: opPresence, approval: opApproval, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  const handlers = { presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -456,6 +482,81 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     say(`event ${snip(id)}`);
   }
 
+  // A plain {type:2,...} button of the clicked message's rows, from a discord.js component or a plain object.
+  const rowsOf = (i) => (i.message?.components || []).map((r) => {
+    const j = typeof r.toJSON === 'function' ? r.toJSON() : r;
+    return { ...j, components: (j.components || []).map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : { ...c })) };
+  });
+
+  // ab:dlg:* clicks. A style-4 option asks for confirmation; toggles flip in place; submit carries the picks;
+  // reply arms the message for one reply. Everything else is deferred and written as a click event.
+  async function onDialogInteraction(i, id, m) {
+    const [, key, togNum, num, confirm, word] = m;
+    const isToggle = togNum !== undefined;
+    const user = String(i.user?.id);
+    const ts = now();
+    if (word === 'reply') {
+      const mid = String(i.message?.id);
+      st.reply_armed[mid] = key;
+      trim(st.reply_armed, DIALOGS_KEEP);
+      save();
+      await answer(i, 'Reply to that message with your answer.');
+      say(`reply armed ${snip(key)}`);
+      return;
+    }
+    if (isToggle && !confirm) {
+      const rows = rowsOf(i);
+      for (const r of rows) for (const c of r.components) {
+        if (c.custom_id === id) c.style = c.style === 3 ? 2 : 3;
+      }
+      try { await i.update({ components: rows }); } catch (e) { say(`update failed: ${snip(e?.message)}`); }
+      return;
+    }
+    if (num !== undefined && confirm === 'cancel') { await answer(i, 'Cancelled.', []); return; }
+    if (num !== undefined && confirm === 'confirm') {
+      await answer(i, 'Sent.', []);
+      writeEvent({ type: 'click', custom_id: id, user, message_id: i.message?.id, channel_id: i.channelId, ts });
+      say(`event ${snip(id)}`);
+      return;
+    }
+    // Permanent = the stored button's style 4, read from the clicked message's rows; the click's own component is the
+    // fallback; when neither says, fail closed (ask for the confirm step).
+    const stored = rowsOf(i).flatMap((r) => r.components).find((c) => c.custom_id === id);
+    const style = stored?.style ?? i.component?.style;
+    if (num !== undefined && (style === undefined || style === 4)) {
+      const label = String(stored?.label ?? i.component?.label ?? 'this option').replace(/^\d+\. /, '');
+      await answer(i, `this allows ${label} from now on`, [{ type: 1, components: [
+        { type: 2, style: 4, label: 'Confirm', custom_id: `${id}:confirm` },
+        { type: 2, style: 2, label: 'Cancel', custom_id: `${id}:cancel` },
+      ] }]);
+      return;
+    }
+    try { await i.deferUpdate(); } catch (e) { say(`ack failed: ${snip(e?.message)}`); }
+    const ev = { type: 'click', custom_id: id, user, message_id: i.message?.id, channel_id: i.channelId, ts };
+    if (word === 'submit') {
+      ev.picks = rowsOf(i).flatMap((r) => r.components)
+        .filter((c) => c.style === 3 && /:t[0-9]{1,2}$/.test(String(c.custom_id)))
+        .map((c) => Number(/:t([0-9]{1,2})$/.exec(c.custom_id)[1])).sort((a, b) => a - b);
+    }
+    writeEvent(ev);
+    say(`event ${snip(id)}`);
+  }
+
+  // A reply to an armed dialog message by an allowlisted user becomes one reply event; the message is disarmed.
+  async function onMessage(msg) {
+    if (!msg || msg.author?.bot) return;
+    const ref = msg.reference?.messageId;
+    if (!ref || !Object.hasOwn(st.reply_armed, ref)) return;
+    const uid = String(msg.author?.id);
+    if (!allowFrom().has(uid)) return;
+    const text = String(msg.content ?? '').trim().slice(0, REPLY_TEXT_MAX);
+    if (!text) return;
+    const key = st.reply_armed[ref];
+    writeEvent({ type: 'reply', key, text, user: uid, message_id: String(ref), ts: now() });
+    delete st.reply_armed[ref]; save();
+    say(`reply ${snip(key)}`);
+  }
+
   async function onInteraction(i) {
     if (await commands.handle(i, ctx)) return;
     const id = i?.customId;
@@ -466,6 +567,8 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       if (ops && id.startsWith('ab:ops:')) writeEvent({ type: 'rejected', what: id, user: String(i.user?.id), ts: now() });
       return;
     }
+    const dm = DLG_RE.exec(id);
+    if (dm) return onDialogInteraction(i, id, dm);
     if (ops && id.startsWith('ab:ops:')) return onOpsInteraction(i, id);
     try { await i.deferUpdate(); } catch (e) { say(`ack failed: ${snip(e?.message)}`); }
     const ts = now();
@@ -495,9 +598,10 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     }
   }
 
-  // Wire the client: components and reactions; no message listener.
+  // Wire the client: components, reactions and messages (replies to armed dialogs).
   function attach() {
     client.on('interactionCreate', (i) => { onInteraction(i).catch((e) => say(`interaction: ${snip(e?.message)}`)); });
+    client.on('messageCreate', (m) => { onMessage(m).catch((e) => say(`message: ${snip(e?.message)}`)); });
     client.on('messageReactionAdd', (r, u) => { onReaction(r, u).catch((e) => say(`reaction: ${snip(e?.message)}`)); });
     const ready = () => { onReady().catch(() => {}); };
     client.on('clientReady', ready);
@@ -511,7 +615,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   function close() { closed = true; }
 
   const ctx = { dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, fence, NO_MENTIONS };
-  return { ctx, tick, onInteraction, onReaction, onReady, onDisconnect, attach, close, TICK_MS };
+  return { ctx, tick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 
 function main() {
@@ -536,7 +640,7 @@ function main() {
 
   const { Client, GatewayIntentBits: I, Partials } = require('discord.js');
   const client = new Client({
-    intents: [I.Guilds, I.GuildMessages, I.GuildMessageReactions, I.DirectMessages, I.DirectMessageReactions],
+    intents: [I.Guilds, I.GuildMessages, I.GuildMessageReactions, I.DirectMessages, I.DirectMessageReactions, I.MessageContent],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
   bridge = createBridge({ dir, client, ops: process.argv.includes('--ops'), log });
@@ -545,5 +649,5 @@ function main() {
   client.login(token).catch((e) => { log(`login failed: ${scrub(e?.message)}`); process.exit(1); });
 }
 
-module.exports = { createBridge, readToken };
+module.exports = { createBridge, readToken, DLG_RE };
 if (require.main === module) main();

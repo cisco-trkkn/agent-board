@@ -21,6 +21,20 @@ What it does:
   (`ab:perm:<key>:allow|deny`; over 1500 characters the text is cut and only `Deny` stays) and keeps
   `bridge-state.json` `prompts[key] = message id` (newest 200). `edit` `{key, text}` rewrites that post and
   removes its buttons; an unknown key or a deleted message is dropped with a log line, not failed.
+- `dialog` `{key, text, rows, mention_user}` posts `text` (with `<@user> ` in front when `mention_user`) with up to 5 rows
+  of up to 5 buttons `{label, style, custom_id}` to the home channel (ops mode: `#approvals`) and keeps
+  `bridge-state.json` `dialogs[key] = message id` (newest 200). `edit` also finds a `dialogs` key; with `rows` it sets
+  those buttons, without it removes them.
+- Dialog ids, key `p<digits>-<16 hex>`: `ab:dlg:<key>:<n>` (an option), `…:<n>:confirm|cancel`, `…:t<n>` (toggle),
+  `…:submit`, `…:reply`. A click on an option whose style is 4 (a permanent choice) gets an ephemeral
+  `this allows <label> from now on` with `Confirm` / `Cancel` and writes no event; `Confirm` becomes `Sent.` and writes
+  the click event, `Cancel` becomes `Cancelled.`. A toggle flips that button between styles 2 and 3 in place and
+  writes nothing; `submit` writes a click event with `picks` (numbers of the style-3 toggles, ascending). `reply` answers
+  `Reply to that message with your answer.` and arms the message (`reply_armed[message id] = key`); the next message
+  from an allowlisted user that replies to it writes `{type:"reply", key, text, user, message_id, ts}` (text trimmed,
+  at most 1000 characters, `message_id` = the dialog message) and disarms it. `ab:dlg:` and `ab:gate:` clicks are
+  events in project and in ops mode; this needs the `MessageContent` intent: every bot whose bridge runs (project and
+  ops) must have **Message Content Intent** switched on in the Developer Portal, and a bot without it exits at login.
 - Turns component clicks whose `customId` starts with `ab:` into `<dir>/events/<ts>-<id>.json`. The user must be in
   `<dir>/access.json` `allowFrom` (re-read on every click; missing file = nobody); otherwise the reply is an
   ephemeral `Not authorized.` and nothing is written. Allowed clicks are deferred first, then written:
@@ -28,7 +42,7 @@ What it does:
   `{type:"click", custom_id, user, message_id, channel_id, ts}`. Other components are ignored.
 - Reactions (`messageReactionAdd`, partials enabled) from an allowlisted non-bot user on a bot message in the home
   channel or one of its threads, with `✅ ❌ 🛑 ▶️ ⏭️`, write `{type:"react", emoji, message_id, excerpt, user, ts}`
-  (excerpt = first 80 characters) and the bot adds 👀 once. Messages are otherwise ignored.
+  (excerpt = first 80 characters) and the bot adds 👀 once. Messages are ignored except replies to an armed dialog.
 - Token comes only from `<dir>/.env` (`DISCORD_BOT_TOKEN=`). The log (`<dir>/bridge.log`) never holds it
   nor more than 80 characters of a message body. `<dir>/bridge.pid` exists while it runs; SIGTERM exits.
 

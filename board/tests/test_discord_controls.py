@@ -1,9 +1,7 @@
-"""discord_controls: prompt watch, perm and react consumption. Scratch TC_STATE; the runner and add_line are fakes.
-The SHOW text below is the real `_ap_prompt` output (T: second B: line, P: lines) on tools/tests/fixtures/approve/bash-multiline.txt."""
-import hashlib
+"""discord_controls: react, click and reply consumption (the dialog routes are tested in test_discord_dialogs). Scratch TC_STATE; the runner and add_line are fakes.
+"""
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,11 +13,6 @@ sys.path.insert(0, str(HERE))
 import discord_controls as dc  # noqa: E402
 import tc_env  # noqa: E402
 
-SHOW = "T:Bash command\nP:│ echo a\nP:│ ──── echo probe\n"
-LINES = ["│ echo a", "│ ──── echo probe"]
-KEY = "%5:" + hashlib.sha1("\n".join(LINES).encode()).hexdigest()
-SHOW2 = "T:Create file\nP:notes.txt\n"
-KEY2 = "%5:" + hashlib.sha1(b"notes.txt").hexdigest()
 TC = str(dc.BIN / "tmux-ctl")
 NOPROMPT = "approve: no permission prompt in w1"
 
@@ -77,185 +70,29 @@ class Base(unittest.TestCase):
     def state(self):
         return json.loads((self.d / "controls-state.json").read_text())
 
-    def seed(self, key=KEY, window="w1", lines=LINES):
-        (self.d / "controls-state.json").write_text(json.dumps({"prompts": {key: {"window": window, "pane": "%5", "tool": "Bash command", "lines": lines, "ts": 1.0}}}))
 
+class LeftoverPermTest(Base):
+    """The old 🔐 prompt buttons are gone: a perm event left in the events dir presses nothing and is audited `unknown`."""
 
-class ScanTest(Base):
-    def test_posts_once(self):  # mutation: skip the "key already stored" check -> two ops
-        r = Runner({"w1": SHOW})
-        self.step(r, self.rec("w1"))
-        self.step(r, self.rec("w1"))
-        self.assertEqual(self.ops(), [{"op": "prompt", "key": KEY, "window": "w1", "tool": "Bash command", "lines": LINES, "tier": "decision", "mention_user": True}])
-        self.assertEqual(r.calls[0], [TC, "approve", "w1", "show"])
-        self.assertEqual(self.state()["prompts"][KEY]["lines"], LINES)
-
-    def test_claude_window_never_shown(self):
-        r = Runner({"claude": SHOW})
-        self.step(r, self.rec("claude"))
+    def test_leftover_perm_event_is_unknown_and_presses_nothing(self):
+        self.event("1-a.json", {"type": "perm", "key": "%5:abc", "choice": "allow", "user": "U1", "message_id": "m", "ts": 1})
+        r = Runner()
+        self.step(r)
         self.assertEqual(r.calls, [])
         self.assertEqual(self.ops(), [])
-
-    def test_show_error_posts_nothing(self):
-        r = Runner({"w1": "approve: ambiguous prompt in w1"})
-        self.step(r, self.rec("w1"))
-        self.assertEqual(self.ops(), [])
-
-    def test_gone_prompt_reshown_then_answered_elsewhere(self):
-        self.seed()
-        r = Runner({})  # no prompt
-        self.step(r, self.rec())
-        self.assertEqual(r.calls, [[TC, "approve", "w1", "show"]])
-        self.assertEqual(self.ops(), [{"op": "edit", "key": KEY, "text": "🔐 w1 wants to run Bash command: answered elsewhere"}])
-        self.assertEqual(self.state()["prompts"], {})
-
-    def test_flicker_keeps_key_when_same_prompt_shows(self):  # mutation: drop without re-show
-        self.seed()
-        r = Runner({"w1": SHOW})
-        self.step(r, self.rec())
-        self.assertEqual(self.ops(), [])
-        self.assertIn(KEY, self.state()["prompts"])
-
-    def test_different_key_in_needs_you_window_edits_old_and_posts_new(self):
-        self.seed()
-        r = Runner({"w1": SHOW2})
-        self.step(r, self.rec("w1"))
-        ops = self.ops()
-        self.assertEqual([o["op"] for o in ops], ["edit", "prompt"] if ops[0]["op"] == "edit" else ["prompt", "edit"])
-        self.assertEqual(list(self.state()["prompts"]), [KEY2])
-        self.assertEqual(r.calls, [[TC, "approve", "w1", "show"]])
-
-    def test_other_show_error_keeps_key(self):
-        self.seed()
-        self.step(Runner({"w1": "approve: ambiguous prompt in w1"}), self.rec())
-        self.assertIn(KEY, self.state()["prompts"])
-        self.assertEqual(self.ops(), [])
-
-
-class TimeoutTest(Base):
-    """run_script(timeout=20) raises subprocess.TimeoutExpired, which is not a RuntimeError: a hung show is an 'error', never an abort."""
-    class Hung(Runner):
-        def __call__(self, argv):
-            if argv[3] == "show" and argv[2] in self.hang:
-                self.calls.append(list(argv))
-                raise subprocess.TimeoutExpired(argv, 20)
-            return super().__call__(argv)
-
-    def hung(self, shows, hang):
-        r = self.Hung(shows)
-        r.hang = hang
-        return r
-
-    def react(self, emoji, name="1-a.json"):
-        self.event(name, {"type": "react", "emoji": emoji, "message_id": "m", "excerpt": "hi", "user": "U1", "ts": 1})
-
-    def test_hung_show_keeps_key_and_scan_continues(self):  # mutation: except RuntimeError only -> w2 never posted
-        self.seed()
-        r = self.hung({"w2": SHOW2}, hang={"w1"})
-        self.step(r, self.rec("w1", "w2"))
-        self.assertIn(KEY, self.state()["prompts"])
-        self.assertEqual([o["op"] for o in self.ops()], ["prompt"])
-        self.assertEqual(self.ops()[0]["window"], "w2")
-
-    def test_hung_show_still_consumes_react(self):
-        self.seed()
-        self.react("✅")
-        lines = []
-        dc.step("p", self.rec("w1"), 100.0, self.hung({}, hang={"w1"}), lambda s, t: lines.append((s, t)))
-        self.assertEqual(lines, [("p", '[Discord] ✅ yes to your message "hi"')])
-        self.assertIn(KEY, self.state()["prompts"])
-        self.assertEqual([a["result"] for a in self.audit()], ["queued"])
-
-
-class ScanFailureTest(Base):
-    def test_scan_exception_still_consumes_events_and_saves_state(self):
-        self.event("1-a.json", {"type": "react", "emoji": "🛑", "message_id": "m", "excerpt": "", "user": "U1", "ts": 1})
-        lines = []
-        with mock.patch.object(dc, "scan_prompts", side_effect=RuntimeError("boom")), mock.patch("sys.stderr") as err:
-            dc.step("p", self.rec("w1"), 100.0, Runner(), lambda s, t: lines.append((s, t)))
-        self.assertEqual(lines, [("p", "[Discord] 🛑 pause the queue")])
-        self.assertTrue((self.d / "controls-state.json").exists())
-        self.assertIn("discord_controls: scan failed (p): RuntimeError: boom", "".join(c[0][0] for c in err.write.call_args_list))
-
-
-class PermTest(Base):
-    def perm(self, choice="allow", user="U1", key=KEY, name="1-a.json"):
-        self.event(name, {"type": "perm", "key": key, "choice": choice, "user": user, "message_id": "m", "ts": 1})
-
-    def test_allow(self):
-        self.seed()
-        self.perm()
-        r = Runner({"w1": SHOW})
-        self.step(r)
-        self.assertEqual(r.presses, [[TC, "approve", "w1", "once", "--expect", "\n".join(LINES)]])
-        self.assertEqual(self.ops()[-1], {"op": "edit", "key": KEY, "text": "🔐 w1 wants to run Bash command: ✅ allowed by you"})
-        self.assertEqual(self.state()["prompts"], {})
-        self.assertEqual(self.audit()[-1]["result"], "allowed")
+        self.assertEqual([(a["action"], a["result"]) for a in self.audit()], [("perm", "unknown")])
         self.assertEqual(list((self.d / "events").glob("*.json")), [])
 
-    def test_deny(self):
-        self.seed()
-        self.perm("deny")
-        r = Runner({"w1": SHOW})
-        self.step(r)
-        self.assertEqual(r.presses[0][3], "deny")
-        self.assertEqual(self.ops()[-1]["text"], "🔐 w1 wants to run Bash command: ⛔ denied")
-        self.assertEqual(self.audit()[-1], {**self.audit()[-1], "action": "perm", "target": KEY, "result": "denied", "user": "U1"})
-
-    def test_changed_prompt_not_pressed_no_retry(self):
-        self.seed()
-        self.perm()
-        r = Runner({"w1": SHOW}, approve=RuntimeError("approve: the prompt in w1 changed\nwas: x\nnow: y"))
-        self.step(r)
-        self.assertEqual(len(r.presses), 1)
-        self.assertEqual(self.ops()[-1]["text"], "🔐 w1 wants to run Bash command: ⚠️ not pressed: approve: the prompt in w1 changed")
-        self.assertEqual(self.state()["prompts"], {})
-        self.assertEqual(self.audit()[-1]["result"], "not pressed")
-        self.step(r)
-        self.assertEqual(len(r.presses), 1)
-
-    def test_empty_error_text(self):
-        self.seed()
-        self.perm()
-        self.step(Runner({"w1": SHOW}, approve=RuntimeError("")))
-        self.assertEqual(self.ops()[-1]["text"], "🔐 w1 wants to run Bash command: ⚠️ not pressed: exit error")
-
-    def test_unknown_key(self):
-        self.perm(key="%9:abc")
-        r = Runner({"w1": SHOW})
-        self.step(r)
-        self.assertEqual(r.presses, [])
-        self.assertEqual(self.ops(), [])  # an unknown key writes no edit
-        self.assertEqual(self.audit()[-1]["result"], "unknown")
-
-    def test_double_tap_keeps_the_real_outcome(self):  # mutation: edit "not pressed" for an unknown key -> last edit is overwritten
-        self.seed()
-        self.perm("allow", name="1-a.json")
-        self.perm("deny", name="2-b.json")
-        r = Runner({"w1": SHOW})
-        self.step(r)
-        self.assertEqual(len(r.presses), 1)
-        edits = [o for o in self.ops() if o["op"] == "edit"]
-        self.assertEqual(edits, [{"op": "edit", "key": KEY, "text": "🔐 w1 wants to run Bash command: ✅ allowed by you"}])
-        self.assertEqual([a["result"] for a in self.audit() if a["action"] == "perm"], ["allowed", "unknown"])
-
-    def test_rejected_user(self):  # mutation: skip allowlist -> runner called
-        self.seed()
-        self.perm(user="X")
-        r = Runner({"w1": SHOW})
-        self.step(r)
-        self.assertEqual(r.presses, [])
-        self.assertEqual(self.ops(), [])
+    def test_leftover_perm_event_of_a_stranger_is_rejected(self):  # mutation: skip the allowlist -> "unknown"
+        self.event("1-a.json", {"type": "perm", "key": "%5:abc", "choice": "allow", "user": "X", "message_id": "m", "ts": 1})
+        self.step(Runner())
         self.assertEqual(self.audit()[-1]["result"], "rejected")
-        self.assertIn(KEY, self.state()["prompts"])
-        self.assertEqual(list((self.d / "events").glob("*.json")), [])
 
-    def test_real_fixture_key_roundtrip(self):
-        r = Runner({"w1": SHOW})
+    def test_step_never_scans_panes(self):
+        r = Runner()
         self.step(r, self.rec("w1"))
-        self.perm()
-        self.step(r, self.rec("w1"))
-        self.assertEqual(r.presses[-1][-1], "│ echo a\n│ ──── echo probe")
+        self.assertEqual(r.calls, [])
+        self.assertFalse(hasattr(dc, "scan_prompts") or hasattr(dc, "_perm"))
 
 
 class ReactTest(Base):

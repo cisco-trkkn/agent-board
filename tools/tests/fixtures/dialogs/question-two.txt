@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.328
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/scratch
+
+
+❯ Use the AskUserQuestion tool once and nothing else: question "Which fruit?", header "Fruit", multiSelect false, options "Apple" (description "red") and "Pear" (description "green").                 
+
+⏺ Answered Claude's questions:
+  ⎿  · Which fruit? → Pear
+
+⏺ You picked Pear.
+
+✻ Brewed for 4s · done 12:54 AM
+         
+❯ Use the AskUserQuestion tool once and nothing else: question "Which fruit?", header "Fruit", multiSelect false, options "Apple" (description "red") and "Pear" (description "green").                 
+
+⏺ Answered Claude's questions:
+  ⎿  · Which fruit? → hello
+
+⏺ You didn't pick Apple or Pear. You typed "hello" as a custom answer instead.
+          
+✻ Brewed for 4s · done 12:54 AM
+         
+❯ Use the AskUserQuestion tool once and nothing else: question "Which fruit?", header "Fruit", multiSelect true, options "Apple" (description "red"), "Pear" (description "green") and "Plum"           
+  (description "purple").                                                                                                                                                                               
+
+⏺ Answered Claude's questions:                                                                                                                                                                          
+  ⎿  · Which fruit? → Pear
+
+⏺ You picked Pear, and nothing else.
+              
+✻ Worked for 4s · done 12:55 AM
+             
+❯ Use the AskUserQuestion tool once and nothing else, with ONE call that has two questions: first question "Which fruit?" (header "Fruit", multiSelect false, options "Apple" (description "red") and   
+  "Pear" (description "green")), second question "Which size?" (header "Size", multiSelect false, options "Small" (description "s") and "Large" (description "l")).                                     
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Fruit  ☐ Size  ✔ Submit  →
+
+Which fruit?
+                    
+❯ 1. Apple
+     red                                                   
+  2. Pear                                                                  
+     green
+  3. Type something.                                                                                                                                                                                    
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this                                                                                                                                                                                    
+                            
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

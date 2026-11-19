@@ -1,0 +1,28 @@
+{
+  "kind": "question",
+  "question": "Switch to a fresh orchestrator now?",
+  "options": [
+    {
+      "n": 1,
+      "label": "Yes",
+      "permanent": false
+    },
+    {
+      "n": 2,
+      "label": "Not yet",
+      "permanent": false
+    },
+    {
+      "n": 3,
+      "label": "Type something.",
+      "permanent": false
+    },
+    {
+      "n": 4,
+      "label": "Chat about this",
+      "permanent": false
+    }
+  ],
+  "multi": false,
+  "other": true
+}

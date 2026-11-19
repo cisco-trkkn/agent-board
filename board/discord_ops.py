@@ -3,7 +3,7 @@
 tick() renders the command-center card, writes <_ops>/views.json, mirrors each project's decision events into #approvals
 and critical ones into #command-center, and keeps one approval per lead question. consume() reads the ops bridge's events
 (<_ops>/events) and handle_event() serves both those and the slash/modal/read/rejected events a project's controls forward.
-mirror_prompt()/resolve() copy a project's permission prompt into #approvals and edit it when answered.
+consume() also routes `ab:dlg:` dialog clicks and `reply` events to discord_dialogs (dialogs of sessions without a channel).
 Discord is never the source of truth: every action is checked against <_ops>/access.json and audited.
 State lives in <_ops>/ops-state.json under flock(<_ops>/ops-state.lock). Test: tests/test_discord_ops.py."""
 import contextlib
@@ -17,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+import discord_dialogs
 import discord_feed
 import discord_ideas
 import ideas
@@ -26,7 +27,6 @@ CARD_MAX = 1900
 QUEUE_MAX = 1800
 MIRRORED_KEEP = 2000
 CONFIRM_S = 60
-PROMPT_LINES = 15
 FIELD_MAX = 300
 DETAIL_MAX = 4000
 OPEN_KEEP = 200        # newest `other`/`merge` approvals kept in the state
@@ -198,34 +198,6 @@ def _evidence_view(st):
     return out
 
 
-def mirror_prompt(project, src_key, window, tool, lines):
-    """Copy a teammate's permission prompt into #approvals (kind perm). No-op when ops is not configured."""
-    if not configured():
-        return
-    with _state(True) as st:
-        if _okey(project, src_key) in st["approvals"]:
-            return
-        body = "\n".join(str(l) for l in lines[:PROMPT_LINES])
-        text = f"🔐 {project} · {window} wants to run {tool}\n```\n{body}\n```"
-        _approve(tc_env.ops_dir(), st, project, src_key, "perm", text, title=f"{window} {tool}")
-
-
-def resolve(project, src_key, text):
-    """Edit the ops copy of an answered approval and drop it from views.json. No-op when ops is not configured or the key was never mirrored."""
-    if not configured():
-        return
-    with _state(True) as st:
-        key = _okey(project, src_key)
-        if st["approvals"].pop(key, None) is None:
-            return
-        _edit_ops(tc_env.ops_dir(), key, f"{project}: {text}")
-        vp = tc_env.ops_dir() / "views.json"
-        v = _load(vp)
-        if v:
-            v["approvals"] = _approvals_view(st)
-            _write_json(vp, v)
-
-
 # ---- tick ----
 def _event_key(project, ev):
     refs = ev.get("refs") or {}
@@ -328,14 +300,6 @@ def _collapse(v, n=FIELD_MAX):
     return " ".join(str(v or "").split())[:n]
 
 
-def _write_event(project, ev):
-    d = tc_env.discord_dir(project) / "events"
-    d.mkdir(parents=True, exist_ok=True)
-    name = f"{discord_feed._next_ms():013d}-{secrets.token_hex(4)}"
-    _write_json(d / f"{name}.tmp", ev)
-    os.replace(d / f"{name}.tmp", d / f"{name}.json")
-
-
 def handle_event(project, d, ev, add_line, allow):
     """slash / modal / read / rejected: act, audit in <d>/audit.jsonl, return the audit result. `project` is the default
     when the event names none (events forwarded from a project's controls)."""
@@ -425,12 +389,6 @@ def _click(d, user, cid, st, add_line, now, on_merge):
     if parts[:2] != ["ab", "ops"] or len(parts) < 3:
         return "ignored"
     act, k = parts[2], ":".join(parts[3:])
-    if act in ("allow", "deny"):
-        rec = st["approvals"].get(k)
-        if not rec or rec.get("kind") != "perm":
-            return "unknown"
-        _write_event(rec["project"], {"type": "perm", "key": rec["src_key"], "choice": act, "user": user, "ts": now})
-        return "forwarded"
     if act == "pause-all-confirm":
         try:
             ms = int(k)
@@ -479,7 +437,10 @@ def consume(add_line, run, now, on_merge=None):
             try:
                 user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
                 allow = _allow(d)
-                if kind == "click":
+                dlg = discord_dialogs.consume_event(d, ev, allow, run, now, add_line=add_line)
+                if dlg:
+                    discord_feed.audit_append(d, user, *dlg)
+                elif kind == "click":
                     cid = str(ev.get("custom_id") or "")
                     result = _click(d, user, cid, st, add_line, now, on_merge) if user in allow else "rejected"
                     discord_feed.audit_append(d, user, "click", cid, result)

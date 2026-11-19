@@ -30,6 +30,8 @@ an approval question, answer it yourself with the default and put the question a
 report. Stop only before something destructive or irreversible (deleting data, force-pushing, touching
 production): say exactly what you need and wait.
 
+A hook denies `AskUserQuestion` for workers and teammates (ask the lead with SendMessage; the user is not at your window): decide, or ask the lead, instead of calling it.
+
 Before ending your turn, check your last paragraph. If it is a plan, a question, a list of next steps
 or a promise about work you haven't done, do that work now. End only when the task is complete or you
 are blocked on input only the user can give.

@@ -33,7 +33,8 @@
       {
         "matcher": "AskUserQuestion",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/plan-handoff-guard.sh\" --scoped", "timeout": 10 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/plan-handoff-guard.sh\" --scoped", "timeout": 10 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/remote-ask-guard.sh\" --scoped", "timeout": 10 }
         ]
       }
     ],

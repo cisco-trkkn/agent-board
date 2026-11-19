@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_digest, discord_feed, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -128,6 +128,8 @@ def run_script(args, cwd=None, extra_env=None, timeout=30):
     out = (r.stdout + r.stderr).strip()
     if r.returncode != 0:
         raise RuntimeError(out or f"exit {r.returncode}")
+    if len(args) > 3 and str(args[1]) == "dialog" and str(args[3]) == "rows":
+        return r.stdout   # `dialog <pane> rows`: its rows become `type --expect`, so the first row's leading indent must survive
     return out
 
 
@@ -398,7 +400,10 @@ def build_state():
         s["windows"] = sorted(s["windows"].values(), key=lambda w: w["index"])
         s["worktrees"] = cached_worktrees(s["path"])
     out.sort(key=lambda s: (not s["attached"], s["name"]))
-    deliver_comments(out + _overseer_sessions(every, rows_by))   # the overseer gets queued lines (/ideas) but never a card
+    global _dialog_sessions
+    seen = out + _overseer_sessions(every, rows_by)
+    _dialog_sessions = seen   # the dialog scan of the next feed tick reads these panes
+    deliver_comments(seen)   # the overseer gets queued lines (/ideas) but never a card
     snap = INDEXER.snapshot() if INDEXER else []
     usage.card_alerts(out, snap)
     usage.card_labels(out, snap)
@@ -409,6 +414,7 @@ def build_state():
 # ---------------------------------------------------------------- overview and notifier
 
 _overview_lock = threading.Lock()
+_dialog_sessions = []   # the sessions (plus the overseer's) of the last build_state, for discord_dialogs.scan
 _overview_cache = {"at": 0.0, "value": None}
 
 
@@ -499,8 +505,16 @@ def ensure_discord_bridges(records):
         print(f"tmux-dash: discord bridge ensure failed (ops): {e}", file=sys.stderr, flush=True)
 
 
+def _gates(project, tasks, now):
+    """The project's pending user-gate tasks as Discord messages; a failure is logged and never skips the feed tick."""
+    try:
+        discord_dialogs.gates(project, tasks, now)
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: discord gates failed ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
 def feed_tick(records, now, live=None):
-    """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (prompt buttons, inbound events).
+    """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (inbound events); the dialog scan runs once before them.
     A failure in one project is logged and never breaks the overview or the next project."""
     home = HOME / ".claude"
     ops_on = discord_ops.configured()
@@ -508,6 +522,10 @@ def feed_tick(records, now, live=None):
         limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
     except Exception:   # noqa: BLE001 -- no taps: the lines show "?"
         limits = None
+    try:   # once per tick, before the projects: it covers every session, with or without a channel
+        discord_dialogs.scan(_dialog_sessions, now, run=lambda argv: run_script(argv, timeout=20))
+    except Exception as e:   # noqa: BLE001
+        print(f"tmux-dash: discord dialogs failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     lead_sids = {}
     tasks_by_project = {}   # the ops card and views cover every project, with or without a channel of its own
     for r in records:
@@ -518,11 +536,13 @@ def feed_tick(records, now, live=None):
                     sid, pid, started = planview.lead_entry(p, home, tmux)
                     lead_sids[p] = sid
                     tasks_by_project[p] = planview.raw_live_list(home, sid, pid, started)[1]
+                    _gates(p, tasks_by_project[p], now)
                 continue
             sid, pid, started = planview.lead_entry(p, home, tmux)
             lead_sids[p] = sid
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
             tasks_by_project[p] = tasks
+            _gates(p, tasks, now)
             discord_feed.tick(p, r, r.get("path") or ".", now, lead_tasks=tasks, list_id=list_id,
                               live=live, limits=limits, lead_sid=sid)
         except Exception as e:   # noqa: BLE001

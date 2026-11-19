@@ -139,12 +139,42 @@ def is_claude_cmd(cmd):
     return bool(VERSION_RE.match(cmd)) or "claude" in cmd.lower()
 
 
+TASKS_HEAD_RE = re.compile(r"^ +\d+/\d+ tasks done")
+TASKS_ROW_RE = re.compile(r"^  +\S")
+DIVIDER = "─" * 10   # isdiv() in tools/lib/dialog.zsh: a row that starts with ten rule characters
+TEAM_DIVIDER_RE = re.compile(r" @[A-Za-z0-9_.-]+ ─$")   # the teammate status divider, the last row of a pane with teammates
+CURSOR_RE = re.compile(r"^\s*❯")
+
+
+def _task_row(row):
+    return bool(TASKS_ROW_RE.match(row)) and not CURSOR_RE.match(row) and not row.lstrip().startswith(DIVIDER)
+
+
+def _above_tasklist(rows):
+    """rows without a task list drawn as the last rows: a `N/M tasks done` row followed only by rows indented by two or more,
+    none of them a cursor row or a divider, after a teammate status divider as the very last row is set aside (the rules of
+    tasklist() and its caller in tools/lib/dialog.zsh). A session with tasks draws the list under an open prompt's footer, so
+    the prompt can sit any number of rows above the bottom; above an input box the list is not the last rows and stays."""
+    body = rows
+    if rows and rows[-1].startswith(DIVIDER) and TEAM_DIVIDER_RE.search(rows[-1]):
+        body = rows[:-1]
+    for n in range(len(body) - 1, -1, -1):
+        if TASKS_HEAD_RE.match(body[n]):
+            if not all(_task_row(r) for r in body[n + 1:]):
+                return rows
+            n -= 1
+            while n >= 0 and not rows[n].strip():
+                n -= 1
+            return rows[:n + 1]
+    return rows
+
+
 def classify(cmd, rows, bell, mod=None):
     """kind: claude | shell | program ; status: waiting | working | ready | idle | running.
     mod: the pane's fresh agent-status state (mod_states()), preferred over pane text for a claude pane."""
     is_claude = is_claude_cmd(cmd)
     # Claude draws its prompts and spinner at the bottom; older scrollback may quote prompt text.
-    tail = "\n".join(rows[-12:])
+    tail = "\n".join(_above_tasklist(rows)[-12:])
     if cmd in SHELLS:
         return "shell", "idle"
     if is_claude:

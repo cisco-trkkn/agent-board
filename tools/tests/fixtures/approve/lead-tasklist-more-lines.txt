@@ -1,0 +1,50 @@
+ │ touch made-11.txt
+ │ touch made-12.txt           
+ │ touch made-13.txt            
+ │ touch made-14.txt                                                                                                               
+ │ touch made-15.txt
+ │ touch made-16.txt
+ │ touch made-17.txt                                                                                                                                                                                    
+ │ touch made-18.txt                                                                                                                                                                                    
+ │ touch made-19.txt
+ │ touch made-20.txt             
+ │ touch made-21.txt
+ │ touch made-22.txt                                                                                                                        
+ │ touch made-23.txt
+ │ touch made-24.txt                                                                                                       
+ │ touch made-25.txt
+ │ touch made-26.txt          
+ │ touch made-27.txt
+ │ touch made-28.txt                                                                                                                                                                                    
+ │ touch made-29.txt
+ │ touch made-30.txt      
+ │ touch made-31.txt
+ │ touch made-32.txt
+ │ touch made-33.txt
+ │ touch made-34.txt
+ │ touch made-35.txt
+ │ touch made-36.txt
+ │ touch made-37.txt
+ │ touch made-38.txt
+ │ touch made-39.txt
+ │ touch made-40.txt
+ │ touch made-41.txt
+ │ touch made-42.txt
+ │ touch made-43.txt
+ │ touch made-44.txt
+ │ touch made-45.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for touch made-1.txt, touch made-2.txt, touch made-3.txt, touch made-4.txt, and touch made-5.txt commands in
+      /tmp/scratch
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you   
+   4. No                                                                       
+ ↑ 15 more lines                                                               
+ Esc to cancel · Tab to amend                                                                                                                                                                         
+                                                                                                                                                                                                        
+  0/4 tasks done · 1 in progress                                                                                                                                                                        
+  ◼ Alpha                                                                                                                                                                     
+  ◻ Beta                                                                                                                                                                                                
+  ◻ Gamma                   
+  ◻ Delta                                                   

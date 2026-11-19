@@ -163,6 +163,33 @@ class OutboxTest(Base):
         self.assertEqual(len(ops), 200)
         self.assertEqual([o["op"] for o in ops if o["op"] in ("prompt", "edit")], ["prompt", "edit"])
 
+    def test_dialog_and_edit_rows_shapes(self):
+        b = {"label": "1. Yes", "style": 1, "custom_id": "ab:dlg:p1-0123456789abcdef:1"}
+        dlg = {"op": "dialog", "key": "p1-0123456789abcdef", "text": "t", "rows": [[b]], "mention_user": True}
+        df.outbox_write(self.dir, dlg)
+        df.outbox_write(self.dir, {"op": "edit", "key": "k", "text": "t", "rows": [[b] * 5] * 5})
+        self.assertEqual(len(self.names()), 2)
+        bad = [{**dlg, "rows": [[b]] * 6}, {**dlg, "rows": [[b] * 6]}, {**dlg, "rows": [[{**b, "style": "1"}]]},
+               {**dlg, "rows": [[{**b, "style": True}]]}, {**dlg, "rows": [[{**b, "custom_id": "x" * 101}]]},
+               {**dlg, "rows": [[{**b, "label": 3}]]}, {**dlg, "rows": [[{"label": "a", "style": 1}]]},
+               {**dlg, "rows": [b]}, {**dlg, "rows": "x"},
+               {k: v for k, v in dlg.items() if k != "mention_user"}, {**dlg, "mention_user": "yes"}, {**dlg, "x": 1},
+               {"op": "edit", "key": "k", "text": "t", "rows": [[b]] * 6},
+               {"op": "edit", "key": "k", "text": "t", "rows": [[{**b, "custom_id": "x" * 101}]]}]
+        for op in bad:
+            with self.assertRaises(ValueError, msg=str(op)):
+                df.outbox_write(self.dir, op)
+        self.assertEqual(len(self.names()), 2)
+
+    def test_cap_keeps_dialog(self):  # mutation: leave dialog out of _enforce_cap's keep list -> the oldest op, the dialog, is the one removed
+        b = {"label": "1. Yes", "style": 1, "custom_id": "ab:dlg:p1-0123456789abcdef:1"}
+        df.outbox_write(self.dir, {"op": "dialog", "key": "p1-0123456789abcdef", "text": "t", "rows": [[b]], "mention_user": False})
+        for i in range(205):
+            df.outbox_write(self.dir, post(f"p{i}"))
+        ops = [json.loads((self.dir / "outbox" / n).read_text()) for n in self.names()]
+        self.assertEqual(len(ops), 200)
+        self.assertEqual([o["op"] for o in ops if o["op"] == "dialog"], ["dialog"])
+
     def test_cap_drops_non_mention_after_cards(self):
         for i in range(201):
             df.outbox_write(self.dir, post(f"p{i}"))

@@ -70,6 +70,11 @@ the board moves to `dialog`; then `approve` becomes a thin wrapper).
   and its buttons removed. After a Discord press it reads `→ <label> (from Discord)`.
 - The existing 🔐 teammate path is replaced by this one (same buttons for a permission dialog); `discord_controls`
   keeps its react and merge handling.
+- Named dialog kinds (amendment, user OK on Discord 2026-11-19, ideas d8293803c6 + 15f9db31fc): besides
+  AskUserQuestion and permission prompts, the parser recognises and tests the plan-approval dialog (`ExitPlanMode`:
+  approve / keep planning, with the "auto-accept edits" row treated as permanent and confirmed), and the
+  handoff skill's relay question. Each gets its own fixture in `tools/tests/fixtures/dialogs/`; any other dialog
+  still reaches Discord through the generic parse.
 
 ### 3. Hooks: the remote marker and the AskUserQuestion block
 
@@ -79,7 +84,10 @@ the board moves to `dialog`; then `approve` becomes a thin wrapper).
 - `PreToolUse` hook on `AskUserQuestion`: a teammate or worker session (the existing `AGENT_BOARD_LEAD` /
   teammate env markers) is always denied with "ask the lead with SendMessage; the user is not at your window". A
   lead session with the remote marker is denied with "the user is remote: ask in Discord as a numbered list with the
-  reply tool". Otherwise allowed.
+  reply tool". A peer session (a `claude` pane that is neither a lead, a teammate nor a worker) is denied while
+  any remote marker under `<state>/remote/` is younger than 12 h, with "the user is remote: write the question as
+  plain text and end your turn; it reaches Discord as a Needs you item" (amendment, user OK on Discord
+  2026-11-19). Otherwise allowed.
 - `claude/orchestrator.md` and `claude/worker.md`: one line each pointing at the hook's behaviour (the rules
   already say this; the hook enforces it).
 

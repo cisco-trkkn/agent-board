@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.328
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/scratch
+
+
+❯ Use the AskUserQuestion tool once and nothing else: question "Which fruit?", header "Fruit", multiSelect false, options "Apple" (description "red") and "Pear" (description "green").                 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Fruit 
+
+Which fruit?
+
+❯ 1. Apple
+     red
+  2. Pear
+     green
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                                                                      
+
+
+
+                           
+                                                    

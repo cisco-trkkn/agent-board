@@ -39,6 +39,13 @@
 #   tmux-ctl approve <win> show           print the prompt's tool (T:) and its --expect lines (P:); read-only
 #   tmux-ctl approve <win> once|deny --expect <text>  answer the permission prompt showing in a window: the one-time Yes, or No
 #                                          (never an always/auto-mode row; refuses when there is no prompt or it changed)
+#   tmux-ctl dialog <win> show            print the Claude Code dialog showing in a window (or a pane id, %N) as JSON:
+#                                          kind, question, options (n, label, permanent), multi, other, lines; read-only
+#   tmux-ctl dialog <win> press --expect <lines> (--option <n>... | --text <text>)  answer that dialog with the keys of its kind; refuses
+#                                          (exit 1, nothing sent) unless its lines equal --expect on two reads; --option repeats on a multi-select
+#   tmux-ctl dialog <win> rows [--n N]    print the last N (default 8) rows above the input box, the rows `type --expect` compares
+#   tmux-ctl dialog <win> type --expect <rows> --text <text>  type a reply into an idle prompt; refuses (exit 1, nothing sent) unless
+#                                          those rows are unchanged on two reads, the pane is not in copy mode and the input line is empty
 #   tmux-ctl wait-gone <name>... [--timeout S]  after shutdown_requests: wait (default 300 s) until every `✦ <name>` window of this
 #                                          session is gone; at the timeout kill the ones left (exit 3)
 #   tmux-ctl handoff-mark [--clear]        a self-started handoff marks this session as not yet relayed (the Stop guard
@@ -460,6 +467,10 @@ case "$cmd" in
     source "${0:A:h:h}/tools/lib/approve.zsh"
     approve_cmd "$@"; exit $? ;;
 
+  dialog)    # any Claude Code dialog, read from the pane text; <win> may be a pane id anywhere on the server
+    source "${0:A:h:h}/tools/lib/dialog.zsh"
+    dialog_cmd "$@"; exit $? ;;
+
   new)
     [[ -n "$1" ]] || die "usage: tmux-ctl new <win> [dir]"
     t new-window -d -t "=$SESSION:" -n "$1" -c "${2:-$PWD}" ;;
@@ -672,7 +683,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
