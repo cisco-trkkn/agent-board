@@ -24,7 +24,7 @@ const REPLY_MAX = 2000;
 const REPLY_TEXT_MAX = 1000;
 const DIALOGS_KEEP = 200;
 // The dialog custom-id grammar: ab:dlg:<key>:<n>, :<n>:confirm|cancel, :t<n>, :submit, :reply.
-const DLG_RE = /^ab:dlg:(p[0-9]+-[0-9a-f]{16}):(?:(t)?([0-9]{1,2})(?::(confirm|cancel))?|(submit|reply))$/;
+const DLG_RE = /^ab:dlg:(p[0-9]+-[0-9a-f]{16}):(?:t([0-9]{1,2})|([0-9]{1,2})(?::(confirm|cancel))?|(submit|reply))$/;
 const REACT_EMOJI = new Set(['✅', '❌', '🛑', '▶', '⏭']);
 
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
@@ -488,7 +488,8 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   // ab:dlg:* clicks. A style-4 option asks for confirmation; toggles flip in place; submit carries the picks;
   // reply arms the message for one reply. Everything else is deferred and written as a click event.
   async function onDialogInteraction(i, id, m) {
-    const [, key, isToggle, num, confirm, word] = m;
+    const [, key, togNum, num, confirm, word] = m;
+    const isToggle = togNum !== undefined;
     const user = String(i.user?.id);
     const ts = now();
     if (word === 'reply') {
@@ -508,15 +509,19 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       try { await i.update({ components: rows }); } catch (e) { say(`update failed: ${snip(e?.message)}`); }
       return;
     }
-    if (!isToggle && num !== undefined && confirm === 'cancel') { await answer(i, 'Cancelled.', []); return; }
-    if (!isToggle && num !== undefined && confirm === 'confirm') {
+    if (num !== undefined && confirm === 'cancel') { await answer(i, 'Cancelled.', []); return; }
+    if (num !== undefined && confirm === 'confirm') {
       await answer(i, 'Sent.', []);
       writeEvent({ type: 'click', custom_id: id, user, message_id: i.message?.id, channel_id: i.channelId, ts });
       say(`event ${snip(id)}`);
       return;
     }
-    if (!isToggle && num !== undefined && i.component?.style === 4) {
-      const label = String(i.component.label ?? '').replace(/^\d+\. /, '');
+    // Permanent = the stored button's style 4, read from the clicked message's rows; the click's own component is the
+    // fallback; when neither says, fail closed (ask for the confirm step).
+    const stored = rowsOf(i).flatMap((r) => r.components).find((c) => c.custom_id === id);
+    const style = stored?.style ?? i.component?.style;
+    if (num !== undefined && (style === undefined || style === 4)) {
+      const label = String(stored?.label ?? i.component?.label ?? 'this option').replace(/^\d+\. /, '');
       await answer(i, `this allows ${label} from now on`, [{ type: 1, components: [
         { type: 2, style: 4, label: 'Confirm', custom_id: `${id}:confirm` },
         { type: 2, style: 2, label: 'Cancel', custom_id: `${id}:cancel` },
@@ -544,8 +549,8 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     const text = String(msg.content ?? '').trim().slice(0, REPLY_TEXT_MAX);
     if (!text) return;
     const key = st.reply_armed[ref];
-    delete st.reply_armed[ref]; save();
     writeEvent({ type: 'reply', key, text, user: uid, message_id: String(ref), ts: now() });
+    delete st.reply_armed[ref]; save();
     say(`reply ${snip(key)}`);
   }
 

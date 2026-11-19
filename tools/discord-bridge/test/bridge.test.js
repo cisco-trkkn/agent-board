@@ -727,9 +727,9 @@ test('a presence op without a non-empty string text goes to failed/', async () =
 const KEY = 'p12-0123456789abcdef';
 const ID = (suffix) => `ab:dlg:${KEY}:${suffix}`;
 test('dialog custom-id grammar: the sample ids the Python side reuses match the bridge DLG_RE', () => {
-  // Mutation: break DLG_RE (e.g. drop the `t?`) -> a sample id stops matching and this test fails.
+  // Mutation: let DLG_RE accept t<n>:confirm / t<n>:cancel (the two negatives) or break it (e.g. drop the `t`) -> a sample id stops matching and this test fails.
   for (const id of [ID('1'), ID('2:confirm'), ID('2:cancel'), ID('t3'), ID('submit'), ID('reply')]) assert.ok(DLG_RE.test(id), id);
-  for (const id of [ID('x'), ID('t3:cancel:x'), 'ab:dlg:p12-0123456789abcde:1', 'ab:dlg:q12-0123456789abcdef:1']) assert.ok(!DLG_RE.test(id), id);
+  for (const id of [ID('x'), ID('t3:cancel:x'), 'ab:dlg:p12-0123456789abcde:1', 'ab:dlg:q12-0123456789abcdef:1', ID('t3:confirm'), ID('t3:cancel')]) assert.ok(!DLG_RE.test(id), id);
 });
 const btn = (suffix, style, label) => ({ label, style, custom_id: ID(suffix) });
 const dlg = (extra = {}) => ({ op: 'dialog', key: KEY, text: 'Pick one', mention_user: false, rows: [[btn('1', 1, '1. Yes'), btn('2', 4, '2. Always')]], ...extra });
@@ -908,4 +908,33 @@ test('dlg and gate clicks of an allowlisted user become click events in both mod
     assert.strictEqual(n.replies[0].content, 'Not authorized.');
     assert.strictEqual(events(s).filter((f) => readEv(s, f).user === 'U2').length, 0);
   }
+});
+
+test('permanent option: unknown style fails closed, the stored row decides over the click', async () => {
+  // Mutation: decide from i.component?.style === 4 only -> the first two cases write an event / no confirm step.
+  const s = setup(); allow(s, ['U1']);
+  const bare = fakeInteraction({ customId: ID('2'), user: 'U1' });                 // no component, no stored row
+  await s.bridge.onInteraction(bare);
+  const row = plainRows([[btn('1', 1, '1. Yes'), btn('2', 4, '2. Always allow npm')]]);
+  const stale = fakeInteraction({ customId: ID('2'), user: 'U1', component: { style: 1, label: 'x' }, components: row });
+  await s.bridge.onInteraction(stale);
+  assert.deepStrictEqual(events(s), []);
+  assert.strictEqual(bare.replies[0].components[0].components[0].custom_id, ID('2:confirm'));
+  assert.strictEqual(stale.replies[0].content, 'this allows Always allow npm from now on');
+  const plain = fakeInteraction({ customId: ID('1'), user: 'U1', components: row });   // stored row says style 1: an event
+  await s.bridge.onInteraction(plain);
+  assert.strictEqual(events(s).length, 1);
+});
+
+test('a reply is disarmed only after its event is written', async () => {
+  // Mutation: delete the armed entry before writeEvent -> a failed write loses the reply for good.
+  const s = setup(); allow(s, ['U1']);
+  await s.bridge.onInteraction(fakeInteraction({ customId: ID('reply'), user: 'U1', messageId: 'm7' }));
+  fs.writeFileSync(path.join(s.dir, 'events'), 'x');                       // a file where the events dir should be: the write fails
+  await assert.rejects(s.bridge.onMessage(fakeReply({ content: 'a', ref: 'm7' })));
+  assert.strictEqual(s.st().reply_armed.m7, KEY);
+  fs.rmSync(path.join(s.dir, 'events'));
+  await s.bridge.onMessage(fakeReply({ content: 'a', ref: 'm7' }));
+  assert.strictEqual(events(s).length, 1);
+  assert.deepStrictEqual(s.st().reply_armed, {});
 });
