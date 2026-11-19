@@ -63,15 +63,11 @@ def consume_events(d, project, state, run, add_line):
             continue
         user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
         try:
-            if kind == "perm":   # the old prompt buttons are gone: a leftover event is only audited
+            dlg = discord_dialogs.consume_event(d, ev, allow, run, time.time())
+            if dlg:
+                discord_feed.audit_append(d, user, *dlg)
+            elif kind == "perm":   # the old prompt buttons are gone: a leftover event is only audited
                 discord_feed.audit_append(d, user, "perm", str(ev.get("key") or ""), "unknown" if user in allow else "rejected")
-            elif kind == "reply":
-                discord_feed.audit_append(d, user, "dialog-reply", str(ev.get("key") or ""),
-                                          discord_dialogs.reply(d, user, ev, run, time.time()) if user in allow else "rejected")
-            elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:dlg:"):
-                cid = str(ev.get("custom_id"))
-                discord_feed.audit_append(d, user, "dialog", cid,
-                                          discord_dialogs.click(d, user, cid, ev, run, time.time()) if user in allow else "rejected")
             elif kind == "react":
                 emoji = str(ev.get("emoji") or "").replace("️", "")
                 tpl = EMOJI_LINES.get(emoji)

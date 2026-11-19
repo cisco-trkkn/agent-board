@@ -382,10 +382,8 @@ def _resume_all(st, add_line):
     return len(names)
 
 
-def _click(d, user, cid, st, add_line, now, on_merge, ev=None, run=None):
+def _click(d, user, cid, st, add_line, now, on_merge):
     parts = cid.split(":")
-    if parts[:2] == ["ab", "dlg"]:
-        return discord_dialogs.click(d, user, cid, ev or {}, run, now)
     if parts[:2] == ["ab", "ideas"]:
         return discord_ideas.click(user, cid, add_line, now)
     if parts[:2] != ["ab", "ops"] or len(parts) < 3:
@@ -439,13 +437,13 @@ def consume(add_line, run, now, on_merge=None):
             try:
                 user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
                 allow = _allow(d)
-                if kind == "click":
+                dlg = discord_dialogs.consume_event(d, ev, allow, run, now)
+                if dlg:
+                    discord_feed.audit_append(d, user, *dlg)
+                elif kind == "click":
                     cid = str(ev.get("custom_id") or "")
-                    result = _click(d, user, cid, st, add_line, now, on_merge, ev, run) if user in allow else "rejected"
-                    discord_feed.audit_append(d, user, "dialog" if cid.startswith("ab:dlg:") else "click", cid, result)
-                elif kind == "reply":
-                    key = str(ev.get("key") or "")
-                    discord_feed.audit_append(d, user, "dialog-reply", key, discord_dialogs.reply(d, user, ev, run, now) if user in allow else "rejected")
+                    result = _click(d, user, cid, st, add_line, now, on_merge) if user in allow else "rejected"
+                    discord_feed.audit_append(d, user, "click", cid, result)
                 else:
                     handle_event(None, d, ev, add_line, allow)
                 done += 1

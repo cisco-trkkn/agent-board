@@ -799,6 +799,20 @@ class RoutingConsumeTest(ConsumerBase):
         ops.consume(lambda *a: None, self.run, 300.0)
         self.assertEqual(self.audit(d), [("dialog", "u1", "pressed: Pear"), ("dialog-reply", "u1", "already answered")])
         self.assertEqual(len(self.run.presses), 1)
+    def test_ops_rejects_a_stranger_click_and_reply_and_presses_nothing(self):
+        # mutation: drop the `user in allow` check of the reply route -> the reply presses and is audited `pressed: …`
+        import discord_ops as ops
+        self.ops_on()
+        d = tc_env.ops_dir()
+        dd.scan([sess(name="nochan")], 100.0, Runner({"%12": SINGLE}))
+        key = key_of("%12", SINGLE["lines"])
+        (d / "access.json").write_text(json.dumps({"allowFrom": ["u1"]}))
+        self.events(d, {"type": "click", "custom_id": f"ab:dlg:{key}:2", "user": "evil", "ts": 1},
+                    {"type": "reply", "key": key, "text": "x", "user": "evil", "ts": 2})
+        ops.consume(lambda *a: None, self.run, 300.0)
+        self.assertEqual(self.audit(d), [("dialog", "evil", "rejected"), ("dialog-reply", "evil", "rejected")])
+        self.assertEqual(self.run.presses, [])
+        self.assertIn(key, self.state())
 
 
 class RealShowTest(unittest.TestCase):

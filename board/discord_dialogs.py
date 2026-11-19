@@ -192,7 +192,7 @@ def _sweep(dialogs, live, panes, show):
     """Edit and drop every known dialog that is no longer on its pane's screen. A pane whose `show` failed keeps its keys this
     tick; a pane that no longer classifies as waiting is shown once more, so a dialog the classifier missed is not called answered."""
     for key, rec in list(dialogs.items()):
-        if not (isinstance(rec, dict) and rec.get("dir") and rec.get("header")):   # a damaged record: no message to edit
+        if _record(dialogs, key, need_show=False) is None:   # a damaged record: no message to edit
             del dialogs[key]
             continue
         pid = rec.get("pane")
@@ -240,6 +240,16 @@ def scan(sessions, now, run):
         _scan(dialogs, sessions, now, run)
 
 
+def _record(dialogs, key, need_show=True):
+    """dialogs[key] when it is a usable record (a message to edit, and for a press its pane and the `show` lines), else None."""
+    rec = dialogs.get(key)
+    if not (isinstance(rec, dict) and rec.get("dir") and rec.get("header")):
+        return None
+    if need_show and not (rec.get("pane") and isinstance((rec.get("show") or {}).get("lines"), list)):
+        return None
+    return rec
+
+
 def _opt(rec, n):
     return next((o for o in (rec.get("show") or {}).get("options") or [] if isinstance(o, dict) and o.get("n") == n), None)
 
@@ -283,9 +293,8 @@ def click(d, user, cid, ev, run, now):
     else:
         return "ignored"
     with _locked() as dialogs:
-        rec = dialogs.get(key)
-        if not isinstance(rec, dict) or not rec.get("pane") or not rec.get("dir") or not rec.get("header") \
-                or not isinstance((rec.get("show") or {}).get("lines"), list):
+        rec = _record(dialogs, key)
+        if rec is None:
             return "already answered"
         show = rec["show"]
         ok = {o["n"]: o for o in _buttonable(show) if isinstance(o.get("n"), int)}
@@ -313,9 +322,8 @@ def reply(d, user, ev, run, now):
     key = str(ev.get("key") or "")
     text = _C0.sub(" ", str(ev.get("text") or ""))[:REPLY_MAX]
     with _locked() as dialogs:
-        rec = dialogs.get(key)
-        if not isinstance(rec, dict) or not rec.get("pane") or not rec.get("dir") or not rec.get("header") \
-                or not isinstance((rec.get("show") or {}).get("lines"), list):
+        rec = _record(dialogs, key)
+        if rec is None:
             return "already answered"
         mid = ev.get("message_id")
         if mid is not None and rec.get("message_id") is not None and str(mid) != str(rec["message_id"]):
@@ -323,3 +331,19 @@ def reply(d, user, ev, run, now):
         if not rec["show"].get("other") or not text.strip():
             return "ignored"
         return _finish(rec, key, dialogs, run, ["--text", text], _one_line(text, LABEL_MAX), now)
+
+
+def consume_event(d, ev, allow, run, now):
+    """(audit action, audit target, result) for a dialog event of an events dir, or None when `ev` is not one (a `reply`, or a
+    click on an `ab:dlg:` id). The one place that checks allowFrom for dialog events: a user outside `allow` gets `rejected`."""
+    user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
+    cid = str(ev.get("custom_id") or "")
+    if kind == "reply":
+        action, target = "dialog-reply", str(ev.get("key") or "")
+        go = lambda: reply(d, user, ev, run, now)  # noqa: E731
+    elif kind == "click" and cid.startswith("ab:dlg:"):
+        action, target = "dialog", cid
+        go = lambda: click(d, user, cid, ev, run, now)  # noqa: E731
+    else:
+        return None
+    return action, target, go() if user in allow else "rejected"
