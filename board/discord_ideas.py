@@ -172,21 +172,30 @@ def post(doc, now, dry_run=False):
         if dry_run:
             return 0, f"would post {len(groups)} groups, skipped {skipped}"
         bridge = r.get("bridge", "_ops")
-        state = []
+        state, ops = [], []
         for n, (g, rows) in enumerate(groups):
             header = f"{g['emoji']} **{g['title']}** · {g['project']} · {len(rows)}"
-            text = _render(header, [x[2] for x in rows])
-            discord_feed.outbox_write(_box(bridge), {"op": "post", "text": text, "tier": TIER, "mention_user": False,
-                                                     "key": f"ideas-{req}-{n}", "buttons": _buttons(req, n)})
+            ops.append({"op": "post", "text": _render(header, [x[2] for x in rows]), "tier": TIER, "mention_user": False,
+                        "key": f"ideas-{req}-{n}", "buttons": _buttons(req, n)})
             state.append({"title": g["title"], "emoji": g["emoji"], "project": g["project"], "ids": [x[0] for x in rows],
                           "keys": [x[3] for x in rows], "texts": [x[2] for x in rows], "header": header, "done": None})
         if not groups:
-            _plain(bridge, f"ideas-{req}-none", "no open ideas")
+            ops.append({"op": "post", "text": "no open ideas", "tier": TIER, "mention_user": False, "key": f"ideas-{req}-none"})
         if skipped:
-            _plain(bridge, f"ideas-{req}-skipped", f"skipped: {skipped} ids")
+            ops.append({"op": "post", "text": f"skipped: {skipped} ids", "tier": TIER, "mention_user": False, "key": f"ideas-{req}-skipped"})
+        try:
+            for op in ops:
+                discord_feed._check(op)   # a bad op fails here, before anything is written
+        except ValueError as e:
+            return 1, f"invalid group: {e}"
         _write(d / f"post-{req}.json", {"request": req, "bridge": bridge, "groups": state})
         r["state"] = "answered"
-        _write(rf, r)
+        _write(rf, r)   # answered before the ops go out: a failed write must not let a retry duplicate posts
+        try:
+            for op in ops:
+                discord_feed.outbox_write(_box(bridge), op)
+        except (OSError, ValueError) as e:
+            return 1, f"error writing posts (request stays answered): {e}"
     return 0, f"posted {len(groups)} groups, skipped {skipped}"
 
 
@@ -220,6 +229,10 @@ def click(user, cid, add_line, now):
         g = st["groups"][gi]
         if g.get("done"):
             return "unknown"
+        try:
+            discord_feed._check({"op": "edit", "key": f"ideas-{req}-{gi}", "text": g["header"]})   # fail before acting
+        except ValueError:
+            return "error: edit failed"
         if act == "next":
             add_line(g["project"], f"regroup: {g['title']} — ideas: {', '.join(g['ids'])}")
             second, result = f"→ sent to {g['project']}'s lead to brainstorm", "queued"
@@ -235,10 +248,13 @@ def click(user, cid, add_line, now):
                     changed += 1
             second = f"dropped {done}" + (f", {changed} already changed" if changed else "")
             result = f"dropped {done}"
-        g["done"] = act
+        edit = {"op": "edit", "key": f"ideas-{req}-{gi}", "text": f"{g['header']}\n{second}"}
+        g["done"] = act   # the action ran: a re-tap must never repeat it, even if the edit below fails
         _write(d / f"post-{req}.json", st)
-        discord_feed.outbox_write(_box(st.get("bridge", "_ops")),
-                                  {"op": "edit", "key": f"ideas-{req}-{gi}", "text": f"{g['header']}\n{second}"})
+        try:
+            discord_feed.outbox_write(_box(st.get("bridge", "_ops")), edit)
+        except (OSError, ValueError):
+            return "error: edit failed"
     return result
 
 

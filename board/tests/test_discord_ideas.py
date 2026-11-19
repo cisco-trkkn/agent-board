@@ -193,6 +193,47 @@ class TestPost(Base):
         self.assertEqual(ops[-1]["text"], "skipped: 2 ids")
 
 
+class TestPostFailures(Base):
+    def req_state(self, req):
+        return json.loads((tc_env.ops_dir() / "ideas" / f"req-{req}.json").read_text())["state"]
+
+    def test_invalid_op_writes_nothing_and_stays_open(self):
+        req = self.ask()
+        ids = self.ids("alpha") + self.ids("beta")
+        real = discord_feed._check
+        calls = []
+
+        def check(op):
+            calls.append(op)
+            if len(calls) == 2:
+                raise ValueError("bad op")
+            return real(op)
+        with mock.patch.object(discord_feed, "_check", check):
+            rc, msg = di.post(self.doc(req, [self.grp(ids[:1]), self.grp(ids[2:], "beta")]), 1010.0)
+        self.assertEqual(rc, 1, msg)
+        self.assertEqual(self.outbox(), [])
+        self.assertEqual(self.req_state(req), "open")
+        self.assertFalse((tc_env.ops_dir() / "ideas" / f"post-{req}.json").exists())
+
+    def test_write_failure_leaves_answered_and_retry_refused(self):
+        req = self.ask()
+        ids = self.ids("alpha") + self.ids("beta")
+        real, n = discord_feed.outbox_write, []
+
+        def flaky(d, op):
+            n.append(1)
+            if len(n) == 2:
+                raise OSError("disk full")
+            return real(d, op)
+        with mock.patch.object(discord_feed, "outbox_write", flaky):
+            rc, msg = di.post(self.doc(req, [self.grp(ids[:1]), self.grp(ids[2:], "beta")]), 1010.0)
+        self.assertEqual(rc, 1, msg)
+        self.assertEqual(self.req_state(req), "answered")
+        self.assertEqual(len(self.outbox()), 1)
+        self.assertEqual(di.post(self.doc(req, [self.grp(ids[:1])]), 1011.0)[0], 1)
+        self.assertEqual(len(self.outbox()), 1)
+
+
 class TestExpire(Base):
     def test_expire_posts_and_closes(self):
         req = self.ask(bridge="alpha", now=1000.0)
@@ -264,6 +305,22 @@ class TestClick(Base):
             self.assertEqual(di.click("u1", cid, self.add, 1020.0), "unknown", cid)
         self.assertEqual(len(self.outbox()), n)
         self.assertEqual(len(self.ids("alpha")), 2)
+
+
+class TestClickEditFailure(TestClick):
+    def test_edit_failure_after_next_still_marks_done(self):
+        self.lines.clear()
+        with mock.patch.object(discord_feed, "outbox_write", side_effect=OSError("disk full")):
+            self.assertEqual(di.click("u1", self.cid("next"), self.add, 1020.0), "error: edit failed")
+        self.assertEqual(len(self.lines), 1)
+        self.assertEqual(di.click("u1", self.cid("next"), self.add, 1030.0), "unknown")
+        self.assertEqual(len(self.lines), 1)
+
+    def test_failure_before_action_leaves_buttons_live(self):
+        def boom(*a):
+            raise OSError("no line")
+        self.assertRaises(OSError, di.click, "u1", self.cid("next"), boom, 1020.0)
+        self.assertEqual(di.click("u1", self.cid("park"), self.add, 1030.0), "parked")
 
 
 class TestMain(Base):
