@@ -25,8 +25,9 @@ _dlg_screen() { t capture-pane -p -J -t "$1" 2>/dev/null | LC_ALL=C tr -d '\000-
 #   K:<kind>   Q:<question>   M:<0|1> (multi-select)   W:<0|1> (a free-text row is present)
 #   O:<n>:<0|1>:<label>   one per option; the flag is `permanent`
 #   L:<line>              one per line of the dialog: the rows after its top rule up to, not including, the key-hint footer
-#                         (a teammate status divider `──── @name ─` after the footer is not part of it); the auto-mode
-#                         countdown time is written M:SS
+#                         (a teammate status divider `──── @name ─` or a task list after the footer is not part of it);
+#                         a prompt taller than the pane starts at the first screen row and ends with its `↑ N more lines`
+#                         row; the auto-mode countdown time is written M:SS
 # Byte-literal dividers and cursor (no {n}, no multibyte class, no length() of a row): the same result in any locale.
 _dlg_parse() {
   awk -v permlist="$_DLG_PERMANENT" '
@@ -69,34 +70,64 @@ _dlg_parse() {
 
     # permission: approve.zsh _ap_prompt. The options are only the contiguous run 1. 2. … right after the last
     # "Do you want…"/"Would you like…" line, so option-shaped text inside the command preview is never one.
-    function permission(   i, j, n, q, e, s, dv, ft, nr, r1, r2, amb) {
+    # A long option label wraps onto a row indented to the label column (approve/lead-tasklist-more-lines.txt, option 2).
+    function labcol(x,   t) { t = nocur(x); match(t, /^[ \t]*[0-9]+\.[ \t]+/); return RLENGTH }
+    # runend(i): the last row of the run 1. 2. … that starts at row i, the wrapped rows of its labels included
+    function runend(i,   j, n, lc) {
+      j = i; n = 1; lc = -1
+      while (j <= N2) {
+        if (optnum(l[j]) == n) { lc = labcol(l[j]); j++; n++ }
+        else if (n > 1 && !optnum(l[j]) && !hascur(l[j]) && indent(l[j]) == lc) j++
+        else break
+      }
+      return j - 1
+    }
+    # addrun(a, b): the options of the rows a..b of such a run; a wrapped row joins its label with one blank
+    function addrun(a, b,   i, cn, cur) {
+      cn = 0
+      for (i = a; i <= b; i++) {
+        if (optnum(l[i])) { if (cn) addopt(cn, cur); cn = optnum(l[i]); cur = optlabel(l[i]) }
+        else cur = cur " " ltrim(l[i])
+      }
+      if (cn) addopt(cn, cur)
+    }
+    function permission(   i, q, e, s, a, ft, mr, nr, r1, r2, amb) {
       reset(); q = 0; e = 0
-      for (i = 1; i < N; i++) {
+      for (i = 1; i < N2; i++) {
         if (l[i] !~ /(Do you want|Would you like)/ || optnum(l[i+1]) != 1) continue
-        j = i + 1; n = 1
-        while (j <= N && optnum(l[j]) == n) { j++; n++ }
-        q = i; e = j - 1
+        q = i; e = runend(i + 1)
       }
       if (!q) return 0
-      # only the footer may follow the options, then, only after the footer, at most one teammate status divider as the last row
-      dv = 0; ft = 0
-      for (i = e + 1; i <= N; i++) {
-        if (dv) return 0
+      # only these may follow the options: one `↑ N more lines` row (the prompt is taller than the pane: its top is off
+      # screen) and the footer. A teammate status divider or a task list (dropped in END) counts only after a footer.
+      ft = 0; mr = 0
+      for (i = e + 1; i <= N2; i++) {
+        if (!ft && !mr && l[i] ~ /^[ \t]*↑ [0-9]+ more lines$/) { mr = i; continue }
         if (l[i] ~ /^[ \t]*Esc to cancel/) { ft = 1; continue }
-        if (ft && isdiv(l[i]) && l[i] ~ / @[A-Za-z0-9_.-]+ ─$/) { dv = 1; continue }
         return 0
       }
-      s = q
-      for (i = q; i >= 1; i--) if (isdiv(l[i])) { s = i; break }
-      # ambiguous when the preview could fake its own frame: a solid divider or ╌ rule at column 1 above the chosen divider,
-      # not exactly two ╌ rules between the divider and the question, or a non-indented row between the two rules
-      r1 = 0; r2 = 0; nr = 0
-      for (i = s + 1; i < q; i++) if (isrule(l[i])) { nr++; if (!r1) r1 = i; else if (!r2) r2 = i }
-      amb = (nr != 2)
-      for (i = r1 + 1; r1 && r2 && i < r2; i++) if (l[i] ~ /^[^ \t]/) amb = 1
-      for (i = 1; i < s; i++) if (isdiv(l[i]) || isrule(l[i])) amb = 1
-      for (i = q + 1; i <= e; i++) addopt(optnum(l[i]), optlabel(l[i]))
-      return emit(amb ? "unknown" : "permission", ltrim(l[q]), (s < q ? s + 1 : q), e, amb)
+      if ((TDIV || TLIST) && !ft) return 0
+      if (mr) {
+        # taller than the pane: every row above the question belongs to the prompt, so `lines` start at the first screen row.
+        # Ambiguous when a row there is not indented (a solid divider would be a frame top that cannot be on screen), or
+        # more than two ╌ rules show.
+        a = 1; nr = 0; amb = 0
+        for (i = 1; i < q; i++) { if (isrule(l[i])) nr++; else if (l[i] ~ /^[^ \t]/) amb = 1 }
+        if (nr > 2) amb = 1
+      } else {
+        s = q
+        for (i = q; i >= 1; i--) if (isdiv(l[i])) { s = i; break }
+        # ambiguous when the preview could fake its own frame: a solid divider or ╌ rule at column 1 above the chosen divider,
+        # not exactly two ╌ rules between the divider and the question, or a non-indented row between the two rules
+        r1 = 0; r2 = 0; nr = 0
+        for (i = s + 1; i < q; i++) if (isrule(l[i])) { nr++; if (!r1) r1 = i; else if (!r2) r2 = i }
+        amb = (nr != 2)
+        for (i = r1 + 1; r1 && r2 && i < r2; i++) if (l[i] ~ /^[^ \t]/) amb = 1
+        for (i = 1; i < s; i++) if (isdiv(l[i]) || isrule(l[i])) amb = 1
+        a = (s < q ? s + 1 : q)
+      }
+      addrun(q + 1, e)
+      return emit(amb ? "unknown" : "permission", ltrim(l[q]), a, (mr ? mr : e), amb)
     }
 
     # question: AskUserQuestion (dialogs/question-*.txt). From the bottom: the footer, the last numbered row (Chat about this),
@@ -175,7 +206,7 @@ _dlg_parse() {
     # generic (a screen of no captured kind): the last contiguous run 1. 2. … of at least two rows with the cursor on exactly
     # one of them, a text row right above it (the question; a rule there means typed text in the input box), and no ❯ row
     # after it (the input box of a screen whose list is only text). Every row is permanent: nothing is guessed about it.
-    function generic(   i, j, n, o1, e, nc, qt, s) {
+    function generic(   i, j, n, o1, e, nc, qt, s, b) {
       reset(); o1 = 0
       for (i = 1; i <= N2; i++) if (optnum(l[i]) == 1) o1 = i
       if (o1 < 2) return 0
@@ -190,14 +221,27 @@ _dlg_parse() {
       if (index(qt, "─") == 1 || index(qt, "╌") == 1 || index(qt, "❯") == 1 || index(qt, "│") == 1 || index(qt, "╰") == 1) return 0
       s = 0; for (i = o1 - 2; i >= 1; i--) if (isdiv(ltrim(l[i]))) { s = i; break }
       for (i = o1; i <= e; i++) addopt(optnum(l[i]), optlabel(l[i]))
-      return emit("unknown", qt, (s ? s + 1 : o1 - 1), N2, 1)
+      # `lines` end before the key-hint footer when one shows (a row under it, a status line or a timer, is not the dialog);
+      # without one they run to the last row
+      b = N2; for (i = e + 1; i <= N2; i++) if (l[i] ~ /(Esc to |Enter to )/) { b = i - 1; break }
+      return emit("unknown", qt, (s ? s + 1 : o1 - 1), b, 1)
+    }
+    # tasklist(): when the last rows of the screen are a task list (a `N/M tasks done` row, then only rows indented by two
+    # or more), the row before it; else N2. A session with tasks draws the list under the dialog footer
+    # (approve/lead-tasklist-more-lines.txt); above an input box it is not the last rows and stays.
+    function tasklist(   i, h) {
+      h = 0; for (i = N2; i >= 1; i--) if (l[i] ~ /^ +[0-9]+\/[0-9]+ tasks done/) { h = i; break }
+      if (!h) return N2
+      for (i = h + 1; i <= N2; i++) if (l[i] !~ /^  +[^ \t]/ || hascur(l[i]) || isdiv(ltrim(l[i]))) return N2
+      return h - 1
     }
 
     BEGIN { np = split(permlist, perm, "|"); for (k = 1; k <= np; k++) perm[k] = tolower(perm[k]) }
     { l[NR] = $0 }
     END {
-      N = NR; N2 = N
-      if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / @[A-Za-z0-9_.-]+ ─$/) N2--   # a teammate status divider as the last row
+      N = NR; N2 = N; TDIV = 0; TLIST = 0
+      if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / @[A-Za-z0-9_.-]+ ─$/) { N2--; TDIV = 1 }   # a teammate status divider as the last row
+      i = tasklist(); if (i < N2) { N2 = i; TLIST = 1 }                                   # a task list as the last rows
       if (permission() || question() || plan() || trust() || resume()) exit
       generic()
     }'

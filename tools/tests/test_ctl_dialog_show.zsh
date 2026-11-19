@@ -61,6 +61,33 @@ replay p-tdn $S/td-none.txt; dl p-tdn show
 check "teammate divider: same output with and without it"  test "$out" = "$td" -a -n "$td"
 check "teammate divider: not in lines"         test "$(print -r -- "$td" | grep -a -c 'gate-tap ─')" = 0 -a -n "$td"
 
+# --- a prompt taller than the pane, in a session with a task list (approve/lead-tasklist-more-lines.txt, a real capture):
+# the top of the dialog is off screen, option 2 wraps onto a second row, a `↑ N more lines` row sits between the options
+# and the footer, and the task list is drawn after the footer
+LT=$FXA/lead-tasklist-more-lines.txt
+replay p-lt $LT; dl p-lt show; lt="$out"
+# mutation: stop accepting the `↑ N more lines` row before the footer → kind unknown
+# mutation: stop dropping the task list under the footer → kind unknown
+check "tall prompt: permission, question, exit 0"  test "$(jget 'd["kind"] + "|" + d["question"]')" = "permission|Do you want to proceed?" -a $rc -eq 0
+# mutation: stop joining the wrapped row of an option to its label → kind unknown (the run ends at row 2)
+check "tall prompt: four options, the wrapped label joined"  test "$(jget '"|".join("%d %s" % (o["n"], o["label"]) for o in d["options"])')" = "1 Yes|2 Yes, and don't ask again for touch made-1.txt, touch made-2.txt, touch made-3.txt, touch made-4.txt, and touch made-5.txt commands in /tmp/scratch|3 Yes, and switch to auto mode · auto mode handles these prompts for you|4 No"
+check "tall prompt: rows 2 and 3 permanent, 1 and 4 not"  test "$(jget '[o["permanent"] for o in d["options"]]')" = "[False, True, True, False]"
+# mutation: emit the permission `lines` through the screen bottom → the task list rows are in `lines`
+# (the fixture fills all 50 pane rows, so the newline that ends the replay's `cat` scrolls row 1 off: the pane shows rows 2-50)
+check "tall prompt: lines are the screen from its first row to the more-lines row (fixture rows 2-43)"  test "$(lines_of)" = "$(rows $LT 2 43)"
+check "tall prompt: no task list row in lines"  test "$(lines_of | grep -a -c -E 'tasks done|Alpha|Delta')" = 0 -a -n "$lt"
+sed -e 's|0/4 tasks done · 1 in progress|1/4 tasks done · 1 in progress|' -e 's/◼ Alpha/✔ Alpha/' -e 's/◻ Beta/◼ Beta/' $LT > $S/lt-tasks2.txt
+check "lt-tasks2 variant changed three rows"   test "$(diff $LT $S/lt-tasks2.txt | grep -a -c '^>')" = 3
+replay p-lt2 $S/lt-tasks2.txt; dl p-lt2 show
+# mutation: emit the permission `lines` through the screen bottom → the two outputs differ
+check "tall prompt: the task list changing changes nothing"  test "$out" = "$lt" -a -n "$lt"
+# the same screen with an input box under the task list is not a live prompt: something else is drawn after it
+{ cat $LT; grep -a -m1 '^──────────' $FXA/bash-git.txt; print -r -- '❯ '; grep -a -m1 '^──────────' $FXA/bash-git.txt } > $S/lt-stale.txt
+check "lt-stale variant gained three rows"     test "$(( $(wc -l < $S/lt-stale.txt) - $(wc -l < $LT) ))" -eq 3
+replay n-lts $S/lt-stale.txt; dl n-lts show
+# mutation: drop the task list wherever it is, not only as the last rows of the screen → kind permission, exit 0
+check "prompt text above an input box: none"   test $rc -eq 1 -a "$err" = "dialog: none in n-lts" -a -z "$out"
+
 # --- no dialog: exit 1, the exact message, empty stdout
 for n in no-prompt after-yes; do
   replay n-$n $FXA/$n.txt; dl n-$n show
@@ -98,6 +125,16 @@ check "gen variant differs from plan.txt"      eval '! cmp -s $FXD/plan.txt $S/g
 replay g-gen $S/gen.txt; dl g-gen show
 check "generic: unknown, question, exit 0"     test "$(jget 'd["kind"] + "|" + d["question"]')" = "unknown|Claude has written up a plan and is ready to execute. Would you like to proceed?" -a $rc -eq 0
 check "generic: the numbered run, every row permanent"  test "$(jget '[(o["n"], o["label"], o["permanent"]) for o in d["options"]]')" = "[(1, 'Yes, and use auto mode', True), (2, 'Yes, manually approve edits', True), (3, 'Tell Claude what to change', True)]"
+# an unknown dialog with a key-hint footer: `lines` end at the footer, so a row drawn under it (a status line, a timer)
+# does not change them (variants of plan.txt: a footer no captured kind has, then the same with a row under it)
+sed 's/ctrl+g to edit in Vim.*$/Enter to pick · Esc to cancel/' $FXD/plan.txt > $S/gen-foot.txt
+check "gen-foot variant has the new footer"    test "$(grep -a -c 'Enter to pick · Esc to cancel$' $S/gen-foot.txt)" = 1
+{ cat $S/gen-foot.txt; print -r -- '  ✻ Working… (12s)' } > $S/gen-foot-status.txt
+replay g-ft $S/gen-foot.txt; dl g-ft show; gft="$out"
+check "generic with a footer: unknown, lines stop before the footer"  test "$(jget 'd["kind"]')|$(lines_of | grep -a -c 'Esc to cancel')|$(lines_of | tail -1)" = "unknown|0|$(rows $FXD/plan.txt 48 48)"
+replay g-fts $S/gen-foot-status.txt; dl g-fts show
+# mutation: the generic parse emits `lines` through the screen bottom → the status row is in `lines` and the outputs differ
+check "generic with a footer: a row under it changes nothing"  test "$out" = "$gft" -a -n "$gft"
 sed 's/❯ 1\. Yes, and use/  1. Yes, and use/' $S/gen.txt > $S/gen-nocur.txt
 replay g-nc $S/gen-nocur.txt; dl g-nc show
 # mutation: drop the "exactly one cursor row" test of the generic parse → kind unknown, exit 0
