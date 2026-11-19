@@ -70,6 +70,15 @@ mkdir -p "$TT_DIR/nogit"; run_hook "$BRIEF" s-nogit "$TT_DIR/nogit"
 check "cwd not a git repo: silent"                         silent
 run_hook "$BRIEF" '../x'
 check "session_id ../x: silent, no file written"           zsh -c '[[ $1 == 0 && -z "$2" ]] && [[ ! -e "$3/context-recall/../x" && ! -e "$3/x" ]]' _ $rc "$out" "$TC_STATE"
+# the fixture brief names six paths; one archive entry per path, each must be injected (the real extraction, via the hook)
+python3 - "$f" <<'PY'
+import sys
+paths = ["claude/plugin/scripts/context-inject.sh", "board/discord_controls.py", "board/metrics.py", "claude/plugin/hooks/hooks.json", "claude/overseer-settings.json", "board/usage.py"]
+L = ["# tt: archived agent context\n", "\n", "## Map\n"] + [f"- note for {p} (files: {p}) · 2026-10-{i + 1:02d} · archived 2026-11-18\n" for i, p in enumerate(paths)] + ["\n", "## How to run\n", "\n", "## Gotchas\n", "\n", "## Decisions\n"]
+open(sys.argv[1], "w").write("".join(L))
+PY
+run_hook "$BRIEF" s-six
+check "fixture brief yields the six named paths: one entry per path injected" zsh -c 'for p in claude/plugin/scripts/context-inject.sh board/discord_controls.py board/metrics.py claude/plugin/hooks/hooks.json claude/overseer-settings.json board/usage.py; do print -r -- "$1" | grep -qF "note for $p " || { print -u2 "missing $p"; exit 1; }; done' _ "$(ctx)"
 # the cap: 6 KB of matching entries, distinct dates
 python3 - "$f" <<'PY'
 import sys
