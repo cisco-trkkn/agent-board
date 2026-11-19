@@ -20,6 +20,7 @@ approve_cmd() {
     block="$(_dlg_screen "$pane" | _dlg_parse | _dlg_approve_view)"
     [[ -n "$block" ]] || { print -u2 "approve: no permission prompt in $win"; return 1 }
     if print -r -- "$block" | grep -aq '^X:ambiguous$'; then print -u2 "approve: ambiguous prompt in $win"; return 1; fi
+    print -r -- "$block" | grep -aq '^U:tall$' && { print -u2 "approve: no expect lines in $win"; return 1; }
     got="$(print -r -- "$block" | grep -a '^P:')"
     [[ -n "$got" ]] || { print -u2 "approve: no expect lines in $win"; return 1 }
     print -r -- "$block" | grep -a '^T:'
@@ -42,6 +43,7 @@ approve_cmd() {
   # the preview's P: lines must equal the --expect lines (trimmed, empty ones dropped), same count and order; an ambiguous prompt has no P: lines, so it never matches
   local want_lines
   got="$(print -r -- "$block" | grep -a '^P:' | sed -e 's/^P://')"
+  print -r -- "$block" | grep -aq '^U:tall$' && { print -u2 "approve: no expect lines in $win"; return 1; }   # taller than the pane: part of the command is off screen
   want_lines="$(print -r -- "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$')"
   if [[ "$got" != "$want_lines" || -z "$got" ]]; then print -u2 "approve: the prompt in $win changed"; return 1; fi
   [[ "$act" == once ]] && want=Yes || want=No

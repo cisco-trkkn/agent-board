@@ -1,7 +1,7 @@
 # dialog.zsh — sourced by tmux-ctl for `tmux-ctl dialog <win> show` (spec 2026-11-19-remote-discord-only §1).
 # Reads the Claude Code dialog showing in a window's main pane, or in a pane given by id (%<digits>, anywhere on the server),
 # from the pane text alone, and prints it as one JSON object. Read-only: no key is ever sent here.
-# Built from approve.zsh (its screen read, its option-run rule, its ambiguity rules); approve.zsh itself is unchanged.
+# Built from approve.zsh (its screen read, its option-run rule, its ambiguity rules); approve.zsh now sources this file and reads through it (_dlg_approve_view).
 # Uses tmux-ctl's t, use_win, exists, target, die.
 #
 # Kinds are recognised only from real captured screens (tools/tests/fixtures/approve/*.txt, tools/tests/fixtures/dialogs/*.txt):
@@ -56,7 +56,7 @@ _dlg_parse() {
     }
     # emit: the tagged block of rows a..b; all = 1 flags every row permanent (an unknown dialog)
     function emit(kind, qt, a, b, all,   i, x) {
-      print "K:" kind; if (PAMB) print "A:ambiguous"; print "Q:" qt; print "M:" (multi ? 1 : 0); print "W:" (other ? 1 : 0)
+      print "K:" kind; if (PAMB) print "A:ambiguous"; if (PTALL) print "U:tall"; print "Q:" qt; print "M:" (multi ? 1 : 0); print "W:" (other ? 1 : 0)
       for (i = 1; i <= no; i++) print "O:" on[i] ":" ((all || op[i]) ? 1 : 0) ":" ol[i]
       for (i = a; i <= b; i++) {
         x = l[i]
@@ -68,7 +68,7 @@ _dlg_parse() {
       return 1
     }
 
-    # permission: approve.zsh _ap_prompt. The options are only the contiguous run 1. 2. … right after the last
+    # permission (the rule approve.zsh began with). The options are only the contiguous run 1. 2. … right after the last
     # "Do you want…"/"Would you like…" line, so option-shaped text inside the command preview is never one.
     # A long option label wraps onto a row indented to the label column (approve/lead-tasklist-more-lines.txt, option 2).
     function labcol(x,   t) { t = nocur(x); match(t, /^[ \t]*[0-9]+\.[ \t]+/); return RLENGTH }
@@ -127,7 +127,7 @@ _dlg_parse() {
         a = (s < q ? s + 1 : q)
       }
       addrun(q + 1, e)
-      PAMB = amb
+      PAMB = amb; PTALL = (mr ? 1 : 0)
       return emit(amb ? "unknown" : "permission", ltrim(l[q]), a, (mr ? mr : e), amb)
     }
 
@@ -240,7 +240,7 @@ _dlg_parse() {
     BEGIN { np = split(permlist, perm, "|"); for (k = 1; k <= np; k++) perm[k] = tolower(perm[k]) }
     { l[NR] = $0 }
     END {
-      N = NR; N2 = N; TDIV = 0; TLIST = 0; PAMB = 0
+      N = NR; N2 = N; TDIV = 0; TLIST = 0; PAMB = 0; PTALL = 0
       if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / @[A-Za-z0-9_.-]+ ─$/) { N2--; TDIV = 1 }   # a teammate status divider as the last row
       i = tasklist(); if (i < N2) { N2 = i; TLIST = 1 }                                   # a task list as the last rows
       if (permission() || question() || plan() || trust() || resume()) exit
@@ -298,6 +298,7 @@ _dlg_approve_view() {
     { tag = substr($0, 1, 2); v = substr($0, 3)
       if (tag == "K:") kind = v
       else if (tag == "A:") amb = 1
+      else if (tag == "U:") tall = 1
       else if (tag == "O:") { n = v; sub(/:.*/, "", n); v = substr(v, length(n) + 2); sub(/^[01]:/, "", v); o[++no] = n ":" v }
       else if (tag == "L:") l[++nl] = v }
     END {
@@ -306,7 +307,8 @@ _dlg_approve_view() {
       r1 = 0; r2 = 0
       for (i = 1; i <= nl; i++) if (isrule(l[i])) { if (!r1) r1 = i; else if (!r2) r2 = i }
       print "T:" trim(l[1])
-      if (r1 && r2) {
+      if (tall) print "U:tall"   # taller than the pane: the top of the command is off screen, so no row of it is a P: line
+      if (r1 && r2 && !tall) {
         if (l[1] !~ /^[ \t]*Bash command/) { for (i = 2; i < r1; i++) if (trim(l[i]) != "") print "P:" trim(l[i]) }
         else for (i = r1 + 1; i < r2; i++) if (trim(l[i]) != "") print "P:" trim(l[i])
       }
