@@ -45,3 +45,33 @@ ls = got.get("lines")
 if not (isinstance(ls, list) and ls and all(isinstance(x, str) and x == x.rstrip() and x for x in ls)): bad.append("lines")
 for k in bad: print("  differs:", k, "got", json.dumps(got.get(k), ensure_ascii=False), "want", json.dumps(exp.get(k), ensure_ascii=False), file=sys.stderr)
 sys.exit(1 if bad else 0)' "$1" }
+
+# --- the raw-byte pane of the press tests: records EVERY byte that arrives (a digit, an arrow, Enter, typed text), not one key.
+# mkpanek <win> <fixture>: writes $S/pane-<win>.zsh (cat the fixture, signal ready, record bytes until $S/stop-<win> exists, print
+# GOT:<lowercase hex of all bytes>, or GOT:NONE for nothing). The recorder drains one more read after the stop file appears.
+cat > $S/rec.py <<'PY'
+import os, select, sys, termios, tty
+stop = sys.argv[1]
+old = termios.tcgetattr(0)
+tty.setraw(0)
+data = b""
+def rd():
+    global data
+    if select.select([0], [], [], 0.05)[0]:
+        data += os.read(0, 4096)
+while not os.path.exists(stop):
+    rd()
+rd()
+termios.tcsetattr(0, termios.TCSADRAIN, old)
+print("GOT:" + (data.hex() if data else "NONE"), flush=True)
+PY
+mkpanek() {
+  rm -f $S/ready-$1 $S/stop-$1
+  print -rl -- "cat ${(q)2}" "touch $S/ready-$1" "python3 -I $S/rec.py $S/stop-$1" 'sleep 600' > $S/pane-$1.zsh
+}
+# replayk <win> <file>: a window showing the fixture and recording every byte sent to it; returns once it is recording
+replayk() { mkpanek $1 $2; tt new-window -d -t '=tt:' -n "$1" -c "$TT_DIR" "zsh $S/pane-$1.zsh"; fwait $S/ready-$1; sleep 0.2 }
+# gotk <win>: GOT:<hex of every byte received> or GOT:NONE
+gotk() { touch $S/stop-$1; local n=50 g; while (( n-- > 0 )); do g="$(tt capture-pane -p -J -t "=tt:$1" | grep -a -o 'GOT:[0-9a-fNOE]*' | tail -1)"; [[ -n "$g" ]] && { print -r -- "$g"; return }; sleep 0.1; done; print -r -- TIMEOUT }
+# pshow <win> <fixture>: replayk, then E = the `lines` of `show` on it joined by newlines
+pshow() { replayk $1 $2; dl $1 show; E="$(jget '"\n".join(d["lines"])')" }

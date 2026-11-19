@@ -285,10 +285,113 @@ _dlg_pane() {
   fi
 }
 
+# _dlg_read <pane>: sets BLOCK to the parsed screen (empty when no dialog shows) and LINES to its `lines` joined by newlines.
+_dlg_read() {
+  BLOCK="$(_dlg_screen "$1" | _dlg_parse)"
+  LINES_="$(print -r -- "$BLOCK" | grep -a '^L:' | sed -e 's/^L://')"
+}
+
+# _dlg_press_keys <pane> <kind> <multi> <ncheck> <cur> <opts…>: sends the keys of tools/tests/fixtures/dialogs/README.md `## Key probes`.
+#   opts = option numbers (several only on a multi-select). ncheck = the checkbox rows of a multi-select (its options but the
+#   last, `Chat about this`); cur = the row under the cursor in the dialog just read (1 when none is marked).
+_dlg_press_keys() {
+  local pane="$1" kind="$2" multi="$3" ncheck="$4" cur="$5" n i; shift 5
+  if [[ "$multi" == 1 ]]; then
+    for n in "$@"; do t send-keys -t "$pane" -l -- "$n"; done                      # a digit only toggles; the cursor stays
+    for (( i = 0; i < ncheck - cur + 1; i++ )); do t send-keys -t "$pane" Down; done   # onto `Submit`
+    t send-keys -t "$pane" Enter                                                    # the review screen is a new dialog: never pressed here
+    return
+  fi
+  n="$1"
+  case "$kind" in
+    trust|resume|login)   # rows without digits: the cursor starts on row 1
+      for (( i = 1; i < n; i++ )); do t send-keys -t "$pane" Down; done; t send-keys -t "$pane" Enter ;;
+    *)
+      t send-keys -t "$pane" -l -- "$n"
+      [[ "$PLAN" == 1 ]] && t send-keys -t "$pane" Enter ;;
+  esac
+}
+
+# dialog_press <win> <args…>: see the usage line. Reads the dialog twice (byte-identical `lines` both times and equal to
+# --expect), checks copy mode after each read, then sends the keys; the label of each option comes from that same read.
+_dlg_press() {
+  local win="$1" pane expect="" have_expect=0 text="" have_text=0 opts=() u="usage: tmux-ctl dialog <win> press --expect <lines> (--option <n>... | --text <text>)"
+  local first kind multi other ncheck cur ol i line labels n found other_n PLAN
+  shift
+  while (( $# )); do
+    case "$1" in
+      --expect) (( $# >= 2 )) || die "$u"; expect="$2"; have_expect=1; shift 2 ;;
+      --option) (( $# >= 2 )) || die "$u"; [[ "$2" == <-> && "$2" != 0* ]] || die "--option needs a number ($u)"; opts+=("$2"); shift 2 ;;
+      --text)   (( $# >= 2 )) || die "$u"; text="$2"; have_text=1; shift 2 ;;
+      *) die "$u" ;;
+    esac
+  done
+  (( have_expect )) || die "--expect <lines> is required: the dialog's lines from show, newline-joined ($u)"
+  if (( ${#opts} > 0 && have_text )) || (( ${#opts} == 0 && ! have_text )); then die "give --option <n> (repeat it on a multi-select) or --text <text>, not both and not neither ($u)"; fi
+  [[ "$have_text" == 1 && -z "$text" ]] && die "--text needs a non-empty text ($u)"
+  _dlg_pane "$win"; pane="$REPLY"
+  _dlg_read "$pane"
+  [[ -n "$BLOCK" ]] || { print -u2 "dialog: none in $win"; return 1 }
+  first="$BLOCK"
+  [[ "$LINES_" == "$expect" ]] || { print -u2 "dialog: the dialog in $win changed"; return 1 }
+  # what the keys depend on, all from this read
+  kind="$(print -r -- "$first" | sed -n 's/^K://p')"
+  multi="$(print -r -- "$first" | sed -n 's/^M://p')"
+  other="$(print -r -- "$first" | sed -n 's/^W://p')"
+  ol=("${(@f)$(print -r -- "$first" | sed -n 's/^O://p')}")   # n:perm:label
+  ncheck=$(( ${#ol} - 1 ))
+  cur=1; for line in "${(@f)LINES_}"; do [[ "$line" =~ '^[[:space:]]*❯[[:space:]]+([0-9]+)\.' ]] && { cur="${match[1]}"; break }; done
+  # the plan-approval dialog is the one whose free-text row is "Tell Claude what to change": a digit only moves its cursor, so Enter follows
+  PLAN=0; [[ "$first" == *$'\n'"O:"<->":"[01]":Tell Claude what to change"* ]] && PLAN=1
+  # option / text validation (usage errors, nothing sent): numbers of the dialog's options only
+  labels=""
+  if (( have_text )); then
+    [[ "$other" == 1 ]] || die "this dialog has no free-text row (other: false); --text does not apply"
+    other_n=0
+    for line in "${ol[@]}"; do
+      n="${line%%:*}"; i="${line#*:*:}"
+      [[ "$i" == "Type something"(.|) || "$i" == "Tell Claude what to change" ]] && { other_n="$n"; break }
+    done
+    (( other_n )) || die "no free-text row found"
+    labels="$text"
+  else
+    if (( ${#opts} > 1 )) && [[ "$multi" != 1 ]]; then die "--option repeated: only a multi-select takes several"; fi
+    for n in "${opts[@]}"; do
+      found=0
+      for line in "${ol[@]}"; do
+        [[ "${line%%:*}" == "$n" ]] && { found=1; labels="${labels:+$labels, }${line#*:*:}"; break }
+      done
+      (( found )) || die "no option $n in this dialog"
+    done
+    # a multi-select's Chat-about-this row is not a checkbox
+    if [[ "$multi" == 1 ]]; then for n in "${opts[@]}"; do (( n <= ncheck )) || die "option $n is not a checkbox of this multi-select"; done; fi
+  fi
+  [[ -n "$TC_DIALOG_BEFORE_SEND" ]] && eval "$TC_DIALOG_BEFORE_SEND" >/dev/null 2>&1
+[[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  _dlg_read "$pane"
+  [[ "$BLOCK" == "$first" && "$LINES_" == "$expect" ]] || { print -u2 "dialog: the dialog in $win changed"; return 1 }
+[[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
+  if (( have_text )); then
+    if [[ "$multi" == 1 ]]; then
+      for (( i = cur; i < other_n; i++ )); do t send-keys -t "$pane" Down; done
+      t send-keys -t "$pane" -l -- "$text"
+      for (( i = other_n; i <= ncheck; i++ )); do t send-keys -t "$pane" Down; done   # Other row onto Submit
+      t send-keys -t "$pane" Enter
+    else
+      t send-keys -t "$pane" -l -- "$other_n"; t send-keys -t "$pane" -l -- "$text"; t send-keys -t "$pane" Enter
+    fi
+  else
+    _dlg_press_keys "$pane" "$kind" "$multi" "$ncheck" "$cur" "${opts[@]}"
+  fi
+  print -r -- "dialog: $win: chose \"$labels\""
+}
+
 dialog_cmd() {
-  local win="$1" act="$2" pane block u="usage: tmux-ctl dialog <win> show"
+  local win="$1" act="$2" pane block u="usage: tmux-ctl dialog <win> show|press"
+  [[ -n "$win" ]] || die "$u"
+  if [[ "$act" == press ]]; then shift 2; _dlg_press "$win" "$@"; return $?; fi
   shift 2 2>/dev/null
-  [[ -n "$win" && "$act" == show && $# -eq 0 ]] || die "$u"
+  [[ "$act" == show && $# -eq 0 ]] || die "$u"
   _dlg_pane "$win"; pane="$REPLY"
   [[ "$(t display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" == 1 ]] && { print -u2 "dialog: $win is in copy mode"; return 1 }
   block="$(_dlg_screen "$pane" | _dlg_parse)"
