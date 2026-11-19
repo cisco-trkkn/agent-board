@@ -1,11 +1,19 @@
 """ticker: pure line builders for the Discord status line."""
+import io
+import os
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
+import discord_feed  # noqa: E402
+import planview  # noqa: E402
 import ticker  # noqa: E402
+import usage  # noqa: E402
 
 NOW = 1_800_000_000.0
 SPEC = "2026-11-17-discord-ticker-design"
@@ -131,6 +139,47 @@ class OpsLine(unittest.TestCase):
         recs = [{"project": "p" * 300, "path": "/r/a"}]
         s = ticker.ops_line(recs, [live(30)], None, {}, NOW)
         self.assertLessEqual(len(s), 128)
+
+
+class MainTest(unittest.TestCase):
+    def run_main(self, argv, sessions=("a",)):
+        def fake_tmux(*args):
+            if args[0] == "display" and args[-1] == "#{session_path}":
+                name = args[3].strip("=:")
+                if name not in sessions:
+                    raise RuntimeError("no session")
+                return f"/r/{name}\n"
+            raise AssertionError(args)
+        conn = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as st, mock.patch.dict(os.environ, {"TC_STATE": st}), \
+                mock.patch.object(ticker, "_tmux", fake_tmux), \
+                mock.patch.object(usage, "connect", return_value=conn), \
+                mock.patch.object(usage, "db_path", return_value="x"), \
+                mock.patch.object(usage, "load_prices", return_value={}), \
+                mock.patch.object(usage, "thresholds", return_value=({"live_s": 1}, {})), \
+                mock.patch.object(usage, "tap_entries", return_value=[]), \
+                mock.patch.object(usage, "plan_limits", return_value=limits()), \
+                mock.patch.object(usage, "live_sessions", return_value=[live(sid="L1")]), \
+                mock.patch.object(usage, "spend_since", return_value=12.345), \
+                mock.patch.object(planview, "lead_entry", return_value=("L1", 1, 2)), \
+                mock.patch.object(planview, "raw_live_list", return_value=("session-L1", tasks())), \
+                mock.patch.object(discord_feed, "spec_floor", return_value=13):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                ticker.main(argv, now=NOW)
+            left = [str(p) for p in Path(st).rglob("*")]
+        return buf.getvalue().splitlines(), left
+
+    def test_prints_project_then_ops_and_writes_nothing(self):
+        out, left = self.run_main(["a"])
+        self.assertEqual(out, [f"project a: {FULL}",
+                               "ops: wk 33% ▲0.8× · 5h 25% · ctx max 23% a · $12.35 · 1 running"])
+        self.assertEqual(left, [])
+
+    def test_project_without_session_is_skipped(self):
+        out, _ = self.run_main(["a", "zz"])
+        self.assertEqual(out[1], "project zz: no session")
+        self.assertTrue(out[2].endswith("· 1 running"))
 
 
 if __name__ == "__main__":

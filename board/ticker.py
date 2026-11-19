@@ -121,3 +121,52 @@ def ops_line(records, live, limits, tasks_by_project, now, floors=None, lead_sid
     head = _head(w, f, pace, ctx, _warn(w, f, pace, c))
     total = f"${sum(spends):.2f}" if spends else "$—"
     return _cap(head + SEP + total + SEP + f"{running} running")
+
+
+def _tmux(*args):
+    """tmux stdout; raises on a missing session or tmux."""
+    import subprocess
+    return subprocess.run(["tmux", *args], capture_output=True, text=True, check=True, timeout=10).stdout
+
+
+def main(argv=None, now=None, home=None):
+    """Print each project's status line, then the ops line, from this Mac's live state. Reads only."""
+    import sys
+    import time
+    from pathlib import Path
+    import planview
+    argv = sys.argv[1:] if argv is None else argv
+    now = time.time() if now is None else now
+    home = Path(home or Path.home() / ".claude")
+    try:
+        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+    except Exception:   # noqa: BLE001 - no taps: the lines show "?"
+        limits = None
+    conn = usage.connect(usage.db_path())
+    try:
+        prices = usage.load_prices()
+        live = usage.live_sessions(conn, prices, usage.thresholds()[0], now)
+        records, tasks_by, floors, sids = [], {}, {}, {}
+        for name in argv:
+            try:
+                path = _tmux("display", "-p", "-t", f"={name}:", "#{session_path}").strip()
+            except Exception:   # noqa: BLE001
+                path = ""
+            if not path:
+                print(f"project {name}: no session")
+                continue
+            sid, pid, started = planview.lead_entry(name, home, _tmux)
+            tasks = planview.raw_live_list(home, sid, pid, started)[1]
+            rec = {"project": name, "path": path,
+                   "spend_today": usage.spend_since(conn, path, usage._midnight(now, 0), prices)}
+            floor = discord_feed.spec_floor(name)
+            records.append(rec)
+            tasks_by[name], floors[name], sids[name] = tasks, floor, sid
+            print(f"project {name}: " + project_line(rec, live, limits, tasks, now, floor=floor, lead_sid=sid))
+        print("ops: " + ops_line(records, live, limits, tasks_by, now, floors=floors, lead_sids=sids))
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()
