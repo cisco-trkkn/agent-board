@@ -49,7 +49,7 @@ check "no token: an inherited DISCORD_STATE_DIR is dropped" test "$(print -r -- 
 # the real state dir is never touched
 check "scratch state only: no _ops dir under the real home" test ! -e "$S/home/.local/state/agent-board/discord"
 # read-only rules
-check "settings: the only discord allows are reply and fetch_messages (no access, react, edit, download, Bash, write)" test "$(jq -cS '[.permissions.allow[] | select(test("discord|access|Bash|Write|Edit"))] | map(select(test("^Bash\\(tmux-ctl overview|^Bash\\(git (log|status|show) ") | not)) | sort' $TT_REPO/claude/overseer-settings.json)" = '["mcp__plugin_discord_discord__fetch_messages","mcp__plugin_discord_discord__reply"]'
+check "settings: the only discord allows are reply and fetch_messages (no access, react, edit, download, Bash, write)" test "$(jq -cS '[.permissions.allow[] | select(test("discord|access|Bash|Write|Edit"))] | map(select(test("^Bash\\(tmux-ctl (overview|discord ideas-(list|post)\\*)|^Bash\\(git (log|status|show) ") | not)) | sort' $TT_REPO/claude/overseer-settings.json)" = '["mcp__plugin_discord_discord__fetch_messages","mcp__plugin_discord_discord__reply"]'
 check "settings: enabledPlugins loads the discord plugin (the probe: it does not load under --setting-sources project,local otherwise)" test "$(jq -r '.enabledPlugins["discord@claude-plugins-official"]' $TT_REPO/claude/overseer-settings.json)" = true
 check "overseer.md: names the discord reply tool, keeps the no-authority line" test -n "$(grep -iE 'discord.*reply|reply.*discord' $TT_REPO/claude/overseer.md)" -a -n "$(grep 'no authority' $TT_REPO/claude/overseer.md)"
 # the launcher: enabledPlugins loads the plugin in every overseer, so a token-less one must reach the stub, never the stock server

@@ -43,5 +43,11 @@ run $C discord ideas-post
 check "ideas-post: no argument rc 2" test $rc -eq 2
 run $C discord ideas-post "$S/g1.json" --bogus
 check "ideas-post: bad flag rc 2" test $rc -eq 2
+# Task 4: the overseer may run exactly ideas-list and ideas-post; its deny list is the one before; overseer.md names the flow.
+OS="$TT_REPO/claude/overseer-settings.json"
+check "overseer settings: allows ideas-list and ideas-post" test "$(jq -r '[.permissions.allow[] | select(test("tmux-ctl discord"))] | sort | join("|")' $OS)" = 'Bash(tmux-ctl discord ideas-list*)|Bash(tmux-ctl discord ideas-post*)'
+check "overseer settings: deny list identical to a773c48" test "$(jq -cS .permissions.deny $OS)" = "$(git -C $TT_REPO show a773c48:claude/overseer-settings.json | jq -cS .permissions.deny)"
+check "overseer settings: no other allow changed" test "$(jq -cS '[.permissions.allow[] | select(test("tmux-ctl discord") | not)]' $OS)" = "$(git -C $TT_REPO show a773c48:claude/overseer-settings.json | jq -cS .permissions.allow)"
+check "overseer.md: /ideas section names list, post and stdin form" test "$(grep -c -e 'tmux-ctl discord ideas-list' -e 'ideas-post - <<< '"'" $TT_REPO/claude/overseer.md)" -ge 2
 check "nothing leaked outside the scratch state" test ! -e "$HOME/.local/state"
 tt_done

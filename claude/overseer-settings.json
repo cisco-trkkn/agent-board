@@ -6,6 +6,7 @@
       "Read", "Grep", "Glob",
       "mcp__plugin_discord_discord__reply", "mcp__plugin_discord_discord__fetch_messages",
       "Bash(tmux-ctl overview *)",
+      "Bash(tmux-ctl discord ideas-list*)", "Bash(tmux-ctl discord ideas-post*)",
       "Bash(git log *)", "Bash(git status *)", "Bash(git show *)"
     ],
     "deny": [

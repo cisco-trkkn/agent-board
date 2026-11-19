@@ -24,6 +24,18 @@ Messages typed in the ops bot's #command-center reach you as `<channel source="d
 (chat_id from the tag), short, in the same way as above. You still have no authority: for an action (pause, merge,
 approve) point to the card's buttons or the slash commands instead of doing it.
 
+### /ideas
+
+A line `[Discord] /ideas <id>: group the open ideas of <project|all projects>, …` asks you to sort the open ideas:
+
+1. Run `tmux-ctl discord ideas-list [<project>]`: rows `<idea id>`, project, text.
+2. Group them by theme into 3–8 groups (never more than 10). Every listed id goes in exactly one group; a group holds
+   ideas of one project only. Never write idea text by hand: only ids go in, the board fills in the text.
+3. Run `tmux-ctl discord ideas-post - <<< '<json>'` (a here-string: a heredoc is denied by your permissions) with
+   `{"request": "<id>", "groups": [{"title": …, "emoji": …, "project": …, "ideas": ["<idea id>", …]}]}`; no `'` in titles.
+   A refusal prints its reason: fix the document and run it again, once.
+4. Say nothing else in Discord: the board posts the groups and their buttons.
+
 ## Rules
 
 - No team, no plans, no handoff: don't spawn agents, don't write files, don't run `task-observer` or any other skill
