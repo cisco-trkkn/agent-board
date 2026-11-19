@@ -21,8 +21,9 @@ denies() { [[ $rc == 2 && -z "$out" && "$err" == "$1" ]]; }   # $(...) drops the
 silent() { [[ $rc == 0 && -z "$out" && -z "$err" ]]; }
 setmark() { mkdir -p "$TC_STATE/remote"; : > "$M"; }
 clr() { rm -f "$M"; }
-# transcript with the fixture plus one extra last user row (text)
-mk_tr() { python3 -c 'import json,sys; rows=[json.loads(l) for l in open(sys.argv[1])][:4]; rows.append({"type":"user","isSidechain":False,"uuid":"x","message":{"role":"user","content":sys.argv[3]}}); open(sys.argv[2],"w").write("".join(json.dumps(r)+"\n" for r in rows))' "$FIX" "$1" "$2"; }
+# mk_tr <out> <uuid>: the fixture rows up to and including <uuid>, so that row is the last one; mk_tr_extra <out> <json row> appends a row to the first 4
+mk_tr() { python3 -c 'import json,sys; rows=[]; [rows.append(json.loads(l)) for l in open(sys.argv[1])]; i=[r["uuid"] for r in rows].index(sys.argv[3]); open(sys.argv[2],"w").write("".join(json.dumps(r)+"\n" for r in rows[:i+1]))' "$FIX" "$1" "$2"; }
+mk_tr_extra() { python3 -c 'import json,sys; rows=[json.loads(l) for l in open(sys.argv[1])][:4]; rows.append(json.loads(sys.argv[3])); open(sys.argv[2],"w").write("".join(json.dumps(r)+"\n" for r in rows))' "$FIX" "$1" "$2"; }
 
 clr; export TC_ROLE=worker; run '{}'
 check "worker, no marker: teammate/worker text"          denies "$TM"
@@ -41,12 +42,18 @@ check "lead without marker: rc 0 silent"                  silent
 clr; run "{\"transcript_path\":\"$FIX\"}"
 check "lead, channel transcript: remote-lead text"        denies "$LEAD"
 check "  ... and the marker is now written"               test -f "$M"
-setmark; mk_tr "$tmp/typed.jsonl" "do it now"; run "{\"transcript_path\":\"$tmp/typed.jsonl\"}"
-check "lead, marker, last row typed: allowed"             silent
+setmark; mk_tr "$tmp/typed.jsonl" u1; run "{\"transcript_path\":\"$tmp/typed.jsonl\"}"
+check "lead, marker, last row origin human/typed: allowed"             silent
 check "  ... and the marker is removed"                   test ! -e "$M"
-setmark; mk_tr "$tmp/tm.jsonl" '<teammate-message teammate_id="x">r</teammate-message>'; run "{\"transcript_path\":\"$tmp/tm.jsonl\"}"
-check "lead, marker, last row teammate-message: remote text" denies "$LEAD"
+setmark; mk_tr "$tmp/tm.jsonl" u3b; run "{\"transcript_path\":\"$tmp/tm.jsonl\"}"
+# real shape: no origin, text "Another Claude session sent a message:\n<teammate-message" (17 of 17 such rows in the real lead transcript)
+# mutation: clear on any row that does not start with <teammate-message (the old rule) -> this and the next fail
+check "lead, marker, last row a real-shaped teammate message: remote text" denies "$LEAD"
 check "  ... marker kept"                                 test -f "$M"
+setmark; mk_tr "$tmp/tn.jsonl" u3c; run "{\"transcript_path\":\"$tmp/tn.jsonl\"}"
+check "lead, marker, last row task-notification origin: remote text, marker kept"  denies "$LEAD"
+setmark; mk_tr_extra "$tmp/plain.jsonl" '{"type":"user","isSidechain":false,"uuid":"x","message":{"role":"user","content":"no origin at all"}}'; run "{\"transcript_path\":\"$tmp/plain.jsonl\"}"
+check "lead, marker, last row with no origin (not positively typed): marker kept"  denies "$LEAD"
 setmark; run '{"transcript_path":"/nonexistent/t.jsonl"}'
 check "lead, marker, missing transcript: marker decides"  denies "$LEAD"
 unset AGENT_BOARD_LEAD

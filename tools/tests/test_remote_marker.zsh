@@ -26,6 +26,8 @@ run sess-1 "${DISC/UID/222}"
 check "allowlist of another channel dir counts (any access.json)"      test -f "$M"
 run sess-1 '<teammate-message teammate_id="x">report</teammate-message>'
 check "teammate-message after a marker keeps it"            test -f "$M"
+run sess-1 $'Another Claude session sent a message:\n<teammate-message teammate_id="x">r</teammate-message>'
+check "real-shaped teammate message (preamble before the tag) keeps it"  test -f "$M"   # mutation: startswith instead of contains -> fails
 run sess-1 '<task-notification>done</task-notification>'
 check "task-notification keeps it"                          test -f "$M"
 run sess-1 '<cross-session-message from="a">x</cross-session-message>'

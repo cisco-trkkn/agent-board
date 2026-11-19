@@ -11,18 +11,22 @@
 #
 # Transcript branch (lead decision; the active writer of the marker until remote-marker.sh is registered, lead ruling F13): for a lead the
 # guard reads payload.transcript_path and takes the last non-sidechain, non-meta-without-origin "user" row that is not a tool result.
-# origin {kind: channel, server: plugin:discord:discord} -> the lead is remote: write/touch the marker. A last row with no channel origin
-# whose text does not start with <teammate-message, <task-notification or <cross-session-message -> remove the marker. Unreadable
+# origin {kind: channel, server: plugin:discord:discord} -> the lead is remote: write/touch the marker. origin.kind "human" (a prompt
+# typed at the terminal; real rows: {"origin": {"kind": "human"}, "promptSource": "typed", "turnOrigin": "human"}) -> remove the marker.
+# Every other user row leaves it: teammate messages are rows with no origin whose text starts "Another Claude session sent a message:\n
+# <teammate-message" (17 of 17 in the real lead transcript 78659598), task notifications carry origin.kind "task-notification". Unreadable
 # transcript: change nothing, the marker file decides. (Deviation from spec §3's letter, F14: teammate/task/cross-session prompts keep
 # the marker.) Cost: the marker is only refreshed when a dialog is attempted.
 # Kill switch: REMOTE_ASK_GUARD=0. --scoped (the plugin registration) is accepted and changes nothing.
 # Test seam: REMOTE_GUARD_ARGS, when set (even empty), stands in for `ps -o args=` of the Claude process.
 #
-# Hook-environment probe (this task, inside a teammate, 2026-11-19):
-#   $ ps -o args= -p $PPID | cut -c1-90   -> …/versions/2.1.328 --agent-id c-t8@session-78659598 --agent-name c-t8 …
-#   $ env | cut -d= -f1 | grep -E 'CLAUDE_PID|TMUX_PANE|AGENT_BOARD_LEAD|TC_ROLE'   -> CLAUDE_PID, TMUX_PANE (no AGENT_BOARD_LEAD, no TC_ROLE)
-#   $ tmux display -p -t "$TMUX_PANE" '#{@tc_teammate}|#{@tc_agent}'                -> 1|
-# so CLAUDE_PID is present in a teammate; the guard reads it first and falls back to the parent pid.
+# Hook-process probe (2026-11-19): scratch `claude -p "run the bash command: echo hi" --settings <tmp>` whose PreToolUse(Bash) hook
+# ran `env | cut -d= -f1`, `ps -o args= -p $PPID` and `cat` of its stdin. In the hook process: CLAUDE_PID, CLAUDECODE and TMUX are set;
+# TMUX_PANE, AGENT_BOARD_LEAD and TC_ROLE are not (the probe unset CLAUDE_PID and TMUX_PANE in the parent, so CLAUDE_PID is set by claude
+# itself; TMUX_PANE absent only because it was unset). $PPID args: `claude -p run the bash command: echo hi --settings …`.
+# Payload keys: cwd, effort, hook_event_name, permission_mode, prompt_id, session_id, tool_input, tool_name, tool_use_id, transcript_path
+# (no agent_id: a top-level session). A teammate cannot be reproduced in a scratch session: teammate detection rests on the payload's
+# agent_id and the Claude argv `--agent-id` (seen with `ps` from a teammate's Bash tool: …/2.1.328 --agent-id c-t8@session-78659598 …) and @tc_teammate.
 [[ "$REMOTE_ASK_GUARD" == 0 ]] && { cat >/dev/null; exit 0; }
 input=$(cat) || exit 0
 HOOK_PAYLOAD="$input" exec python3 -I - <<'PY'
@@ -30,7 +34,6 @@ import json, os, re, subprocess, sys, time
 TM = "ask the lead with SendMessage; the user is not at your window"
 LEAD = "the user is remote: ask in Discord as a numbered list with the reply tool"
 PEER = "the user is remote: write the question as plain text and end your turn; it reaches Discord as a Needs you item"
-PREFIXES = ("<teammate-message", "<task-notification", "<cross-session-message")
 env = os.environ
 
 def deny(text):
@@ -83,14 +86,6 @@ def last_user_row(path):
         return r
     return None
 
-def row_text(r):
-    c = (r.get("message") or {}).get("content")
-    if isinstance(c, str):
-        return c
-    if isinstance(c, list):
-        return "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
-    return ""
-
 try:
     d = json.loads(env["HOOK_PAYLOAD"])
     if d.get("tool_name") != "AskUserQuestion":
@@ -118,7 +113,7 @@ try:
                     with open(marker, "a"):
                         pass
                     os.utime(marker, None)
-                elif not o.get("kind") == "channel" and not row_text(r).lstrip().startswith(PREFIXES):
+                elif o.get("kind") == "human":   # positive evidence of a typed prompt; every other row leaves the marker
                     try:
                         os.remove(marker)
                     except FileNotFoundError:
