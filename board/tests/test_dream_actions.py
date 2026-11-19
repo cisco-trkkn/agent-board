@@ -179,18 +179,56 @@ class RevertTest(Base):
         self.assertEqual(lk.call_args.kwargs.get("wait"), 3)
         self.assertEqual(self.files(), h)
 
-    def test_revert_during_model_step_fails_that_run(self):
+    def test_revert_during_model_step_is_busy(self):
         a = self.night()
         context.add("p", "Map", "night two fact " + "z" * 200 + " (files: board/gone-two.py)")
         real = dream.run_model
+        seen = []
         def mid(*args):
             r = real(*args)
-            self.assertEqual(A.revert("p", a), "reverted")
+            before = self.files()
+            seen.append((A.revert("p", a), A.file_proposals("p"), before == self.files()))
             return r
         with mock.patch.object(dream, "run_model", mid):
             rc, out = self.run_dream("--force")
-        self.assertEqual(rc, 1)
-        self.assertIn("files changed during the run", out)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(seen, [("busy", "busy", True)])
+        self.assertIsNone(self.dj()["reverted"])
+        self.assertEqual(self.dj()["failures"], 0)
+
+    def test_second_revert_tap_says_already_reverted_and_changes_nothing(self):
+        run = self.night()
+        self.assertEqual(A.revert("p", run), "reverted")
+        h = self.files()
+        self.assertEqual(A.revert("p", run), "already reverted")
+        self.assertEqual(self.files(), h)
+        self.assertEqual(self.dj()["reverted"], run)
+
+    def test_revert_of_previous_run_between_commit_and_finish_cannot_restore_it(self):
+        a = self.night()
+        context.add("p", "Map", "night two fact " + "z" * 200 + " (files: board/gone-two.py)")
+        real = dream._finish
+        seen = []
+        def late(*args, **kw):
+            seen.append(A.revert("p", a))
+            return real(*args, **kw)
+        with mock.patch.object(dream, "_finish", late):
+            rc, out = self.run_dream("--force")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(seen[0], ("busy", "stale: newer run " + self.dj()["run"]))
+        self.assertIsNone(self.dj()["reverted"])
+        self.assertIn("night two fact", self.core.read_text() + context.archive_path("p").read_text())
+
+    def test_finish_keeps_a_revert_that_landed_after_its_state_was_read(self):
+        a = self.night()
+        state = dict(P.load("p"))
+        self.assertEqual(A.revert("p", a), "reverted")
+        res = {"outcome": "failed", "failures": 0, "at": "x", "diff": None, "cost_usd": None, "tokens": None,
+               "duration_s": 0, "posted": False, "check": "x", "counts": None, "proposals": [], "contradictions": [],
+               "project": "p", "run": "x"}
+        with mock.patch.object(dream, "notify"), mock.patch.object(dream, "record_metrics"):
+            dream._finish(res, "p", state, str(self.repo), self.now, None, "20990101-0000")
+        self.assertEqual(self.dj()["reverted"], a)
 
 
 class FileTest(Base):

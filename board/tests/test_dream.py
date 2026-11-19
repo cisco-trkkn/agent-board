@@ -234,7 +234,39 @@ class SkipTest(DreamBase):
         self.assertEqual(self.dj()["root"], str(other.resolve()))
 
 
+class LaunchdLookupTest(DreamBase):
+    def test_live_root_found_without_TMUX_on_the_agent_board_socket(self):
+        """launchd has no $TMUX: the lookup must reach agent-board's own server (-L ${AGENT_BOARD_TMUX_SOCKET:-agent-board})."""
+        import pwd
+        mine = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local" / "bin" / "tmux"   # HOME is patched to a temp dir here
+        real = os.environ.get("TC_REAL_TMUX") or (str(mine) if mine.exists() else shutil.which("tmux"))
+        if not real:
+            self.skipTest("no tmux")
+        sock = f"dreamtest{os.getpid()}"
+        base = [real, "-L", sock, "-f", "/dev/null"]
+        r = subprocess.run(base + ["new-session", "-d", "-s", "p", "-c", str(self.repo)], capture_output=True, text=True)
+        if r.returncode != 0:
+            self.skipTest(f"no scratch tmux: {r.stderr.strip()}")
+        self.addCleanup(subprocess.run, base + ["kill-server"], capture_output=True)
+        for k in ("TMUX", "TMUX_PANE", "TMUX_DASH_TMUX_ARGS"):
+            os.environ.pop(k, None)
+        with mock.patch.dict(os.environ, {"TC_TMUX": real, "AGENT_BOARD_TMUX_SOCKET": sock}):
+            self.assertEqual(dream.live_session_root("p"), str(self.repo.resolve()))
+
+
 class ModelStepTest(DreamBase):
+    def test_model_stdout_and_stderr_saved(self):
+        self.run_dream()
+        out = self.rundir() / "out"
+        self.assertIn('"is_error": false', (out / "model.stdout").read_text())
+        self.assertTrue((out / "model.stderr").is_file())
+
+    def test_model_output_saved_when_the_model_fails(self):
+        rc, _ = self.run_dream(mode="exit1")
+        self.assertEqual(rc, 1)
+        self.assertTrue((self.rundir() / "out" / "model.stdout").is_file())
+        self.assertTrue((self.rundir() / "out" / "model.stderr").is_file())
+
     def test_argv_cwd_stdin_are_exact(self):
         self.run_dream()
         c = self.calls()[0]

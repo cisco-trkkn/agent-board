@@ -29,6 +29,7 @@ import dream_check  # noqa: E402
 import dream_discord  # noqa: E402
 import dream_paths as P  # noqa: E402
 import metrics  # noqa: E402
+import paneclass  # noqa: E402
 import relay  # noqa: E402
 import tc_env  # noqa: E402,F401
 import usage  # noqa: E402
@@ -56,17 +57,11 @@ def projects():
     return out
 
 
-def tmux_bin():
-    if os.environ.get("TC_TMUX"):
-        return os.environ["TC_TMUX"]
-    mine = Path.home() / ".local" / "bin" / "tmux"
-    return str(mine) if mine.exists() else "tmux"
-
-
 def live_session_root(project):
     """The repo of the live tmux session whose group or name is `project` (not a background one), else None."""
     try:
-        out = subprocess.run([tmux_bin(), "list-sessions", "-F", "#{session_name}\t#{session_group}\t#{session_path}\t#{@tc_bg}"],
+        # paneclass.tmux_cmd(): under launchd $TMUX is unset, so this resolves to agent-board's own server (-L agent-board)
+        out = subprocess.run(paneclass.tmux_cmd() + ["list-sessions", "-F", "#{session_name}\t#{session_group}\t#{session_path}\t#{@tc_bg}"],
                              capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -213,6 +208,17 @@ def _kill_group(proc):
                 pass
 
 
+def _save_model_output(run_dir, out, err):
+    """The model's stdout and stderr, kept in out/ so a night that failed (`model error`, `model exit N`) can be diagnosed."""
+    try:
+        o = Path(run_dir) / "out"
+        o.mkdir(parents=True, exist_ok=True)
+        (o / "model.stdout").write_text(out or "")
+        (o / "model.stderr").write_text(err or "")
+    except OSError:
+        pass
+
+
 def run_model(run_dir, project, now):
     """(failure text or None, info). G6: argv, cwd, scrubbed environment, the prompt on stdin."""
     argv = [os.environ.get("TC_DREAM_CLAUDE") or "claude", "-p", "--model", "sonnet", "--effort", "medium", "--restricted",
@@ -228,10 +234,11 @@ def run_model(run_dir, project, now):
     except OSError:
         return "model error", {}
     try:
-        out, _ = proc.communicate(prompt, timeout=TIMEOUT)
+        out, err = proc.communicate(prompt, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         return "model timeout", {}
+    _save_model_output(run_dir, out, err)
     if proc.returncode != 0:
         return f"model exit {proc.returncode}", {}
     res = None
@@ -462,19 +469,29 @@ def _finish(res, project, state, root, now, run_dir, run):
     if out:
         out.mkdir(parents=True, exist_ok=True)
     ok = res["outcome"] in ("ok", "unchanged")
-    d = dict(state)
-    d["root"] = root
-    if ok:
-        d.update({"last_run": res["at"], "sources_digest": digest(project, root), "failures": 0})
-        if res["outcome"] == "ok":   # `run`, `reverted` and `last_report` follow the last run that committed: an unchanged night keeps Revert possible
-            d.update({"last_report": str(out / "report.json"), "run": run, "reverted": None})
-    else:
-        n = state.get("failures")
-        d["failures"] = res["failures"] = (n if isinstance(n, int) else 0) + 1
-        d.setdefault("reverted", None)
-    if ok:
-        res["failures"] = 0
-    P.save(project, d)
+    sd = digest(project, root) if ok else None
+    try:
+        lock = context.locked(project, wait=30)
+        lock.__enter__()
+    except ValueError:
+        lock = None   # bookkeeping still runs; the merge below re-reads dream.json either way
+    try:
+        d = dict(P.load(project))   # fresh: only this run's own fields are merged, so a concurrent Revert is never overwritten
+        d["root"] = root
+        if ok:
+            d.update({"last_run": res["at"], "sources_digest": sd, "failures": 0})
+            if res["outcome"] == "ok":   # `run`, `reverted` and `last_report` follow the last run that committed: an unchanged night keeps Revert possible
+                d.update({"last_report": str(out / "report.json"), "run": run, "reverted": None})
+        else:
+            n = d.get("failures")
+            d["failures"] = res["failures"] = (n if isinstance(n, int) else 0) + 1
+            d.setdefault("reverted", None)
+        if ok:
+            res["failures"] = 0
+        P.save(project, d)
+    finally:
+        if lock:
+            lock.__exit__(None, None, None)
     try:
         if out and res["diff"] is not None:
             (out / "diff.txt").write_text(res["diff"])

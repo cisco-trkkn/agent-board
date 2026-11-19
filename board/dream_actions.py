@@ -4,6 +4,8 @@
 Both take the context lock for at most 3 s (`busy` when it stays held: the board's overview tick must not wait longer) and
 return the result text the Discord click audits and the CLI prints. Path helpers come from dream_paths, never dream.py.
 Nothing inside `context.locked` calls `context.add` (lockf is per process: a nested add would drop the lock)."""
+import contextlib
+import fcntl
 import glob
 import hashlib
 import json
@@ -29,7 +31,37 @@ def _atomic(path, text):
     os.replace(tmp, path)
 
 
+@contextlib.contextmanager
+def _idle(project):
+    """Yields True when no nightly run holds D/dream/<p>/run.lock, else False. The lock is held only for the check's duration."""
+    path = P.project_dir(project) / "run.lock"
+    if not path.is_file():
+        yield True
+        return
+    try:
+        fd = open(path, "a")
+    except OSError:
+        yield True
+        return
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True
+    finally:
+        fd.close()
+
+
 def revert(project, run):
+    with _idle(project) as idle:
+        if not idle:
+            return "busy"
+        return _revert(project, run)
+
+
+def _revert(project, run):
     try:
         lock = context.locked(project, wait=WAIT)
         lock.__enter__()
@@ -152,6 +184,13 @@ def _filed(project):
 
 
 def file_proposals(project, run=None):
+    with _idle(project) as idle:
+        if not idle:
+            return "busy"
+        return _file_proposals(project, run)
+
+
+def _file_proposals(project, run=None):
     import ideas
     try:
         lock = context.locked(project, wait=WAIT)
