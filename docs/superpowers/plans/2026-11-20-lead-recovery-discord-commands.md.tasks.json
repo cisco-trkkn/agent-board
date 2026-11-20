@@ -68,7 +68,7 @@
   {
    "id": 9,
    "subject": "LR Task 9: discord_ops handles /lead and /gauth events",
-   "status": "pending",
+   "status": "completed",
    "blockedBy": [
     6,
     7,
@@ -111,5 +111,5 @@
    "description": "**Goal:** The user runs the runbook's items on the phone after the merge.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:** none\n\n**Acceptance Criteria:**\n- [ ] `/lead status agent-board` answers privately with the lead's window, state and context %\n- [ ] `/lead restart` of an idle lead restarts it and `tmux-ctl discord status` shows the new lead holding the bot\n- [ ] `/tasks` lists a plan's tasks\n- [ ] One real `/gauth signal-hub-gcp` ends with `token ok`\n\n**Verify:** the runbook `docs/superpowers/e2e/2026-11-20-lead-recovery-runbook.md`, evidence captured in the task metadata\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"docs/superpowers/e2e/2026-11-20-lead-recovery-runbook.md\", \"acceptanceCriteria\": [\"/lead status answers privately\", \"/lead restart restarts and holds the bot\", \"/tasks lists tasks\", \"/gauth ends with token ok\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```"
   }
  ],
- "lastUpdated": "2026-11-20T15:42:14Z"
+ "lastUpdated": "2026-11-20T15:59:22Z"
 }
