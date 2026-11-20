@@ -65,8 +65,8 @@ check "doc restart: lead pane replaced" test "$(pid $lead)" != "$p0"
 check "doc restart: claude-next renamed claude" test "$(tt display -p -t $lead '#{window_name}')" = claude
 check "doc restart: orchestrator is the pane's own command" zsh -c 'print -r -- "$1" | grep -qF "$2"' x "$(tt display -p -t $lead '#{pane_start_command}')" "${STUB:gs|//|/|}/repo/bin/claude-orchestrator"
 check "doc restart: pane start command ends in a login shell" zsh -c 'print -r -- "$1" | grep -q "exec .*zsh.* -l"' x "$(tt display -p -t $lead '#{pane_start_command}')"
-# tmux names the zsh -c wrapper as the pane command for the whole run (R4's `; exec shell -l`): the lead is its child
-check "doc restart: the pane runs the orchestrator as a child process" test -n "$(pgrep -P "$(pid $lead)")"
+# job control (zsh -i -c): the stub is the tty's foreground job, so the pane reads as the stub, not as a shell
+check "doc restart: the pane is not read as a shell while the stub runs" test "$(tt display -p -t $lead '#{pane_current_command}')" = sleep
 
 # --doc names the doc
 rm -f "$LR_OUT"
@@ -109,7 +109,7 @@ print -r -- "Project: $root"$'\n'"# for g1" > "$H/g1.md"
 out="$(lead_out g1 --doc "$H/g1.md")"; rc=$?
 check "grouped project: restarted through a member session" test $rc -eq 0 -a "$out" = "lead-restart: g1 restarted (doc g1.md); bot: no bot"
 check "grouped project: the real pane was replaced" test "$(pid $gp)" != "$gp0"
-check "grouped project: the -bg session is not the lead" test -z "$(pgrep -P "$(pid "$(tt display -p -t '=g1-bg:shell' '#{pane_id}')")")"
+check "grouped project: the -bg session is not the lead" test "$(tt display -p -t '=g1-bg:shell' '#{pane_current_command}')" != sleep
 
 # the T2 minor: relay from a claude-next window of a grouped session refuses when a claude window already exists there.
 # $FEEDKEY is the group name (g1), which is no session: the duplicate check must list the caller's own session.

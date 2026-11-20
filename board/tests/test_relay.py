@@ -470,26 +470,6 @@ class NewestHandoffTest(unittest.TestCase):
         self.assertIsNone(relay.newest_handoff("/r/one", str(self.d / "nope")))
 
 
-class WaitLeadStartedTest(unittest.TestCase):
-    def test_needs_a_child_on_two_polls_in_a_row(self):
-        seq = iter([True, False, True, True])
-        with mock.patch.object(relay, "pane_has_child", side_effect=lambda *a: next(seq)):
-            self.assertTrue(relay.wait_lead_started(FakeTmux(), "%5", sleep=lambda s: None))
-
-    def test_a_pane_that_fell_back_to_the_shell_never_counts(self):
-        clock = iter(range(0, 1000, 2))
-        with mock.patch.object(relay, "pane_has_child", return_value=False):
-            self.assertFalse(relay.wait_lead_started(FakeTmux(), "%5", cap=10, sleep=lambda s: None, clock=lambda: next(clock)))
-
-    def test_pane_has_child_reads_the_process_table(self):
-        out = "  10 1\n  20 10\n  30 99\n"
-        t = lambda *a, check=False: "10\n"
-        with mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout=out)):
-            self.assertTrue(relay.pane_has_child(t, "%5"))
-        with mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout="  10 1\n  30 99\n")):
-            self.assertFalse(relay.pane_has_child(t, "%5"))
-
-
 class RestartLeadTest(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())
@@ -501,7 +481,7 @@ class RestartLeadTest(unittest.TestCase):
         self.root = str((self.d / "root").resolve())
         self.doc = self.d / "handoffs" / "h.md"
         self.doc.write_text(f"Project: {os.path.realpath(self.root)}\n")
-        p = mock.patch.object(relay, "pane_has_child", return_value=True)
+        p = mock.patch.object(relay, "wait_started", return_value=True)
         p.start()
         self.addCleanup(p.stop)
         self.env = mock.patch.dict(os.environ, {"SHELL": "/bin/zsh"})
@@ -525,9 +505,11 @@ class RestartLeadTest(unittest.TestCase):
         out = self.run_restart(t)
         c = self.respawn_cmd(t)
         self.assertEqual(c[:7], ("respawn-pane", "-k", "-t", "%5", "-c", os.path.realpath(self.root), c[6]))
-        self.assertIn(relay.orchestrator(), c[6])
-        self.assertIn(shlex.quote(f"Read {self.doc} and continue from where the previous session left off."), c[6])
-        self.assertTrue(c[6].endswith("; exec /bin/zsh -l"))
+        inner = shlex.split(c[6])[4]
+        self.assertIn(relay.orchestrator(), inner)
+        self.assertIn(shlex.quote(f"Read {self.doc} and continue from where the previous session left off."), inner)
+        self.assertEqual(shlex.split(c[6])[:4], ["/bin/zsh", "-f", "-i", "-c"])
+        self.assertTrue(inner.endswith("; exec /bin/zsh -l"))
         self.assertNotIn("send-keys", t.names())
         self.assertEqual(out["pane"], "%5")
         self.assertEqual(out["what"], "doc h.md")
@@ -578,7 +560,7 @@ class RestartLeadTest(unittest.TestCase):
             self.run_restart(self.tmux(), doc=str(other), resume=True)
 
     def test_not_started_raises_with_the_pane_tail(self):
-        with mock.patch.object(relay, "wait_lead_started", return_value=False) as ws:
+        with mock.patch.object(relay, "wait_started", return_value=False) as ws:
             with self.assertRaises(relay.LeadRestartError) as cm:
                 self.run_restart(self.tmux())
         self.assertEqual(ws.call_args.kwargs["cap"], 60)

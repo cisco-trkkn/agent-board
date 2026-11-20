@@ -248,34 +248,6 @@ def newest_handoff(root, handoffs):
 LEAD_START_CAP = 60.0
 
 
-def pane_has_child(tmux, pane):
-    """True when the pane's own process has a child. R4's pane command is `<orchestrator>; exec <shell> -l`: tmux then
-    reports the zsh -c wrapper (the foreground process group's leader) as the pane command for the whole run, so
-    wait_started's "not a shell" never sees the lead. The orchestrator is that wrapper's child; a start that failed
-    has already exec'd the login shell, which has none."""
-    pid = tmux("display", "-p", "-t", pane, "#{pane_pid}").strip()
-    if not pid.isdigit():
-        return False
-    try:
-        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return any(len(r.split()) == 2 and r.split()[1] == pid for r in out.splitlines())
-
-
-def wait_lead_started(tmux, pane, poll=2.0, cap=LEAD_START_CAP, sleep=time.sleep, clock=time.monotonic):
-    """True once pane_has_child holds on two polls in a row; False when cap passes first."""
-    deadline = clock() + cap
-    streak = 0
-    while True:
-        sleep(poll)
-        streak = streak + 1 if pane_has_child(tmux, pane) else 0
-        if streak >= 2:
-            return True
-        if clock() >= deadline:
-            return False
-
-
 def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, handoffs=None, **timing):
     """Restart the project's lead pane (spec §2, R3 R4 R6). Everything is checked before anything changes; the respawn
     command is the pane's own command and ends in a login shell, so the window survives claude's exit. Nothing is typed."""
@@ -301,8 +273,12 @@ def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, h
     if win == "claude-next":
         tmux("rename-window", "-t", pane, "claude", check=True)
     shell = os.environ.get("SHELL") or "/bin/zsh"
-    tmux("respawn-pane", "-k", "-t", pane, "-c", root, f"{shlex.quote(orchestrator())} {args}; exec {shlex.quote(shell)} -l", check=True)
-    if not wait_lead_started(tmux, pane, cap=LEAD_START_CAP, **timing):
+    # `-i -c`: an interactive shell has job control, so the orchestrator is the tty's foreground job and tmux (paneclass)
+    # names it, not the wrapper. A plain `-c` (even with set -m) leaves the wrapper in the foreground. -f keeps zsh's rc out of it.
+    inner = f"{shlex.quote(orchestrator())} {args}; exec {shlex.quote(shell)} -l"
+    wrap = f"{shlex.quote(shell)} {'-f ' if os.path.basename(shell) == 'zsh' else ''}-i -c {shlex.quote(inner)}"
+    tmux("respawn-pane", "-k", "-t", pane, "-c", root, wrap, check=True)
+    if not wait_started(tmux, pane, cap=LEAD_START_CAP, **timing):
         raise LeadRestartError(f"the new lead did not start in {root}; the pane shows:\n{pane_tail(tmux, pane)}")
     return {"project": project, "pane": pane, "what": what}
 
