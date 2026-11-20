@@ -133,7 +133,51 @@ FC
   release
   run "$L" --continue
   check "holder gone: channel added"        test "$(nch)" = 1
-  check "leak: no fake holder left"         test -z "$(ps -A -o args= | grep -F 'fake/discord/0.0.4' | grep -v grep)"
+  # --- the same project's old lead (window claude / claude-next) releases the bot: the new lead waits for it
+  zmodload zsh/datetime
+  NEXTP="$(tt new-window -d -P -F '#{pane_id}' -t '=tt:' -n claude-next -c "$TT_DIR")"
+  hold "$NEXTP"; OLDHP=(${HPIDS})
+  t0=$EPOCHREALTIME
+  ( sleep 5; for p in ${OLDHP}; do kill $p 2>/dev/null; done ) >/dev/null 2>&1 &
+  RELPID=$!
+  run TC_DC_WAIT=12 TC_DC_POLL=1 "$L" --continue
+  el=$(( EPOCHREALTIME - t0 ))
+  check "old lead releases in the wait: channel added" test "$(nch)" = 1 -a "$(<$S/dsd)" = "$DC"
+  check "old lead releases in the wait: waited, not the full wait" test $(( el >= 4.5 && el < 11.5 )) = 1
+  check "old lead releases in the wait: one waiting line, no held line" test "$(<$S/err)" = "discord: waiting up to 12s for the lead in tt:claude-next to release tt's bot"
+  wait $RELPID; release
+  hold "$NEXTP"
+  t0=$EPOCHREALTIME
+  run TC_DC_WAIT=3 TC_DC_POLL=1 "$L" --continue
+  el=$(( EPOCHREALTIME - t0 ))
+  check "old lead never releases: starts without the channel" test "$(nch)" = 0 -a "$(<$S/dsd)" = UNSET
+  check "old lead never releases: waited the full wait" test $(( el >= 2.9 )) = 1
+  check "old lead never releases: waiting line then today's message" test "$(<$S/err)" = "discord: waiting up to 3s for the lead in tt:claude-next to release tt's bot
+discord: tt's bot is held by the lead in tt:claude-next (pid $HP); this lead starts without it"
+  release
+  tt new-session -d -s other -c "$TT_DIR"; tt rename-window -t '=other:' claude
+  OTHERP="$(tt display -p -t '=other:' '#{pane_id}')"
+  hold "$OTHERP"
+  t0=$EPOCHREALTIME
+  run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
+  el=$(( EPOCHREALTIME - t0 ))
+  check "holder in another project: no wait" test $(( el < 10 )) = 1 -a "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  check "holder in another project: today's message only" test "$(<$S/err)" = "discord: tt's bot is held by the lead in other:claude (pid $HP); this lead starts without it"
+  release; tt kill-session -t '=other'
+  hold %9999
+  t0=$EPOCHREALTIME
+  run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
+  el=$(( EPOCHREALTIME - t0 ))
+  check "holder another process: no wait" test $(( el < 10 )) = 1 -a "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  release
+  hold "$OTHER"
+  t0=$EPOCHREALTIME
+  run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
+  el=$(( EPOCHREALTIME - t0 ))
+  check "same project, other window name: no wait" test $(( el < 10 )) = 1 -a "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  release; tt kill-window -t "$NEXTP"
+  for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F fake/discord/0.0.4 | grep -v grep)" ]] && break; sleep 0.1; done
+  check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F 'fake/discord/0.0.4' | grep -v grep)"
 else
   print "skip - no node (guard cases)"
 fi

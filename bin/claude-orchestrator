@@ -46,10 +46,23 @@ if [[ "${TC_DISCORD-1}" != 0 ]]; then
       # pane is a stale one (an in-place replacement), so that lead proceeds.
       DC_HOLD="$( { source "$AB_REPO/tools/lib/discord.zsh" && dc_holder "$DC_DIR" } 2>/dev/null )" || DC_HOLD=
       DC_HPANE="${DC_HOLD#* }"
-      if [[ -n "$DC_HOLD" && "$DC_HPANE" != "$TMUX_PANE" ]]; then
+      # the same project's old lead (window claude / claude-next) is on its way out in a handoff: wait for it to release
+      # the bot (TC_DC_WAIT s, polled every TC_DC_POLL s) before settling for a lead without it. Other holders get no wait.
+      DC_WHO=; DC_WAITED=0
+      while [[ -n "$DC_HOLD" && "$DC_HPANE" != "$TMUX_PANE" ]]; do
         DC_WHO=
         [[ "$DC_HPANE" != - ]] && DC_WHO="$(tc_tmux display -p -t "$DC_HPANE" '#{pane_id} #{?session_group,#{session_group},#{session_name}}:#{window_name}' 2>/dev/null)"
-        [[ "${DC_WHO%% *}" == "$DC_HPANE" ]] && DC_WHO="the lead in ${DC_WHO#* }" || DC_WHO="another process"
+        [[ "${DC_WHO%% *}" == "$DC_HPANE" ]] && DC_WHO="the lead in ${DC_WHO#* }" || { DC_WHO="another process"; break }
+        DC_HSESS="${DC_WHO#the lead in }"; DC_HWIN="${DC_HSESS#*:}"; DC_HSESS="${DC_HSESS%%:*}"
+        DC_HSESS="${DC_HSESS%-bg}"
+        [[ "$DC_HSESS" == "$DC_PROJECT" && ( "$DC_HWIN" == claude || "$DC_HWIN" == claude-next ) ]] || break
+        (( DC_WAITED >= ${TC_DC_WAIT:-60} )) && break
+        (( DC_WAITED )) || print -u2 "discord: waiting up to ${TC_DC_WAIT:-60}s for $DC_WHO to release $DC_PROJECT's bot"
+        sleep "${TC_DC_POLL:-2}"; DC_WAITED=$(( DC_WAITED + ${TC_DC_POLL:-2} ))
+        DC_HOLD="$( { source "$AB_REPO/tools/lib/discord.zsh" && dc_holder "$DC_DIR" } 2>/dev/null )" || DC_HOLD=
+        DC_HPANE="${DC_HOLD#* }"
+      done
+      if [[ -n "$DC_HOLD" && "$DC_HPANE" != "$TMUX_PANE" ]]; then
         print -u2 "discord: $DC_PROJECT's bot is held by $DC_WHO (pid ${DC_HOLD%% *}); this lead starts without it"
         CH=("${(@)CH:#plugin:discord@claude-plugins-official}")   # a caller-named entry too: this lead must not connect the held bot
       else
