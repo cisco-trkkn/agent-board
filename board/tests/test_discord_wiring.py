@@ -294,17 +294,20 @@ class FeedStepWiringTest(Base):
     def test_runner_passes_tc_session_and_timeout(self):
         self.configure("p")
         captured = {}
-        def step(project, record, now, run, add_line):
-            captured["run"] = run
+        def step(project, record, now, run, add_line, lead_run=None, spawn=None):
+            captured["run"], captured["lead_run"] = run, lead_run
         with mock.patch.object(server.discord_feed, "tick"), \
              mock.patch.object(server.discord_controls, "step", side_effect=step), \
              mock.patch.object(server, "run_script", return_value="") as rs:
             server.feed_tick([rec("p")], 1000.0)
             captured["run"](["/bin/x", "discord"])
-        rs.assert_called_once()
-        self.assertEqual(rs.call_args[0][0], ["/bin/x", "discord"])
-        self.assertEqual(rs.call_args[1]["extra_env"], {"TC_SESSION": "p"})
-        self.assertEqual(rs.call_args[1]["timeout"], 20)
+            rs.assert_called_once()
+            self.assertEqual(rs.call_args[0][0], ["/bin/x", "discord"])
+            self.assertEqual(rs.call_args[1]["extra_env"], {"TC_SESSION": "p"})
+            self.assertEqual(rs.call_args[1]["timeout"], 20)
+            rs.reset_mock()
+            captured["lead_run"](["/bin/x", "lead-restart"])   # the same 120 s runner the ops consumer gets
+            self.assertEqual((rs.call_args[0][0], rs.call_args[1]["timeout"]), (["/bin/x", "lead-restart"], 120))
 
     def test_discord_controls_bin_is_server_bin(self):
         self.assertEqual(server.discord_controls.BIN, server.BIN)
