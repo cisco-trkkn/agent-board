@@ -1123,6 +1123,31 @@ class StaleDenyTest(Base):
         dd.scan(lead(), 170.0, r)
         self.assertEqual(len(r.presses()), 1)
 
+    def gone_state(self):
+        p = tc_env.agent_base() / "dialogs" / "state.json"
+        return json.loads(p.read_text(encoding="utf-8")).get("gone", {})
+
+    def test_an_answered_request_ends_its_gone_record(self):
+        # mutation: prune only the records of panes still in `found` -> the record outlives the answered request and the later one is denied on its first scan
+        r = QueueRunner({"%12": [req("prober", "a")]})
+        dd.scan(lead(), 100.0, r)
+        r.shows["%12"] = []   # answered at the terminal: the pane shows no dialog
+        dd.scan(lead(), 110.0, r)
+        self.assertEqual(self.gone_state(), {})
+        r.shows["%12"] = [req("prober", "b")]
+        dd.scan(lead(), 300.0, r)   # a new request from the same name: first scan, however long since the old one
+        self.assertEqual(r.presses(), [])
+        dd.scan(lead(), 331.0, r)
+        self.assertEqual(len(r.presses()), 1)
+
+    def test_a_gone_record_of_a_pane_that_no_longer_exists_is_pruned(self):
+        # mutation: prune only the records of panes still in `found` -> the record of the vanished pane stays forever
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(), 100.0, r)
+        self.assertEqual(list(self.gone_state()), ["%12|prober"])
+        dd.scan([{"name": "proj", "windows": []}], 110.0, r)
+        self.assertEqual(self.gone_state(), {})
+
     def test_a_request_with_no_from_is_never_denied(self):
         show = dict(PERM)   # no `from`
         r = QueueRunner({"%12": [show]})

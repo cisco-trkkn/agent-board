@@ -274,8 +274,8 @@ def _deny_stale(dialogs, found, sessions, gone, now, run):
             if not (nrec and now - nrec["first"] >= GONE_S and not _mate_live(sess_, nname)):
                 break
             cur = (key_of(pid, nxt["lines"]), pid, project, window, nxt)
-    for gk in [k for k in gone if k not in seen and k.split("|")[0] in {i[1] for i in found}]:
-        del gone[gk]   # its request left the screen: a later one from that name starts a fresh 30 s wait
+    for gk in [k for k in gone if k not in seen]:
+        del gone[gk]   # its request left the screen (answered, or the pane is gone): a later one from that name starts a fresh 30 s wait
     return out
 
 
