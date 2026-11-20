@@ -110,7 +110,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart ]] || die "not inside tmux"   # discord, context dream*, gauth config and lead-restart work outside tmux
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake ]] || die "not inside tmux"   # discord, context dream*, gauth config, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then

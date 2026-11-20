@@ -405,6 +405,18 @@ check "unsupported started nothing"            test "$(nstub)" = 0
 check "help lists awake"                       sh -c "$C help | grep -q 'tmux-ctl awake'"
 check "help still ends at the blank line"      test "$($C help | tail -1)" = ""
 
+# --- outside tmux (launchd restore job): no $TMUX, no $TMUX_PANE; the server comes from AGENT_BOARD_TMUX_SOCKET (tt_setup sets it)
+$C awake off >/dev/null; rm -f "$S/caffeinate.args"
+out="$(env -u TMUX -u TMUX_PANE $C awake status 2>&1)"; rc=$?
+check "outside tmux: status works (exit 0, no 'not inside tmux')"  test $rc -eq 0 -a "${out#*not inside tmux}" = "$out"
+out="$(env -u TMUX -u TMUX_PANE $C awake on --queue 2>&1)"; rc=$?
+cpo="$(lidfile .caffeinatePid)"
+check "outside tmux: on --queue watches the tmux server pid"  test "$out" = "awake: on (pid $cpo, watching $SRV)" -a $rc -eq 0
+check "outside tmux: awake.json has queue true"  test "$(lidfile .queue)" = true -a "$(lidfile .pid)" = "$SRV"
+out="$(env -u TMUX -u TMUX_PANE $C awake off 2>&1)"; rc=$?
+check "outside tmux: off works"                test $rc -eq 0 -a "${out#*not inside tmux}" = "$out"
+check "outside tmux: other subcommands still refuse"  zsh -c 'o="$(env -u TMUX -u TMUX_PANE "$1" ls 2>&1)"; [[ $o == *"not inside tmux"* ]]' _ "$C"
+
 # --- leak check
 $C awake off >/dev/null
 check "leak: no stub process left"             test "$(nstub)" = 0
