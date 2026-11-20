@@ -21,11 +21,11 @@ const VIEWS = {
 };
 
 // ops: dir is <root>/_ops with command_center; project: dir is <root>/myproj with channel and ../_ops/views.json when opsViews.
-function setup({ ops = true, views = VIEWS, opsViews = true, clock } = {}) {
+function setup({ ops = true, views = VIEWS, opsViews = true, opsAllow = ['U1'], channel = 'C1', clock } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dbc-'));
   const dir = path.join(root, ops ? '_ops' : 'myproj');
   fs.mkdirSync(path.join(dir, 'outbox'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'bridge.json'), JSON.stringify(ops ? { command_center: 'CC', approvals: 'AP', user: 'U1' } : { channel: 'C1', user: 'U1' }));
+  fs.writeFileSync(path.join(dir, 'bridge.json'), JSON.stringify(ops ? { command_center: 'CC', approvals: 'AP', user: 'U1' } : { ...(channel ? { channel } : {}), user: 'U1' }));
   fs.writeFileSync(path.join(dir, '.env'), 'DISCORD_BOT_TOKEN=TOK.abc.SECRETSECRETSECRET\n');
   fs.writeFileSync(path.join(dir, 'access.json'), JSON.stringify({ allowFrom: ['U1'] }));
   if (views && (ops || opsViews)) {
@@ -33,6 +33,7 @@ function setup({ ops = true, views = VIEWS, opsViews = true, clock } = {}) {
     fs.mkdirSync(vdir, { recursive: true });
     fs.writeFileSync(path.join(vdir, 'views.json'), JSON.stringify(views));
   }
+  if (!ops && opsAllow) { fs.mkdirSync(path.join(root, '_ops'), { recursive: true }); fs.writeFileSync(path.join(root, '_ops', 'access.json'), JSON.stringify({ allowFrom: opsAllow })); }
   const client = new FakeClient({ guildId: 'G1' });
   const logs = []; let tick = 0;
   const bridge = createBridge({ dir, client, ops, log: (l) => logs.push(l), now: clock || (() => 1700000000000 + (tick += 1)), sleep: async () => {} });
@@ -525,4 +526,30 @@ test('project bot away from home: an explicit other project is acted on and an u
   assert.strictEqual(bad.replies[0].content, 'Unknown project: nope');
   await s.run(fakeCommand({ name: 'gauth', options: { project: 'alpha' }, channelId: 'CC' }));
   assert.deepStrictEqual(evShape(s).map((e) => [e.command, e.project]), [['gauth', 'alpha']]);
+});
+
+test('project bot: a thread of the home channel, a DM and a bridge.json without channel', async () => {
+  const s = setup({ ops: false, views: { ...VIEWS, tasks: { alpha: 'T1', myproj: 'M1' } } });
+  const thread = await s.run(fakeCommand({ name: 'tasks', channelId: 'T9', channel: { id: 'T9', parentId: 'C1' } }));
+  assert.match(thread.replies[0].content, /M1/);
+  const dm = await s.run(fakeCommand({ name: 'lead', options: { action: 'status' }, channelId: 'D1', channel: { id: 'D1', parentId: null } }));
+  assert.strictEqual(dm.replies[0].content, 'Pick a project.');
+  const none = setup({ ops: false, channel: null });
+  const n = await none.run(fakeCommand({ name: 'pause' }));
+  assert.strictEqual(n.replies[0].content, 'Pick a project.');
+  assert.deepStrictEqual(evShape(none), []);
+});
+
+test('project bot: another project needs the user in the ops allowlist; refused with a rejected event, nothing else', async () => {
+  for (const opsAllow of [['U2'], null]) { // wrong list, then no ops access.json at all (fail closed)
+    const s = setup({ ops: false, opsAllow });
+    for (const [name, options] of [['lead', { action: 'status', project: 'alpha' }], ['lead', { action: 'restart', project: 'alpha' }], ['gauth', { project: 'alpha' }], ['pause', { project: 'alpha' }], ['tasks', { project: 'alpha' }], ['status', { project: 'alpha' }]]) {
+      const i = await s.run(fakeCommand({ name, options }));
+      assert.strictEqual(i.replies[0].content, 'Not allowed for alpha.', name);
+      assert.strictEqual(i.deferredReplies.length, 0, name);
+    }
+    assert.ok(evShape(s).length === 6 && evShape(s).every((e) => e.type === 'rejected' && e.project === 'alpha'), JSON.stringify(evShape(s)));
+    const own = await s.run(fakeCommand({ name: 'pause' })); // its own project is unchanged
+    assert.strictEqual(own.replies[0].content, 'Sent to myproj.');
+  }
 });

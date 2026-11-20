@@ -172,7 +172,7 @@ class ProjectBotLeadGauthTest(Base):
     def setUp(self):
         super().setUp()
         import discord_ops
-        self.ops = discord_ops
+        self.discord_ops = discord_ops
         self.runs = []
 
         class FG:
@@ -210,11 +210,11 @@ class ProjectBotLeadGauthTest(Base):
     def slash(self, name="1.json", **ev):
         self.event(name, {"type": "slash", "user": "U1", "iid": "I1", "ts": 1, "project": "p", **ev})
 
-    def test_lead_restart_reaches_the_lead_runner(self):   # mutation: step/consume_events drop lead_run -> "not available here"
+    def test_lead_restart_reaches_the_lead_runner(self):
         self.slash(command="lead", action="restart")
         dc.step("p", self.rec(), 100.0, Runner(), self.add, lead_run=self.lead_run, spawn=lambda f: f())
         self.assertEqual(self.runs, [[str(dc.BIN / "tmux-ctl"), "lead-restart", "p", "--resume"]])
-        self.assertEqual([o["content"] for o in self.ops_out() if o["op"] == "ireply"], ["restarted p: pane %5"])
+        self.assertEqual([o["content"] for o in self.ops() if o["op"] == "ireply"], ["restarted p: pane %5"])
         self.assertEqual((self.audit()[-1]["target"], self.audit()[-1]["result"]), ("p:lead:restart", "restarted"))
 
     def test_lead_falls_back_to_run_like_the_ops_consumer(self):
@@ -222,10 +222,11 @@ class ProjectBotLeadGauthTest(Base):
         r = Runner(approve="restarted p")
         dc.step("p", self.rec(), 100.0, r, self.add, spawn=lambda f: f())
         self.assertEqual(r.calls, [[str(dc.BIN / "tmux-ctl"), "lead-restart", "p", "--resume"]])
-        self.assertNotIn("not available here", [o.get("content") for o in self.ops_out()])
+        self.assertNotIn("not available here", [o.get("content") for o in self.ops()])
 
-    def test_event_for_another_project_targets_that_project(self):   # mutation: use the bot's own project -> restarts p
+    def test_event_for_another_project_targets_that_project(self):
         tc_env.discord_dir("q").mkdir(parents=True)
+        self.ops_allow(["U1"])
         self.slash(command="lead", action="restart", project="q")
         self.slash("2.json", command="gauth", project="q")
         spawned = []
@@ -234,7 +235,31 @@ class ProjectBotLeadGauthTest(Base):
         self.assertIn(("load_config", "q"), self.fg.calls)
         self.assertNotIn(("load_config", "p"), self.fg.calls)
 
-    def test_gauth_slash_reaches_the_spawn_seam(self):   # mutation: spawn not passed -> a real thread, start() may run after the assert
+    def ops_allow(self, users):
+        od = tc_env.ops_dir()
+        od.mkdir(parents=True, exist_ok=True)
+        if users is not None:
+            (od / "access.json").write_text(json.dumps({"allowFrom": users}))
+
+    def test_another_project_needs_the_user_in_the_ops_allowlist(self):
+        tc_env.discord_dir("q").mkdir(parents=True)
+        for users in (["U2"], None):   # a different list, then no ops access.json: both refuse
+            self.slash("1.json", command="lead", action="restart", project="q")
+            self.slash("2.json", command="gauth", project="q")
+            self.slash("3.json", command="pause", project="q")
+            self.ops_allow(users)
+            spawned = []
+            dc.step("p", self.rec(), 100.0, Runner(), self.add, lead_run=self.lead_run, spawn=spawned.append)
+            self.assertEqual((self.runs, spawned, self.lines, self.fg.calls), ([], [], [], []))
+        self.assertEqual([a["result"] for a in self.audit()], ["rejected"] * 6)
+        self.assertEqual(list((self.d / "events").glob("*.json")), [])
+
+    def test_own_project_does_not_need_the_ops_allowlist(self):
+        self.slash(command="lead", action="restart")
+        dc.step("p", self.rec(), 100.0, Runner(), self.add, lead_run=self.lead_run, spawn=lambda f: f())
+        self.assertEqual(len(self.runs), 1)
+
+    def test_gauth_slash_reaches_the_spawn_seam(self):
         self.slash(command="gauth")
         spawned = []
         dc.step("p", self.rec(), 100.0, Runner(), self.add, lead_run=self.lead_run, spawn=spawned.append)
@@ -242,12 +267,6 @@ class ProjectBotLeadGauthTest(Base):
         self.assertEqual(self.fg.calls, [("load_config", "p")])
         spawned[0]()
         self.assertIn(("start", "p"), self.fg.calls)
-
-    def ops_out(self):
-        return self.ops_list()
-
-    def ops_list(self):
-        return Base.ops(self)
 
 
 if __name__ == "__main__":

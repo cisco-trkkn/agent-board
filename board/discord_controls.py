@@ -49,6 +49,14 @@ def _ops(fn, *args):
         print(f"discord_controls: ops {fn} failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
+def _cross_denied(own, ev, user):
+    """An event naming a project other than this bot's own needs the user in the ops bot's allowlist too (missing file: nobody)."""
+    target = ev.get("project")
+    if not target or target == own:
+        return False
+    return user not in _allow(tc_env.ops_dir())
+
+
 def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
     ev_dir = d / "events"
     allow = _allow(d)
@@ -79,6 +87,8 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
                     add_line(project, tpl.format(" ".join(str(ev.get("excerpt") or "").split())))
                     result = "queued"
                 discord_feed.audit_append(d, user, "react", str(ev.get("emoji") or ""), result)
+            elif kind in ("slash", "modal", "read", "rejected") and _cross_denied(project, ev, user):
+                discord_feed.audit_append(d, user, kind, f"{ev.get('project')}:{ev.get('command') or ev.get('form') or ev.get('what') or ''}", "rejected")
             elif kind in ("slash", "modal", "read", "rejected"):
                 _ops("handle_event", project, d, ev, add_line, allow, lead_run or run, spawn)
             elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:dream:"):

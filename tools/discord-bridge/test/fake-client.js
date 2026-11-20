@@ -127,8 +127,8 @@ function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 
 }
 
 // A chat-input command; options is {name: value}.
-function fakeCommand({ name, options = {}, user = 'U1', channelId = 'C1', id = 'iid-1' } = {}) {
-  const i = { id, edits: [], deferredReplies: [], commandName: name, user: { id: user }, channelId, replies: [], updates: [], modals: [], deferred: 0 };
+function fakeCommand({ name, options = {}, user = 'U1', channelId = 'C1', channel = { id: channelId, parentId: null }, id = 'iid-1' } = {}) {
+  const i = { id, channel, edits: [], deferredReplies: [], commandName: name, user: { id: user }, channelId, replies: [], updates: [], modals: [], deferred: 0 };
   i.isChatInputCommand = () => true;
   i.isModalSubmit = () => false;
   i.options = { getString: (n) => (n in options ? options[n] : null) };

@@ -440,6 +440,12 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     return v && typeof v === 'object' ? v : null;
   };
 
+  // The ops bot's allowlist (a project bot only): who may act on a project that is not its own.
+  const opsAllow = () => {
+    const a = readJson(path.join(path.dirname(dir), '_ops', 'access.json'), null)?.allowFrom;
+    return new Set(Array.isArray(a) ? a.map(String) : []);
+  };
+
   function writeEvent(ev) {
     const evDir = path.join(dir, 'events');
     fs.mkdirSync(evDir, { recursive: true });
@@ -646,7 +652,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   function close() { closed = true; }
 
-  const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
+  const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
   return { ctx, tick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 

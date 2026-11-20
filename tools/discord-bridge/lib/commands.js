@@ -79,6 +79,11 @@ async function leadPreview(i, ctx, action, project, l) {
   await ctx.answer(i, text, [{ type: 1, components: [btn(3, 'Confirm', `ab:lead:${action}:${project}:${ms}`), btn(2, 'Cancel', `ab:lead:cancel:${project}:${ms}`)] }]);
 }
 
+// A project bot acting on a project that is not its own needs the user in the ops bot's allowlist too (missing file: nobody).
+function crossDenied(ctx, project, user) {
+  return !ctx.ops && !!project && project !== path.basename(ctx.dir) && !(ctx.opsAllow?.() ?? new Set()).has(user);
+}
+
 async function handleCommand(i, ctx) {
   const name = i.commandName;
   const what = `/${name}`;
@@ -88,10 +93,15 @@ async function handleCommand(i, ctx) {
   const given = i.options?.getString?.('project') || null;
   // a project bot defaults to its own project only in its home channel (or a thread of it); elsewhere it acts like the ops bot
   const homeId = ctx.ops ? null : ctx.homeChannel?.();
-  const inHome = !ctx.ops && (!ctx.homeChannel || (!!homeId && (i.channelId === homeId || i.channel?.parentId === homeId)));
+  const inHome = !ctx.ops && !!homeId && (i.channelId === homeId || i.channel?.parentId === homeId); // an unknown home channel means no default
   const project = name === 'ideas' ? given : (given || (inHome ? own : null)); // /ideas covers every project unless one is given (R2)
 
   if (NEEDS_PROJECT.has(name) && !project) { await ctx.answer(i, 'Pick a project.'); return; }
+  if (crossDenied(ctx, project, user)) {
+    await ctx.answer(i, `Not allowed for ${project}.`);
+    event({ type: 'rejected', what, project });
+    return;
+  }
   const data = ctx.views();
   const unknown = project && (ctx.ops || given) && Array.isArray(data?.projects) && !data.projects.includes(project);
   if (unknown && ACTIONS.has(name)) { await ctx.answer(i, `Unknown project: ${project}`); return; }
@@ -174,6 +184,7 @@ async function handleComponent(i, ctx, c) {
   const user = String(i.user?.id);
   if (c[4]) { // ab:tasks:pick
     const p = String(i.values?.[0] ?? '');
+    if (crossDenied(ctx, p, user)) { await ctx.answer(i, `Not allowed for ${p}.`, []); ctx.writeEvent({ type: 'rejected', what: 'ab:tasks:pick', project: p, user, ts: ctx.now() }); return; }
     await ctx.answer(i, tasksReply(ctx.views(), p, ctx), []);
     ctx.writeEvent({ type: 'read', what: 'ab:tasks:pick', user, ts: ctx.now() });
     return;
