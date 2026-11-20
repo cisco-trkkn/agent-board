@@ -146,6 +146,7 @@ def _panes(sessions):
 
 
 def _waiting(pane):
+    """Only status "waiting": a teammate's "waiting-on-lead" pane posts nothing, the lead pane's own dialog covers it."""
     return pane.get("kind") == "claude" and pane.get("status") == "waiting"
 
 

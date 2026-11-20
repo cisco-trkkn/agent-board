@@ -238,10 +238,10 @@ class DialogFixturesTest(unittest.TestCase):
         return paneclass.classify("claude", server._rows(path.read_text(encoding="utf-8")), False)
 
     def test_dialog_fixtures_are_waiting_and_idle_ones_stay_ready(self):
-        waiting = sorted((self.FX / "dialogs").glob("*.txt")) + [
+        waiting = [p for p in sorted((self.FX / "dialogs").glob("*.txt")) if p.name != "team-waiting.txt"] + [   # team-waiting is waiting-on-lead: WaitingOnLeadTest
             self.FX / "approve" / n for n in ("bash-git.txt", "write.txt", "bash-teammate-divider.txt", "lead-tasklist-more-lines.txt")]
         ready = [self.FX / "approve" / n for n in ("no-prompt.txt", "after-yes.txt")]
-        self.assertEqual(len(waiting), 11)   # 7 dialogs + 4 permission prompts: a fixture that is gone must not pass quietly
+        self.assertGreaterEqual(len(waiting), 12)   # at least 8 dialogs + 4 permission prompts: a fixture that is gone must not pass quietly; new captures may join
         for p in waiting:
             with self.subTest(fixture=p.name):
                 self.assertEqual(self.status(p), ("claude", "waiting"))
@@ -296,6 +296,32 @@ class DialogFixturesTest(unittest.TestCase):
         rows = ([" Do you want to proceed?", " ❯ 1. Yes", " Esc to cancel · Tab to amend", "", "  0/9 tasks done · 1 in progress"]
                 + [f"  ◻ Task {i}" for i in range(9)] + ["─" * 78, "❯ ", "─" * 78, "  Opus 5.5 · ctx 4% · 5h 16%", "  ⏸ manual mode on"])
         self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
+
+class WaitingOnLeadTest(unittest.TestCase):
+    FX = HERE.parent / "tools" / "tests" / "fixtures" / "dialogs" / "team-waiting.txt"   # real capture, Task 1
+
+    def test_team_waiting_fixture_is_waiting_on_lead(self):
+        rows = server._rows(self.FX.read_text(encoding="utf-8"))
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "waiting-on-lead"))
+
+    def test_a_fresh_needs_you_mod_state_does_not_hide_it(self):
+        rows = server._rows(self.FX.read_text(encoding="utf-8"))
+        self.assertEqual(paneclass.classify("claude", rows, False, "waiting"), ("claude", "waiting-on-lead"))
+
+    def test_prose_quoting_the_box_title_far_above_is_not_waiting_on_lead(self):
+        rows = ["Waiting for team lead approval", "was the title"] + ["x"] * 20 + ["> "]
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
+    def test_waiting_label_names_the_lead_window(self):
+        def p(i, status):
+            return {"id": i, "kind": "claude", "status": status}
+        s = {"name": "proj", "windows": [
+            {"index": 0, "name": "claude", "teammate": False, "panes": [p("%1", "ready")]},
+            {"index": 3, "name": "mate", "teammate": True, "panes": [p("%2", "waiting-on-lead"), p("%3", "working")]}]}
+        server.label_waiting_on_lead([s])
+        self.assertEqual(s["windows"][1]["panes"][0]["waiting_on"], "claude")
+        self.assertNotIn("waiting_on", s["windows"][1]["panes"][1])
 
 
 class InputTextTest(unittest.TestCase):

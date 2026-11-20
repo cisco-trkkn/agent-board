@@ -264,6 +264,16 @@ class RoutingTest(Base):
         self.assertEqual(r.calls, [])
         self.assertEqual(self.ops(), [])
 
+    def test_a_teammate_pane_waiting_on_the_lead_posts_nothing(self):
+        # mutation: _waiting accepts status "waiting-on-lead" -> the scan runs `show` on the pane and posts
+        rows_ = [r.rstrip() for r in (FX / "dialogs" / "team-waiting.txt").read_text(encoding="utf-8").split("\n")]
+        kind, status = paneclass.classify("claude", [r for r in rows_ if r], False)
+        self.assertEqual(status, "waiting-on-lead")
+        r = Runner({"%5": SINGLE})
+        dd.scan([sess(panes=[pane("%5", kind=kind, status=status)])], 100.0, r)
+        self.assertEqual(r.calls, [])
+        self.assertEqual(self.ops(), [])
+
     def test_project_with_a_channel_posts_to_its_own_dir(self):
         self.ops_on()
         dd.scan([sess()], 100.0, Runner({"%12": SINGLE}))
