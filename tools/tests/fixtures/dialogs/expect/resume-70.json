@@ -1,0 +1,18 @@
+{
+  "kind": "resume",
+  "question": "Resume session",
+  "options": [
+    {
+      "n": 1,
+      "label": "Beta",
+      "permanent": false
+    },
+    {
+      "n": 2,
+      "label": "Alpha",
+      "permanent": false
+    }
+  ],
+  "multi": false,
+  "other": false
+}
