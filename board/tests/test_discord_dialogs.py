@@ -1065,7 +1065,24 @@ class StaleDenyTest(Base):
         return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
 
     def deny_argv(self, show):
-        return [TC, "dialog", "%12", "press", "--option", "No", "--expect", "\n".join(show["lines"])]
+        return [TC, "dialog", "%12", "press", "--option", "3", "--expect", "\n".join(show["lines"])]   # the real fixture's No is option 3
+
+    def test_a_request_with_no_no_option_presses_nothing(self):
+        # mutation: press a fixed number when the show result has no No option -> a press here
+        show = dict(req("prober"), options=[{"n": 1, "label": "Yes", "permanent": False}, {"n": 2, "label": "Allow all", "permanent": True}])
+        r = QueueRunner({"%12": [show]})
+        with mock.patch.object(sys, "stderr"):
+            dd.scan(lead(), 100.0, r)
+            dd.scan(lead(), 130.0, r)
+        self.assertEqual(r.presses(), [])
+        self.assertEqual([o["op"] for o in self.ops()], ["dialog"])
+
+    def test_a_from_outside_the_window_name_charset_is_never_stale_denied(self):
+        # mutation: drop the fullmatch guard in _deny_stale -> a press for "rev.1" (its window would be named "✦ rev", so it looks gone)
+        r = QueueRunner({"%12": [req("rev.1")]})
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(), 200.0, r)
+        self.assertEqual(r.presses(), [])
 
     def test_lead_side_request_posts_once_with_the_lead_window_header(self):
         r = QueueRunner({"%12": [req("prober")]})
@@ -1272,6 +1289,26 @@ class RealShowTest(unittest.TestCase):
             got = dd._rows(run, pid)
             self.assertTrue(got and got[0].startswith("  ") and not got[0].startswith("   "), got)
             self.assertEqual(run([TC, "dialog", pid, "type", "--expect", "\n".join(got), "--text", "banana"]), f"dialog: {pid}: typed")
+
+    def test_stale_deny_argv_is_accepted_by_the_real_press(self):
+        # mutation: _deny passes `--option No` again -> the real CLI refuses it ("--option needs a number") and _deny returns False
+        self.t("new-window", "-d", "-t", "=tt:", "-n", "team", f"cat {FX / 'dialogs' / 'team-request.txt'}; sleep 600")
+        pid = self.t("display", "-p", "-t", "=tt:team", "#{pane_id}").strip()
+        for _ in range(100):
+            if "Do you want to proceed" in self.t("capture-pane", "-p", "-t", pid):
+                break
+            time.sleep(0.05)
+        got = dd._show(self.run_real, pid)
+        self.assertEqual(got.get("from"), "prober")
+        sent = []
+
+        def run(argv):
+            sent.append(argv)
+            return self.run_real(argv)
+
+        self.assertTrue(dd._deny({}, "k", pid, "tt", got, run, 100.0))
+        self.assertEqual(sent[0][3:5], ["press", "--option"])
+        self.assertEqual(sent[0][5], "3")
 
     def test_real_show_feeds_scan(self):
         ids = {}

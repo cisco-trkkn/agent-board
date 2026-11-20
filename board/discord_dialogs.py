@@ -245,6 +245,8 @@ def _deny_stale(dialogs, found, sessions, gone, now, run):
     for item in found:
         key, pid, project, window, got = item
         name = got.get("from")
+        if name and not re.fullmatch(r"[A-Za-z0-9_-]+", str(name)):
+            name = None   # a name the teammate-window hook cannot match would look gone while alive: never denied
         sess_, _w = _lead_of(sessions, pid) if name else (None, None)
         if sess_ is None:
             out.append(item)
@@ -284,8 +286,12 @@ def _deny(dialogs, key, pid, project, got, run, now):
     feed line, and the existing post (if any) edited to `→ denied: <name> is gone`. Any failure (a `changed` re-check included)
     returns False: nothing is recorded and the next tick tries again."""
     name = got["from"]
+    n = next((o.get("n") for o in got.get("options") or [] if re.match(r"no\b", str(o.get("label", "")).strip(), re.I)), None)
+    if n is None:   # `dialog press --option` takes a number only: no No option on screen, nothing to press
+        _warn(f"stale deny: no No option ({project} {pid})", "options: " + ", ".join(str(o.get("label")) for o in got.get("options") or []))
+        return False
     try:
-        run([str(BIN / "tmux-ctl"), "dialog", pid, "press", "--option", "No", "--expect", "\n".join(got["lines"])])
+        run([str(BIN / "tmux-ctl"), "dialog", pid, "press", "--option", str(n), "--expect", "\n".join(got["lines"])])
     except Exception as e:  # noqa: BLE001
         if not str(e).startswith(_CHANGED):
             _warn(f"stale deny failed ({project} {pid})", e)
