@@ -26,19 +26,37 @@ tmux -L en9 send-keys -t cm Down Enter         # Code Mode dialog: "Yes, turn on
 tmux -L en9 new-window -d -n shell -c <scratch>/proj   # bash-mirror writes only if the session has a window named shell
 ```
 
-Prompt, identical in both runs: `Run the shell command `echo probe-ok` with the Bash tool, then read the file probe.txt with the Read tool, then reply with one line.` Run 1 (control) went to window 0 (no variable), run 2 (Code Mode) to window `cm`. A first pass of both runs had no `shell` window, so bash-mirror wrote nothing (its rule, not a hook failure); the table is from the second pass, after `events.jsonl` was emptied. The first Code Mode pass logged the same six events.
+Prompt, identical in both runs: `Run the shell command `echo probe-ok` with the Bash tool, then read the file probe.txt with the Read tool, then reply with one line.` Run 1 (control) went to window `=p:0` (no variable), run 2 (Code Mode) to window `cm`. A first pass of both runs had no `shell` window, so bash-mirror wrote nothing (its rule, not a hook failure); the table is from the second pass, after `events.jsonl` was emptied. The first Code Mode pass logged the same six events.
 
 Code Mode was active in the `cm` window: it showed the dialog "Code Mode (experimental)" at start and, after accepting it, the banner "Code Mode (experimental) is on". The control window showed neither. Both runs used the same prompt and both answered it.
 
-Deny pair (second round, new server on the same socket and a fresh `state` directory). A script `<scratch>/deny.sh` was added as a second PreToolUse hook with matcher `Bash` (added with `jq` to the same settings file):
+Deny round (second round, new server on the same socket and a fresh `state` directory). Two additions. First, `<scratch>/deny.sh` (interpreter `zsh`, made executable with `chmod +x <scratch>/deny.sh`):
 
-```
+```zsh
+#!/bin/zsh
 c="$(jq -r '.tool_input.command // empty')"
 if [[ "$c" == *probe-deny* ]]; then print -u2 "DENIED-BY-PROBE-HOOK: commands containing probe-deny are blocked"; exit 2; fi
 exit 0
 ```
 
-Deny mechanism: exit code 2 with the reason on stderr (the JSON `permissionDecision` form was not tried). Same start commands as above (windows `=p:0` control, `shell`, `cm` Code Mode, both with the trust and Code Mode dialogs answered with Down, Enter). Prompt in both runs: `Run the shell command `echo probe-deny` with the Bash tool. Then reply with one line that quotes any error or block message you received verbatim, or says it ran.`
+Second, the full `<scratch>/proj/.claude/settings.json` of this round: the settings above plus a second PreToolUse entry, matcher `Bash`, that runs `deny.sh`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {"hooks": [{"type": "command", "command": "jq -c '{e: .hook_event_name, t: .tool_name, at: now}' >> <scratch>/events.jsonl"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "<scratch>/deny.sh"}]}
+    ],
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "jq -c '{e: .hook_event_name, t: .tool_name, at: now}' >> <scratch>/events.jsonl"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "TC_STATE=<scratch>/state <repo>/claude/plugin/scripts/bash-mirror.sh --scoped"}]}
+    ]
+  }
+}
+```
+
+Deny mechanism: exit code 2 with the reason on stderr (the JSON `permissionDecision` form was not tried). Start commands of this round (same as above, on a fresh server, `TMUX=` cleared; `events.jsonl` emptied before each run): `tmux -L en9 -f /dev/null new-session -d -s p -x 200 -y 50 -c <scratch>/proj "claude --model haiku"` then `send-keys -t "=p:0" Down Enter`; `new-window -d -n shell -c <scratch>/proj`; `new-window -d -n cm -e CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 -c <scratch>/proj "claude --model haiku"` then `send-keys -t "=p:cm" Down Enter` for the trust prompt and again for the Code Mode dialog. The control ran in window `=p:0` (the first window of session `p`, no variable), Code Mode in `=p:cm`. Prompt in both runs: `Run the shell command `echo probe-deny` with the Bash tool. Then reply with one line that quotes any error or block message you received verbatim, or says it ran.`
 
 Cleanup: `tmux -L en9 kill-server`; `ps` showed no process of the socket afterwards. No `pkill` or `killall`.
 
@@ -64,7 +82,32 @@ Deny pair (hook `deny.sh` exit 2 on `probe-deny`):
 
 In both runs the screen showed "Did not run 1 call" with "Reason: PreToolUse:Bash hook error: DENIED-BY-PROBE-HOOK: commands containing probe-deny are blocked", and the model's reply quoted that text. `echo probe-deny` never ran: no PostToolUse for Bash and no mirror entry (the mirror file was not created). Raw order, Code Mode deny run: Pre REPL, Pre Bash, Post REPL. Control deny run: Pre Bash.
 
-Raw order, Code Mode: Pre REPL, Pre Bash, Post Bash, Pre Read, Post Read, Post REPL. Control: Pre Bash, Pre Read, Post Bash, Post Read. The mirror file `feed-p-shell.log` held one entry per run, each with `$ echo probe-ok` and `probe-ok`, exit 0.
+Raw order, Code Mode: Pre REPL, Pre Bash, Post Bash, Pre Read, Post Read, Post REPL. Control: Pre Bash, Pre Read, Post Bash, Post Read.
+
+Raw `events.jsonl` excerpts (kept scratch files; `at` is the epoch time `jq` added, so the order is the file order):
+
+```
+# control
+{"e":"PreToolUse","t":"Bash","at":1795218532.206914}
+{"e":"PreToolUse","t":"Read","at":1795218532.314722}
+{"e":"PostToolUse","t":"Bash","at":1795218532.445373}
+{"e":"PostToolUse","t":"Read","at":1795218532.510481}
+# Code Mode
+{"e":"PreToolUse","t":"REPL","at":1795218482.193357}
+{"e":"PreToolUse","t":"Bash","at":1795218482.503858}
+{"e":"PostToolUse","t":"Bash","at":1795218483.210263}
+{"e":"PreToolUse","t":"Read","at":1795218483.356343}
+{"e":"PostToolUse","t":"Read","at":1795218483.394716}
+{"e":"PostToolUse","t":"REPL","at":1795218483.436254}
+# deny round, control
+{"e":"PreToolUse","t":"Bash","at":1795218692.754223}
+# deny round, Code Mode
+{"e":"PreToolUse","t":"REPL","at":1795218724.798983}
+{"e":"PreToolUse","t":"Bash","at":1795218725.70556}
+{"e":"PostToolUse","t":"REPL","at":1795218725.993946}
+```
+
+The excerpts are copies of the kept scratch files `events-control.jsonl`, `events-cm-first.jsonl`, `events-deny-control.jsonl` and `events.jsonl`; the Code Mode excerpt is from the first pass, which logged the same six events as the table pass.
 
 ## What fires and what does not
 
