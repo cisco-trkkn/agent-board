@@ -32,7 +32,11 @@ echo
 printf 'Enter authorization code: '
 read code
 printf 'GOT[%s]\\n' "$code"
-if [ -f "$D/login-fail" ]; then echo "ERROR: (gcloud.auth.login) bad code"; else echo "Credentials saved to file: [/x/y.json]"; fi
+case "$*" in
+  *application-default*) OK="Credentials saved to file: [/x/y.json]" ;;
+  *) OK="You are now logged in as [x@example.com]." ;;
+esac
+if [ -f "$D/login-fail" ]; then echo "ERROR: (gcloud.auth.login) bad code"; else echo "$OK"; fi
 """
 
 
@@ -167,6 +171,49 @@ class FlowTest(Base):
                 break
             time.sleep(0.1)
         self.assertIn("GOT[Enter]", self.tmux("capture-pane", "-p", "-J", "-t", "=proj-bg:=gauth-proj"))
+
+    def _run_login(self, project="proj", code="4/0A"):
+        gauth.start(project, tmux=self.tmux)
+        gauth.read_url(project, tmux=self.tmux, timeout=10)
+        gauth.send_code(project, code, tmux=self.tmux)
+        for _ in range(50):
+            r = gauth.result(project, tmux=self.tmux)
+            if r:
+                return r
+            time.sleep(0.1)
+
+    def test_result_ok_for_adc_line(self):
+        self.assertEqual(self._run_login(), ("ok", "Credentials saved to file: [/x/y.json]"))
+
+    def test_result_ok_for_non_adc_line(self):
+        self.write_cfg(adc=False)
+        self.assertEqual(self._run_login(), ("ok", "You are now logged in as [x@example.com]."))
+
+    def test_code_starting_with_dash_stays_literal(self):
+        self._run_login(code="-n 4/0A")
+        self.assertIn("GOT[-n 4/0A]", self.tmux("capture-pane", "-p", "-J", "-t", "=proj-bg:=gauth-proj"))
+
+    def test_dotted_project_name(self):
+        self.write_cfg("a.b")
+        gauth.start("a.b", tmux=self.tmux)
+        self.assertIn("a_b-bg:gauth-a_b", self.windows())
+        self.assertEqual(gauth.status("a.b", tmux=self.tmux), "waiting")
+        self.assertEqual(gauth.read_url("a.b", tmux=self.tmux, timeout=10), URL)
+        with self.assertRaises(gauth.GauthError):
+            gauth.start("a.b", tmux=self.tmux)
+        gauth.close("a.b", tmux=self.tmux)
+        self.assertNotIn("a_b-bg:gauth-a_b", self.windows())
+        self.assertEqual(gauth.status("a.b", tmux=self.tmux), "idle")
+
+    def test_tmux_failure_is_a_gauth_error(self):
+        def broken(*a, check=False):
+            if check:
+                raise RuntimeError("no server running\nerror connecting to /x (No such file or directory)")
+            return ""
+        with self.assertRaises(gauth.GauthError) as cm:
+            gauth.start("proj", tmux=broken)
+        self.assertEqual(str(cm.exception), "tmux failed: error connecting to /x (No such file or directory)")
+        self.assertFalse((self.state / "gauth" / "proj.waiting").exists())
 
     def test_error_result(self):
         (self.bin / "login-fail").write_text("")

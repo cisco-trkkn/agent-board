@@ -41,11 +41,22 @@ def _default_tmux():
 
 
 def _window(project):
-    return f"gauth-{project}"
+    """"." would split a target into window and pane, so it is mapped like the session name."""
+    return f"gauth-{project}".replace(".", "_").replace(":", "_")
+
+
+def _last_line(e):
+    lines = [l.strip() for l in str(e).splitlines() if l.strip()]
+    return lines[-1] if lines else e.__class__.__name__
+
+
+def _bg(project):
+    """The <project>-bg session name as tmux stores it: new-session turns "." and ":" into "_"."""
+    return f"{project}-bg".replace(".", "_").replace(":", "_")
 
 
 def _target(project):
-    return f"={project}-bg:={_window(project)}"
+    return f"={_bg(project)}:={_window(project)}"
 
 
 def write_config(project, adc=True, impersonate="", account=""):
@@ -85,7 +96,7 @@ def build_argv(cfg):
 
 
 def _window_alive(tmux, project):
-    out = tmux("list-windows", "-t", f"={project}-bg:", "-F", "#{window_name}")
+    out = tmux("list-windows", "-t", f"={_bg(project)}:", "-F", "#{window_name}")
     return _window(project) in out.split()
 
 
@@ -95,14 +106,17 @@ def start(project, tmux=None):
     waiting = _dir() / f"{project}.waiting"
     if waiting.exists() and _window_alive(tmux, project):
         raise GauthError(f"a /gauth for {project} is already waiting for its code")
-    bg = f"{project}-bg"
+    bg = _bg(project)
     cmd = f"{shlex.join(build_argv(cfg))}; exec sleep 3600"
     home = os.path.expanduser("~")
-    if not tmux("list-windows", "-t", f"={bg}:", "-F", "#{window_name}").strip():
-        tmux("new-session", "-d", "-s", bg, "-n", "tests", "-c", home, check=True)
-        tmux("set-option", "-t", f"={bg}:", "@tc_bg", "1")
-    tmux("kill-window", "-t", _target(project))
-    tmux("new-window", "-d", "-t", f"={bg}:", "-n", _window(project), "-c", home, cmd, check=True)
+    try:
+        if not tmux("list-windows", "-t", f"={bg}:", "-F", "#{window_name}").strip():
+            tmux("new-session", "-d", "-s", bg, "-n", "tests", "-c", home, check=True)
+            tmux("set-option", "-t", f"={bg}:", "@tc_bg", "1")
+        tmux("kill-window", "-t", _target(project))
+        tmux("new-window", "-d", "-t", f"={bg}:", "-n", _window(project), "-c", home, cmd, check=True)
+    except (RuntimeError, subprocess.SubprocessError, OSError) as e:
+        raise GauthError(f"tmux failed: {_last_line(e)}")
     _dir().mkdir(parents=True, exist_ok=True)
     waiting.write_text(json.dumps({"started": int(time.time()), "window": _window(project)}))
     return _window(project)
@@ -130,8 +144,11 @@ def send_code(project, code, tmux=None):
     if not code or "\n" in code or "\r" in code:
         raise GauthError("the code must be one line")
     tmux = tmux or _default_tmux()
-    tmux("send-keys", "-t", _target(project), "-l", "--", code, check=True)
-    tmux("send-keys", "-t", _target(project), "Enter", check=True)
+    try:
+        tmux("send-keys", "-t", _target(project), "-l", "--", code, check=True)
+        tmux("send-keys", "-t", _target(project), "Enter", check=True)
+    except (RuntimeError, subprocess.SubprocessError, OSError) as e:
+        raise GauthError(f"tmux failed: {_last_line(e)}")
 
 
 def result(project, tmux=None):
@@ -139,7 +156,7 @@ def result(project, tmux=None):
     tmux = tmux or _default_tmux()
     for line in _capture(project, tmux).splitlines():
         s = line.strip()
-        if "Credentials saved" in s:
+        if "Credentials saved" in s or "You are now logged in as" in s:
             return ("ok", s)
         if s.startswith("ERROR:"):
             return ("error", s)
