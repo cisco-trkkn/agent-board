@@ -6,11 +6,15 @@ const path = require('node:path');
 
 const REPLY_MAX = 2000;
 const PROJECT_MAX = 60; // ab:modal:new-spec:<project> stays under Discord's 100-char custom_id limit
-const ACTIONS = new Set(['pause', 'resume', 'idea', 'new-spec', 'ideas']); // rejected up front; read commands answer it and still write their read event
-const NEEDS_PROJECT = new Set(['queue', 'pause', 'resume', 'idea', 'new-spec']);
+const ACTIONS = new Set(['pause', 'resume', 'idea', 'new-spec', 'ideas', 'lead', 'gauth']); // rejected up front; read commands answer it and still write their read event
+const NEEDS_PROJECT = new Set(['queue', 'pause', 'resume', 'idea', 'new-spec', 'lead', 'gauth']);
+const LEAD_ACTIONS = ['status', 'restart', 'handoff'];
+const CONFIRM_TTL_MS = 5 * 60 * 1000; // a /lead Confirm older than this has expired
+const COMPONENT_RE = /^ab:(?:lead:(restart|handoff|cancel):(.+):([0-9]+)|(tasks:pick)|gauth:code:(.+))$/;
 const DESCRIPTIONS = {
   status: 'Show the board status', queue: 'Show a project queue', pause: "Pause a project's queue",
   resume: "Resume a project's queue", idea: 'Add an idea', 'new-spec': 'Ask the lead for a new spec', ideas: 'Group the open ideas', approvals: 'List open decisions',
+  tasks: "Show a project's task list", lead: "Check, restart or hand off a project's lead", gauth: 'Re-authenticate Google for a project',
 };
 const NOT_SET_UP = 'Ops bot not set up (tmux-ctl discord ops-channels).';
 const FORMS = {
@@ -23,6 +27,9 @@ function payload(ops) {
     const c = { name, description: DESCRIPTIONS[name], type: 1 };
     if (name !== 'approvals') {
       c.options = [{ name: 'project', description: 'Project name', type: 3, max_length: PROJECT_MAX, required: ops && NEEDS_PROJECT.has(name) }];
+    }
+    if (name === 'lead') {
+      c.options.unshift({ name: 'action', description: 'What to do', type: 3, required: true, choices: LEAD_ACTIONS.map((v) => ({ name: v, value: v })) });
     }
     return c;
   });
@@ -44,6 +51,33 @@ function inboxText(data) {
 // Escape ``` inside text that goes in a code block.
 const fence = (t) => String(t).replace(/`{3,}/g, (m) => `\`\u200b${m.slice(1).match(/`{1,2}/g).join('\u200b')}`);
 const fenced = (t, ctx) => `\`\`\`\n${ctx.fence(t).slice(0, 1900)}\n\`\`\``;
+
+const TASKS_NONE = (p) => `no task list for ${p}`;
+const tasksReply = (data, p, ctx) => fenced(data?.tasks?.[p] ?? TASKS_NONE(p), ctx);
+const base = (f) => path.basename(String(f));
+const age = (s) => (s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`);
+const btn = (style, label, custom_id) => ({ type: 2, style, label, custom_id });
+
+function leadStatus(l) {
+  const dash = (v) => (v ?? '?');
+  return [
+    `window ${dash(l.window)} · pane ${dash(l.pane)} · pid ${dash(l.pid)}`,
+    `state ${dash(l.state)} · bot ${l.holds_bot ? 'held' : 'not held'}`,
+    `context ${l.context_pct == null ? 'unknown' : `${l.context_pct}%`}`,
+    `newest handoff ${l.doc ? `${base(l.doc)} (${age(l.doc_age_s ?? 0)} ago)` : 'none'}`,
+  ].join('\n');
+}
+
+// restart|handoff: a private preview with Confirm and Cancel, or why it cannot be done.
+async function leadPreview(i, ctx, action, project, l) {
+  const miss = action === 'restart' ? (!l.pane ? 'no lead pane' : !l.session_id ? 'no session id' : null) : (!l.doc ? 'no handoff doc' : null);
+  if (miss) { await ctx.answer(i, `cannot ${action} ${project}: ${miss}`); return; }
+  const text = action === 'restart'
+    ? `restart the ${project} lead in window ${l.window} with --resume ${l.session_id}${l.state && l.state !== 'idle' ? '; it is busy right now' : ''}`
+    : `start a fresh lead from ${base(l.doc)}, written ${Math.round((l.doc_age_s ?? 0) / 60)} min ago`;
+  const ms = ctx.now();
+  await ctx.answer(i, text, [{ type: 1, components: [btn(3, 'Confirm', `ab:lead:${action}:${project}:${ms}`), btn(2, 'Cancel', `ab:lead:cancel:${project}:${ms}`)] }]);
+}
 
 async function handleCommand(i, ctx) {
   const name = i.commandName;
@@ -67,6 +101,30 @@ async function handleCommand(i, ctx) {
     });
     return;
   }
+  if (name === 'tasks') {
+    if (project) { await ctx.answer(i, tasksReply(data, project, ctx)); event({ type: 'read', what }); return; }
+    const withTasks = Object.keys(data?.tasks || {}).filter((p) => data.tasks[p]).slice(0, 25);
+    if (!withTasks.length) { await ctx.answer(i, 'no task lists'); event({ type: 'read', what }); return; }
+    await ctx.answer(i, 'Pick a project', [{ type: 1, components: [{ type: 3, custom_id: 'ab:tasks:pick', placeholder: 'Project', options: withTasks.map((p) => ({ label: p.slice(0, 100), value: p })) }] }]);
+    event({ type: 'read', what });
+    return;
+  }
+  if (name === 'lead') {
+    const action = i.options?.getString?.('action');
+    if (!LEAD_ACTIONS.includes(action)) { await ctx.answer(i, 'Pick status, restart or handoff.'); return; }
+    const l = data?.leads?.[project];
+    if (action === 'status') {
+      await ctx.answer(i, l ? fenced(leadStatus(l), ctx) : `no lead info for ${project}`);
+      event({ type: 'read', what: `/lead status` });
+    } else await leadPreview(i, ctx, action, project, l || {});
+    return;
+  }
+  if (name === 'gauth') {
+    await i.deferReply({ flags: 64 });
+    ctx.keep(i);
+    event({ type: 'slash', command: 'gauth', project, iid: String(i.id) });
+    return;
+  }
   if (name === 'pause' || name === 'resume') {
     await ctx.answer(i, `Sent to ${project}.`);
     event({ type: 'slash', command: name, project });
@@ -88,6 +146,14 @@ async function handleCommand(i, ctx) {
 
 async function handleModal(i, ctx, m) {
   const [, form, project] = m;
+  if (form === 'gauth') {
+    const code = String(i.fields.getTextInputValue('code') ?? '').trim();
+    if (!code) { await ctx.answer(i, 'Empty code.'); return; }
+    await ctx.answer(i, 'Code sent.');
+    ctx.writeEvent({ type: 'modal', form: 'gauth', project, user: String(i.user?.id), text: code, ts: ctx.now() });
+    ctx.say(`modal gauth ${ctx.snip(project)} from ${ctx.snip(String(i.user?.id))}`); // never the code itself
+    return;
+  }
   const f = FORMS[form];
   const val = (id) => String(i.fields.getTextInputValue(id) ?? '').trim();
   const fields = Object.fromEntries(f.inputs.map(([id]) => [id, val(id)]));
@@ -97,11 +163,33 @@ async function handleModal(i, ctx, m) {
   ctx.writeEvent({ type: 'modal', form, project, fields, user: String(i.user?.id), ts: ctx.now() });
 }
 
-// True when the interaction was a command or modal (handled here).
+// A click on a /lead Confirm or Cancel, the /tasks select, or the /gauth Enter code button.
+async function handleComponent(i, ctx, c) {
+  const user = String(i.user?.id);
+  if (c[4]) { // ab:tasks:pick
+    const p = String(i.values?.[0] ?? '');
+    await ctx.answer(i, tasksReply(ctx.views(), p, ctx), []);
+    ctx.writeEvent({ type: 'read', what: 'ab:tasks:pick', user, ts: ctx.now() });
+    return;
+  }
+  if (c[5]) { // ab:gauth:code:<project>
+    await i.showModal({ custom_id: `ab:modal:gauth:${c[5]}`, title: 'Google auth code', components: [{ type: 1, components: [{ type: 4, custom_id: 'code', label: 'Code', style: 1, max_length: 400, required: true }] }] });
+    return;
+  }
+  const [, action, project, ms] = c;
+  if (action === 'cancel') { await ctx.answer(i, 'cancelled', []); return; }
+  if (ctx.now() - Number(ms) > CONFIRM_TTL_MS) { await ctx.answer(i, 'expired; run /lead again', []); return; }
+  try { await i.deferUpdate(); } catch (e) { ctx.say(`ack failed: ${ctx.snip(e?.message)}`); }
+  ctx.keep(i);
+  ctx.writeEvent({ type: 'slash', command: 'lead', action, project, user, iid: String(i.id), ts: ctx.now() });
+}
+
+// True when the interaction was a command, modal or one of our components (handled here).
 async function handle(i, ctx) {
   const isCmd = i?.isChatInputCommand?.();
-  const m = i?.isModalSubmit?.() ? /^ab:modal:(idea|new-spec):(.+)$/.exec(String(i.customId)) : null;
-  if (!isCmd && !m) return false;
+  const m = i?.isModalSubmit?.() ? /^ab:modal:(idea|new-spec|gauth):(.+)$/.exec(String(i.customId)) : null;
+  const c = !isCmd && !m && typeof i?.customId === 'string' ? COMPONENT_RE.exec(i.customId) : null;
+  if (!isCmd && !m && !c) return false;
   const what = isCmd ? `/${i.commandName}` : i.customId;
   if (!ctx.allowFrom().has(String(i.user?.id))) {
     try { await i.reply({ content: 'Not authorized.', flags: 64 }); } catch (e) { ctx.say(`reply failed: ${ctx.snip(e?.message)}`); }
@@ -109,7 +197,7 @@ async function handle(i, ctx) {
     ctx.say(`${ctx.snip(what)}: not authorized`);
     return true;
   }
-  if (isCmd) await handleCommand(i, ctx); else await handleModal(i, ctx, m);
+  if (isCmd) await handleCommand(i, ctx); else if (m) await handleModal(i, ctx, m); else await handleComponent(i, ctx, c);
   ctx.say(`command ${ctx.snip(what)}`);
   return true;
 }

@@ -13,10 +13,15 @@ const VIEWS = {
   status: { _all: 'ALL CARD', alpha: 'alpha block' }, queue: { alpha: 'running x (1/2)' },
   approvals: [{ key: 'k1', project: 'alpha', kind: 'merge', title: 'Merge spec-x', link: 'https://d/1' }],
   evidence: {},
+  tasks: { alpha: 'T1 do it\nT2 done' },
+  leads: {
+    alpha: { window: 'claude', pane: '%3', pid: 4242, state: 'idle', holds_bot: true, context_pct: 41, session_id: 'sess-abc', doc: '/h/2026-handoff-a.md', doc_age_s: 540 },
+    beta: { window: null, pane: null, pid: null, state: null, holds_bot: false, context_pct: null, session_id: null, doc: null, doc_age_s: null },
+  },
 };
 
 // ops: dir is <root>/_ops with command_center; project: dir is <root>/myproj with channel and ../_ops/views.json when opsViews.
-function setup({ ops = true, views = VIEWS, opsViews = true } = {}) {
+function setup({ ops = true, views = VIEWS, opsViews = true, clock } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dbc-'));
   const dir = path.join(root, ops ? '_ops' : 'myproj');
   fs.mkdirSync(path.join(dir, 'outbox'), { recursive: true });
@@ -30,7 +35,7 @@ function setup({ ops = true, views = VIEWS, opsViews = true } = {}) {
   }
   const client = new FakeClient({ guildId: 'G1' });
   const logs = []; let tick = 0;
-  const bridge = createBridge({ dir, client, ops, log: (l) => logs.push(l), now: () => 1700000000000 + (tick += 1), sleep: async () => {} });
+  const bridge = createBridge({ dir, client, ops, log: (l) => logs.push(l), now: clock || (() => 1700000000000 + (tick += 1)), sleep: async () => {} });
   const events = () => { try { return fs.readdirSync(path.join(dir, 'events')).filter((n) => n.endsWith('.json')).sort().map((n) => JSON.parse(fs.readFileSync(path.join(dir, 'events', n), 'utf8'))); } catch { return []; } };
   const run = async (i) => { await bridge.onInteraction(i); return i; };
   return { dir, client, logs, bridge, events, run };
@@ -38,13 +43,15 @@ function setup({ ops = true, views = VIEWS, opsViews = true } = {}) {
 const evShape = (s) => s.events().map((e) => { const { ts, ...r } = e; return r; });
 
 test('payload: 8 chat-input commands; project option required per mode', () => {
-  const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'ideas', 'approvals'];
+  const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'ideas', 'approvals', 'tasks', 'lead', 'gauth'];
   const o = commands.payload(true), p = commands.payload(false);
   assert.deepStrictEqual(o.map((c) => c.name), names);
   assert.ok(o.every((c) => c.type === 1));
   const req = (list) => Object.fromEntries(list.map((c) => [c.name, c.options?.find((x) => x.name === 'project')?.required ?? null]));
-  assert.deepStrictEqual(req(o), { status: false, queue: true, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null });
-  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, ideas: false, approvals: null });
+  assert.deepStrictEqual(req(o), { status: false, queue: true, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true });
+  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, ideas: false, approvals: null, tasks: false, lead: false, gauth: false });
+  const act = o.find((c) => c.name === 'lead').options.find((x) => x.name === 'action');
+  assert.deepStrictEqual([act.type, act.required, act.choices.map((c) => c.value)], [3, true, ['status', 'restart', 'handoff']]);
   assert.ok(o.every((c) => (c.options || []).every((x) => x.type === 3)));
 });
 
@@ -54,7 +61,7 @@ test('ready registers the commands once for the guild; a resume after disconnect
   const c = s.client.callsOf('setCommands');
   assert.strictEqual(c.length, 1);
   assert.strictEqual(c[0].target, 'G1');
-  assert.strictEqual(c[0].payload.length, 8);
+  assert.strictEqual(c[0].payload.length, 11);
   s.bridge.onDisconnect();
   await s.bridge.onReady();
   assert.strictEqual(s.client.callsOf('setCommands').length, 2);
@@ -193,7 +200,7 @@ test('attach wires command and modal interactions through the same handler', asy
 
 test('project option has max_length 60 so the modal custom_id stays under 100 chars', () => {
   for (const ops of [true, false]) {
-    for (const c of commands.payload(ops).filter((x) => x.options)) assert.strictEqual(c.options[0].max_length, 60, c.name);
+    for (const c of commands.payload(ops).filter((x) => x.options)) assert.strictEqual(c.options.find((x) => x.name === 'project').max_length, 60, c.name); // lead: action comes first (required before optional)
   }
   assert.ok(`ab:modal:new-spec:${'p'.repeat(60)}`.length <= 100);
 });
@@ -262,4 +269,178 @@ test('/ideas <project> writes that project; an unknown one is answered and write
   const u = await s.run(fakeCommand({ name: 'ideas', options: { project: 'nope' } }));
   assert.strictEqual(u.replies[0].content, 'Unknown project: nope');
   assert.strictEqual(s.events().length, 1);
+});
+
+// ---- /tasks, /lead, /gauth, ireply (lead recovery) ----
+const reply0 = (i) => i.replies[0];
+const btns = (r) => r.components.flatMap((row) => row.components);
+
+test('strangers are refused for every new command, button, select and modal', async () => {
+  const s = setup();
+  const items = [
+    fakeCommand({ name: 'tasks', options: { project: 'alpha' }, user: 'U7' }),
+    fakeCommand({ name: 'lead', options: { action: 'status', project: 'alpha' }, user: 'U7' }),
+    fakeCommand({ name: 'gauth', options: { project: 'alpha' }, user: 'U7' }),
+    fakeInteraction({ customId: 'ab:lead:restart:alpha:1700000000000', user: 'U7' }),
+    fakeInteraction({ customId: 'ab:lead:cancel:alpha:1700000000000', user: 'U7' }),
+    fakeInteraction({ customId: 'ab:tasks:pick', user: 'U7', values: ['alpha'] }),
+    fakeInteraction({ customId: 'ab:gauth:code:alpha', user: 'U7' }),
+    fakeModal({ customId: 'ab:modal:gauth:alpha', fields: { code: 'x' }, user: 'U7' }),
+  ];
+  for (const i of items) {
+    await s.run(i);
+    assert.deepStrictEqual(i.replies.map((r) => [r.content, r.flags]), [['Not authorized.', 64]]);
+  }
+  const ev = evShape(s);
+  assert.strictEqual(ev.length, 8);
+  assert.ok(ev.every((e) => e.type === 'rejected' && e.user === 'U7'));
+  assert.deepStrictEqual(items.map((i) => (i.deferredReplies?.length || 0) + (i.modals?.length || 0) + (i.edits?.length || 0) + (i.updates?.length || 0)), items.map(() => 0));
+});
+
+test('/tasks <p>: private fenced reply from views.tasks, or no task list', async () => {
+  const s = setup();
+  const a = await s.run(fakeCommand({ name: 'tasks', options: { project: 'alpha' } }));
+  assert.deepStrictEqual([reply0(a).content, reply0(a).flags], ['```\nT1 do it\nT2 done\n```', 64]);
+  const b = await s.run(fakeCommand({ name: 'tasks', options: { project: 'beta' } }));
+  assert.strictEqual(reply0(b).content, '```\nno task list for beta\n```');
+});
+
+test('/tasks alone: a select of projects with tasks; picking one gives the same reply', async () => {
+  const s = setup();
+  const a = await s.run(fakeCommand({ name: 'tasks' }));
+  const sel = reply0(a).components[0].components[0];
+  assert.deepStrictEqual([reply0(a).flags, sel.type, sel.custom_id, sel.options.map((o) => o.value)], [64, 3, 'ab:tasks:pick', ['alpha']]);
+  const p = await s.run(fakeInteraction({ customId: 'ab:tasks:pick', user: 'U1', values: ['alpha'], ephemeral: true }));
+  assert.strictEqual(p.updates[0].content, '```\nT1 do it\nT2 done\n```');
+});
+
+test('/tasks alone with no task lists says so', async () => {
+  const s = setup({ views: { ...VIEWS, tasks: {} } });
+  const a = await s.run(fakeCommand({ name: 'tasks' }));
+  assert.strictEqual(reply0(a).content, 'no task lists');
+  assert.ok(!reply0(a).components);
+});
+
+test('/lead status: private fenced block from views.leads', async () => {
+  const s = setup();
+  const a = await s.run(fakeCommand({ name: 'lead', options: { action: 'status', project: 'alpha' } }));
+  assert.strictEqual(reply0(a).flags, 64);
+  assert.strictEqual(reply0(a).content, '```\nwindow claude · pane %3 · pid 4242\nstate idle · bot held\ncontext 41%\nnewest handoff 2026-handoff-a.md (9m ago)\n```');
+  const b = await s.run(fakeCommand({ name: 'lead', options: { action: 'status', project: 'beta' } }));
+  assert.match(reply0(b).content, /context unknown\nnewest handoff none/);
+  assert.match(reply0(b).content, /bot not held/);
+});
+
+test('/lead restart: preview with Confirm and Cancel; busy suffix; no events yet', async () => {
+  const s = setup();
+  const a = await s.run(fakeCommand({ name: 'lead', options: { action: 'restart', project: 'alpha' } }));
+  assert.strictEqual(reply0(a).content, 'restart the alpha lead in window claude with --resume sess-abc');
+  const [c, x] = btns(reply0(a));
+  assert.match(c.custom_id, /^ab:lead:restart:alpha:17000000000\d+$/);
+  assert.match(x.custom_id, /^ab:lead:cancel:alpha:17000000000\d+$/);
+  assert.deepStrictEqual([c.label, x.label], ['Confirm', 'Cancel']);
+  assert.strictEqual(evShape(s).length, 0);
+  const views = { ...VIEWS, leads: { alpha: { ...VIEWS.leads.alpha, state: 'working' } } };
+  const s2 = setup({ views });
+  const b = await s2.run(fakeCommand({ name: 'lead', options: { action: 'restart', project: 'alpha' } }));
+  assert.strictEqual(reply0(b).content, 'restart the alpha lead in window claude with --resume sess-abc; it is busy right now');
+});
+
+test('/lead handoff: preview names the doc and its age', async () => {
+  const s = setup();
+  const a = await s.run(fakeCommand({ name: 'lead', options: { action: 'handoff', project: 'alpha' } }));
+  assert.strictEqual(reply0(a).content, 'start a fresh lead from 2026-handoff-a.md, written 9 min ago');
+  assert.match(btns(reply0(a))[0].custom_id, /^ab:lead:handoff:alpha:/);
+});
+
+test('/lead restart|handoff with a missing field: cannot <action> <p>, no buttons', async () => {
+  const s = setup();
+  const a = await s.run(fakeCommand({ name: 'lead', options: { action: 'restart', project: 'beta' } }));
+  assert.deepStrictEqual([reply0(a).content, reply0(a).components], ['cannot restart beta: no lead pane', undefined]);
+  const noSess = setup({ views: { ...VIEWS, leads: { alpha: { ...VIEWS.leads.alpha, session_id: null } } } });
+  const b = await noSess.run(fakeCommand({ name: 'lead', options: { action: 'restart', project: 'alpha' } }));
+  assert.strictEqual(reply0(b).content, 'cannot restart alpha: no session id');
+  const c = await s.run(fakeCommand({ name: 'lead', options: { action: 'handoff', project: 'beta' } }));
+  assert.strictEqual(reply0(c).content, 'cannot handoff beta: no handoff doc');
+  assert.ok(!reply0(c).components);
+});
+
+test('/lead Cancel answers cancelled and writes no event', async () => {
+  const s = setup();
+  const i = await s.run(fakeInteraction({ customId: 'ab:lead:cancel:alpha:1700000000000', user: 'U1', ephemeral: true }));
+  assert.strictEqual(i.updates[0].content, 'cancelled');
+  assert.deepStrictEqual(i.updates[0].components, []);
+  assert.strictEqual(evShape(s).length, 0);
+});
+
+test('/lead Confirm older than 5 minutes: expired, no event', async () => {
+  const t0 = 1700000000000;
+  const s = setup({ clock: () => t0 + 5 * 60 * 1000 + 1 });
+  const i = await s.run(fakeInteraction({ customId: `ab:lead:restart:alpha:${t0}`, user: 'U1', ephemeral: true }));
+  assert.strictEqual(i.updates[0].content, 'expired; run /lead again');
+  assert.strictEqual(i.deferred, 0);
+  assert.strictEqual(evShape(s).length, 0);
+});
+
+test('/lead Confirm in time: deferUpdate, event with iid, the interaction is kept for ireply', async () => {
+  const t0 = 1700000000000;
+  const s = setup({ clock: () => t0 + 1000 });
+  const i = await s.run(fakeInteraction({ customId: `ab:lead:restart:alpha:${t0}`, user: 'U1', ephemeral: true, id: 'iid-77' }));
+  assert.strictEqual(i.deferred, 1);
+  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'lead', action: 'restart', project: 'alpha', user: 'U1', iid: 'iid-77' }]);
+  fs.writeFileSync(path.join(s.dir, 'outbox', '1.json'), JSON.stringify({ op: 'ireply', iid: 'iid-77', content: 'restarted' }));
+  await s.bridge.tick();
+  assert.strictEqual(i.edits[0].content, 'restarted');
+  assert.strictEqual(s.client.callsOf('send').length, 0);
+});
+
+test('/gauth: deferReply private, kept, event; Enter code button opens the modal; submit sends the event', async () => {
+  const s = setup();
+  const g = await s.run(fakeCommand({ name: 'gauth', options: { project: 'alpha' }, id: 'iid-g' }));
+  assert.deepStrictEqual(g.deferredReplies.map((d) => d.flags), [64]);
+  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'gauth', project: 'alpha', user: 'U1', iid: 'iid-g' }]);
+  const b = await s.run(fakeInteraction({ customId: 'ab:gauth:code:alpha', user: 'U1' }));
+  const m = b.modals[0];
+  assert.strictEqual(m.custom_id, 'ab:modal:gauth:alpha');
+  const inputs = m.components.flatMap((r) => r.components);
+  assert.deepStrictEqual(inputs.map((x) => [x.type, x.custom_id, x.style]), [[4, 'code', 1]]);
+  const sub = await s.run(fakeModal({ customId: 'ab:modal:gauth:alpha', fields: { code: '  4/0AbC-secret ' }, user: 'U1' }));
+  assert.strictEqual(sub.replies[0].content, 'Code sent.');
+  assert.strictEqual(sub.replies[0].flags, 64);
+  assert.deepStrictEqual(evShape(s)[1], { type: 'modal', form: 'gauth', project: 'alpha', user: 'U1', text: '4/0AbC-secret' });
+  assert.ok(s.logs.some((l) => l.includes('modal gauth alpha from U1')));
+  assert.ok(!s.logs.some((l) => l.includes('4/0AbC')));
+});
+
+test('/gauth modal with an empty code sends no event', async () => {
+  const s = setup();
+  const sub = await s.run(fakeModal({ customId: 'ab:modal:gauth:alpha', fields: { code: '  ' }, user: 'U1' }));
+  assert.strictEqual(sub.replies[0].content, 'Empty code.');
+  assert.strictEqual(evShape(s).length, 0);
+});
+
+test('ireply: components become rows; unknown iid falls back to a channel post and logs it', async () => {
+  const s = setup();
+  const g = await s.run(fakeCommand({ name: 'gauth', options: { project: 'alpha' }, id: 'iid-g' }));
+  const put = (n, op) => fs.writeFileSync(path.join(s.dir, 'outbox', `${n}.json`), JSON.stringify(op));
+  put(1, { op: 'ireply', iid: 'iid-g', content: 'open the link', components: [[{ label: 'Enter code', style: 1, custom_id: 'ab:gauth:code:alpha' }]] });
+  put(2, { op: 'ireply', iid: 'nope', content: 'lost reply' });
+  await s.bridge.tick();
+  assert.strictEqual(g.edits[0].content, 'open the link');
+  assert.deepStrictEqual(g.edits[0].components[0].components.map((b) => [b.label, b.custom_id]), [['Enter code', 'ab:gauth:code:alpha']]);
+  const sent = s.client.callsOf('send');
+  assert.deepStrictEqual(sent.map((c) => [c.target, c.payload.content]), [['CC', 'lost reply']]);
+  assert.ok(s.logs.some((l) => l.includes('ireply nope fell back to post')));
+});
+
+test('ireply: an interaction kept more than 14 minutes is expired and falls back', async () => {
+  let t = 1700000000000;
+  const s = setup({ clock: () => t });
+  const g = await s.run(fakeCommand({ name: 'gauth', options: { project: 'alpha' }, id: 'iid-old' }));
+  t += 840 * 1000 + 1;
+  fs.writeFileSync(path.join(s.dir, 'outbox', '1.json'), JSON.stringify({ op: 'ireply', iid: 'iid-old', content: 'late' }));
+  await s.bridge.tick();
+  assert.strictEqual(g.edits.length, 0);
+  assert.deepStrictEqual(s.client.callsOf('send').map((c) => c.payload.content), ['late']);
+  assert.ok(s.logs.some((l) => l.includes('ireply iid-old fell back to post')));
 });

@@ -51,6 +51,7 @@ def _check(op):
               "edit": ({"op", "key", "text"}, {"rows"}),
               "dialog": ({"op", "key", "text", "rows", "mention_user"}, set()),
               "presence": ({"op", "text"}, set()),
+              "ireply": ({"op", "iid", "content"}, {"components"}),
               "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"})}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
@@ -58,7 +59,7 @@ def _check(op):
     keys = set(op)
     if not need <= keys or keys - need - opt:
         raise ValueError(f"bad keys for {kind}: {sorted(keys)}")
-    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons", "rows"}:
+    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons", "rows", "components"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
     if kind == "presence" and (not op["text"] or len(op["text"]) > PRESENCE_MAX):
@@ -72,6 +73,8 @@ def _check(op):
             raise ValueError("lines must be a list of strings")
     if "rows" in op:
         _check_rows(op["rows"])
+    if "components" in op:
+        _check_rows(op["components"])
     if kind == "dialog" and not isinstance(op["mention_user"], bool):
         raise ValueError("mention_user must be a bool")
     if kind == "approval":

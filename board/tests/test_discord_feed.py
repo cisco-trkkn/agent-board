@@ -362,6 +362,22 @@ class PresenceCheckTest(unittest.TestCase):
                 df._check(op)
 
 
+class IreplyCheckTest(unittest.TestCase):
+    ROW = [[{"label": "Enter code", "style": 1, "custom_id": "ab:gauth:code:alpha"}]]
+
+    def test_valid(self):
+        df._check({"op": "ireply", "iid": "123", "content": "hi"})
+        df._check({"op": "ireply", "iid": "123", "content": "hi", "components": self.ROW})
+
+    def test_invalid(self):
+        for op in ({"op": "ireply", "iid": "123"}, {"op": "ireply", "content": "hi"},
+                   {"op": "ireply", "iid": 5, "content": "hi"}, {"op": "ireply", "iid": "1", "content": "hi", "extra": "y"},
+                   {"op": "ireply", "iid": "1", "content": "hi", "components": [[{"label": "x"}]]},
+                   {"op": "ireply", "iid": "1", "content": "hi", "components": "no"}):
+            with self.assertRaises(ValueError, msg=str(op)):
+                df._check(op)
+
+
 class DueTest(unittest.TestCase):
     def test_due(self):
         st = {"card_text": "a", "card_ts": 1000.0}
