@@ -688,6 +688,269 @@ class Events(Base):
         return [json.loads(l) for l in (self.ops / "audit.jsonl").read_text().splitlines()]
 
 
+class FakeGauth:
+    """Stands in for the gauth module: nothing here starts gcloud or a tmux window."""
+    class GauthError(Exception):
+        pass
+
+    def __init__(self):
+        self.calls, self.cfg, self.waiting = [], {"adc": True, "impersonate": "", "account": ""}, False
+        self.url, self.res, self.start_err, self.send_err, self.check = "https://accounts.google.com/o/oauth2/auth?x=1", ("ok", "Credentials saved"), None, None, "token ok"
+        self.no_config = False
+
+    def load_config(self, p):
+        self.calls.append(("load_config", p))
+        if self.no_config:
+            raise self.GauthError(f"no gauth config for {p}; set it at the terminal: tmux-ctl gauth config {p} …")
+        return self.cfg
+
+    def status(self, p):
+        return "waiting" if self.waiting else "idle"
+
+    def start(self, p):
+        self.calls.append(("start", p))
+        if self.start_err:
+            raise self.start_err
+        return "gauth-" + p
+
+    def read_url(self, p, tmux=None, timeout=15):
+        self.calls.append(("read_url", p))
+        return self.url
+
+    def send_code(self, p, code):
+        self.calls.append(("send_code", p, code))
+        if self.send_err:
+            raise self.send_err
+
+    def result(self, p):
+        self.calls.append(("result", p))
+        return self.res
+
+    def token_check(self, cfg):
+        return self.check
+
+    def close(self, p):
+        self.calls.append(("close", p))
+
+
+class FakeClock:
+    def __init__(self, t=NOW):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+CODE = "4/0AQSTgQ-SECRET-CODE-123"
+
+
+class LeadGauth(Base):
+    def setUp(self):
+        super().setUp()
+        self.configure()
+        self.pd = self.project("a")
+        self.g, self.clock, self.runs = FakeGauth(), FakeClock(), []
+        for patcher in (mock.patch.object(ops, "gauth", self.g), mock.patch.object(ops, "_clock", self.clock),
+                        mock.patch.object(ops, "_sleep", self.clock.sleep)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.run_out = "restarted a: pane %5"
+        self.run_err = None
+
+    def fake_run(self, argv):
+        self.runs.append(argv)
+        if self.run_err:
+            raise self.run_err
+        return self.run_out
+
+    def send(self, ev, name="1.json"):
+        self.event(name, ev)
+        ops.consume(self.add, self.fake_run, NOW)
+
+    def audit(self):
+        return [json.loads(l) for l in (self.ops / "audit.jsonl").read_text().splitlines()]
+
+    def ireplies(self):
+        return [o for o in self.outbox() if o["op"] == "ireply"]
+
+    def lead(self, action="restart", user="U1", project="a", **kw):
+        return {"type": "slash", "command": "lead", "action": action, "project": project, "user": user, "iid": "I1", "ts": NOW, **kw}
+
+    def gauth(self, **kw):
+        return {"type": "slash", "command": "gauth", "project": "a", "user": "U1", "iid": "I2", **kw}
+
+    def modal(self, user="U1", code=CODE, project="a"):
+        return {"type": "modal", "form": "gauth", "project": project, "user": user, "text": code, "ts": NOW}
+
+    def pending(self):
+        return json.loads((self.ops / "gauth-pending.json").read_text())
+
+    def seed_pending(self, url_ts=NOW, user="U1"):
+        (self.ops / "gauth-pending.json").write_text(json.dumps({"a": {"project": "a", "user": user, "iid": "I2", "url_ts": url_ts}}))
+
+    # ---- /lead ----
+    def test_lead_restart_runs_resume_and_ireplies_its_line(self):
+        self.send(self.lead("restart"))
+        self.assertEqual(self.runs, [[str(ops.discord_dialogs.BIN / "tmux-ctl"), "lead-restart", "a", "--resume"]])
+        self.assertEqual(self.ireplies(), [{"op": "ireply", "iid": "I1", "content": "restarted a: pane %5"}])
+        self.assertEqual((self.audit()[-1]["target"], self.audit()[-1]["result"]), ("a:lead:restart", "restarted"))
+
+    def test_lead_handoff_passes_the_newest_doc(self):
+        (self.ops / "views.json").write_text(json.dumps({"leads": {"a": {"doc": "/h/new.md"}}}))
+        self.send(self.lead("handoff"))
+        self.assertEqual(self.runs[0][-3:], ["a", "--doc", "/h/new.md"][-3:])
+        self.assertIn("--doc", self.runs[0])
+        self.assertEqual(self.audit()[-1]["result"], "restarted")
+
+    def test_lead_handoff_without_a_doc_does_not_restart(self):
+        self.send(self.lead("handoff"))
+        self.assertEqual(self.runs, [])
+        self.assertEqual(self.ireplies()[0]["content"], "no handoff doc for a")
+        self.assertEqual(self.audit()[-1]["result"], "no handoff doc")
+
+    def test_lead_failure_is_ireplied_and_audited(self):
+        self.run_err = RuntimeError("lead-restart: no claude window")
+        self.send(self.lead("restart"))
+        self.assertIn("no claude window", self.ireplies()[0]["content"])
+        self.assertEqual(self.audit()[-1]["result"], "failed")
+
+    def test_lead_bad_action_or_unknown_project_runs_nothing(self):
+        self.send(self.lead("nuke"), "1.json")
+        self.send(self.lead("restart", project="nope"), "2.json")
+        self.send(self.lead("restart", user="EVIL"), "3.json")
+        self.assertEqual(self.runs, [])
+        self.assertEqual([a["result"] for a in self.audit()], ["ignored", "unknown project", "rejected"])
+
+    # ---- /gauth slash ----
+    def test_gauth_no_config_ireplies_the_hint(self):
+        self.g.no_config = True
+        self.send(self.gauth())
+        self.assertIn("tmux-ctl gauth config a", self.ireplies()[0]["content"])
+        self.assertNotIn(("start", "a"), self.g.calls)
+        self.assertEqual(self.audit()[-1]["result"], "no config")
+
+    def test_gauth_already_waiting_is_refused(self):
+        self.g.waiting = True
+        self.send(self.gauth())
+        self.assertNotIn(("start", "a"), self.g.calls)
+        self.assertIn("already", self.ireplies()[0]["content"])
+        self.assertEqual(self.audit()[-1]["result"], "busy")
+
+    def test_gauth_sends_the_url_privately_with_the_button_and_stores_pending(self):
+        # mutation: drop private=True -> the URL would be posted to the channel when the interaction expires
+        self.send(self.gauth())
+        r, = self.ireplies()
+        self.assertTrue(r["private"])
+        self.assertIn(self.g.url, r["content"])
+        self.assertIn("10 min", r["content"])
+        self.assertEqual(r["components"], [[{"label": "Enter code", "style": 1, "custom_id": "ab:gauth:code:a"}]])
+        self.assertEqual(self.pending(), {"a": {"project": "a", "user": "U1", "iid": "I2", "url_ts": NOW}})
+        self.assertEqual(self.audit()[-1]["result"], "url sent")
+
+    def test_gauth_url_never_appears_polls_30s_then_closes(self):
+        self.g.url = None
+        self.send(self.gauth())
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertGreaterEqual(self.clock.t - NOW, 30)
+        self.assertLess(self.clock.t - NOW, 40)
+        self.assertEqual(self.audit()[-1]["result"], "failed")
+        self.assertFalse((self.ops / "gauth-pending.json").exists())
+
+    # ---- /gauth modal ----
+    def test_modal_same_user_within_window_sends_code_and_reports(self):
+        self.seed_pending(url_ts=NOW - 599)
+        self.send(self.modal())
+        self.assertIn(("send_code", "a", CODE), self.g.calls)
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertIn("token ok", self.ireplies()[0]["content"])
+        self.assertEqual(self.ireplies()[0]["iid"], "I2")
+        self.assertEqual(self.audit()[-1]["result"], "authenticated")
+        self.assertEqual(json.loads((self.ops / "gauth-pending.json").read_text()), {})
+
+    def test_modal_auth_error_is_reported(self):
+        self.seed_pending()
+        self.g.res = ("error", "ERROR: invalid_grant")
+        self.send(self.modal())
+        self.assertIn("invalid_grant", self.ireplies()[0]["content"])
+        self.assertEqual(self.audit()[-1]["result"], "auth failed")
+        self.assertIn(("close", "a"), self.g.calls)
+
+    def test_modal_other_user_is_ignored_and_sends_nothing(self):
+        # mutation: drop the same-user comparison -> send_code is called for the stranger
+        self.seed_pending()
+        self.send(self.modal(user="U2"))
+        self.assertFalse([c for c in self.g.calls if c[0] == "send_code"])
+        self.assertEqual(self.audit()[-1]["result"], "rejected")   # U2 is not on the allowlist either
+
+    def test_modal_allowlisted_other_user_is_ignored(self):
+        (self.ops / "access.json").write_text(json.dumps({"allowFrom": ["U1", "U2"]}))
+        self.seed_pending()
+        self.send(self.modal(user="U2"))
+        self.assertFalse([c for c in self.g.calls if c[0] == "send_code"])
+        self.assertEqual(self.audit()[-1]["result"], "ignored")
+        self.assertTrue((self.ops / "gauth-pending.json").exists())
+
+    def test_modal_late_is_ignored_closes_and_says_timed_out(self):
+        # mutation: change the 600 s window to 700 -> a 650 s old code is sent
+        self.seed_pending(url_ts=NOW - 601)
+        self.send(self.modal())
+        self.assertFalse([c for c in self.g.calls if c[0] == "send_code"])
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertEqual(self.audit()[-1]["result"], "timed out")
+        self.assertIn("timed out", self.ireplies()[0]["content"])
+
+    def test_modal_without_pending_is_ignored(self):
+        self.send(self.modal())
+        self.assertFalse([c for c in self.g.calls if c[0] == "send_code"])
+        self.assertEqual(self.audit()[-1]["result"], "ignored")
+
+    def test_modal_unknown_project_never_reaches_gauth(self):
+        self.send(self.modal(project="../x"))
+        self.assertEqual(self.g.calls, [])
+
+    def test_code_never_in_audit_logs_posts_or_reraised_errors(self):
+        # mutation: put the code in an audit target/result, a print, or let the GauthError text through -> a hit below
+        import io
+        import contextlib
+        self.seed_pending()
+        self.g.send_err = self.g.GauthError(f"tmux failed: {CODE}")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            self.send(self.modal(), "1.json")
+        self.seed_pending()
+        self.g.send_err = None
+        self.g.res = ("error", f"ERROR: bad code {CODE}")
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            self.send(self.modal(), "2.json")
+        files = [self.ops / "audit.jsonl"] + list((self.ops / "outbox").glob("*.json")) + [self.ops / "ops-state.json"]
+        for f in files:
+            self.assertEqual(f.read_text().count(CODE), 0, f.name)
+        self.assertEqual(err.getvalue().count(CODE), 0)
+        self.assertTrue(self.ireplies())
+
+    # ---- tick ----
+    def tick_now(self, now):
+        return ops.tick([rec("a")], {}, None, now, self.add)
+
+    def test_tick_closes_a_timed_out_gauth(self):
+        # mutation: drop the tick sweep -> window stays open and pending stays
+        self.seed_pending(url_ts=NOW - 601)
+        self.tick_now(NOW)
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertEqual(json.loads((self.ops / "gauth-pending.json").read_text()), {})
+        self.assertIn("timed out", self.ireplies()[0]["content"])
+        self.assertEqual((self.audit()[-1]["target"], self.audit()[-1]["result"]), ("a:gauth", "timed out"))
+
+    def test_tick_leaves_a_fresh_gauth_alone(self):
+        self.seed_pending(url_ts=NOW - 100)
+        self.tick_now(NOW)
+        self.assertNotIn(("close", "a"), self.g.calls)
+        self.assertIn("a", json.loads((self.ops / "gauth-pending.json").read_text()))
+
+
 class ControlsHooks(Base):
     """The hook discord_controls has into discord_ops (slash/modal/read/rejected events), driven through the real controls step."""
     SRC = "%5:" + hashlib.sha1(b"x").hexdigest()

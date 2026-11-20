@@ -20,6 +20,7 @@ from pathlib import Path
 import discord_dialogs
 import discord_feed
 import discord_ideas
+import gauth
 import ideas
 import relay
 import tc_env
@@ -36,6 +37,10 @@ OPEN_TTL = 7 * 86400   # older ones leave views.json
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PAUSE_LINE = "[Discord] 🛑 pause the queue"
 RESUME_LINE = "[Discord] ▶️ resume the queue"
+GAUTH_WINDOW_S = 600   # the code is accepted this long after the URL was sent
+GAUTH_URL_WAIT_S = 30
+GAUTH_RESULT_WAIT_S = 60
+_clock, _sleep = time.time, time.sleep   # seams: tests drive the URL poll and the result wait without waiting
 # decision-tier kinds that are already covered by the perm mirror and the lead-question approval
 _COVERED = ("needs_you",)
 
@@ -297,6 +302,10 @@ def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=
             _lead_question(d, st, r, links[r["project"]], now)
             _mirror_events(d, st, r["project"], links[r["project"]], now)
         _trim_open(st)
+        try:
+            gauth_sweep(d, now)
+        except Exception as e:   # noqa: BLE001 -- a bad pending record never stops the card
+            print(f"discord_ops: gauth sweep skipped: {type(e).__name__}", file=sys.stderr, flush=True)
         text = render_card(records, tasks_by_project, links, limits, now, floors)
         card = discord_feed.card_op_due(st, text, now)
         if card:
@@ -353,7 +362,139 @@ def _collapse(v, n=FIELD_MAX):
     return " ".join(str(v or "").split())[:n]
 
 
-def handle_event(project, d, ev, add_line, allow):
+# ---- /lead and /gauth ----
+def _ireply(d, iid, content, **kw):
+    if iid:
+        discord_feed.outbox_write(d, {"op": "ireply", "iid": str(iid), "content": str(content)[:1900], **kw})
+
+
+def _pending_path():
+    return tc_env.ops_dir() / "gauth-pending.json"
+
+
+def _pending_load():
+    return {k: v for k, v in _load(_pending_path()).items() if isinstance(v, dict)}
+
+
+def _pending_save(pend):
+    _write_json(_pending_path(), pend)
+
+
+def _lead_event(d, project, ev, run):
+    action = ev.get("action")
+    iid = ev.get("iid")
+    if action not in ("restart", "handoff"):
+        return "ignored"
+    if run is None:
+        return "ignored"
+    argv = [str(discord_dialogs.BIN / "tmux-ctl"), "lead-restart", project]
+    if action == "restart":
+        argv.append("--resume")
+    else:
+        doc = ((_load(tc_env.ops_dir() / "views.json").get("leads") or {}).get(project) or {}).get("doc")
+        if not doc:
+            _ireply(d, iid, f"no handoff doc for {project}")
+            return "no handoff doc"
+        argv += ["--doc", str(doc)]
+    try:
+        out = str(run(argv) or "").strip()
+    except Exception as e:   # noqa: BLE001 -- the tool's own error text goes back to the user
+        _ireply(d, iid, f"lead-restart failed: {_collapse(e, 500) or type(e).__name__}")
+        return "failed"
+    _ireply(d, iid, out.splitlines()[-1] if out else f"restarted {project}")
+    return "restarted"
+
+
+def _gauth_slash(d, project, user, ev):
+    iid = ev.get("iid")
+    try:
+        gauth.load_config(project)
+    except gauth.GauthError as e:
+        _ireply(d, iid, str(e), private=True)
+        return "no config"
+    try:
+        if gauth.status(project) == "waiting":
+            _ireply(d, iid, f"a /gauth for {project} is already waiting for its code", private=True)
+            return "busy"
+        gauth.start(project)
+    except gauth.GauthError as e:
+        _ireply(d, iid, str(e), private=True)
+        return "failed"
+    url, end = None, _clock() + GAUTH_URL_WAIT_S
+    while True:
+        url = gauth.read_url(project, timeout=0)
+        if url or _clock() >= end:
+            break
+        _sleep(1)
+    if not url:
+        try:
+            gauth.close(project)
+        except Exception:   # noqa: BLE001
+            pass
+        _ireply(d, iid, f"no sign-in URL appeared within {GAUTH_URL_WAIT_S} s; closed", private=True)
+        return "failed"
+    pend = _pending_load()
+    pend[project] = {"project": project, "user": user, "iid": str(iid or ""), "url_ts": _clock()}
+    _pending_save(pend)
+    _ireply(d, iid, f"Open this URL, sign in with Google, then press Enter code and paste the code (valid 10 min):\n{url}",
+            components=[[{"label": "Enter code", "style": 1, "custom_id": f"ab:gauth:code:{project}"}]], private=True)
+    return "url sent"
+
+
+def _gauth_close(project, pend):
+    try:
+        gauth.close(project)
+    except Exception as e:   # noqa: BLE001
+        print(f"discord_ops: gauth close failed ({project}): {type(e).__name__}", file=sys.stderr, flush=True)
+    pend.pop(project, None)
+    _pending_save(pend)
+
+
+def _gauth_modal(d, project, user, ev):
+    pend = _pending_load()
+    rec = pend.get(project)
+    if not rec or rec.get("user") != user:
+        return "ignored"
+    if _clock() - (rec.get("url_ts") or 0) > GAUTH_WINDOW_S:
+        _gauth_close(project, pend)
+        _ireply(d, rec.get("iid"), f"gauth for {project} timed out; run /gauth again")
+        return "timed out"
+    code = str(ev.get("text") or "").strip()
+    iid = rec.get("iid")
+    try:
+        cfg = gauth.load_config(project)
+        gauth.send_code(project, code)
+    except Exception as e:   # noqa: BLE001 -- the text can echo the code: only the class leaves this function
+        _gauth_close(project, pend)
+        _ireply(d, iid, f"could not send the code ({type(e).__name__}); run /gauth again")
+        return "auth failed"
+    res, end = None, _clock() + GAUTH_RESULT_WAIT_S
+    while True:
+        res = gauth.result(project)
+        if res or _clock() >= end:
+            break
+        _sleep(1)
+    if res and res[0] == "ok":
+        outcome, result = f"authenticated: {gauth.token_check(cfg)}", "authenticated"
+    else:
+        outcome, result = "auth failed: " + (str(res[1]) if res else f"no result in {GAUTH_RESULT_WAIT_S} s"), "auth failed"
+    outcome = outcome.replace(code, "***") if code else outcome
+    _gauth_close(project, pend)
+    _ireply(d, iid, outcome)
+    return result
+
+
+def gauth_sweep(d, now):
+    """tick: close every waiting gauth whose code window has passed, tell its interaction, audit it."""
+    pend = _pending_load()
+    for project, rec in list(pend.items()):
+        if now - (rec.get("url_ts") or 0) > GAUTH_WINDOW_S:
+            _gauth_close(project, pend)
+            _ireply(d, rec.get("iid"), f"gauth for {project} timed out; run /gauth again")
+            discord_feed.audit_append(d, str(rec.get("user") or ""), "gauth", f"{project}:gauth", "timed out")
+
+
+def handle_event(project, d, ev, add_line, allow, run=None):
     """slash / modal / read / rejected: act, audit in <d>/audit.jsonl, return the audit result. `project` is the default
     when the event names none (events forwarded from a project's controls)."""
     user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
@@ -373,6 +514,17 @@ def handle_event(project, d, ev, add_line, allow):
         return result
     elif not _known(project):
         result = "unknown project"
+        if kind == "slash" and ev.get("command") in ("lead", "gauth"):
+            _ireply(d, ev.get("iid"), "unknown project")
+    elif kind == "slash" and ev.get("command") == "lead":
+        result = _lead_event(d, project, ev, run)
+        target = f"lead:{ev.get('action')}"
+    elif kind == "slash" and ev.get("command") == "gauth":
+        result = _gauth_slash(d, project, user, ev)
+        target = "gauth"
+    elif kind == "modal" and ev.get("form") == "gauth":
+        result = _gauth_modal(d, project, user, ev)
+        target = "gauth"
     elif kind == "slash":
         line = {"pause": PAUSE_LINE, "resume": RESUME_LINE}.get(ev.get("command"))
         if line:
@@ -498,7 +650,7 @@ def consume(add_line, run, now, on_merge=None):
                     result = _click(d, user, cid, st, add_line, now, on_merge) if user in allow else "rejected"
                     discord_feed.audit_append(d, user, "click", cid, result)
                 else:
-                    handle_event(None, d, ev, add_line, allow)
+                    handle_event(None, d, ev, add_line, allow, run=run)
                 done += 1
             except Exception as e:   # noqa: BLE001 -- one bad event never blocks the rest
                 print(f"discord_ops: event {f.name} failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
