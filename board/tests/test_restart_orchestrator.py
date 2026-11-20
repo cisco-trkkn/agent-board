@@ -73,7 +73,7 @@ class RestartOrchestratorTest(unittest.TestCase):
     def test_restarts_in_session_root_not_pane_path(self):
         fake = Fake([(1, "claude", False)], cmd="zsh")
         self.run_act(fake)
-        self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", self.root))
+        self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", self.root, relay.login_shell(fake.tmux), "-l"))
 
     def test_close_session_also_kills_bg_by_exact_name(self):
         fake = Fake([(1, "claude", False)])
@@ -146,7 +146,7 @@ class RestartOrchestratorTest(unittest.TestCase):
     def test_idle_respawns_in_root_then_sends_keys(self):
         fake = Fake([(1, "claude", False)], rows=["> "])
         msg = self.run_act(fake)
-        self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", self.root))
+        self.assertEqual(fake.find("respawn-pane")[0], ("respawn-pane", "-k", "-t", "%7", "-c", self.root, relay.login_shell(fake.tmux), "-l"))
         sk = fake.find("send-keys")
         self.assertEqual(sk[0], ("send-keys", "-t", "%7", "-l", "--", relay.launch_line(self.root)))
         self.assertEqual(sk[1], ("send-keys", "-t", "%7", "Enter"))

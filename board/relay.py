@@ -123,9 +123,16 @@ def launch_line(root, prompt=None):
     return f"cd -- {shlex.quote(root)} && {cmd}"
 
 
+def login_shell(tmux):
+    """What tmux itself runs for a new window: the global default-shell, else $SHELL, else /bin/sh."""
+    out = tmux("show-options", "-gv", "default-shell").strip()
+    return out if out.startswith("/") else (os.environ.get("SHELL") or "/bin/sh")
+
+
 def respawn(tmux, pane, root, prompt=None):
-    """Replace whatever runs in pane with a fresh shell in root, then start claude-orchestrator [prompt]."""
-    tmux("respawn-pane", "-k", "-t", pane, "-c", root, check=True)  # no command: fresh default shell
+    """Replace whatever runs in pane with a fresh login shell in root, then start claude-orchestrator [prompt].
+    The shell is passed explicitly: respawn-pane without a command re-runs the pane's original start command."""
+    tmux("respawn-pane", "-k", "-t", pane, "-c", root, login_shell(tmux), "-l", check=True)
     tmux("send-keys", "-t", pane, "-l", "--", launch_line(root, prompt), check=True)
     tmux("send-keys", "-t", pane, "Enter", check=True)
 

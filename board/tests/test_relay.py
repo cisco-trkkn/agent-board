@@ -178,6 +178,43 @@ class RealTmuxSessionRootTest(unittest.TestCase):
         self.assertEqual(relay.session_root(tmux, "proj"), str(a))
 
 
+class RespawnCommandTest(unittest.TestCase):
+    """respawn-pane without a command re-runs the pane's old start command: pass a login shell explicitly."""
+
+    class Rec:
+        def __init__(self, default_shell=""):
+            self.calls, self.default_shell = [], default_shell
+
+        def __call__(self, *a, check=False):
+            self.calls.append(a)
+            return self.default_shell + "\n" if a[:3] == ("show-options", "-gv", "default-shell") else ""
+
+    def respawn_call(self, rec):
+        return [c for c in rec.calls if c[0] == "respawn-pane"][0]
+
+    def test_respawn_pane_ends_with_the_tmux_default_shell_as_login_shell(self):
+        rec = self.Rec("/bin/zsh")
+        relay.respawn(rec, "%1", "/r", "p")
+        self.assertEqual(self.respawn_call(rec), ("respawn-pane", "-k", "-t", "%1", "-c", "/r", "/bin/zsh", "-l"))
+
+    def test_falls_back_to_SHELL_then_bin_sh(self):
+        with mock.patch.dict(os.environ, {"SHELL": "/opt/x/fish"}):
+            rec = self.Rec("")
+            relay.respawn(rec, "%1", "/r")
+            self.assertEqual(self.respawn_call(rec)[-2:], ("/opt/x/fish", "-l"))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            rec = self.Rec("")
+            relay.respawn(rec, "%1", "/r")
+            self.assertEqual(self.respawn_call(rec)[-2:], ("/bin/sh", "-l"))
+
+    def test_send_keys_still_follow_respawn(self):
+        rec = self.Rec("/bin/zsh")
+        relay.respawn(rec, "%1", "/r", "p")
+        names = [c[0] for c in rec.calls if c[0] in ("respawn-pane", "send-keys")]
+        self.assertEqual(names, ["respawn-pane", "send-keys", "send-keys"])
+        self.assertEqual(rec.calls[-1], ("send-keys", "-t", "%1", "Enter"))
+
+
 class RelayTest(unittest.TestCase):
     def test_relay_respawns_and_writes_lineage(self):
         fake = FakeTmux()
@@ -192,7 +229,7 @@ class RelayTest(unittest.TestCase):
         self.assertEqual((rec["old_session_id"], rec["doc"], rec["pane"]), ("OLD1", "/d.md", "%5"))
         rp = [c for c in fake.calls if c[0] == "respawn-pane"]
         sk = [c for c in fake.calls if c[0] == "send-keys"]
-        self.assertEqual(rp[0], ("respawn-pane", "-k", "-t", "%5", "-c", fake.root))
+        self.assertEqual(rp[0], ("respawn-pane", "-k", "-t", "%5", "-c", fake.root, relay.login_shell(fake), "-l"))
         self.assertEqual(sk[0], ("send-keys", "-t", "%5", "-l", "--",
                                  f"cd -- {shlex.quote(fake.root)} && " + shlex.quote(relay.orchestrator())
                                  + " 'Read /d.md and continue from where the previous session left off.'"))
