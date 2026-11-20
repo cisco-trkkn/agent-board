@@ -959,6 +959,8 @@ class LeadGauth(Base):
         self.assertTrue(done.wait(5))
         self.assertIsNot(seen[0], threading.main_thread())
         self.assertTrue(seen[0].daemon)
+        seen[0].join(5)   # the worker still writes its reply and audit: let it finish before the temp dir goes
+        self.assertFalse(seen[0].is_alive())
 
     def test_a_dead_gauth_worker_is_closed_by_the_tick_sweep(self):
         self.event("1.json", self.gauth())
