@@ -79,7 +79,7 @@
   {
    "id": 10,
    "subject": "LR Task 10: Agent rules for re-auth",
-   "status": "pending",
+   "status": "completed",
    "blockedBy": [],
    "description": "**Goal:** Workers stop and tell the lead on Google auth errors; a remote lead points the user at `/gauth`.\n\n**Files:**\n- Modify: `claude/worker.md` (end of `## Processes`), `claude/orchestrator.md` (`## Remote: Discord`, \"While remote:\" list)\n\n**Acceptance Criteria:**\n- [ ] worker.md: one bullet: on `invalid_rapt`, `Reauthentication failed` or missing Google credentials, stop that step and message the lead\n- [ ] orchestrator.md: one bullet: the lead posts `🔑 <project> needs Google re-auth: run /gauth <project>` and does not ask for the terminal while the user is remote\n- [ ] One bullet in each tmux-orchestrator SKILL.md table: `tmux-ctl lead-restart <project> [--resume|--doc <d>]`\n\n**Verify:** `grep -c 'invalid_rapt' claude/worker.md && grep -c '/gauth' claude/orchestrator.md && grep -c 'lead-restart' claude/skills/tmux-orchestrator/SKILL.md claude/plugin/skills/tmux-orchestrator/SKILL.md` → each ≥ 1\n\n```json:metadata\n{\"files\": [\"claude/worker.md\", \"claude/orchestrator.md\", \"claude/skills/tmux-orchestrator/SKILL.md\", \"claude/plugin/skills/tmux-orchestrator/SKILL.md\"], \"verifyCommand\": \"grep -c 'invalid_rapt' claude/worker.md && grep -c '/gauth' claude/orchestrator.md && grep -c 'lead-restart' claude/skills/tmux-orchestrator/SKILL.md claude/plugin/skills/tmux-orchestrator/SKILL.md\", \"acceptanceCriteria\": [\"worker bullet\", \"orchestrator bullet\", \"skill table rows\"], \"modelTier\": \"mechanical\"}\n```"
   },
@@ -111,5 +111,5 @@
    "description": "**Goal:** The user runs the runbook's items on the phone after the merge.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:** none\n\n**Acceptance Criteria:**\n- [ ] `/lead status agent-board` answers privately with the lead's window, state and context %\n- [ ] `/lead restart` of an idle lead restarts it and `tmux-ctl discord status` shows the new lead holding the bot\n- [ ] `/tasks` lists a plan's tasks\n- [ ] One real `/gauth signal-hub-gcp` ends with `token ok`\n\n**Verify:** the runbook `docs/superpowers/e2e/2026-11-20-lead-recovery-runbook.md`, evidence captured in the task metadata\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"docs/superpowers/e2e/2026-11-20-lead-recovery-runbook.md\", \"acceptanceCriteria\": [\"/lead status answers privately\", \"/lead restart restarts and holds the bot\", \"/tasks lists tasks\", \"/gauth ends with token ok\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```"
   }
  ],
- "lastUpdated": "2026-11-20T15:02:25Z"
+ "lastUpdated": "2026-11-20T15:05:55Z"
 }
