@@ -36,6 +36,30 @@ check "all 9 dialogs fixtures ran"             test $ran -eq 9 -a "$(print -rl -
 check "named session: the trailing rule is on the fixture"  test "$(tail -1 $FXD/question-named-session.txt)" = "$(grep -a -m1 ' fruit-choice-question ─$' $FXD/question-named-session.txt)"
 check "named session: options equal question-single's"  eval 'dl d-question-named-session show; test "$(jget "[(o[\"n\"], o[\"label\"]) for o in d[\"options\"]]")" = "$(print -r -- "$(<$FXD/expect/question-single.json)" | python3 -I -c "import json, sys; print([(o[\"n\"], o[\"label\"]) for o in json.load(sys.stdin)[\"options\"]])")"'
 
+# the rule's name may be any text, not only an ASCII word (_dlg_screen runs under LC_ALL=C, so the awk sees bytes)
+# mutation: back to the ` @?[A-Za-z0-9_.-]+ ─$` tail → every "name" variant below: dialog none, exit 1
+dl d-question-named-session show; nm0="$out"
+nmi=0
+for nm in '日本語' 'café' 'fix(tmux-ctl): dialog' 'a/b+c' 'two words (x)'; do
+  (( nmi++ ))
+  sed "\$s| fruit-choice-question ─\$| $nm ─|" $FXD/question-named-session.txt > $S/name$nmi.txt
+  check "name '$nm': variant carries the name"  test "$(tail -1 $S/name$nmi.txt | grep -a -c -F " $nm ─")" = 1
+  replay d-name$nmi $S/name$nmi.txt; dl d-name$nmi show
+  check "name '$nm': same JSON as the plain name, exit 0"  test "$out" = "$nm0" -a $rc -eq 0
+done
+# the rule is only dropped under a footer, and only as the last row: anything else is not a dialog
+# mutation: drop the footer test of the trailing-row rule → "rule with no footer" reads a dialog
+sed '$d' $FXD/question-named-session.txt > $S/nobar.txt
+replay d-nobar $S/nobar.txt; dl d-nobar show
+check "named session: with and without the rule, the same JSON (lines unchanged)"  test "$out" = "$nm0" -a -n "$nm0"
+{ cat $S/nobar.txt; print -r -- ' status row after the footer'; tail -1 $FXD/question-named-session.txt; } > $S/neg-status.txt
+{ cat $FXD/question-named-session.txt; print -r -- ' a row after the rule'; } > $S/neg-after.txt
+grep -a -v 'Esc to cancel' $FXD/question-named-session.txt > $S/neg-nofooter.txt
+for v in status after nofooter; do
+  replay n-$v $S/neg-$v.txt; dl n-$v show
+  check "named session, $v: no dialog, exit 1"  test $rc -eq 1 -a -z "$out" -a "$err" = "dialog: none in n-$v"
+done
+
 # --- a teammate's request in the lead's window (team-request.txt): the name is only in the header row
 # mutation: remove the `from` handling of _dlg_parse → every check below fails (no from)
 dl d-team-request show
