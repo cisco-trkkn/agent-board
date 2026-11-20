@@ -60,16 +60,33 @@ class TestReader(Base):
         self.assertEqual(ctxsize.first_turns_tokens(FIX), 63403 + 67478 + 74262 + 76129)
 
     def test_agrees_with_usage_index(self):
-        n = 0
+        # fixture lines 2-6, 8, 9 (README table) are the main-thread usage lines; each has its own literal
+        expected = {2: 63194, 3: 63194, 4: 67099, 5: 67099, 6: 67099, 8: 73748, 9: 75890}
         with open(FIX) as f:
             lines = f.read().splitlines()
-        for raw in lines:
+        got = {}
+        for i, raw in enumerate(lines, 1):
             d = json.loads(raw)
             if d.get("type") == "assistant" and not d.get("isSidechain") and (d.get("message") or {}).get("usage"):
-                row = usage.row_from_line(d, False)
-                self.assertIn(usage.context_tokens(row), [t[1] for t in TURNS])
-                n += 1
-        self.assertEqual(n, 7)
+                got[i] = usage.context_tokens(usage.row_from_line(d, False))
+        self.assertEqual(got, expected)
+
+    def test_context_tokens_across_block_boundaries(self):
+        def line(i, ctx):
+            return json.dumps({"type": "assistant", "requestId": "r%d" % i, "message": {"usage": {
+                "input_tokens": ctx, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                "output_tokens": 1}}, "pad": "x" * (40 + 13 * i)}) + "\n"
+        body = "".join(line(i, 1000 + i) for i in range(8))
+        # a trailing non-assistant line, so the reader walks back over several blocks to reach the last turn
+        body += json.dumps({"type": "user", "pad": "y" * 300}) + "\n"
+        p = self.tmp(body)
+        p2 = self.tmp(body.rstrip("\n"))  # no trailing newline
+        old = ctxsize.BLOCK
+        self.addCleanup(setattr, ctxsize, "BLOCK", old)
+        for block in (7, 64, 100, 129, 250):
+            ctxsize.BLOCK = block
+            self.assertEqual(ctxsize.context_tokens(p), 1007, block)
+            self.assertEqual(ctxsize.context_tokens(p2), 1007, block)
 
     def test_bad_input_returns_none(self):
         d = tempfile.mkdtemp()

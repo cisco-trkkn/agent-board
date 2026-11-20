@@ -12,7 +12,8 @@ Sources (basenames):
 
 Hand edit: fixture line 10 is captured line 98 of the lead capture (request BKMjFb) with its `message.usage` key
 deleted, because no captured assistant line lacked usage. Nothing else was edited. Lines are in the order below,
-not captured order; fixture line 9's timestamp is earlier than line 10's by design of the pick, and line 7 is the sidechain.
+not captured order. Line 7 is the sidechain line (an older timestamp, from another transcript); line 9 comes
+before line 10 in time.
 
 Fixture lines (context = input + cache_read + cache_creation; total = context + output_tokens):
 
