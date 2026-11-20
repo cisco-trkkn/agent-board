@@ -62,6 +62,8 @@
 #   tmux-ctl discord merge-request --project <p> --task <id> --spec <s> --branch <b> [--target main] --tests <line> --verdict <text> [--finding <line>]…  post a merge approval (queue integration ask)
 #   tmux-ctl discord send [--thread <key>] [<file>…] [-m <text>] [--project <name>]  post up to 10 files; snap [<project>]  post a PNG of the board
 #   tmux-ctl discord watch --once|install|status|uninstall  the reconnect watchdog
+#   tmux-ctl gauth config <project> [--adc|--no-adc] [--impersonate <sa>] [--account <email>]  set the fixed Google re-auth command (terminal only, file mode 0600)
+#   tmux-ctl gauth start|status|close <project>  run it in window gauth-<project> of <project>-bg; the code is typed by the board (/gauth), never by this command
 #   tmux-ctl metrics backfill-tasks [--log P]  task lines (tasks.jsonl) for past runs that have none
 #   tmux-ctl metrics analyze [--since 7d|30d|ISO] [--json]  trends, flags, coverage over every project -> stats.json
 #   tmux-ctl metrics recommend [--since] [--stats P]  three recommendations over stats.json, evidence-checked
@@ -104,7 +106,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) ]] || die "not inside tmux"   # discord and context dream* work outside tmux
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) ]] || die "not inside tmux"   # discord, context dream* and gauth config work outside tmux
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -302,6 +304,10 @@ cmd="$1"; shift 2>/dev/null
 if [[ "$cmd" == discord ]]; then   # no tmux needed
   source "${0:A:h:h}/tools/lib/discord.zsh"
   discord_cmd "$@"; exit $?
+fi
+if [[ "$cmd" == gauth ]]; then   # config needs no tmux; the others reach tmux through board/gauth.py
+  [[ "$1" == (config|start|status|close) && -n "$2" ]] || die 'usage: tmux-ctl gauth config <project> [--adc|--no-adc] [--impersonate <sa>] [--account <email>] | start|status|close <project>'
+  python3 -I "${0:A:h:h}/board/gauth.py" "$@"; exit $?
 fi
 if [[ "$cmd" == context && ( "$1" == dream || "$1" == dream-report || "$1" == dream-file || "$1" == dream-revert || "$1" == dream-schedule ) ]]; then   # no tmux needed (launchd runs it)
   dsub="$1"; shift
@@ -689,7 +695,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,72p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
