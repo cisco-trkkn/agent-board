@@ -29,6 +29,8 @@ ANSWERED = "answered at the terminal"
 NOT_PARSED = "(dialog not parsed)"
 _NONE = "dialog: none in"   # stderr of `tmux-ctl dialog <win> show` when the pane shows no dialog (tools/lib/dialog.zsh)
 ERROR = "error"
+GONE_S = 30        # a teammate's window must be missing on two scans this far apart before its request is denied
+DENY_MAX = 10      # stale Deny presses per lead pane per tick
 _HOLDS_TEXT = "the input line holds text"   # stderr of `type` when the rows match but the input line holds typed text (tools/lib/dialog.zsh)
 _CHANGED = ("dialog: the dialog in", "dialog: the screen in")   # stderr start of `press` / `type` when the screen no longer matches --expect (tools/lib/dialog.zsh)
 IDLE = "idle"
@@ -71,6 +73,10 @@ def _one_line(s, n):
 
 def header(project, window, show):
     icon = "🔐" if show.get("kind") == "permission" else "❓"
+    # `from` is a teammate's request drawn in the lead's window. A request taller than the pane reads with no `from` (tools/lib/dialog.zsh),
+    # so it gets the ordinary header below and is never a stale-Deny candidate.
+    if show.get("from"):
+        return f"{icon} {project} · {show['from']} (in the lead's window) wants to …"
     return f"{icon} {project} · {window}: {_one_line(show.get('question') or '', QUESTION_MAX)}"
 
 
@@ -215,8 +221,98 @@ def _idle_track(last, sessions, now):
     return out
 
 
-def _scan(dialogs, sessions, now, run, last=None):
+def _lead_of(sessions, pid):
+    """(session, window) of pane `pid` when it is a lead pane (not a worker or teammate window), else (None, None)."""
+    for s in sessions or []:
+        for w in s.get("windows") or []:
+            if any(p.get("id") == pid for p in w.get("panes") or []):
+                return (s, w) if not (w.get("worker") or w.get("teammate")) else (None, None)
+    return None, None
+
+
+def _mate_live(session, name):
+    """The one window lookup of the stale-Deny step: True when the lead's tmux session has a window named exactly `✦ <name>`."""
+    return any(w.get("name") == f"✦ {name}" for w in session.get("windows") or [])
+
+
+def _deny_stale(dialogs, found, sessions, gone, now, run):
+    """Press No on every teammate request in a lead pane whose teammate's window is gone on two scans >= GONE_S apart (state `gone`:
+    "<pane>|<name>" -> {first}). Returns `found` without the requests it pressed. After a press the pane is shown again and the next
+    request is pressed too when its name is confirmed gone; at most DENY_MAX per pane, and a changed screen or failed press stops
+    that pane until the next tick."""
+    seen, out = set(), []
+    for item in found:
+        key, pid, project, window, got = item
+        name = got.get("from")
+        sess_, _w = _lead_of(sessions, pid) if name else (None, None)
+        if sess_ is None:
+            out.append(item)
+            continue
+        gk = f"{pid}|{name}"
+        seen.add(gk)
+        if _mate_live(sess_, name):
+            gone.pop(gk, None)
+            out.append(item)
+            continue
+        rec = gone.setdefault(gk, {"first": now})
+        if now - rec["first"] < GONE_S:
+            out.append(item)
+            continue
+        pressed, cur = 0, item
+        while cur is not None:
+            key, _pid, project, window, got = cur
+            if not _deny(dialogs, key, pid, project, got, run, now):
+                out.append(cur)
+                break
+            pressed += 1
+            if pressed >= DENY_MAX:
+                break
+            nxt = _show(run, pid)
+            nname = nxt.get("from") if isinstance(nxt, dict) else None
+            nrec = gone.get(f"{pid}|{nname}") if nname else None
+            if not (nrec and now - nrec["first"] >= GONE_S and not _mate_live(sess_, nname)):
+                break
+            cur = (key_of(pid, nxt["lines"]), pid, project, window, nxt)
+    for gk in [k for k in gone if k not in seen and k.split("|")[0] in {i[1] for i in found}]:
+        del gone[gk]   # its request left the screen: a later one from that name starts a fresh 30 s wait
+    return out
+
+
+def _deny(dialogs, key, pid, project, got, run, now):
+    """Press No (with the exact-text re-check) on a stale request; True when it was pressed. Audit `dialog / stale-deny / <name>`,
+    feed line, and the existing post (if any) edited to `→ denied: <name> is gone`. Any failure (a `changed` re-check included)
+    returns False: nothing is recorded and the next tick tries again."""
+    name = got["from"]
+    try:
+        run([str(BIN / "tmux-ctl"), "dialog", pid, "press", "--option", "No", "--expect", "\n".join(got["lines"])])
+    except Exception as e:  # noqa: BLE001
+        if not str(e).startswith(_CHANGED):
+            _warn(f"stale deny failed ({project} {pid})", e)
+        return False
+    d = target_dir(project)
+    if d is not None:
+        try:
+            discord_feed.audit_append(d, "board", "dialog", "stale-deny", name)
+        except Exception as e:  # noqa: BLE001
+            _warn(f"stale-deny audit failed ({project})", e)
+    try:
+        discord_feed.append_event(project, {"ts": now, "project": project, "spec": "", "kind": "stale_deny", "tier": "progress",
+                                            "text": f"denied stale request from {name} (window gone)"})
+    except Exception as e:  # noqa: BLE001
+        _warn(f"stale-deny feed failed ({project})", e)
+    rec = _record(dialogs, key, need_show=False)
+    if rec is not None:
+        try:
+            discord_feed.outbox_write(Path(rec["dir"]), {"op": "edit", "key": key, "text": f"{rec['header']}\n→ denied: {name} is gone"})
+        except Exception as e:  # noqa: BLE001
+            _warn(f"edit failed ({key})", e)
+    dialogs.pop(key, None)
+    return True
+
+
+def _scan(dialogs, sessions, now, run, last=None, gone=None):
     last = last if last is not None else {}
+    gone = gone if gone is not None else {}
     idle = _idle_track(last, sessions, now)
     cache, live, panes = {}, {}, {}   # pane id -> show result; pane id -> the key on its screen now, or ERROR; pane id -> pane
 
@@ -240,6 +336,7 @@ def _scan(dialogs, sessions, now, run, last=None):
         live[pid] = key_of(pid, got["lines"])
         found.append((live[pid], pid, project, window, got))
     _sweep(dialogs, live, panes, show, run)   # before the posts: a changed dialog's old message is closed above its new one
+    found = _deny_stale(dialogs, found, sessions, gone, now, run)
     for pid, project, window, prev in idle:
         try:
             rows = _rows(run, pid)
@@ -301,7 +398,7 @@ def _locked_state():
         except (OSError, ValueError):
             st = {}
         st = st if isinstance(st, dict) else {}
-        for k in ("dialogs", "gates", "last_status"):
+        for k in ("dialogs", "gates", "last_status", "gone"):
             if not isinstance(st.get(k), dict):
                 st[k] = {}
         try:
@@ -322,7 +419,7 @@ def _locked():
 def scan(sessions, now, run):
     """One pass over every waiting claude pane of `sessions` (build_state()["sessions"]): post new dialogs, retire answered ones."""
     with _locked_state() as st:
-        _scan(st["dialogs"], sessions, now, run, st["last_status"])
+        _scan(st["dialogs"], sessions, now, run, st["last_status"], st["gone"])
 
 
 def _record(dialogs, key, need_show=True):
