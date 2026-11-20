@@ -646,7 +646,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   function close() { closed = true; }
 
-  const ctx = { dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
+  const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
   return { ctx, tick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 

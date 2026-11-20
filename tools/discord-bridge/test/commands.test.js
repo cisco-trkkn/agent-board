@@ -500,3 +500,29 @@ test('/gauth modal: the answer follows the write; a failed write answers could n
   const bad = await s2.run(fakeModal({ customId: 'ab:modal:gauth:alpha', fields: { code: 'abc' }, user: 'U1' }));
   assert.strictEqual(bad.replies[0].content, 'could not send the code; run /gauth again');
 });
+
+test('project bot: no project defaults to its own only in its home channel; elsewhere it acts like the ops bot', async () => {
+  const s = setup({ ops: false, views: { ...VIEWS, tasks: { alpha: 'T1', myproj: 'M1' } } });
+  const home = await s.run(fakeCommand({ name: 'tasks' }));
+  assert.match(home.replies[0].content, /M1/);
+  const away = await s.run(fakeCommand({ name: 'tasks', channelId: 'CC' }));
+  assert.strictEqual(away.replies[0].content, 'Pick a project');
+  assert.strictEqual(away.replies[0].components[0].components[0].custom_id, 'ab:tasks:pick');
+  for (const name of ['lead', 'gauth', 'pause']) {
+    const o = name === 'lead' ? { action: 'restart' } : {};
+    const i = await s.run(fakeCommand({ name, options: o, channelId: 'CC' }));
+    assert.strictEqual(i.replies[0].content, 'Pick a project.', name);
+    assert.strictEqual(i.deferredReplies.length, 0, name);
+  }
+  assert.deepStrictEqual(evShape(s).filter((e) => e.type === 'slash'), []);
+});
+
+test('project bot away from home: an explicit other project is acted on and an unknown one is refused', async () => {
+  const s = setup({ ops: false });
+  const ok = await s.run(fakeCommand({ name: 'lead', options: { action: 'restart', project: 'alpha' }, channelId: 'CC' }));
+  assert.match(ok.replies[0].content, /restart the alpha lead/);
+  const bad = await s.run(fakeCommand({ name: 'gauth', options: { project: 'nope' }, channelId: 'CC' }));
+  assert.strictEqual(bad.replies[0].content, 'Unknown project: nope');
+  await s.run(fakeCommand({ name: 'gauth', options: { project: 'alpha' }, channelId: 'CC' }));
+  assert.deepStrictEqual(evShape(s).map((e) => [e.command, e.project]), [['gauth', 'alpha']]);
+});

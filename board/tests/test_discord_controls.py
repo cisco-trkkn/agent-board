@@ -207,8 +207,8 @@ class ProjectBotLeadGauthTest(Base):
         self.runs.append(argv)
         return "restarted p: pane %5"
 
-    def slash(self, **ev):
-        self.event("1.json", {"type": "slash", "user": "U1", "iid": "I1", "ts": 1, "project": "p", **ev})
+    def slash(self, name="1.json", **ev):
+        self.event(name, {"type": "slash", "user": "U1", "iid": "I1", "ts": 1, "project": "p", **ev})
 
     def test_lead_restart_reaches_the_lead_runner(self):   # mutation: step/consume_events drop lead_run -> "not available here"
         self.slash(command="lead", action="restart")
@@ -223,6 +223,16 @@ class ProjectBotLeadGauthTest(Base):
         dc.step("p", self.rec(), 100.0, r, self.add, spawn=lambda f: f())
         self.assertEqual(r.calls, [[str(dc.BIN / "tmux-ctl"), "lead-restart", "p", "--resume"]])
         self.assertNotIn("not available here", [o.get("content") for o in self.ops_out()])
+
+    def test_event_for_another_project_targets_that_project(self):   # mutation: use the bot's own project -> restarts p
+        tc_env.discord_dir("q").mkdir(parents=True)
+        self.slash(command="lead", action="restart", project="q")
+        self.slash("2.json", command="gauth", project="q")
+        spawned = []
+        dc.step("p", self.rec(), 100.0, Runner(), self.add, lead_run=self.lead_run, spawn=lambda f: (spawned.append(f), f()))
+        self.assertEqual(self.runs[0][2:], ["q", "--resume"])
+        self.assertIn(("load_config", "q"), self.fg.calls)
+        self.assertNotIn(("load_config", "p"), self.fg.calls)
 
     def test_gauth_slash_reaches_the_spawn_seam(self):   # mutation: spawn not passed -> a real thread, start() may run after the assert
         self.slash(command="gauth")

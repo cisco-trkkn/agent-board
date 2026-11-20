@@ -86,7 +86,10 @@ async function handleCommand(i, ctx) {
   const event = (e) => ctx.writeEvent({ ...e, user, ts: ctx.now() });
   const own = path.basename(ctx.dir);
   const given = i.options?.getString?.('project') || null;
-  const project = name === 'ideas' ? given : (given || (ctx.ops ? null : own)); // /ideas covers every project unless one is given (R2)
+  // a project bot defaults to its own project only in its home channel (or a thread of it); elsewhere it acts like the ops bot
+  const homeId = ctx.ops ? null : ctx.homeChannel?.();
+  const inHome = !ctx.ops && (!ctx.homeChannel || (!!homeId && (i.channelId === homeId || i.channel?.parentId === homeId)));
+  const project = name === 'ideas' ? given : (given || (inHome ? own : null)); // /ideas covers every project unless one is given (R2)
 
   if (NEEDS_PROJECT.has(name) && !project) { await ctx.answer(i, 'Pick a project.'); return; }
   const data = ctx.views();
