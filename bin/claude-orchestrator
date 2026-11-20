@@ -48,7 +48,10 @@ if [[ "${TC_DISCORD-1}" != 0 ]]; then
       DC_HPANE="${DC_HOLD#* }"
       # the same project's old lead (window claude / claude-next) is on its way out in a handoff: wait for it to release
       # the bot (TC_DC_WAIT s, polled every TC_DC_POLL s) before settling for a lead without it. Other holders get no wait.
-      DC_WHO=; DC_WAITED=0
+      DC_WHO=; DC_WAITING=0
+      DC_WAIT="${TC_DC_WAIT:-60}"; [[ "$DC_WAIT" =~ '^(0|[1-9][0-9]*)$' ]] || DC_WAIT=60   # an integer >= 0, else the default
+      DC_POLL="${TC_DC_POLL:-2}"; [[ "$DC_POLL" =~ '^[1-9][0-9]*$' ]] || DC_POLL=2   # an integer >= 1, else the default
+      DC_DEADLINE=$(( SECONDS + DC_WAIT ))
       while [[ -n "$DC_HOLD" && "$DC_HPANE" != "$TMUX_PANE" ]]; do
         DC_WHO=
         [[ "$DC_HPANE" != - ]] && DC_WHO="$(tc_tmux display -p -t "$DC_HPANE" '#{pane_id} #{?session_group,#{session_group},#{session_name}}:#{window_name}' 2>/dev/null)"
@@ -56,9 +59,9 @@ if [[ "${TC_DISCORD-1}" != 0 ]]; then
         DC_HSESS="${DC_WHO#the lead in }"; DC_HWIN="${DC_HSESS#*:}"; DC_HSESS="${DC_HSESS%%:*}"
         DC_HSESS="${DC_HSESS%-bg}"
         [[ "$DC_HSESS" == "$DC_PROJECT" && ( "$DC_HWIN" == claude || "$DC_HWIN" == claude-next ) ]] || break
-        (( DC_WAITED >= ${TC_DC_WAIT:-60} )) && break
-        (( DC_WAITED )) || print -u2 "discord: waiting up to ${TC_DC_WAIT:-60}s for $DC_WHO to release $DC_PROJECT's bot"
-        sleep "${TC_DC_POLL:-2}"; DC_WAITED=$(( DC_WAITED + ${TC_DC_POLL:-2} ))
+        (( SECONDS >= DC_DEADLINE )) && break
+        (( DC_WAITING )) || print -u2 "discord: waiting up to ${DC_WAIT}s for $DC_WHO to release $DC_PROJECT's bot"
+        DC_WAITING=1; sleep "$DC_POLL"
         DC_HOLD="$( { source "$AB_REPO/tools/lib/discord.zsh" && dc_holder "$DC_DIR" } 2>/dev/null )" || DC_HOLD=
         DC_HPANE="${DC_HOLD#* }"
       done

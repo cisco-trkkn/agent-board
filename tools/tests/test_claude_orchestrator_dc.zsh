@@ -175,7 +175,27 @@ discord: tt's bot is held by the lead in tt:claude-next (pid $HP); this lead sta
   run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
   el=$(( EPOCHREALTIME - t0 ))
   check "same project, other window name: no wait" test $(( el < 10 )) = 1 -a "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
-  release; tt kill-window -t "$NEXTP"
+  release
+  # bad knobs fall back to the defaults, and the wait is a deadline: a never-released same-project holder must end the
+  # wait in time (a watchdog frees the holder after 40 s so a regression fails the test instead of hanging it)
+  hold "$NEXTP"; WDPIDS=(${HPIDS})
+  ( sleep 40; for p in ${WDPIDS}; do kill $p 2>/dev/null; done ) >/dev/null 2>&1 &
+  WD=$!
+  for bad in abc 0 -2 1.5; do
+    t0=$EPOCHREALTIME
+    run TC_DC_WAIT=6 TC_DC_POLL=$bad "$L" --continue
+    el=$(( EPOCHREALTIME - t0 ))
+    check "TC_DC_POLL=$bad: ends within the wait, no channel" test $(( el < 25 )) = 1 -a "$(nch)" = 0 -a "$(<$S/dsd)" = UNSET
+    check "TC_DC_POLL=$bad: no math error, the wait line is the default shape" test -z "$(grep -i 'bad math\|not valid\|division' $S/err)" -a -n "$(grep -x 'discord: waiting up to 6s for .*' $S/err)"
+  done
+  t0=$EPOCHREALTIME
+  run TC_DC_WAIT=6 TC_DC_POLL=1 "$L" --continue
+  el=$(( EPOCHREALTIME - t0 ))
+  check "deadline: WAIT=6 never released ends within 6 s plus one poll and scans" test $(( el >= 4.5 && el < 16 )) = 1 -a "$(nch)" = 0
+  ( sleep 15; for p in ${WDPIDS}; do kill $p 2>/dev/null; done ) >/dev/null 2>&1 &
+  run TC_DC_WAIT=1x TC_DC_POLL=1 "$L" --continue
+  check "TC_DC_WAIT=1x: no math error on stderr, falls back to 60 in the wait line" test -z "$(grep -i 'bad math\|not valid' $S/err)" -a -n "$(grep -x 'discord: waiting up to 60s for .*' $S/err)"
+  kill $WD 2>/dev/null; release; tt kill-window -t "$NEXTP"
   for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F fake/discord/0.0.4 | grep -v grep)" ]] && break; sleep 0.1; done
   check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F 'fake/discord/0.0.4' | grep -v grep)"
 else
