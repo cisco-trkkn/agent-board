@@ -32,6 +32,15 @@ Pear, so I do not think it is that. A mis-tap on Pear is possible, though the us
 Make it diagnosable next time: in `bridge.js`, `say()` the toggled id and new style on each toggle, and the picks on submit.
 Then ask the user to retry once.
 
+## Follow-up done (lead's ruling): diagnostic log lines in the bridge
+`tools/discord-bridge/bridge.js` `onDialogInteraction` now logs one line per toggle (`toggle <custom_id> "<label>" -> <new style>`) and one per submit
+(`submit <key> picks [..] buttons t1 "<label>" <style>, …` for every `:t<n>` button of the clicked message). No behaviour change.
+Tests first in `test/bridge.test.js`: `toggle logs the custom id, the label and the new style` and
+`submit logs the picks and the label and style of every t<n> button`; RED run showed exactly those two failing (151 pass, 2 fail),
+GREEN `npm test` 153 pass, 0 fail. Commit `f886cb6` (`fix(bridge): log each dialog toggle and the button states at submit`).
+Full suite in the worktree: `ALL PASS 172 jobs in 8m9s` (rc=4 = the time budget only; `grep -c FAIL` on the output = 0).
+The bridge is not restarted; the lead does that and the merge.
+
 ## Files, commits, suite
 Only this report is added on branch `fix/multiselect-picks`. No code changed, so I did not run `zsh tools/tests/all.zsh`.
 The parse, `message()` and discord.js probes ran as one-off scripts in the scratchpad and are not committed.
