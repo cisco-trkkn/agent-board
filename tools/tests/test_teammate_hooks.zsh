@@ -80,9 +80,20 @@ check "lead Stop: ... and once only"                    quiet
 rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr" prober:$((T0+50))
 rem Stop "$tmp/args-lead" $((T0+60)) 1
 check "lead Stop: message newer than the stop: no reminder" quiet
-mk_tr "$tmp/tr" prober:$((T0+5))
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr" prober:$((T0-21))
 rem Stop "$tmp/args-lead" $((T0+60)) 1
-check "lead Stop: message older than the stop: reminder"    blocked
+check "lead Stop: message 31 s before the stop, none after: reminder" blocked
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr" prober:$((T0+9))
+rem Stop "$tmp/args-lead" $((T0+60)) 1
+check "lead Stop: message 1 s before the stop (its report): no reminder" quiet
+check "lead Stop: ... and the stop is recorded as handled" test "$(cat "$D/prober.reminded")" = $((T0+10))
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr" prober:$((T0-20))
+rem Stop "$tmp/args-lead" $((T0+60)) 1
+check "lead Stop: message exactly 30 s before the stop: no reminder" quiet
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr"
+rem Stop "$tmp/args-lead" $((T0+60)) 1
+check "lead Stop: no message at all: reminder"          blocked
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr" prober:$((T0-21))
 rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr" other:$((T0+50))
 rem Stop "$tmp/args-lead" $((T0+60)) 1
 check "lead Stop: another teammate's message does not count" blocked
@@ -119,6 +130,40 @@ check "PostToolUse: after a minute: reminds again"      grep -q 'prober stopped 
 check "PostToolUse: ... for each due teammate"          grep -q 'other stopped at' "$tmp/o"
 rem PostToolUse "$tmp/args-lead" $((T0+200)) 1
 check "PostToolUse: same ts again: silent"              quiet
+
+# cheap early exits: a stub python3 first on PATH marks every `python3 -I` start (the hooks' own; the test helpers do not use -I)
+mkdir -p "$tmp/shim"; print -r -- '#!/bin/sh
+[ "$1" = -I ] && : > "$PYMARK"
+exec '"$(command -v python3)"' "$@"' > "$tmp/shim/python3"; chmod +x "$tmp/shim/python3"
+export PYMARK="$tmp/pystart"
+rem_py() { rm -f "$PYMARK"; PATH="$tmp/shim:$PATH" rem "$@"; }
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr"
+touch -t 202001010000 "$D/prober.json"   # -nt compares whole seconds: back-date the status so .reminded is strictly newer
+rem_py PostToolUse "$tmp/args-lead" $((T0+20)) 1
+check "early: a due stop starts python (shim works)"    test -e "$PYMARK"
+rem_py PostToolUse "$tmp/args-lead" $((T0+300)) 1
+check "early: nothing newer than its .reminded: no python" test ! -e "$PYMARK"
+check "early: ... and the quiet run left no .last-remind update" test "$(cat "$D/.last-remind")" = $((T0+20))
+touch -t 202001010000 "$D/prober.json"
+rem_py Stop "$tmp/args-lead" $((T0+300)) 1
+check "early: Stop, .reminded newer than the status: no python" test ! -e "$PYMARK"
+rm -rf "$TC_STATE"
+rem_py PostToolUse "$tmp/args-lead" $((T0+20)) 1
+check "early: no teammates dir: no python"              test ! -e "$PYMARK"
+status $((T0+10)); rem_py PostToolUse "$tmp/args-lead" $((T0+20)) ""
+check "early: not a lead: no python"                    test ! -e "$PYMARK"
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr" prober:$((T0+9))
+rem PostToolUse "$tmp/args-lead" $((T0+20)) 1
+check "PostToolUse: a check that reaches the transcript and emits nothing"  quiet
+check "PostToolUse: ... still writes .last-remind"      test "$(cat "$D/.last-remind")" = $((T0+20))
+status $((T0+30))
+rem PostToolUse "$tmp/args-lead" $((T0+40)) 1
+check "PostToolUse: ... so a second check within a minute is silent" quiet
+rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr"
+rm -f "$PYMARK"; stop_in hi | PATH="$tmp/shim:$PATH" env TC_TEAMMATE_ARGS_FILE="$tmp/args-worker" "$HS" >/dev/null 2>&1
+check "early: stop of a non-teammate: no python"        test ! -e "$PYMARK"
+rm -f "$PYMARK"; stop_in hi | PATH="$tmp/shim:$PATH" env TC_TEAMMATE_ARGS_FILE="$tmp/args-mate" "$HS" >/dev/null 2>&1
+check "early: stop of a teammate starts python"         test -e "$PYMARK"
 
 # the real ps path, once: a real process whose argv carries the flags
 sh -c 'while :; do sleep 1; done' claude --agent-name realmate --parent-session-id "$LEAD" --lead-verify-key $SECRET & rp=$!

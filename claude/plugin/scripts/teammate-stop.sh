@@ -12,7 +12,7 @@ if [ -n "$TC_TEAMMATE_ARGS_FILE" ]; then
 elif [ -n "$CLAUDE_PID" ]; then
   args=$(ps -o args= -p "$CLAUDE_PID" 2>/dev/null)
 fi
-[ -n "$args" ] || exit 0
+case " $args " in *" --agent-name "*) ;; *) exit 0 ;; esac
 printf '%s' "$input" | ARGS="$args" python3 -I -c 'import json, os, re, sys, tempfile, time
 try:
     toks = os.environ.get("ARGS", "").split()
