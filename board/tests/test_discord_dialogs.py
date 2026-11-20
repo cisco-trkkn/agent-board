@@ -1073,7 +1073,8 @@ class StaleDenyTest(Base):
         dd.scan(lead(["prober"]), 200.0, r)
         ops = self.ops()
         self.assertEqual([o["op"] for o in ops], ["dialog"])
-        self.assertTrue(ops[0]["text"].startswith("🔐 proj · prober (in the lead's window) wants to …\n```\n"), ops[0]["text"])
+        # the real fixture's question is "Do you want to proceed?": the leading "Do you want to " is dropped so it does not read twice
+        self.assertTrue(ops[0]["text"].startswith("🔐 proj · prober (in the lead's window) wants to proceed?\n```\n"), ops[0]["text"])
         key = key_of("%12", req("prober")["lines"])
         self.assertEqual([b["label"] for b in self.buttons(ops[0])], ["1. Yes", "2. Yes, and switch to auto mode · auto mode handles these prompts for you", "3. No"])
         self.assertEqual(ops[0]["key"], key)
@@ -1090,6 +1091,9 @@ class StaleDenyTest(Base):
         self.assertEqual(self.audit()[-1]["action"], "dialog")
         self.assertEqual((self.audit()[-1]["target"], self.audit()[-1]["result"]), ("stale-deny", "prober"))
         self.assertEqual([e["text"] for e in self.feed()], ["denied stale request from prober (window gone)"])
+        import discord_feed   # the line reaches Discord: ops_for_events posts a progress event's text whatever its kind
+        self.assertEqual([(o["op"], o["text"]) for o in discord_feed.ops_for_events(self.feed(), {})],
+                         [("post", "denied stale request from prober (window gone)")])
         ops = self.ops()
         self.assertEqual([o["op"] for o in ops], ["dialog", "edit"])
         self.assertEqual(ops[1]["key"], ops[0]["key"])

@@ -76,7 +76,8 @@ def header(project, window, show):
     # `from` is a teammate's request drawn in the lead's window. A request taller than the pane reads with no `from` (tools/lib/dialog.zsh),
     # so it gets the ordinary header below and is never a stale-Deny candidate.
     if show.get("from"):
-        return f"{icon} {project} · {show['from']} (in the lead's window) wants to …"
+        q = re.sub(r"^(do you want to|wants to)\s+", "", _one_line(show.get("question") or "", QUESTION_MAX), flags=re.I)   # not "wants to do you want to …"
+        return f"{icon} {project} · {show['from']} (in the lead's window) wants to {q}".rstrip()
     return f"{icon} {project} · {window}: {_one_line(show.get('question') or '', QUESTION_MAX)}"
 
 
