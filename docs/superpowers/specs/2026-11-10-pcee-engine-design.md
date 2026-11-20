@@ -58,6 +58,15 @@ headless"):
     architect pass do not change in this stage. Until stage 10 the lead plays the owner: an architect decision that
     would need a push, a protected path or spend far over the estimate is an `escalate`, never a ruling.
 
+## Revised 2026-11-20: efficiency (E2-E4; user, Discord 15:04Z)
+
+Source: `docs/superpowers/notes/2026-11-20-efficiency-learnings-for-pcee.md`; the reader and probes are built by
+`2026-11-20-efficiency-now-design.md`. Each change is made in place and marked `(E<n>, 2026-11-20)`.
+
+- **E2.** The bounce text is short and measured (section 3, step 3).
+- **E3.** A job's end event carries its final context size and the limits reading (section 1, `jobs`).
+- **E4.** A per-kind tools/mcp column is pending a probe (section 3, step 2).
+
 ## Problem
 
 One Opus lead session runs the whole queue. On the 12 baseline specs it is 48 to 74% of each spec's cost, nearly
@@ -142,6 +151,10 @@ architect job sees less than the lead did. Gate K2 therefore watches quality as 
     lifecycle = state.
   - `jobs`: id, spec, kind, task number, tier, model, effort, state, attempt, brief path, report path, window and
     pane, base and head commits, start and end times.
+    (E3, 2026-11-20) The job's end event writes in its `detail` `context_tokens` (the job's final context, from the
+    shared reader `board/ctxsize.py` that `2026-11-20-efficiency-now-design.md` §2 builds) and the limits reading
+    when one exists. Without one, the field is null with a missing reason naming the cause, the rule of that
+    spec's §3.
   - `events`: append-only: time, spec, job, kind, detail. This is the ledger; `Ruling:` lines are events of kind
     `ruling`.
   - `steps`, `timers`, `waits`, `retry_policies`: section 10; `inbox`: section 12; `holds`: section 13 (moved to
@@ -205,9 +218,16 @@ The steps:
 1. **Stale check** by `tmux-ctl registry stale`; a `refresh` job when stale.
 2. **Per task, in the plan's order:** an `implement` job on the task's tier, its brief built from the task's text
    and the report contract. Consecutive small same-shape tasks are not merged into one job in this stage.
+   Pending (E4, 2026-11-20): a per-kind `tools`/`mcp` column on the job table, allow-all by default, applies only if
+   the worker-context probe returns a go (MCP schemas are at least 5% of a fresh worker's context); the probe writes
+   `docs/superpowers/notes/<run date>-worker-context-probe.md` (`2026-11-20-efficiency-now-design.md` §4). Not built
+   until then.
 3. **Green check by the engine, not by an agent:** it runs the task's `verifyCommand` in the worktree (and
    `agent-ci check` where `.agent-ci.yml` exists). Red: the output goes back to the implementer as a bounce, at
-   most two; the third red is an escalation.
+   most two; the third red is an escalation. (E2, 2026-11-20) The bounce text is the failing test names, their error
+   lines and the runner's summary line, plus the path of the full log, not the whole output. A cap in lines comes
+   from a constant in the strategy file. The bounce event's `detail` gains `bounce_bytes` (the size of the text sent),
+   so the cap can be measured.
 4. **Review:** a `review` job at the standard tier with a review package for the task's commit range and the
    task's brief and report. Consecutive green `mechanical` tasks are reviewed as one batch (up to 5; never a task
    whose files touch security, migrations, CI or shared configuration), with a verdict per task.

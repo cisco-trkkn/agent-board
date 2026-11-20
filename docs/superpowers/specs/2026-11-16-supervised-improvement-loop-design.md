@@ -75,6 +75,14 @@ win over the text below where they differ.
   (from deterministic usage records only, per R1). Tests: retire then revert restores the file byte for byte; the
   cap holds.
 
+## Revision 2026-11-20: efficiency (E1, E5; user, Discord 15:04Z)
+
+Source: `docs/superpowers/notes/2026-11-20-efficiency-learnings-for-pcee.md`. These amendments bind the sections they
+name and win over the text below where they differ.
+
+- **E1.** A proposal that shrinks what a worker reads is judged on tokens per task, fix rounds and bounces (§4).
+- **E5.** Code Mode as a trial variant is pending a probe (§4).
+
 ## Design
 
 ### 1. Outcomes and observability contracts
@@ -156,7 +164,15 @@ win over the text below where they differ.
   - `skill`: a challenger copy `claude/skills/<skill>@<id>/` is created from the patch in the spec's worktree only
     (git-ignored path `.superpowers/improve/skills/`), and the brief names it instead of the champion.
   - `routing`: the engine's tier-to-model map for that spec's jobs is taken from the patched copy.
+- Pending (E5, 2026-11-20): `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` becomes a trial variant for mechanical-tier
+  implementers only if the Code Mode hooks probe returns a go (our PreToolUse and PostToolUse gates fire under it;
+  `2026-11-20-efficiency-now-design.md` §4). Not built until then.
 - The champion files on `main` are never touched by a trial.
+- (E1, 2026-11-20) Acceptance rule for a proposal that shrinks what a worker reads (tool output, bounce text,
+  context): it is trialled and judged on tokens per task plus fix rounds per task and bounces per task, with failed
+  tasks kept in the denominator. A cut that makes the agent re-read or re-run can raise the bill: PointFive measured
+  38.4% less tool output read and a 6.8% higher bill over about 3,000 runs. This is ECC insight 8
+  (`docs/superpowers/notes/2026-11-20-ecc-insights-for-pcee.md`), the same rule.
 - A trial spec that fails for a reason the event log ties to the variant (an architect ruling or a review finding that
   cites the trial block) ends that proposal's trial at once as `reverted`.
 
