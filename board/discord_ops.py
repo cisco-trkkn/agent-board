@@ -21,7 +21,9 @@ import discord_dialogs
 import discord_feed
 import discord_ideas
 import ideas
+import relay
 import tc_env
+import usage
 
 CARD_MAX = 1900
 QUEUE_MAX = 1800
@@ -107,6 +109,37 @@ def queue_text(lead_tasks, floor=None):
         meta = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
         out.append(f"{mark} {discord_feed._spec_name(t['subject'])}" + (f" — {meta['outcome']}" if meta.get("outcome") else ""))
     return "\n".join(out)[:QUEUE_MAX]
+
+
+def tasks_text(lead_tasks, floor):
+    """The /tasks view: the running Plan & run task's own tasks, `#id status owner tier subject[:60]`, at most QUEUE_MAX chars.
+    '' when the floor is unknown or the spec has no tasks."""
+    if floor is None:
+        return ""
+    own = [t for t in (lead_tasks or []) if isinstance(t, dict) and not str(t.get("subject", "")).startswith(discord_feed._PLAN_RUN)
+           and (discord_feed._num(t.get("id")) or 0) > floor]
+    own.sort(key=discord_feed._tid)
+    lines = [f"#{t.get('id')} {t.get('status') or '-'} {t.get('owner') or '-'} {discord_feed._tier(t) or '-'} {str(t.get('subject') or '')[:60]}"
+             for t in own]
+    return "\n".join(lines)[:QUEUE_MAX]
+
+
+def lead_view(info, holders, tap, handoffs, now):
+    """One project's views.json `leads` entry; every missing value is null."""
+    sid = info.get("session_id") or None
+    pct = ((tap.get(sid) or {}).get("context_window") or {}).get("used_percentage") if sid else None
+    doc = age = None
+    if info.get("root"):
+        doc = relay.newest_handoff(info["root"], handoffs)
+        if doc:
+            try:
+                age = max(0, int(now - os.path.getmtime(doc)))
+            except OSError:
+                doc = None
+    return {"window": info.get("window") or None, "pane": info.get("pane") or None, "pid": info.get("pid") or None,
+            "state": info.get("state") or None, "holds_bot": info.get("pane") in holders,
+            "context_pct": pct if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None,
+            "session_id": sid, "doc": doc, "doc_age_s": age}
 
 
 BLOCKING = ("failing", "stuck")
@@ -246,7 +279,7 @@ def _lead_question(d, st, record, link, now):
         _edit_ops(d, key, f"{p}: answered")
 
 
-def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=None):
+def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=None, lead_info=None, holder_panes=None, handoffs=None):
     """One ops pass. None when ops is not configured or another tick holds the lock."""
     if not configured():
         return None
@@ -282,7 +315,27 @@ def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=
         st["queue_ts"] = now
         status = {"_all": text}
         status.update({r["project"]: _project_line(r, tasks_by_project.get(r["project"]), links[r["project"]], floors[r["project"]]) for r in records})
-        _write_json(d / "views.json", {"ts": now, "projects": sorted(links), "status": status,
+        tasks_view = {}
+        for r in records:
+            tt = tasks_text(tasks_by_project.get(r["project"]), floors[r["project"]])
+            if tt:
+                tasks_view[r["project"]] = tt
+        leads_view = {}
+        lead_info = {p: i for p, i in (lead_info or {}).items() if isinstance(i, dict)}
+        if lead_info:
+            try:   # one holder lookup for every lead; a failure leaves the leads without the bot
+                holders = holder_panes([(i.get("pane"), i.get("pane_pid")) for i in lead_info.values()]) if holder_panes else set()
+            except Exception as e:   # noqa: BLE001
+                print(f"discord_ops: holder lookup skipped: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                holders = set()
+            try:
+                tap = usage.tap_entries(now, 3600)
+            except Exception:   # noqa: BLE001 -- no taps: context unknown
+                tap = {}
+            hd = handoffs or str(tc_env.agent_base() / "handoffs")
+            for p, i in lead_info.items():
+                leads_view[p] = lead_view(i, holders, tap, hd, now)
+        _write_json(d / "views.json", {"tasks": tasks_view, "leads": leads_view, "ts": now, "projects": sorted(links), "status": status,
                                        "queue": {r["project"]: queue_text(tasks_by_project.get(r["project"]), floors[r["project"]]) for r in records},
                                        "approvals": _approvals_view(st, now), "evidence": _evidence_view(st)})
         return {"approvals": len(st["approvals"])}

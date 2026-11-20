@@ -524,6 +524,26 @@ def _gates(project, tasks, now):
         print(f"tmux-dash: discord gates failed ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
+def lead_infos(projects, lead_sids, lead_pids):
+    """{project: lead info} for discord_ops views.json: the `claude` window's pane, pane pid, claude pid, session id and
+    state (waiting | busy | idle, from paneclass.classify). A project without that window is left out."""
+    out = {}
+    for p in projects:
+        try:
+            raw = tmux("display", "-p", "-t", f"={p}:claude", "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{window_bell_flag}").strip()
+            if not raw:
+                continue   # no claude window
+            pane, ppid, cmd, bell = raw.split("\t")
+            rows = capture_panes([pane]).get(pane, [])
+            status = classify(cmd, rows, bell == "1", mod_states().get(pane))[1]
+            out[p] = {"window": "claude", "pane": pane, "pane_pid": int(ppid), "pid": lead_pids.get(p) or 0,
+                      "session_id": lead_sids.get(p) or "", "root": str(relay.session_root(tmux, p) or ""),
+                      "state": "waiting" if status in ("waiting", "waiting-on-lead") else "busy" if status == "working" else "idle"}
+        except Exception as e:   # noqa: BLE001 -- no claude window or a bad capture: the project has no lead view
+            print(f"tmux-dash: lead info skipped ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    return out
+
+
 def feed_tick(records, now, live=None):
     """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (inbound events); the dialog scan runs once before them.
     A failure in one project is logged and never breaks the overview or the next project."""
@@ -537,7 +557,7 @@ def feed_tick(records, now, live=None):
         discord_dialogs.scan(_dialog_sessions, now, run=lambda argv: run_script(argv, timeout=20))
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord dialogs failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-    lead_sids = {}
+    lead_sids, lead_pids = {}, {}
     tasks_by_project = {}   # the ops card and views cover every project, with or without a channel of its own
     for r in records:
         p = r["project"]
@@ -545,12 +565,12 @@ def feed_tick(records, now, live=None):
             if not discord_feed.channel_of(p):
                 if ops_on:
                     sid, pid, started = planview.lead_entry(p, home, tmux)
-                    lead_sids[p] = sid
+                    lead_sids[p], lead_pids[p] = sid, pid
                     tasks_by_project[p] = planview.raw_live_list(home, sid, pid, started)[1]
                     _gates(p, tasks_by_project[p], now)
                 continue
             sid, pid, started = planview.lead_entry(p, home, tmux)
-            lead_sids[p] = sid
+            lead_sids[p], lead_pids[p] = sid, pid
             list_id, tasks = planview.raw_live_list(home, sid, pid, started)
             tasks_by_project[p] = tasks
             _gates(p, tasks, now)
@@ -564,10 +584,11 @@ def feed_tick(records, now, live=None):
         except Exception as e:   # noqa: BLE001 -- a tick error does not skip the controls step, and vice versa
             print(f"tmux-dash: discord controls failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     if ops_on:
-        ops_tick(records, tasks_by_project, now, limits=limits, live=live, lead_sids=lead_sids)
+        ops_tick(records, tasks_by_project, now, limits=limits, live=live, lead_sids=lead_sids,
+                 lead_info=lead_infos([r["project"] for r in records], lead_sids, lead_pids))
 
 
-def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=None):
+def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=None, lead_info=None):
     """The ops bot: one tick (card, views, approvals) then one pass over its events, after every project's step.
     A failure in either is logged and never breaks the overview."""
     for p in (r["project"] for r in records):
@@ -578,7 +599,8 @@ def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=N
         except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
             limits = None
     try:
-        discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line, live=live, lead_sids=lead_sids)
+        discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line, live=live, lead_sids=lead_sids,
+                         lead_info=lead_info, holder_panes=discord_leads)
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     try:

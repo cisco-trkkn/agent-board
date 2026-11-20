@@ -197,7 +197,66 @@ class Tick(Base):
         self.assertEqual(v["queue"]["a"].split("\n"), ["queue: running y (spec 2 of 3)", "✓ x — merged", "▶ y", "· z"])
         self.assertEqual(v["approvals"], [])
         self.assertEqual(v["evidence"], {})
+        self.assertEqual((v["tasks"], v["leads"]), ({}, {}))
         self.assertFalse(list(self.ops.glob("*.tmp")))
+
+    def floor(self, project, n):
+        (tc_env.discord_dir(project) / "feed-state.json").write_text(json.dumps({"spec_floor": {"k": n}, "running_thread_key": "k"}))
+
+    def test_tasks_view_lists_running_spec_own_tasks_capped(self):
+        # mutation: drop the id > floor rule -> task 1 (an earlier spec's) is listed and the test fails
+        self.configure()
+        self.project("a")
+        self.project("b")
+        self.floor("a", 1)
+        own = [{"id": "2", "subject": "S" * 80, "status": "completed", "owner": "w1", "metadata": {"modelTier": "standard"}},
+               {"id": "3", "subject": "next", "status": "pending"}]
+        tasks = {"a": [run_task(1, "x", "in_progress"), {"id": "1x", "subject": "old", "status": "completed"}] + own, "b": []}
+        tasks["a"][1]["id"] = "1"
+        self.tick([rec("a"), rec("b")], tasks)
+        v = json.loads((self.ops / "views.json").read_text())
+        self.assertEqual(list(v["tasks"]), ["a"])
+        self.assertEqual(v["tasks"]["a"].split("\n"), [f"#2 completed w1 standard {'S' * 60}", "#3 pending - - next"])
+
+    def test_tasks_view_total_cap(self):
+        self.configure()
+        self.project("a")
+        self.floor("a", 0)
+        tasks = {"a": [{"id": str(i), "subject": "s" * 100, "status": "pending"} for i in range(1, 80)]}
+        self.tick([rec("a")], tasks)
+        self.assertLessEqual(len(json.loads((self.ops / "views.json").read_text())["tasks"]["a"]), 1800)
+
+    def test_leads_view_fields_and_null_when_missing(self):
+        self.configure()
+        self.project("a")
+        self.project("b")
+        hd = Path(self.tmp.name) / "handoffs"
+        hd.mkdir()
+        doc = hd / "h.md"
+        doc.write_text("Project: /root/a\nFocus\n")
+        os.utime(doc, (NOW - 90, NOW - 90))
+        sd = Path(self.tmp.name) / "statusline"
+        sd.mkdir()
+        (sd / "s.json").write_text(json.dumps({"session_id": "sid-a", "received_at": NOW - 5, "context_window": {"used_percentage": 42}}))
+        info = {"a": {"window": "claude", "pane": "%3", "pane_pid": 100, "pid": 101, "session_id": "sid-a", "state": "busy", "root": "/root/a"},
+                "b": {"window": "claude", "pane": "%4", "pane_pid": 200, "pid": 0, "session_id": "", "state": "idle", "root": "/root/b"}}
+        ops.tick([rec("a"), rec("b")], {}, None, NOW, self.add, lead_info=info, holder_panes=lambda panes: {"%3"}, handoffs=str(hd))
+        v = json.loads((self.ops / "views.json").read_text())["leads"]
+        self.assertEqual(v["a"], {"window": "claude", "pane": "%3", "pid": 101, "state": "busy", "holds_bot": True, "context_pct": 42,
+                                  "session_id": "sid-a", "doc": str(doc), "doc_age_s": 90})
+        self.assertEqual(v["b"], {"window": "claude", "pane": "%4", "pid": None, "state": "idle", "holds_bot": False, "context_pct": None,
+                                  "session_id": None, "doc": None, "doc_age_s": None})
+
+    def test_holder_looked_up_once_per_tick(self):
+        # mutation: call holder_panes inside the per-project loop -> 2 calls and the test fails
+        self.configure()
+        self.project("a")
+        self.project("b")
+        calls = []
+        info = {p: {"window": "claude", "pane": "%" + p, "pane_pid": 1, "pid": 1, "session_id": "", "state": "idle", "root": "/r/" + p} for p in "ab"}
+        ops.tick([rec("a"), rec("b")], {}, None, NOW, self.add, lead_info=info, holder_panes=lambda panes: calls.append(panes) or set())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sorted(calls[0]), [("%a", 1), ("%b", 1)])
 
     def test_queue_text_cut_to_1800(self):
         tasks = [run_task(i, "s" * 100, "pending") for i in range(1, 60)]

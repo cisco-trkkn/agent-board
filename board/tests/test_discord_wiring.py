@@ -157,7 +157,7 @@ class FeedTickWiringTest(Base):
         self.assertEqual(tick.call_args[1]["live"], live)
         self.assertIs(tick.call_args[1]["limits"], lim)
         self.assertEqual(tick.call_args[1]["lead_sid"], "sid")
-        self.assertEqual(ot.call_args[1], {"limits": lim, "live": live, "lead_sids": {"p": "sid", "nochan": "sid"}})
+        self.assertEqual(ot.call_args[1], {"limits": lim, "live": live, "lead_sids": {"p": "sid", "nochan": "sid"}, "lead_info": {}})
 
     def test_overview_payload_passes_indexer_snapshot(self):
         ov = {"generated": 1.0, "projects": [rec("p")]}
