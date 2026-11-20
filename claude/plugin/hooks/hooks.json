@@ -59,6 +59,12 @@
         ]
       },
       {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/spec-boundary-nudge.sh\" --scoped", "timeout": 5 }
+        ]
+      },
+      {
         "hooks": [
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/teammate-remind.sh\" --scoped", "timeout": 5 }
         ]

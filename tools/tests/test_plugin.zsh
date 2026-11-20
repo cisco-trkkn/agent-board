@@ -90,6 +90,13 @@ PY
 check "shutdown-record.sh and lead-stop-guard.sh are executable" test -x "$P/scripts/shutdown-record.sh" -a -x "$P/scripts/lead-stop-guard.sh"
 check "settings.json no longer registers hooks (no double run)" python3 -c 'import json,sys; assert "hooks" not in json.load(open(sys.argv[1]))' "$R/claude/session-settings.json"
 check "legacy hook paths are symlinks into the plugin" zsh -c 'cd "$1/claude/hooks" && for n in kill-guard bash-mirror artifact-register worktree-sweep; do [[ -L $n.sh && $(readlink $n.sh) == ../plugin/scripts/$n.sh && -x $n.sh ]] || exit 1; done' _ "$R"
+check "hooks.json registers spec-boundary-nudge on PostToolUse TaskUpdate, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
+hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/spec-boundary-nudge.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] == "TaskUpdate" and hit[0][1].get("timeout") == 5 and not hit[0][1].get("async"), hit
+PY
+check "spec-boundary-nudge.sh is executable and claude/hooks links to it" zsh -c '[[ -x $1/claude/plugin/scripts/spec-boundary-nudge.sh && -L $1/claude/hooks/spec-boundary-nudge.sh && $(readlink $1/claude/hooks/spec-boundary-nudge.sh) == ../plugin/scripts/spec-boundary-nudge.sh ]]' _ "$R"
 check "superpowers-hook.sh stays in claude/hooks (regular file)" test -f "$R/claude/hooks/superpowers-hook.sh" -a ! -L "$R/claude/hooks/superpowers-hook.sh"
 check "plugin ships skills and agents" zsh -c 'cd "$1" && for f in skills/tmux-orchestrator/SKILL.md skills/handoff/SKILL.md skills/handoff/agents/openai.yaml agents/effort-low.md agents/effort-medium.md agents/effort-high.md; do [[ -s $f ]] || exit 1; done' _ "$P"
 
