@@ -125,10 +125,22 @@ Only the `TeammateIdle` event, which fired in the teammate process (ppid 94703) 
 
     STDIN {"session_id":"8898fa26-e3c4-4b54-a080-af024e206698",…,"permission_mode":"default","agent_type":"general-purpose","hook_event_name":"TeammateIdle","teammate_name":"prober","team_name":"session-7bb5ac65"}
 
-**The marker: the Claude process's arguments.** `ps` on the teammate's `CLAUDE_PID` (run from outside the hook, same pid):
+**The marker: the Claude process's arguments.** `ps` on the teammate's `CLAUDE_PID`, first run from outside the hook (same pid); the in-hook lines follow below:
 
     $ ps -o pid=,ppid=,args= -p 94703
     94703 92184 /Users/<user>/.local/share/claude/versions/2.1.329 --agent-id prober@session-7bb5ac65 --agent-name prober --team-name session-7bb5ac65 --agent-color blue --parent-session-id 7bb5ac65-ad5f-4b3e-892a-d38d9a8fa8e9 --lead-verify-key <redacted> --agent-type general-purpose --permission-mode default --model opus
+
+**Read from inside a hook (fix round 1).** A second scratch run (own team `session-9339758c`, one teammate `prober`) had a
+temp-repo hook on `Stop` and `PostToolUse` that, from inside the hook, ran `ps -o args= -p "$CLAUDE_PID"`, replaced the
+`--lead-verify-key` value with `<redacted>` with `sed` before writing, and appended the line. Raw lines, one per hook event:
+
+    teammate, PostToolUse (pid 39777): /Users/<user>/.local/share/claude/versions/2.1.329 --agent-id prober@session-9339758c --agent-name prober --team-name session-9339758c --agent-color blue --parent-session-id 9339758c-2f30-4d76-861c-02dcf9ac5a4e --lead-verify-key <redacted> --agent-type general-purpose --permission-mode default --model opus
+    teammate, Stop (pid 39777):        /Users/<user>/.local/share/claude/versions/2.1.329 --agent-id prober@session-9339758c --agent-name prober --team-name session-9339758c --agent-color blue --parent-session-id 9339758c-2f30-4d76-861c-02dcf9ac5a4e --lead-verify-key <redacted> --agent-type general-purpose --permission-mode default --model opus
+    lead, Stop (pid 30733):            claude --permission-mode default
+    lead, PostToolUse (pid 30733):     claude --permission-mode default
+
+The lead's line is the negative case: no `--agent-name`, no `--parent-session-id`. The same teammate pid showed the same line
+in all three of its `PostToolUse` events and its `Stop`; the lead's pid showed the same line in both of its events.
 
 - **Is this a teammate?** `ps -o args= -p "$CLAUDE_PID"` contains `--agent-name` and `--parent-session-id`. The lead's
   process (`claude --permission-mode default`) has neither.

@@ -30,7 +30,6 @@ hello.txt containing hi, then present the plan for approval." in `--permission-m
 | `question-handoff.txt` | the handoff skill's question: Yes / Not yet (each with a wrapped-free description line), 3 `Type something.`, 4 `Chat about this`; header chip `☐ Switch` |
 | `plan.txt` | plan approval ("Ready to code?" plan box, then `Would you like to proceed?`): 1 `Yes, and use auto mode`, 2 `Yes, manually approve edits`, 3 `Tell Claude what to change` (sub-line `shift+tab to approve with this feedback`). No Other row |
 | `resume.txt` | `claude --resume` picker: `Resume session`, search box, session rows without numbers (title line, then `<age> · <branch> · <size>`), `❯` marks the selected one |
-
 | `team-request.txt` | LEAD pane (120x49) while a teammate's permission request shows: an ordinary Bash permission dialog whose header row is ` Bash command · from the prober agent` (row 38). Rows 37-49 are the dialog: top rule, header, tip, description, `╌` rule, command, `╌` rule, `Do you want to proceed?`, 1 `Yes`, 2 `Yes, and switch to auto mode · …`, 3 `No`, blank, footer `Esc to cancel · Tab to amend`. No oracle in `expect/` yet (see "Teammate request") |
 | `team-waiting.txt` | TEAMMATE pane (79x49) at the same moment: the `╭…╮` box `✽ Waiting for team lead approval` / `⏺ @prober` / `Tool:    Bash` / `Action:  Create probe2 file` / `Permission request sent to team "session-7bb5ac65" leader` (rows 34-43), then the `─── @prober ─` divider, an empty `❯` prompt and the status rows. Not a dialog: no options, no key-hint footer |
 
