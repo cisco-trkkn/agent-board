@@ -7,9 +7,9 @@ Spec: `docs/superpowers/specs/2026-11-19-lead-recovery-discord-commands-design.m
 The live install links into the main checkout, so this gate runs only after the branch `feat/lead-recovery-discord-commands` is merged to `main`. After the merge:
 
 1. Restart the board (so it writes `tasks` and `leads` into `views.json`).
-2. Restart the bridge (so it registers `/lead`, `/tasks` and `/gauth`): `tmux-ctl discord bridge --ops stop`, then `tmux-ctl discord bridge --ops start`.
+2. Restart the bridges (so they register `/lead`, `/tasks` and `/gauth`; both the ops bot and each project bot offer them): `tmux-ctl discord bridge --ops stop`, then `tmux-ctl discord bridge --ops start`; for a project bot the same without `--ops`.
 
-`<ops>` below is the ops bot's directory, `~/.local/state/agent-board/discord/_ops/`. It holds `views.json`, `audit.jsonl`, `events/` and `gauth-pending.json`. It is not the project's discord dir that `tmux-ctl discord status` shows.
+`<ops>` below is the ops bot's directory, `~/.local/state/agent-board/discord/_ops/`. It holds `views.json`, `audit.jsonl`, `events/` and `gauth-pending.json`. It is not the project's discord dir that `tmux-ctl discord status` shows. A command sent to a project bot is logged in `~/.local/state/agent-board/discord/<project>/bridge.log` and audited in `~/.local/state/agent-board/discord/<project>/audit.jsonl`; the ops bot's are in `bridge.log` and `audit.jsonl` under `<ops>`. Wherever an item below says `<ops>/audit.jsonl`, read the bot's own file you sent the command to.
 
 Rollback, if a restart leaves the window with no Claude: from another pane run `tmux-ctl lead-restart agent-board --resume`. Or, in the window itself, run `claude-orchestrator --resume <session id>` by hand (the id is the one of THIS pane's lead, not the newest session of any project: `P=$(tmux display -p -t '=agent-board:claude' '#{window_id}.#{pane_id}')`, then `for f in ~/.claude/sessions/*.json; do jq -r --arg p "$P" 'select((.tmux // "") | endswith($p)) | "\(.updatedAt) \(.sessionId)"' "$f"; done | sort -n | tail -1`; the second field is the id. This is how `relay.session_for_pane` picks it).
 
@@ -30,7 +30,7 @@ Precondition: the agent-board lead is idle at its prompt (not mid-turn) and you 
 
 ### 3. `/tasks`
 - Do: send `/tasks agent-board` (a project with a running plan). Then send `/tasks` with no project.
-- Expect: with a project, a fenced block of `#id status owner tier subject` lines, subjects cut at 60 characters. Without one, a `Pick a project` dropdown of the projects that have a task list; picking one gives the same block. A project with none replies `no task list for <p>`; with no project at all, `no task lists`.
+- Expect: with a project, a fenced block of `#id status owner tier subject` lines, subjects cut at 60 characters. Without one, on the ops bot (and on a project bot anywhere but its own channel), a `Pick a project` dropdown of the projects that have a task list; picking one gives the same block. A project with none replies `no task list for <p>`; with no project at all, `no task lists`. A project bot's `/tasks` with no project shows its own project's list in its own channel; anywhere else, and on the ops bot, the Pick a project dropdown.
 - If not: `<ops>/views.json` key `tasks` is empty for the project (no running `Plan & run:` task, or the board was not restarted); check `<ops>/audit.jsonl`.
 
 ### 4. One real `/gauth <project>`
