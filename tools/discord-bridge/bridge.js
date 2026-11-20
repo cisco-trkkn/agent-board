@@ -509,6 +509,8 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       for (const r of rows) for (const c of r.components) {
         if (c.custom_id === id) c.style = c.style === 3 ? 2 : 3;
       }
+      const now1 = rows.flatMap((r) => r.components).find((c) => c.custom_id === id);
+      say(`toggle ${snip(id)} ${JSON.stringify(snip(now1?.label))} -> ${now1?.style}`);
       try { await i.update({ components: rows }); } catch (e) { say(`update failed: ${snip(e?.message)}`); }
       return;
     }
@@ -537,6 +539,9 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       ev.picks = rowsOf(i).flatMap((r) => r.components)
         .filter((c) => c.style === 3 && /:t[0-9]{1,2}$/.test(String(c.custom_id)))
         .map((c) => Number(/:t([0-9]{1,2})$/.exec(c.custom_id)[1])).sort((a, b) => a - b);
+      const states = rowsOf(i).flatMap((r) => r.components).filter((c) => /:t[0-9]{1,2}$/.test(String(c.custom_id)))
+        .map((c) => `t${/:t([0-9]{1,2})$/.exec(c.custom_id)[1]} ${JSON.stringify(snip(c.label))} ${c.style}`);
+      say(`submit ${snip(key)} picks ${JSON.stringify(ev.picks)} buttons ${states.join(', ')}`);
     }
     writeEvent(ev);
     say(`event ${snip(id)}`);

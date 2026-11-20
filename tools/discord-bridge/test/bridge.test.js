@@ -849,6 +849,29 @@ test('toggle: updates in place, flips only that button 2<->3, no event', async (
   assert.deepStrictEqual(j.updates[0].components, want2);
 });
 
+test('toggle logs the custom id, the label and the new style', async () => {
+  // Mutation: drop the say() in the toggle branch -> no log line names the button.
+  const s = setup(); allow(s, ['U1']);
+  const i = fakeInteraction({ customId: ID('t2'), user: 'U1', component: { style: 2, label: 'B' }, components: toggleRows() });
+  await s.bridge.onInteraction(i);
+  const line = s.logs.find((l) => l.startsWith('toggle '));
+  assert.ok(line, s.logs.join('\n'));
+  assert.ok(line.includes(ID('t2')) && line.includes('"B"') && line.endsWith('-> 2'), line);
+});
+
+test('submit logs the picks and the label and style of every t<n> button', async () => {
+  // Mutation: drop the say() in the submit branch -> no line carries the button states.
+  const s = setup(); allow(s, ['U1']);
+  const rows = plainRows([[btn('t1', 3, '1. Apple'), btn('t2', 2, '2. Pear'), btn('t3', 3, '3. Plum')], [btn('submit', 1, 'Submit')]]);
+  const i = fakeInteraction({ customId: ID('submit'), user: 'U1', messageId: 'm5', components: rows });
+  await s.bridge.onInteraction(i);
+  const line = s.logs.find((l) => l.startsWith('submit '));
+  assert.ok(line, s.logs.join('\n'));
+  assert.ok(line.includes('picks [1,3]'), line);
+  assert.ok(line.includes('t1 "1. Apple" 3') && line.includes('t2 "2. Pear" 2') && line.includes('t3 "3. Plum" 3'), line);
+  assert.ok(!line.includes('Submit"'), line);
+});
+
 test('click on the t3 sample id toggles button 3 in place', async () => {
   const s = setup(); allow(s, ['U1']);
   const rows = plainRows([[btn('t3', 2, 'C')]]);
