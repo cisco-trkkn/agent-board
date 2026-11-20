@@ -515,3 +515,36 @@ class SinkTest(Base):
         with mock.patch.object(discord_feed, "append_event", side_effect=OSError("disk")), mock.patch("sys.stderr") as err:
             notify.discord_sink(self.ev())
         self.assertIn("notify: discord sink failed", "".join(c[0][0] for c in err.write.call_args_list))
+
+
+class LeadInfosTest(Base):
+    """server.lead_infos on a faked tmux: the display format split, the status -> state mapping, and its output through discord_ops.lead_view."""
+
+    def infos(self, status, out="%7\t4242\tclaude\t0\n"):
+        seen = []
+        def fake_tmux(*a, **kw):
+            seen.append(a)
+            return out
+        with mock.patch.object(server, "tmux", fake_tmux), \
+                mock.patch.object(server, "capture_panes", lambda ids: {i: ["row"] for i in ids}), \
+                mock.patch.object(server, "classify", lambda cmd, rows, bell, mod: ("claude", status)), \
+                mock.patch.object(server, "mod_states", lambda: {}), \
+                mock.patch.object(server.relay, "session_root", lambda t, p: Path("/root/p")):
+            return server.lead_infos(["p"], {"p": "sid-1"}, {"p": 99}), seen
+
+    def test_state_mapping_and_fields(self):
+        # mutation: map "working" to idle, or swap the split fields -> the matching case fails
+        for status, state in (("working", "busy"), ("waiting", "waiting"), ("waiting-on-lead", "waiting"), ("ready", "idle"), ("idle", "idle"), ("running", "idle")):
+            info, seen = self.infos(status)
+            self.assertEqual(info["p"], {"window": "claude", "pane": "%7", "pane_pid": 4242, "pid": 99, "session_id": "sid-1",
+                                         "root": "/root/p", "state": state}, status)
+        self.assertEqual(seen[0][:4], ("display", "-p", "-t", "=p:claude"))
+        self.assertEqual(seen[0][4], "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{window_bell_flag}")
+
+    def test_no_claude_window_leaves_project_out(self):
+        self.assertEqual(self.infos("working", out="")[0], {})
+
+    def test_output_feeds_lead_view(self):
+        info, _ = self.infos("working")
+        v = discord_ops.lead_view(info["p"], {"%7"}, {}, self.tmp.name, 1_800_000_000.0)
+        self.assertEqual((v["pane"], v["pid"], v["state"], v["holds_bot"], v["session_id"]), ("%7", 99, "busy", True, "sid-1"))
