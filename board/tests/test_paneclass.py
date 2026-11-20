@@ -250,6 +250,19 @@ class DialogFixturesTest(unittest.TestCase):
                 self.assertEqual(self.status(p), ("claude", "ready"))
         print(f"dialog fixtures checked: {len(waiting)} waiting, {len(ready)} ready, {len(waiting) + len(ready)} in all", file=sys.stderr)
 
+    def test_phrase_split_across_two_adjacent_rows_is_waiting(self):
+        # mutation: classify searches only "\n".join(tail) (drop _wrap_joined) -> resume-70.txt, `Enter to` / `resume`, is ready
+        rows = server._rows((self.FX / "dialogs" / "resume-70.txt").read_text(encoding="utf-8"))
+        self.assertTrue(any(r.rstrip().endswith("Enter to") for r in rows))
+        self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "waiting"))
+
+    def test_split_phrase_across_unrelated_rows_stays_ready(self):
+        # mutation: _wrap_joined joins a run of rows (3+, skipping the row between) instead of adjacent pairs -> waiting
+        for between in ([""], ["⏺ unrelated output"], ["─" * 40]):
+            rows = ["⏺ the footer said: Enter to"] + between + ["resume was quoted in the notes", "", "❯ "]
+            with self.subTest(between=between):
+                self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
+
     def tall(self, n=14):
         """EXTENDED fixture (hand-made rows): the real lead-tasklist-more-lines.txt with n more `◻` task rows appended in the
         capture's own row format, so the prompt's footer is more than 12 rows above the bottom."""

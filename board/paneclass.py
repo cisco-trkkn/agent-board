@@ -172,12 +172,30 @@ def _above_tasklist(rows):
     return rows
 
 
+_WRAP_BREAK_RE = re.compile(r"^\s*(?:[─━╌│╭╰┌└]|$)")   # a blank row or a rule/box row never joins its neighbour
+
+
+def _wrap_joined(rows):
+    """rows plus each pair of adjacent text rows joined with one space: a key-hint footer that wraps at a narrow pane splits
+    a phrase (`Enter to` / `resume`) across two rows. Pairs only; a blank row, a rule or a box row never joins."""
+    out = list(rows)
+    for a, b in zip(rows, rows[1:]):
+        if not _WRAP_BREAK_RE.match(a) and not _WRAP_BREAK_RE.match(b):
+            out.append(a.rstrip() + " " + b.lstrip())
+    return out
+
+
+def _waiting(tail_rows):
+    return bool(WAITING_RE.search("\n".join(tail_rows)) or WAITING_RE.search("\n".join(_wrap_joined(tail_rows))))
+
+
 def classify(cmd, rows, bell, mod=None):
     """kind: claude | shell | program ; status: waiting | working | ready | idle | running.
     mod: the pane's fresh agent-status state (mod_states()), preferred over pane text for a claude pane."""
     is_claude = is_claude_cmd(cmd)
     # Claude draws its prompts and spinner at the bottom; older scrollback may quote prompt text.
-    tail = "\n".join(_above_tasklist(rows)[-12:])
+    tail_rows = _above_tasklist(rows)[-12:]
+    tail = "\n".join(tail_rows)
     if cmd in SHELLS:
         return "shell", "idle"
     if is_claude:
@@ -186,12 +204,12 @@ def classify(cmd, rows, bell, mod=None):
             return "claude", WAITING_ON_LEAD
         if mod:
             # a dialog the mod cannot see (subagent, sandbox network prompt) only shows in the pane: raise to waiting
-            if mod != "waiting" and WAITING_RE.search(tail):
+            if mod != "waiting" and _waiting(tail_rows):
                 return "claude", "waiting"
             return "claude", mod
         if WORKING_RE.search(tail) or spinner_live(rows[-30:]):  # no spinner while a prompt is open
             return "claude", "working"
-        if WAITING_RE.search(tail):
+        if _waiting(tail_rows):
             return "claude", "waiting"
         # Claude also rings the bell when it finishes; a real prompt is caught by WAITING_RE above.
         return "claude", "ready"
