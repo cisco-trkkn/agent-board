@@ -662,11 +662,16 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     warn_web_key
     # lead-only: relay.py respawns the session's claude window as the lead. Called from a worker, teammate, lane or
     # shell window it must leave the lead alone and hand the user the manual start instead.
-    cwin=; csess=
-    [[ -n "$TMUX_PANE" ]] && { cwin="$(t display -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)"; csess="$(t display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; }
-    if [[ "$cwin" != claude || "$csess" != "$FEEDKEY" ]]; then
+    # R7: the lead is AGENT_BOARD_LEAD=1, in a window named claude (or claude-next, renamed below), in this session, not a teammate
+    cwin=; csess=; cmate=
+    [[ -n "$TMUX_PANE" ]] && { cwin="$(t display -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)"; csess="$(t display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; cmate="$(t display -p -t "$TMUX_PANE" '#{@tc_teammate}' 2>/dev/null)"; }
+    if [[ "$AGENT_BOARD_LEAD" != 1 || ( "$cwin" != claude && "$cwin" != claude-next ) || "$csess" != "$FEEDKEY" || -n "$cmate" && "$cmate" != 0 ]]; then
       print -u2 -r -- "tmux-ctl: relay refused: only the lead, from the session's claude window, can relay (this is ${cwin:-no tmux pane}). The lead was not touched. Give the user this to start the new lead by hand: ${(q)TC_REPO}/bin/claude-orchestrator 'Read $doc and continue from where the previous session left off.'"
       exit 2
+    fi
+    if [[ "$cwin" == claude-next ]]; then   # relay.py finds the lead by the window name claude: rename only after every check passed
+      t list-windows -t "=$csess:" -F '#{window_name}' | grep -qx claude && { print -u2 -r -- "relay: a claude window already exists in $csess"; exit 2; }
+      t rename-window -t "$TMUX_PANE" claude || die "cannot rename the claude-next window"
     fi
     log="$STATE/relay-$FEEDKEY.log"
     sock="$(t display -p '#{socket_path}')"
