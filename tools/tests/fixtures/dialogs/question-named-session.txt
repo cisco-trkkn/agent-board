@@ -1,0 +1,23 @@
+ ▐▛███▛█   Claude Code v2.1.329
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   @claude · ~/interiors
+
+
+❯ Use AskUserQuestion: which fruit, Apple or Pear?                              
+
+⏺ Asking you to pick a fruit.
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Fruit 
+
+Which fruit do you want: Apple or Pear?
+
+❯ 1. Apple
+     Pick Apple.
+  2. Pear
+     Pick Pear.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+──────────────────────────────────────────────────────── fruit-choice-question ─

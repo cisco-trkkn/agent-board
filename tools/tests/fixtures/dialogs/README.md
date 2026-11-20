@@ -25,6 +25,7 @@ hello.txt containing hi, then present the plan for approval." in `--permission-m
 |---|---|
 | `trust.txt` | folder-trust dialog: `❯ No, exit` is the default row, 2 `Yes, I trust this folder`; footer `Enter to confirm · Esc to cancel` |
 | `question-single.txt` | AskUserQuestion, 1 question, 2 options: rows 1 Apple, 2 Pear, 3 `Type something.` (the Other row, ends with a period), and below a rule 4 `Chat about this`; footer `Enter to select · ↑/↓ to navigate · Esc to cancel` |
+| `question-named-session.txt` | AskUserQuestion as `question-single.txt` (1 question, Apple / Pear / `Type something.` / `Chat about this`) on Claude Code 2.1.329 in a session with a name: one more row under the footer, a rule ending in the session name `──…── fruit-choice-question ─`; the question row reads `Which fruit do you want: Apple or Pear?`, tab chip `☐ Fruit` |
 | `question-multi.txt` | multiSelect: `N. [ ] label` rows 1-3, 4 `[ ] Type something` (no period), an unnumbered `Submit` row, below a rule 5 `Chat about this` |
 | `question-two.txt` | one call, two questions: tab bar `←  ☐ Fruit  ☐ Size  ✔ Submit  →`, first question shown; footer `Tab/Arrow keys to navigate` |
 | `question-handoff.txt` | the handoff skill's question: Yes / Not yet (each with a wrapped-free description line), 3 `Type something.`, 4 `Chat about this`; header chip `☐ Switch` |

@@ -247,7 +247,7 @@ _dlg_parse() {
     { l[NR] = $0 }
     END {
       N = NR; N2 = N; TDIV = 0; TLIST = 0; PAMB = 0; PTALL = 0; PFROM = ""
-      if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / @[A-Za-z0-9_.-]+ ─$/) { N2--; TDIV = 1 }   # a teammate status divider as the last row
+      if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / @?[A-Za-z0-9_.-]+ ─$/) { N2--; TDIV = 1 }   # a teammate status divider, or (Claude Code 2.1.329) the session-name rule, as the last row
       i = tasklist(); if (i < N2) { N2 = i; TLIST = 1 }                                   # a task list as the last rows
       if (permission() || question() || plan() || trust() || resume()) exit
       generic()
