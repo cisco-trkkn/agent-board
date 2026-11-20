@@ -30,6 +30,16 @@ Prompt, identical in both runs: `Run the shell command `echo probe-ok` with the 
 
 Code Mode was active in the `cm` window: it showed the dialog "Code Mode (experimental)" at start and, after accepting it, the banner "Code Mode (experimental) is on". The control window showed neither. Both runs used the same prompt and both answered it.
 
+Deny pair (second round, new server on the same socket and a fresh `state` directory). A script `<scratch>/deny.sh` was added as a second PreToolUse hook with matcher `Bash` (added with `jq` to the same settings file):
+
+```
+c="$(jq -r '.tool_input.command // empty')"
+if [[ "$c" == *probe-deny* ]]; then print -u2 "DENIED-BY-PROBE-HOOK: commands containing probe-deny are blocked"; exit 2; fi
+exit 0
+```
+
+Deny mechanism: exit code 2 with the reason on stderr (the JSON `permissionDecision` form was not tried). Same start commands as above (windows `=p:0` control, `shell`, `cm` Code Mode, both with the trust and Code Mode dialogs answered with Down, Enter). Prompt in both runs: `Run the shell command `echo probe-deny` with the Bash tool. Then reply with one line that quotes any error or block message you received verbatim, or says it ran.`
+
 Cleanup: `tmux -L en9 kill-server`; `ps` showed no process of the socket afterwards. No `pkill` or `killall`.
 
 ## Observed events
@@ -44,6 +54,16 @@ Events in log order. Tool calls were Bash and Read in both runs; the Code Mode r
 | Code Mode | Bash `echo probe-ok` (called from the code) | yes | yes | yes |
 | Code Mode | Read `probe.txt` (called from the code) | yes | yes | n/a (Bash only) |
 
+Deny pair (hook `deny.sh` exit 2 on `probe-deny`):
+
+| Run | Tool call | PreToolUse logged | PostToolUse logged | bash-mirror line written | Blocked | Reason reached the model |
+|---|---|---|---|---|---|---|
+| control | Bash `echo probe-deny` | yes | no | no | yes | yes (quoted verbatim) |
+| Code Mode | REPL (wrapper) | yes | yes | n/a | n/a | n/a |
+| Code Mode | Bash `echo probe-deny` (called from the code) | yes | no | no | yes | yes (quoted verbatim) |
+
+In both runs the screen showed "Did not run 1 call" with "Reason: PreToolUse:Bash hook error: DENIED-BY-PROBE-HOOK: commands containing probe-deny are blocked", and the model's reply quoted that text. `echo probe-deny` never ran: no PostToolUse for Bash and no mirror entry (the mirror file was not created). Raw order, Code Mode deny run: Pre REPL, Pre Bash, Post REPL. Control deny run: Pre Bash.
+
 Raw order, Code Mode: Pre REPL, Pre Bash, Post Bash, Pre Read, Post Read, Post REPL. Control: Pre Bash, Pre Read, Post Bash, Post Read. The mirror file `feed-p-shell.log` held one entry per run, each with `$ echo probe-ok` and `probe-ok`, exit 0.
 
 ## What fires and what does not
@@ -51,8 +71,9 @@ Raw order, Code Mode: Pre REPL, Pre Bash, Post Bash, Pre Read, Post Read, Post R
 - Under Code Mode both PreToolUse and PostToolUse fire for every tool call the code makes (Bash and Read), each with its own `tool_name`, and the PostToolUse `Bash` hook ran (bash-mirror wrote its entry).
 - Code Mode adds a `REPL` tool call that wraps the others: Pre REPL comes first, Post REPL last. A gate matching all tools or a specific tool name sees both the wrapper and the inner calls.
 - The control run fires the same events without the wrapper.
-- Not tested: PermissionRequest or deny decisions (a PreToolUse hook that blocks) under Code Mode; only logging hooks ran. Auto mode's safety check reads the JavaScript once and not each inner call, according to the Code Mode dialog, so a PreToolUse gate that returns a deny was not exercised here. One run per condition, one model.
+- A PreToolUse hook that exits 2 blocked the inner Bash call under Code Mode exactly as in the control run, and its stderr reason reached the model in both. The wrapper REPL call still completed (Post REPL logged) with the inner call reported as not run.
+- Not tested: the JSON `permissionDecision` deny form, PermissionRequest hooks, and a deny on the REPL wrapper itself. The Code Mode dialog says auto mode's safety check reads the JavaScript once, not each inner call; hooks are a separate layer and did run per inner call. One run per condition, one model.
 
 ## Verdict for E5
 
-go: PreToolUse and PostToolUse fired for every tool call made from Code Mode code (Bash and Read) in the observed run, with an extra REPL wrapper call; deny behaviour of a blocking PreToolUse was not tested.
+go: PreToolUse and PostToolUse fired for every tool call made from Code Mode code (Bash and Read), and a PreToolUse Bash hook that exits 2 blocked the inner call with its reason reaching the model, as in the control; the JSON permissionDecision form was not tried.
