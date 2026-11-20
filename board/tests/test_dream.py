@@ -550,6 +550,20 @@ class AllTest(DreamBase):
         self.assertIn("ok", lines[2])
 
 
+class AllSkipEmptyTest(DreamBase):
+    def test_all_passes_over_an_empty_core(self):
+        # mutation: remove the `continue` in dream.main's --all loop -> "dream: e skipped, no repo root" appears
+        (self.D / "e.md").write_text(context.skeleton("e"))
+        rc, out = self.run_dream("--all", project=None, root=False)
+        self.assertEqual(out, "dream: p skipped, no repo root\n")
+        self.assertEqual(rc, 0)
+
+    def test_named_empty_project_still_reports(self):
+        (self.D / "e.md").write_text(context.skeleton("e"))
+        rc, out = self.run_dream(project="e", root=False)
+        self.assertEqual(out, "dream: e skipped, no repo root\n")
+
+
 class UnexpectedErrorTest(DreamBase):
     def test_exception_in_one_project_is_a_failed_night_and_all_goes_on(self):
         for name in ("a", "b"):
