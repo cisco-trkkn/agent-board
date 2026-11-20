@@ -61,8 +61,8 @@ _dlg_parse() {
       for (i = 1; i <= no; i++) print "O:" on[i] ":" ((all || op[i]) ? 1 : 0) ":" ol[i]
       for (i = a; i <= b; i++) {
         x = l[i]
-        # auto mode draws "block this request in M:SS" and it ticks every second: only the time of that exact warning row is masked
-        if (x ~ /^ *⚠ Claude Code will automatically block this request in [0-9][0-9]*:[0-9][0-9], to avoid holding up an unattended session$/)
+        # auto mode draws "block this request in M:SS" and it ticks every second: only the time of that warning row is masked, also when the row wraps at 80 columns (its second half is constant)
+        if (x ~ /^ *⚠ Claude Code will automatically block this request in [0-9][0-9]*:[0-9][0-9],/)
           sub(/request in [0-9][0-9]*:[0-9][0-9],/, "request in M:SS,", x)
         print "L:" x
       }

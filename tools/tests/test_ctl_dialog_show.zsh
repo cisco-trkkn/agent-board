@@ -111,6 +111,17 @@ replay p-cd2 $S/countdown2.txt; dl p-cd2 show
 check "countdown: identical lines for 1:47 and 0:09"  test "$(lines_of)" = "$cd1" -a -n "$cd1"
 check "countdown: the row reads M:SS"          test "$(print -r -- "$cd1" | grep -a -c 'block this request in M:SS, to avoid')" = 1
 check "countdown: permission, Yes / No"        test "$(jget 'd["kind"] + "|" + "|".join(o["label"] for o in d["options"])')" = "permission|Yes|No"
+# the same row in an 80-column pane wraps onto two rows, and its time must still be masked (live bug: one prompt posted 15 times)
+# SYNTHETIC: the fixture's row split the way Claude Code wraps it at 80 columns, not a capture of an 80-column pane
+# mutation: end-anchor the countdown regex again (`…unattended session$`) → "wrapped countdown: identical lines" fails
+for t in 1:47 1:35; do
+  awk -v t=$t '$0 == " ⚠ Claude Code will automatically block this request in 1:47, to avoid holding up an unattended session" { print " ⚠ Claude Code will automatically block this request in " t ", to avoid"; print " holding up an unattended session"; next } { print }' $FXA/bash-auto-countdown.txt > $S/wrap-${t//:/-}.txt
+done
+check "wrapped countdown variants: two rows each, differing times"  test "$(grep -a -c '^ holding up an unattended session$' $S/wrap-1-47.txt)" = 1 -a "$(grep -a -c 'request in 1:35, to avoid$' $S/wrap-1-35.txt)" = 1 -a "$(grep -a -c 'request in 1:47, to avoid$' $S/wrap-1-35.txt)" = 0
+replay p-w1 $S/wrap-1-47.txt; dl p-w1 show; w1="$(lines_of)"
+replay p-w2 $S/wrap-1-35.txt; dl p-w2 show
+check "wrapped countdown: identical lines for 1:47 and 1:35"  test "$(lines_of)" = "$w1" -a -n "$w1"
+check "wrapped countdown: the first row reads M:SS"  test "$(print -r -- "$w1" | grep -a -c 'block this request in M:SS, to avoid$')" = 1
 
 # --- the teammate status divider after the footer is not part of the dialog
 TD=$FXA/bash-teammate-divider.txt
