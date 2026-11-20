@@ -42,6 +42,39 @@ The rule this spec builds: **learning is cheap, changing behaviour needs evidenc
 - **Start quiet:** Discord gets a card only for a decision that is the user's, and one weekly digest line.
 - Claude Code stays the runtime. A Pi spike is an idea, not part of this spec.
 
+## Revision 2026-11-20: lessons from Everything Claude Code (user: "Spec it", Discord 14:10Z)
+
+Source: `docs/superpowers/notes/2026-11-20-ecc-insights-for-pcee.md` (affaan-m/ECC v2.2.3 at 4adeee6, MIT). The
+ideas are taken; no ECC file, hook or plugin is installed or copied. These amendments bind the sections they name and
+win over the text below where they differ.
+
+- **R1. Deterministic evidence only (§1, §3).** Every `evidence` citation of a proposal, and every number a trial
+  decision reads, comes from a deterministic capture: engine events, run records (`runs.jsonl`, `tasks.jsonl`), ledger
+  lines written by code, or hook-written rows. A model's free-text note ("I noticed…") is never evidence by itself;
+  an adapter that reads model-written text (dream, observer) cites the code-written record it came with (report
+  file, run id) and the proposal stays at most `high`. Test: a proposal whose only evidence is model prose is
+  refused with `no deterministic evidence`.
+- **R2. A guardrail regression fixture (§4, §6, Testing).** The decision-rule tests gain a fixture in which a
+  harmful proposal improves the outcome signal (tokens per merged task down) while a guardrail worsens (tests red
+  after a merge up); the rule must return `reverted`, never `kept`/`awaiting_you`. Mutation named in the test: drop
+  the guardrail check → the fixture is kept.
+- **R3. Stop-blocking gates block once (§6, engine hooks).** Any hook or gate the loop adds that can block a Stop
+  blocks at most once per stop attempt: when Claude Code reports `stop_hook_active`, it allows the stop and records a
+  `gate_overridden` event instead. An unfixable condition can never trap a session. Test: a gate whose condition
+  never clears blocks the first stop and allows the second, with one event.
+- **R4. Spend cap per trial, failures counted (§2, §4).** Each proposal's trial carries a spend cap (default: 2× the
+  control half's mean tokens per spec, times the trial length); a trial spec that would cross it ends the trial as
+  `reverted` with `over budget`. O1's tokens-per-merged-task is computed with failed and abandoned trial specs
+  included in the token sum (their tokens count; they add no merged task), so a variant cannot look cheaper by
+  failing early. Tests: a trial whose failed specs are cheap but unmerged does not beat control; the cap ends a trial.
+- **R5. Retire proposals (§3, §5).** New `kind` `retire`: the patch removes or disables a skill, rule, prompt section
+  or memory entry. Class is derived as for other kinds (protected targets stay protected). Applying a kept/promoted
+  retire is a soft delete: the target moves to `.superpowers/improve/retired/<id>/` (or its section is commented out
+  with a `retired: <id>` marker) and an undo line is logged; `tmux-ctl improve revert <id>` restores it. At most 5
+  retire proposals per tick; the dream and observer adapters may emit them for entries/skills unused for 30 days
+  (from deterministic usage records only, per R1). Tests: retire then revert restores the file byte for byte; the
+  cap holds.
+
 ## Design
 
 ### 1. Outcomes and observability contracts
