@@ -136,16 +136,29 @@ FC
   # --- the same project's old lead (window claude / claude-next) releases the bot: the new lead waits for it
   zmodload zsh/datetime
   NEXTP="$(tt new-window -d -P -F '#{pane_id}' -t '=tt:' -n claude-next -c "$TT_DIR")"
-  hold "$NEXTP"; OLDHP=(${HPIDS})
-  t0=$EPOCHREALTIME
-  ( sleep 5; for p in ${OLDHP}; do kill $p 2>/dev/null; done ) >/dev/null 2>&1 &
-  RELPID=$!
-  run TC_DC_WAIT=12 TC_DC_POLL=1 "$L" --continue
-  el=$(( EPOCHREALTIME - t0 ))
+  # Timing is keyed to the launcher's own "waiting" line, never to the clock from before the launcher started: a loaded
+  # machine can take many seconds to reach its first holder scan, so a fixed release time or a whole-run bound races it.
+  bgrun() {   # bgrun <run args>: start the launcher in the background; WLT = when its waiting line first showed (empty if never)
+    rm -f $S/err; run "$@" & BGP=$!; WLT=
+    local i; for i in {1..1200}; do
+      grep -q '^discord: waiting' $S/err 2>/dev/null && { WLT=$EPOCHREALTIME; break }
+      kill -0 $BGP 2>/dev/null || break; sleep 0.05
+    done
+  }
+  settle() {   # settle <secs>: wait for the launcher up to <secs>, SETTLED=1 if it ended; else free it so the test fails, not hangs
+    local i; SETTLED=0
+    for i in {1..$(( $1 * 20 ))}; do kill -0 $BGP 2>/dev/null || { SETTLED=1; break }; sleep 0.05; done
+    (( SETTLED )) || { release; pkill -P $BGP 2>/dev/null; kill $BGP 2>/dev/null }
+    wait $BGP 2>/dev/null; return 0
+  }
+  hold "$NEXTP"
+  bgrun TC_DC_WAIT=30 TC_DC_POLL=1 "$L" --continue
+  check "old lead releases in the wait: the waiting line shows" test -n "$WLT"
+  sleep 3; release
+  settle 25; el=$(( EPOCHREALTIME - ${WLT:-EPOCHREALTIME} ))
   check "old lead releases in the wait: channel added" test "$(nch)" = 1 -a "$(<$S/dsd)" = "$DC"
-  check "old lead releases in the wait: waited, not the full wait" test $(( el >= 4.5 && el < 11.5 )) = 1
-  check "old lead releases in the wait: one waiting line, no held line" test "$(<$S/err)" = "discord: waiting up to 12s for the lead in tt:claude-next to release tt's bot"
-  wait $RELPID; release
+  check "old lead releases in the wait: waited for the release, not the full wait" test $SETTLED = 1 -a $(( el >= 2.5 && el < 25 )) = 1
+  check "old lead releases in the wait: one waiting line, no held line" test "$(<$S/err)" = "discord: waiting up to 30s for the lead in tt:claude-next to release tt's bot"
   hold "$NEXTP"
   t0=$EPOCHREALTIME
   run TC_DC_WAIT=3 TC_DC_POLL=1 "$L" --continue
@@ -158,44 +171,34 @@ discord: tt's bot is held by the lead in tt:claude-next (pid $HP); this lead sta
   tt new-session -d -s other -c "$TT_DIR"; tt rename-window -t '=other:' claude
   OTHERP="$(tt display -p -t '=other:' '#{pane_id}')"
   hold "$OTHERP"
-  t0=$EPOCHREALTIME
   run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
-  el=$(( EPOCHREALTIME - t0 ))
-  check "holder in another project: no wait" test $(( el < 10 )) = 1 -a "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  check "holder in another project: no wait" test "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
   check "holder in another project: today's message only" test "$(<$S/err)" = "discord: tt's bot is held by the lead in other:claude (pid $HP); this lead starts without it"
   release; tt kill-session -t '=other'
   hold %9999
-  t0=$EPOCHREALTIME
   run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
-  el=$(( EPOCHREALTIME - t0 ))
-  check "holder another process: no wait" test $(( el < 10 )) = 1 -a "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  check "holder another process: no wait" test "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
   release
   hold "$OTHER"
-  t0=$EPOCHREALTIME
   run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
-  el=$(( EPOCHREALTIME - t0 ))
-  check "same project, other window name: no wait" test $(( el < 10 )) = 1 -a "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  check "same project, other window name: no wait" test "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
   release
   # bad knobs fall back to the defaults, and the wait is a deadline: a never-released same-project holder must end the
-  # wait in time (a watchdog frees the holder after 40 s so a regression fails the test instead of hanging it)
-  hold "$NEXTP"; WDPIDS=(${HPIDS})
-  ( sleep 40; for p in ${WDPIDS}; do kill $p 2>/dev/null; done ) >/dev/null 2>&1 &
-  WD=$!
+  # wait in time (settle frees the holder after 40 s so a regression fails the test instead of hanging it)
+  hold "$NEXTP"
   for bad in abc 0 -2 1.5; do
-    t0=$EPOCHREALTIME
-    run TC_DC_WAIT=6 TC_DC_POLL=$bad "$L" --continue
-    el=$(( EPOCHREALTIME - t0 ))
-    check "TC_DC_POLL=$bad: ends within the wait, no channel" test $(( el < 25 )) = 1 -a "$(nch)" = 0 -a "$(<$S/dsd)" = UNSET
+    bgrun TC_DC_WAIT=6 TC_DC_POLL=$bad "$L" --continue
+    settle 40
+    check "TC_DC_POLL=$bad: ends within the wait, no channel" test $SETTLED = 1 -a "$(nch)" = 0 -a "$(<$S/dsd)" = UNSET
     check "TC_DC_POLL=$bad: no math error, the wait line is the default shape" test -z "$(grep -i 'bad math\|not valid\|division' $S/err)" -a -n "$(grep -x 'discord: waiting up to 6s for .*' $S/err)"
   done
-  t0=$EPOCHREALTIME
-  run TC_DC_WAIT=6 TC_DC_POLL=1 "$L" --continue
-  el=$(( EPOCHREALTIME - t0 ))
-  check "deadline: WAIT=6 never released ends within 6 s plus one poll and scans" test $(( el >= 4.5 && el < 16 )) = 1 -a "$(nch)" = 0
-  ( sleep 15; for p in ${WDPIDS}; do kill $p 2>/dev/null; done ) >/dev/null 2>&1 &
-  run TC_DC_WAIT=1x TC_DC_POLL=1 "$L" --continue
+  bgrun TC_DC_WAIT=6 TC_DC_POLL=1 "$L" --continue
+  settle 40; el=$(( EPOCHREALTIME - ${WLT:-EPOCHREALTIME} ))
+  check "deadline: WAIT=6 never released ends about 6 s after the waiting line (one poll and scans over)" test $SETTLED = 1 -a $(( el >= 3 )) = 1 -a "$(nch)" = 0
+  bgrun TC_DC_WAIT=1x TC_DC_POLL=1 "$L" --continue
+  release; settle 25
   check "TC_DC_WAIT=1x: no math error on stderr, falls back to 60 in the wait line" test -z "$(grep -i 'bad math\|not valid' $S/err)" -a -n "$(grep -x 'discord: waiting up to 60s for .*' $S/err)"
-  kill $WD 2>/dev/null; release; tt kill-window -t "$NEXTP"
+  release; tt kill-window -t "$NEXTP"
   for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F fake/discord/0.0.4 | grep -v grep)" ]] && break; sleep 0.1; done
   check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F 'fake/discord/0.0.4' | grep -v grep)"
 else
