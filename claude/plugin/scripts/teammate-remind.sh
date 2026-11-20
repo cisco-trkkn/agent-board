@@ -15,8 +15,8 @@
 # PostToolUse writes .last-remind on every check that gets that far, not only on emit.
 # Seam: TC_TEAMMATE_ARGS_FILE (args line instead of `ps -o args= -p $CLAUDE_PID`), TC_NOW (clock).
 # Fail-open: any error exits 0 with nothing printed. --scoped is accepted and changes nothing.
-IFS= read -r -d "" input
-[ "$AGENT_BOARD_LEAD" = 1 ] || exit 0
+[ "$AGENT_BOARD_LEAD" = 1 ] || exit 0   # before the input is read: bash 3.2 reads a pipe a byte at a time, and this runs on every tool call
+input=$(cat)
 GRACE=30
 [[ $input =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_-]+)\" ]] || exit 0
 sid=${BASH_REMATCH[1]}
@@ -30,14 +30,11 @@ for f in "$ddir"/*.json; do
   [ "${f%.json}.reminded" -nt "$f" ] || { due=1; break; }
 done
 [ -n "$due" ] || exit 0
-case "$input" in
-  *'"hook_event_name"'*'"PostToolUse"'*)
-    if [ -r "$ddir/.last-remind" ]; then
-      now=${TC_NOW:-$(date +%s)}
-      lr=$(cat "$ddir/.last-remind" 2>/dev/null)
-      case "$lr" in ''|*[!0-9]*) ;; *) [ $((now - lr)) -lt 60 ] && exit 0 ;; esac
-    fi ;;
-esac
+if [[ $input =~ \"hook_event_name\"[[:space:]]*:[[:space:]]*\"PostToolUse\" ]] && [ -r "$ddir/.last-remind" ]; then
+  now=${TC_NOW:-$(date +%s)}
+  lr=$(cat "$ddir/.last-remind" 2>/dev/null)
+  case "$lr" in ''|*[!0-9]*) ;; *) [ $((now - lr)) -lt 60 ] && exit 0 ;; esac
+fi
 if [ -n "$TC_TEAMMATE_ARGS_FILE" ]; then
   args=$(cat "$TC_TEAMMATE_ARGS_FILE" 2>/dev/null)
 elif [ -n "$CLAUDE_PID" ]; then

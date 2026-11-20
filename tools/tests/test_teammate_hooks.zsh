@@ -118,6 +118,16 @@ check "lead Stop: no status files: silent exit 0"       quiet
 print -r -- 'not json' | AGENT_BOARD_LEAD=1 TC_TEAMMATE_ARGS_FILE="$tmp/args-lead" "$HR" >"$tmp/o" 2>"$tmp/e"; rc=$?
 check "malformed input: silent exit 0"                  quiet
 
+# a non-lead pays nothing for a big tool response: the lead check comes before the input is read (bash 3.2 reads a pipe a byte at a time)
+# mutation: move the AGENT_BOARD_LEAD check back below `read` -> 1 MB takes ~0.5 s here and the bound fails
+python3 -c 'import sys; sys.stdout.write("{\"session_id\":\"s\",\"x\":\"" + "a"*1000000 + "\"}")' >"$tmp/big"
+zmodload zsh/datetime; t0=$EPOCHREALTIME
+env -u AGENT_BOARD_LEAD TC_TEAMMATE_ARGS_FILE="$tmp/args-lead" "$HR" <"$tmp/big" >"$tmp/o" 2>"$tmp/e"; rc=$?
+big_s=$(( EPOCHREALTIME - t0 ))
+print "  1 MB input, no lead: ${big_s}s"
+check "1 MB input, no lead: silent exit 0"              quiet
+check "1 MB input, no lead: under 0.15 s"               zsh -c '(( $1 < 0.15 ))' _ $big_s
+
 # PostToolUse: additionalContext, at most once a minute
 rm -rf "$TC_STATE"; status $((T0+10)); mk_tr "$tmp/tr"
 rem PostToolUse "$tmp/args-lead" $((T0+20)) 1
