@@ -203,7 +203,8 @@ class TestRereads(Base):
         self.f = {}
         for n in ("a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "rel.txt", "late.txt", "side.txt"):
             p = os.path.join(self.d, n)
-            open(p, "w").write("x")
+            with open(p, "w") as fh:
+                fh.write("x")
             self.f[n] = p
         self.gone = os.path.join(self.d, "gone.txt")
 
@@ -275,7 +276,8 @@ class TestRobust(Base):
 
     def test_no_private_strings_in_result(self):
         secret = os.path.join(self.d, "secretfile-zq.txt")
-        open(secret, "w").write("x")
+        with open(secret, "w") as fh:
+            fh.write("x")
         self.transcript("sess-old-9f3", [self.turn(LO + 1, tools=[read(secret)])])
         self.successor_of("sess-new-7c1", "/h/handoffdoc-zq.md", LO + 30,
                           [self.turn(LO + 31, ctx=20, tools=[read(secret)])])
