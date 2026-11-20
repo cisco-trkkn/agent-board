@@ -30,6 +30,23 @@ From `docs/superpowers/metrics/runs.jsonl` (29 `run` records, 2026-11-20):
   - It is read-only and never blocks.
 - The order inside the boundary is fixed: outcome, metrics record and commit, then the handoff. The handoff doc records `Queue mode: on` and each queued task's `metadata.queue`, as it does today.
 
+### 1a. What the boundary doc carries (user-approved 2026-11-20)
+
+- **Cost rule.** A doc line and a lookup result both stay in the next lead's context and are re-read on every later turn. So the choice is the fact's size against the size of what the next lead would read to rediscover it, not doc against lookup.
+- **Include rule**, applied per item:
+  - Include a fact if the next spec needs it and recovering it would take a much bigger read or several tool calls (a ruling, a decision, a cause found by debugging).
+  - Give a pointer instead (a path, a command) if one named file or command answers exactly that and little else: the plan, the spec, the archived ledger, `git log`.
+  - Never include finished history: task-by-task progress, review rounds, fix loops. Git and the archived ledger hold it.
+  - Durable knowledge (gotchas, how to run, where things live) goes to the shared context file with `tmux-ctl context add` before the handoff, not into the doc. Every agent gets that file from the SessionStart hook.
+- **Fixed shape at a spec boundary**, in this order:
+  1. Queue state: the next spec's path, every queued task's `metadata.queue`, the batch id.
+  2. Live state: keep-awake, uncommitted files and why, open worktrees and leftovers, user gates waiting.
+  3. Carried over: rulings and open user decisions that affect later specs, one line each with a pointer.
+  4. Pointers: the spec to start from, the last report, the archived ledger.
+- **Budget:** about 3K tokens. The handoff skill counts the doc (`ctxsize`-style estimate, chars/4) and warns when it is over the budget, naming the largest section. It never blocks.
+- **Mid-spec handoffs** (context guard, a live team, a ledger mid-loop) keep today's fuller format with the Team section. The tight shape applies only at spec boundaries.
+- **Measurement, so the budget is tuned from data:** item 2's run records also get, per handoff, `post_handoff_tokens` (the new lead's tokens over its first 10 main-thread turns) and `rereads` (files the new lead read in those turns that the previous lead had also read in its session, from the two transcripts' Read/Bash file arguments). Re-reads staying high means the doc is too thin; a lead peak that barely drops after a handoff means the doc or the startup reading is too fat. The report's per-spec Lead line adds `, <r> re-reads after handoff`.
+
 ### 2. Context size in metrics (D3)
 
 - **One reader:** `board/ctxsize.py` with:
