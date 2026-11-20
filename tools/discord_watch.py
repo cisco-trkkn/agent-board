@@ -122,12 +122,15 @@ class State:
     def __init__(self, path):
         self.path = Path(path)
         self.notified, self.tries = {}, {}
+        self.idle_seen, self.restarted = {}, {}     # project-keyed (the bot-less lead repair); prune leaves them alone
         try:
             d = json.loads(self.path.read_text())
+            self.idle_seen = {str(k): int(v) for k, v in d.get("idle_seen", {}).items()}
+            self.restarted = {str(k): float(v) for k, v in d.get("restarted", {}).items()}
             self.notified = {int(k): float(v) for k, v in d.get("notified", {}).items()}
             self.tries = {int(k): {"n": int(v["n"]), "next": float(v["next"])} for k, v in d.get("tries", {}).items()}
         except (OSError, ValueError, AttributeError, TypeError, KeyError):
-            self.notified, self.tries = {}, {}
+            self.notified, self.tries, self.idle_seen, self.restarted = {}, {}, {}, {}
 
     def should_notify(self, pid, now):
         return now - self.notified.get(pid, -1e12) >= NOTIFY_EVERY
@@ -164,7 +167,8 @@ class State:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_name(self.path.name + ".tmp")
             tmp.write_text(json.dumps({"notified": {str(k): v for k, v in self.notified.items()},
-                                       "tries": {str(k): v for k, v in self.tries.items()}}))
+                                       "tries": {str(k): v for k, v in self.tries.items()},
+                                       "idle_seen": self.idle_seen, "restarted": self.restarted}))
             os.replace(tmp, self.path)
         except OSError:
             pass
@@ -285,9 +289,126 @@ def reconnect(ctl, has_server, settle=8, quiet_gap=QUIET_GAP):
     return "no server after reconnect"
 
 
+# ---- the bot-less lead repair (spec 2026-11-19 §3)
+
+RESTART_EVERY = 900     # seconds between two restart attempts for one project
+IDLE_RUNS = 2           # consecutive idle runs before a restart
+LEAD_WINDOWS = ("claude", "claude-next")
+
+
+def projects_with_token(sd):
+    """Projects with a bot token: <state>/discord/<project>/.env holds DISCORD_BOT_TOKEN=… (`_ops` and other `_` dirs are not projects)."""
+    out = []
+    for d in sorted((Path(sd) / "discord").glob("*")):
+        if d.name.startswith("_") or not d.is_dir():
+            continue
+        try:
+            if any(l.startswith("DISCORD_BOT_TOKEN=") and len(l) > 18 for l in d.joinpath(".env").read_text().splitlines()):
+                out.append(d.name)
+        except OSError:
+            continue
+    return out
+
+
+def pick_lead(project, rows):
+    """(pane id, pane pid) of the project's lead window, or None. rows: (session, group, bg, window name, pane id, pane pid).
+    A real (non-bg) session named for the project or in its group; window `claude`, else `claude-next`; nothing else is a lead."""
+    live = [r for r in rows if not r[2] and (r[0] == project or r[1] == project)]
+    for want in LEAD_WINDOWS:
+        for r in live:
+            if r[3] == want:
+                return r[4], int(r[5])
+    return None
+
+
+def _lead_of(project):
+    SEP = "\t"
+    try:
+        out = _tmux()("list-windows", "-a", "-F", SEP.join(["#{session_name}", "#{session_group}", "#{@tc_bg}", "#{window_name}", "#{pane_id}", "#{pane_pid}"]))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows = [l.split(SEP) for l in out.splitlines()]
+    return pick_lead(project, [r for r in rows if len(r) == 6 and r[5].isdigit()])
+
+
+def _holder(project):
+    """Who holds the project's bot, by tools/lib/discord.zsh dc_holder: '<pid> <pane|->' or ''. A failure to ask reads as held (never restart on a guess)."""
+    lib = Path(__file__).resolve().parent / "lib" / "discord.zsh"
+    d = state_dir() / "discord" / project
+    try:
+        r = subprocess.run(["zsh", "-c", 'source "$1" && dc_holder "$2"', "dc", str(lib), str(d)], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return r.stdout.strip() if r.returncode == 0 else "unknown"
+
+
+def _restart(project):
+    """(ok, text): `tmux-ctl lead-restart <project> --resume`."""
+    try:
+        r = subprocess.run([str(tmux_ctl_path()), "lead-restart", project, "--resume"], capture_output=True, text=True, timeout=120)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    text = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())[-200:]
+    return r.returncode == 0, text or f"exit {r.returncode}"
+
+
+def _post(project, text):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "board"))
+    import discord_feed
+    import tc_env
+    discord_feed.outbox_write(tc_env.discord_dir(project), {"op": "post", "text": text, "tier": "routine", "mention_user": False})
+
+
+def _claude_under(pane_pid, table):
+    """Args of the claude process in the pane (the pane's own process or a descendant), or None."""
+    for pid in [pane_pid] + descendants(pane_pid, table):
+        if pid in table and _is_claude(table[pid].args):
+            return table[pid].args
+    return None
+
+
+def _has_channel(args):
+    w = args.split()
+    return CHANNEL in w or f"--channels={CHANNEL}" in w
+
+
+def repair_botless(st, now, table, log, projects, holder, lead_of, pane_idle, restart, post, notify):
+    for project in projects:
+        def reset():
+            if st.idle_seen.pop(project, None) is not None:
+                st.save()
+        if holder(project):
+            reset()
+            continue
+        lead = lead_of(project)
+        args = _claude_under(lead[1], table) if lead else None
+        if args is None or _has_channel(args) or not pane_idle(lead[0]):
+            reset()
+            continue
+        n = st.idle_seen.get(project, 0) + 1
+        st.idle_seen[project] = n
+        st.save()
+        if n < IDLE_RUNS or now - st.restarted.get(project, -1e12) < RESTART_EVERY:
+            continue
+        st.restarted[project] = now          # an attempt counts, successful or not
+        st.idle_seen.pop(project, None)
+        st.save()
+        ok, text = restart(project)
+        if ok:
+            log(f"project {project} pane {lead[0]}: lead had no discord channel and nobody holds the bot, restarted with --resume")
+            try:
+                post(project, f"{project} lead reconnected to Discord")
+            except Exception as e:  # noqa: BLE001 - the restart worked; a failed post is only logged
+                log(f"project {project}: post failed: {e}")
+        else:
+            log(f"project {project} pane {lead[0]}: lead restart failed: {text}")
+            notify("Discord lead restart failed", f"{project}: tmux-ctl lead-restart --resume failed: {text}")
+
+
 # ---- one pass
 
-def watch_once(env=None, now=None, table=None, panes=None, pane_idle=None, do_reconnect=None, notify=None):
+def watch_once(env=None, now=None, table=None, panes=None, pane_idle=None, do_reconnect=None, notify=None,
+               projects=None, holder=None, restart=None, lead_of=None, post=None):
     env = os.environ if env is None else env
     now = time.time() if now is None else now
     sd = state_dir(env)
@@ -309,6 +430,10 @@ def watch_once(env=None, now=None, table=None, panes=None, pane_idle=None, do_re
         except OSError:
             pass
 
+    plist = projects_with_token(sd) if projects is None else projects()
+    if plist:
+        repair_botless(st, now, table, log, plist, holder or _holder, lead_of or _lead_of, pane_idle or _pane_idle,
+                       restart or _restart, post or _post, notify or _notify)
     grace = float(env.get("TC_DISCORD_WATCH_GRACE") or GRACE)
     for pid in leads:
         if has_server(pid, table):

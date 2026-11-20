@@ -485,6 +485,137 @@ class Once(unittest.TestCase):
         self.assertEqual((self.recon, self.notes, self.log()), ([], [], []))
 
 
+class Repair(unittest.TestCase):
+    """Spec §3 watch repair: a bot-less idle lead of a project with a token is restarted with --resume. Every seam is injected:
+    no tmux, no bridge outbox, no real state dir."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.env = {"TC_STATE": str(self.d)}
+        self.tbl = table((100, 1, 9, "-zsh"), (101, 100, 600, "claude --model opus"))   # a lead started without the channel
+        self.restarts, self.posts, self.notes = [], [], []
+        self.holder_of, self.idle, self.res = "", True, (True, "restarted")
+        self.lead = ("%1", 100)
+
+    def go(self, now=5000, tbl=None, projects=("p",), lead="default"):
+        return dw.watch_once(env=self.env, now=now, table=tbl or self.tbl, panes={100: "%1"},
+                             projects=lambda: list(projects), holder=lambda proj: self.holder_of,
+                             lead_of=lambda proj: self.lead if lead == "default" else lead,
+                             pane_idle=lambda p: self.idle,
+                             restart=lambda proj: (self.restarts.append(proj), self.res)[1],
+                             post=lambda proj, text: self.posts.append((proj, text)),
+                             notify=lambda title, text: self.notes.append((title, text)))
+
+    def log(self):
+        f = self.d / "discord-watch.log"
+        return f.read_text().splitlines() if f.exists() else []
+
+    def test_restart_on_the_second_idle_run_not_the_first(self):
+        self.go(5000)
+        self.assertEqual(self.restarts, [])
+        self.go(5060)
+        self.assertEqual(self.restarts, ["p"])
+
+    def test_a_busy_run_resets_the_count(self):
+        self.go(5000)
+        self.idle = False
+        self.go(5060)
+        self.idle = True
+        self.go(5120)
+        self.assertEqual(self.restarts, [])
+        self.go(5180)
+        self.assertEqual(self.restarts, ["p"])
+
+    def test_busy_lead_is_never_restarted(self):
+        self.idle = False
+        for n in range(4):
+            self.go(5000 + 60 * n)
+        self.assertEqual(self.restarts, [])
+
+    def test_held_bot_is_never_restarted(self):
+        self.holder_of = "555 %9"
+        for n in range(4):
+            self.go(5000 + 60 * n)
+        self.assertEqual(self.restarts, [])
+
+    def test_a_lead_already_running_with_the_channel_is_left_alone(self):
+        t = table((100, 1, 9, "-zsh"), (101, 100, 600, f"claude {CH}"), (102, 101, 5, SRV))
+        for n in range(4):
+            self.go(5000 + 60 * n, tbl=t)
+        self.assertEqual(self.restarts, [])
+
+    def test_a_pane_with_no_claude_in_it_is_left_alone(self):
+        t = table((100, 1, 9, "-zsh"))
+        for n in range(4):
+            self.go(5000 + 60 * n, tbl=t)
+        self.assertEqual(self.restarts, [])
+
+    def test_only_claude_and_claude_next_windows_are_lead_windows(self):
+        rows = [("p", "", "", "agent-1", "%7", 70), ("p", "", "", "claude-next", "%8", 80), ("p", "", "", "claude", "%9", 90),
+                ("p-bg", "", "1", "claude", "%5", 50), ("other", "", "", "claude", "%6", 60), ("p2", "p", "", "claude", "%4", 40)]
+        self.assertEqual(dw.pick_lead("p", rows), ("%9", 90))
+        self.assertEqual(dw.pick_lead("p", [r for r in rows if r[3] != "claude" or r[2]]), ("%8", 80))
+        self.assertIsNone(dw.pick_lead("p", [r for r in rows if r[3] not in ("claude", "claude-next")]))
+        self.assertIsNone(dw.pick_lead("zz", rows))
+
+    def test_a_project_without_a_lead_window_is_skipped(self):
+        for n in range(4):
+            self.go(5000 + 60 * n, lead=None)
+        self.assertEqual(self.restarts, [])
+
+    def test_fifteen_minute_cap_per_project(self):
+        self.go(5000)
+        self.go(5060)
+        self.assertEqual(len(self.restarts), 1)
+        for n in range(2, 14):                               # still idle, inside 15 min of the attempt at 5060
+            self.go(5000 + 60 * n)
+        self.assertEqual(len(self.restarts), 1)
+        self.go(5060 + 899)
+        self.assertEqual(len(self.restarts), 1)
+        self.go(5060 + 900)
+        self.assertEqual(len(self.restarts), 2)
+
+    def test_the_cap_is_per_project_and_a_failed_attempt_counts(self):
+        self.res = (False, "boom")
+        self.go(5000, projects=("a", "b"))
+        self.go(5060, projects=("a", "b"))
+        self.assertEqual(sorted(self.restarts), ["a", "b"])
+        self.go(5120, projects=("a", "b"))
+        self.assertEqual(len(self.restarts), 2)
+
+    def test_success_posts_and_logs(self):
+        self.go(5000)
+        self.go(5060)
+        self.assertEqual(self.posts, [("p", "p lead reconnected to Discord")])
+        self.assertEqual(self.notes, [])
+        self.assertTrue(any("p lead reconnected" in l or "restarted" in l for l in self.log()))
+
+    def test_failure_logs_and_banners_without_posting(self):
+        self.res = (False, "no pane")
+        self.go(5000)
+        self.go(5060)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(len(self.notes), 1)
+        self.assertIn("p", self.notes[0][1])
+        self.assertTrue(any("no pane" in l for l in self.log()))
+
+    def test_state_keys_survive_prune_and_a_new_process(self):
+        self.go(5000)                                        # idle_seen written
+        self.go(5060)                                        # restarted written
+        st = dw.State(self.d / "discord-watch.json")
+        st.prune(set())
+        self.assertEqual(dw.State(self.d / "discord-watch.json").restarted, {"p": 5060})
+        self.go(5120)
+        self.assertEqual(len(self.restarts), 1)
+
+    def test_default_projects_are_the_dirs_with_a_bot_token(self):
+        for name, env in (("a", "DISCORD_BOT_TOKEN=x\n"), ("b", "OTHER=1\n"), ("_ops", "DISCORD_BOT_TOKEN=x\n")):
+            (self.d / "discord" / name).mkdir(parents=True)
+            (self.d / "discord" / name / ".env").write_text(env)
+        (self.d / "discord" / "c").mkdir()
+        self.assertEqual(dw.projects_with_token(self.d), ["a"])
+
+
 class Banner(unittest.TestCase):
     def test_tc_notify_0_sends_no_banner_and_darwin_sends_one(self):
         calls = []
