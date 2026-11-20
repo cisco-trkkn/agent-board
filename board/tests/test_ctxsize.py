@@ -61,7 +61,9 @@ class TestReader(Base):
 
     def test_agrees_with_usage_index(self):
         n = 0
-        for raw in open(FIX).read().splitlines():
+        with open(FIX) as f:
+            lines = f.read().splitlines()
+        for raw in lines:
             d = json.loads(raw)
             if d.get("type") == "assistant" and not d.get("isSidechain") and (d.get("message") or {}).get("usage"):
                 row = usage.row_from_line(d, False)
