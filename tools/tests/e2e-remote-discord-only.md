@@ -63,3 +63,25 @@ Before item 10: repeat item 1's message to the scratch lead, so a marker is fres
 - [ ] **12. A hook inside a teammate.** In the scratch lead, start a teammate and have it try `AskUserQuestion`.
   Expect the deny text `ask the lead with SendMessage; the user is not at your window` in its window and no dialog.
   This probes the environment a hook sees inside a teammate, which was not probed when the plan was written.
+
+## Group 1: teammate requests and reminders
+
+Precondition: group 1 is merged, and the bridge, board and scratch lead are restarted as in Preconditions 4-6 above.
+Take `<ISO>` from before you start: `date -u +%FT%TZ`.
+
+- [ ] **G1. A teammate's request in the lead's window.** In the scratch lead, ask it to start one teammate named `prober`
+  that runs `touch probe` (denied by the project settings so it asks). Expect a `🔐 <project> · prober (in the lead's
+  window) wants to …` message on Discord. Tap Allow once, then expect the message to read `→ … (from Discord)`.
+  Command: `tmux-ctl discord audit --since <ISO> | grep dialog`.
+- [ ] **G2. A gone teammate's request is denied.** Repeat G1, but kill `✦ prober` (`tmux kill-window -t '=<session>:✦ prober'`)
+  while the request waits. Within a minute, expect the message edited to `→ denied: prober is gone` and the feed line
+  `denied stale request from prober (window gone)`. Command: `tmux-ctl discord audit --since <ISO> | grep stale-deny`.
+- [ ] **G3. The reminder when a teammate stops.** Ask the scratch lead to start a teammate that writes one line and stops
+  without messaging. Expect the reminder `prober stopped at HH:MM: <first line> — read its report file.` in the lead, and
+  `tmux-ctl teammates` (run by the lead) showing the row with that time.
+- [ ] **G4. An in-process teammate.** Same as G3 with teammate mode in-process, if the scratch lead offers it
+  (`teammateMode`). Tick it or note "not available".
+- [ ] **G5. A wrapped auto-mode countdown.** In an 80-column `✦` pane in auto mode, trigger a prompt with the
+  `⚠ … will automatically block this request in M:SS` row. Expect ONE Discord message for it, not one per tick. Before
+  answering, save `tmux capture-pane -p -J -t <pane> > /tmp/countdown-80.txt` and hand it to the lead as a real fixture,
+  since the current one is synthetic.
