@@ -30,7 +30,7 @@ Builds on spec C (`2026-11-19-remote-discord-only-design.md`): `tmux-ctl dialog 
 ### 2. Stale requests are denied (`board/discord_dialogs.py`)
 
 - On every scan, for each lead pane whose `show` is a permission request `from` a teammate: the teammate is **gone** when no `✦ <name>` window exists in the lead's session, on two scans at least 30 s apart (a window being respawned under the same name is not gone).
-- A gone teammate's request gets `dialog press <lead pane> --option No --expect <its lines>`. If the re-check reads `changed`, nothing is pressed this tick.
+- A gone teammate's request gets `dialog press <lead pane> --option <n> --expect <its lines>` (revised 2026-11-20: `<n>` is the number of the No option, read from `show`, since `--option` takes a number only; with no No option nothing is pressed). If the re-check reads `changed`, nothing is pressed this tick.
 - The scan repeats down the queue while the new head is also from a gone teammate, up to 10 presses per lead per tick.
 - Each press: an audit line `dialog / stale-deny / <name>`, a line in the Activity feed `denied stale request from <name> (window gone)`, and, if the request had a Discord post, an edit to `→ denied: <name> is gone`.
 - Never: a press on a request from a live teammate, a request with no `from`, or a request whose re-check fails. A worker (`tmux-ctl agent`) or a peer is never treated as a teammate here.
