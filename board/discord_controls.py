@@ -49,7 +49,7 @@ def _ops(fn, *args):
         print(f"discord_controls: ops {fn} failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
-def consume_events(d, project, state, run, add_line):
+def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
     ev_dir = d / "events"
     allow = _allow(d)
     for f in sorted(ev_dir.glob("*.json")):
@@ -80,7 +80,7 @@ def consume_events(d, project, state, run, add_line):
                     result = "queued"
                 discord_feed.audit_append(d, user, "react", str(ev.get("emoji") or ""), result)
             elif kind in ("slash", "modal", "read", "rejected"):
-                _ops("handle_event", project, d, ev, add_line, allow)
+                _ops("handle_event", project, d, ev, add_line, allow, lead_run or run, spawn)
             elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:dream:"):
                 cid = str(ev.get("custom_id"))
                 discord_feed.audit_append(d, user, "click", cid, dream_discord.click(project, user, cid, time.time()) if user in allow else "rejected")
@@ -96,7 +96,7 @@ def consume_events(d, project, state, run, add_line):
                 pass
 
 
-def step(project, record, now, run, add_line):
+def step(project, record, now, run, add_line, lead_run=None, spawn=None):
     d = tc_env.discord_dir(project)
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "controls-state.lock", "w") as lock:
@@ -104,7 +104,7 @@ def step(project, record, now, run, add_line):
         sp = d / "controls-state.json"
         st = _load(sp)
         try:
-            consume_events(d, project, st, run, add_line)
+            consume_events(d, project, st, run, add_line, lead_run=lead_run, spawn=spawn)
         finally:
             tmp = sp.with_name(sp.name + ".tmp")
             tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")

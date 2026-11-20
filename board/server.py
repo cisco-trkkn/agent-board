@@ -580,7 +580,7 @@ def feed_tick(records, now, live=None):
             print(f"tmux-dash: discord feed failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         try:
             discord_controls.step(p, r, now, run=lambda argv, p=p: run_script(argv, extra_env={"TC_SESSION": p}, timeout=20),
-                                  add_line=COMMENTS.add_line)
+                                  add_line=COMMENTS.add_line, lead_run=lambda argv: run_script(argv, timeout=120))
         except Exception as e:   # noqa: BLE001 -- a tick error does not skip the controls step, and vice versa
             print(f"tmux-dash: discord controls failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     if ops_on:

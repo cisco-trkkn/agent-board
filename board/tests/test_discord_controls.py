@@ -166,5 +166,79 @@ class DreamClickTest(Base):
         self.assertEqual([a["result"] for a in self.audit()], ["ignored", "unknown"])
 
 
+class ProjectBotLeadGauthTest(Base):
+    """/lead restart|handoff and /gauth arrive as slash events in a project bot's dir: they reach the same runner and spawn
+    seam the ops consumer uses (nothing here restarts a lead or starts gcloud)."""
+    def setUp(self):
+        super().setUp()
+        import discord_ops
+        self.ops = discord_ops
+        self.runs = []
+
+        class FG:
+            GauthError = type("GauthError", (Exception,), {})
+            calls = []
+
+            def load_config(self, p):
+                self.calls.append(("load_config", p))
+                return {}
+
+            def status(self, p):
+                return "idle"
+
+            def start(self, p):
+                self.calls.append(("start", p))
+
+            def read_url(self, p, tmux=None, timeout=15):
+                return "https://accounts.google.com/x"
+
+            def close(self, p):
+                self.calls.append(("close", p))
+
+        self.fg = FG()
+        FG.calls = []
+        for patcher in (mock.patch.object(discord_ops, "gauth", self.fg),
+                        mock.patch.object(discord_ops, "_pending_update", lambda *a, **k: None),
+                        mock.patch.object(discord_ops, "_pending_load", lambda: {})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def lead_run(self, argv):
+        self.runs.append(argv)
+        return "restarted p: pane %5"
+
+    def slash(self, **ev):
+        self.event("1.json", {"type": "slash", "user": "U1", "iid": "I1", "ts": 1, "project": "p", **ev})
+
+    def test_lead_restart_reaches_the_lead_runner(self):   # mutation: step/consume_events drop lead_run -> "not available here"
+        self.slash(command="lead", action="restart")
+        dc.step("p", self.rec(), 100.0, Runner(), self.add, lead_run=self.lead_run, spawn=lambda f: f())
+        self.assertEqual(self.runs, [[str(dc.BIN / "tmux-ctl"), "lead-restart", "p", "--resume"]])
+        self.assertEqual([o["content"] for o in self.ops_out() if o["op"] == "ireply"], ["restarted p: pane %5"])
+        self.assertEqual((self.audit()[-1]["target"], self.audit()[-1]["result"]), ("p:lead:restart", "restarted"))
+
+    def test_lead_falls_back_to_run_like_the_ops_consumer(self):
+        self.slash(command="lead", action="restart")
+        r = Runner(approve="restarted p")
+        dc.step("p", self.rec(), 100.0, r, self.add, spawn=lambda f: f())
+        self.assertEqual(r.calls, [[str(dc.BIN / "tmux-ctl"), "lead-restart", "p", "--resume"]])
+        self.assertNotIn("not available here", [o.get("content") for o in self.ops_out()])
+
+    def test_gauth_slash_reaches_the_spawn_seam(self):   # mutation: spawn not passed -> a real thread, start() may run after the assert
+        self.slash(command="gauth")
+        spawned = []
+        dc.step("p", self.rec(), 100.0, Runner(), self.add, lead_run=self.lead_run, spawn=spawned.append)
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(self.fg.calls, [("load_config", "p")])
+        spawned[0]()
+        self.assertIn(("start", "p"), self.fg.calls)
+
+    def ops_out(self):
+        return self.ops_list()
+
+    def ops_list(self):
+        return Base.ops(self)
+
+
 if __name__ == "__main__":
     unittest.main()
