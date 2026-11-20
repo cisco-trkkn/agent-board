@@ -9,8 +9,8 @@ rows() { sed -n "$2,$3p" $1 | sed -e 's/ *$//' | grep -a -v '^$' }
 # its top rule up to the key-hint footer, never the scrollback above it
 # mutation: start `lines` at the first screen row → every "lines are" check below fails
 typeset -A FROM TO
-FROM=(trust 3 question-single 9 question-named-session 10 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3 team-request 38)
-TO=(trust 15 question-single 19 question-named-session 20 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13 team-request 47)
+FROM=(question-review 8 trust 3 question-single 9 question-named-session 10 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3 team-request 38)
+TO=(question-review 16 trust 15 question-single 19 question-named-session 20 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13 team-request 47)
 # team-waiting.txt is the teammate's own "Waiting for team lead approval" box, not a dialog (Task 3's pane-class fixture): no oracle
 ran=0
 for f in $FXD/*.txt; do
@@ -29,7 +29,7 @@ for f in $FXD/*.txt; do
   check "$n: lines are fixture rows $FROM[$n]-$TO[$n]"  test "$(lines_of)" = "$(rows $f $FROM[$n] $TO[$n])"
   check "$n: nothing on stderr"                test -z "$err"
 done
-check "all 9 dialogs fixtures ran"             test $ran -eq 9 -a "$(print -rl -- $FXD/expect/*.json | wc -l | tr -d ' ')" = 9
+check "all 10 dialogs fixtures ran"            test $ran -eq 10 -a "$(print -rl -- $FXD/expect/*.json | wc -l | tr -d ' ')" = 10
 
 # --- Claude Code 2.1.329 draws one more row under the footer in a named session: a rule ending in the session name
 # mutation: accept only ` @name ─` as the trailing rule → question-named-session: dialog none, exit 1
