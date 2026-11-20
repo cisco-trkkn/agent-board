@@ -48,6 +48,24 @@ To find "the recent handoff for this project", filter by the `Project:` line fir
 - **Shared context**: first merge any unmerged `Context learned` items from teammate reports and checkpoints with `tmux-ctl context add <section> "<entry>"` (inside tmux). Then one line: `Shared context: ${TC_CONTEXT_DIR:-~/.local/state/agent-board/context}/<project>.md`, with `TC_CONTEXT_DIR` resolved from your environment when it is set and `<project>` as for Ideas. Never copy entries into the doc: the next orchestrator gets them from the SessionStart hook. Outside tmux, leave this line out.
 - **Suggested skills**: the skills the next lead should invoke with the Skill tool.
 
+### At a spec boundary (queue mode)
+
+A handoff at the end of a `Plan & run:` spec (step 4 names the trigger) writes the boundary doc, not the fuller format above.
+
+- **Cost rule.** A doc line and a lookup result both stay in the next lead's context and are re-read every turn. Compare the fact's size with the size of what the next lead would read to rediscover it.
+- **Include rule**, per item:
+  - Include a fact the next spec needs when recovering it takes a much bigger read or several tool calls (a ruling, a decision, a cause found by debugging).
+  - Give a pointer (a path, a command) when one named file or command answers exactly that: the plan, the spec, the archived ledger, `git log`.
+  - Finished history (task progress, review rounds, fix loops) stays in git and the archived ledger.
+  - Durable knowledge (gotchas, how to run, where things live) goes to the shared context file with `tmux-ctl context add` before the handoff.
+- **Shape**, four `## ` sections in this order:
+  1. `## Queue state`: the next spec's path, every queued task's `metadata.queue`, the batch id.
+  2. `## Live state`: keep-awake, uncommitted files and why, open worktrees and leftovers, user gates waiting.
+  3. `## Carried over`: rulings and open user decisions that affect later specs, one line each with a pointer.
+  4. `## Pointers`: the spec to start from, the last report, the archived ledger.
+- The doc still starts with the `Project:` line, keeps `Queue mode: on` and the `Awake:` line inside Queue state, and keeps the Previous session line. It has no Team section.
+- Mid-spec handoffs (the context guard, a live team, a ledger mid-loop) keep the fuller format with the Team section.
+
 Redact secrets and personal data.
 
 **Find the previous session id.** The Write tool's hook records the doc together with this session's id. Read it back, retrying for up to about 5 seconds because the hook runs async:
@@ -59,6 +77,14 @@ jq -r --arg p "<doc absolute realpath>" 'select(.path==$p and .session_id) | .se
 
 Only if that is still empty (always the case outside tmux), fall back to the basename (without `.jsonl`) of the newest `.jsonl` file in `~/.claude/projects/<cwd with every / and . replaced by ->/`, and say in the doc that the id came from this fallback and may be a teammate's transcript. Don't use "newest .jsonl" first: teammate transcripts share that directory. Put the id into the doc with Edit.
 
+**Check the size** after writing any handoff doc:
+
+```bash
+python3 -I "$(dirname "$(realpath "$(command -v tmux-ctl)")")/../board/ctxsize.py" doc <doc>
+```
+
+It prints one line: `handoff doc: <n> tokens (budget 3000): ok`, or `over` with the largest section. On `over`, trim that section once and go on. The warning never blocks the handoff, and it applies to boundary docs only.
+
 **Register it** only if the doc is saved somewhere other than `~/.local/state/agent-board/handoffs/`: `tmux-ctl artifact <doc> --kind handoff`. A doc under `~/.local/state/agent-board/handoffs/` is already registered by the hook.
 
 **Mark a self-started handoff** (inside tmux only; step 4 defines self-started): run `tmux-ctl handoff-mark` now. Until `tmux-ctl relay` runs, the Stop guard blocks this session from ending its turn, so a handoff whose doc is written cannot stall before the relay. A user-started handoff does not run it. If you call the handoff off, run `tmux-ctl handoff-mark --clear`.
@@ -69,7 +95,7 @@ Send each teammate a `shutdown_request`. End its `reason` with: "To approve: fir
 
 ## 4. Ask before switching
 
-**Self-started** means the user did not type `/handoff` in the message that started this turn (you chose to hand off, for example after a context-guard warning). Self-started: skip the question, print `Handing off to a fresh orchestrator: <doc>` and take step 5's **On Yes** path. A Not yet earlier in this session makes every later handoff user-started: ask.
+**Self-started** means the user did not type `/handoff` in the message that started this turn (you chose to hand off, for example after a context-guard warning). A spec boundary is self-started too: a `Plan & run:` spec finished in queue mode, with another pending. Self-started: skip the question, print `Handing off to a fresh orchestrator: <doc>` and take step 5's **On Yes** path. A Not yet earlier in this session makes every later handoff user-started: ask.
 
 **User-started:** ask with AskUserQuestion: "Switch to a fresh orchestrator now?"
 
