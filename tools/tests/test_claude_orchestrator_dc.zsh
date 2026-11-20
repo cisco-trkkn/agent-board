@@ -96,12 +96,12 @@ if (( $+commands[node] )); then
   cat > "$FB/fc.js" <<'FC'
 const { spawn } = require('child_process')
 require('fs').writeFileSync(process.argv[3], String(process.pid))
-spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start'],
+spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start', process.argv[4]],
   { env: { ...process.env, DISCORD_STATE_DIR: process.argv[2] }, stdio: 'ignore' }).on('exit', () => process.exit(0))
 FC
   typeset -a HPIDS=()
   hold() {   # hold <pane>: a live fake lead holding $DC, its TMUX_PANE being <pane>; sets HP
-    local f="$FB/pid.$RANDOM"; env TMUX_PANE="$1" "$FB/claude" "$FB/fc.js" "$DC" "$f" >/dev/null 2>&1 &
+    local f="$FB/pid.$RANDOM"; env TMUX_PANE="$1" "$FB/claude" "$FB/fc.js" "$DC" "$f" "$FB" >/dev/null 2>&1 &
     local i; for i in {1..50}; do [[ -s "$f" ]] && break; sleep 0.1; done
     HP="$(<$f)"; HPIDS+=($HP); sleep 0.5; HPIDS+=($(ps -A -o pid=,ppid= | awk -v p=$HP '$2==p{print $1}'))
   }
@@ -133,7 +133,91 @@ FC
   release
   run "$L" --continue
   check "holder gone: channel added"        test "$(nch)" = 1
-  check "leak: no fake holder left"         test -z "$(ps -A -o args= | grep -F 'fake/discord/0.0.4' | grep -v grep)"
+  # --- the same project's old lead (window claude / claude-next) releases the bot: the new lead waits for it
+  zmodload zsh/datetime
+  NEXTP="$(tt new-window -d -P -F '#{pane_id}' -t '=tt:' -n claude-next -c "$TT_DIR")"
+  # Timing is keyed to the launcher's own "waiting" line, never to the clock from before the launcher started: a loaded
+  # machine can take many seconds to reach its first holder scan, so a fixed release time or a whole-run bound races it.
+  bgrun() {   # bgrun <run args>: start the launcher in the background; WLT = when its waiting line first showed (empty if never)
+    rm -f $S/err; run "$@" & BGP=$!; WLT=
+    local i; for i in {1..1200}; do
+      grep -q '^discord: waiting' $S/err 2>/dev/null && { WLT=$EPOCHREALTIME; break }
+      kill -0 $BGP 2>/dev/null || break; sleep 0.05
+    done
+  }
+  killtree() {   # killtree <pid>: the pid and every descendant (a launcher overrun must leave no grandchild)
+    local c; for c in $(pgrep -P $1 2>/dev/null); do killtree $c; done; kill $1 2>/dev/null
+  }
+  settle() {   # settle <secs>: wait for the launcher up to <secs>, SETTLED=1 if it ended; else free it so the test fails, not hangs
+    local i; SETTLED=0
+    for i in {1..$(( $1 * 20 ))}; do kill -0 $BGP 2>/dev/null || { SETTLED=1; break }; sleep 0.05; done
+    (( SETTLED )) || { release; killtree $BGP }
+    wait $BGP 2>/dev/null; return 0
+  }
+  hold "$NEXTP"
+  bgrun TC_DC_WAIT=30 TC_DC_POLL=1 "$L" --continue
+  check "old lead releases in the wait: the waiting line shows" test -n "$WLT"
+  sleep 3; release
+  settle 25; el=$(( EPOCHREALTIME - ${WLT:-EPOCHREALTIME} ))
+  check "old lead releases in the wait: channel added" test "$(nch)" = 1 -a "$(<$S/dsd)" = "$DC"
+  check "old lead releases in the wait: waited for the release, not the full wait" test $SETTLED = 1 -a $(( el >= 2.5 && el < 25 )) = 1
+  check "old lead releases in the wait: one waiting line, no held line" test "$(<$S/err)" = "discord: waiting up to 30s for the lead in tt:claude-next to release tt's bot"
+  hold "$NEXTP"
+  t0=$EPOCHREALTIME
+  run TC_DC_WAIT=3 TC_DC_POLL=1 "$L" --continue
+  el=$(( EPOCHREALTIME - t0 ))
+  check "old lead never releases: starts without the channel" test "$(nch)" = 0 -a "$(<$S/dsd)" = UNSET
+  check "old lead never releases: waited the full wait" test $(( el >= 2.9 )) = 1
+  check "old lead never releases: waiting line then today's message" test "$(<$S/err)" = "discord: waiting up to 3s for the lead in tt:claude-next to release tt's bot
+discord: tt's bot is held by the lead in tt:claude-next (pid $HP); this lead starts without it"
+  release
+  tt new-session -d -s other -c "$TT_DIR"; tt rename-window -t '=other:' claude
+  OTHERP="$(tt display -p -t '=other:' '#{pane_id}')"
+  hold "$OTHERP"
+  run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
+  check "holder in another project: no wait" test "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  check "holder in another project: today's message only" test "$(<$S/err)" = "discord: tt's bot is held by the lead in other:claude (pid $HP); this lead starts without it"
+  release; tt kill-session -t '=other'
+  hold %9999
+  run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
+  check "holder another process: no wait" test "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  release
+  hold "$OTHER"
+  run TC_DC_WAIT=20 TC_DC_POLL=1 "$L" --continue
+  check "same project, other window name: no wait" test "$(nch)" = 0 -a -z "$(grep waiting $S/err)"
+  release
+  # bad knobs fall back to the defaults, and the wait is a deadline: a never-released same-project holder must end the
+  # wait in time (settle frees the holder after 40 s so a regression fails the test instead of hanging it)
+  hold "$NEXTP"
+  for bad in abc 0 -2 1.5; do
+    bgrun TC_DC_WAIT=6 TC_DC_POLL=$bad "$L" --continue
+    settle 40
+    check "TC_DC_POLL=$bad: ends within the wait, no channel" test $SETTLED = 1 -a "$(nch)" = 0 -a "$(<$S/dsd)" = UNSET
+    check "TC_DC_POLL=$bad: no math error, the wait line is the default shape" test -z "$(grep -i 'bad math\|not valid\|division' $S/err)" -a -n "$(grep -x 'discord: waiting up to 6s for .*' $S/err)"
+  done
+  bgrun TC_DC_WAIT=6 TC_DC_POLL=1 "$L" --continue
+  settle 40; el=$(( EPOCHREALTIME - ${WLT:-EPOCHREALTIME} ))
+  check "deadline: WAIT=6 never released ends about 6 s after the waiting line (one poll and scans over)" test $SETTLED = 1 -a $(( el >= 3 && el < 20 )) = 1 -a "$(nch)" = 0
+  bgrun TC_DC_WAIT=1x TC_DC_POLL=1 "$L" --continue
+  release; settle 25
+  check "TC_DC_WAIT=1x: no math error on stderr, falls back to 60 in the wait line" test -z "$(grep -i 'bad math\|not valid' $S/err)" -a -n "$(grep -x 'discord: waiting up to 60s for .*' $S/err)"
+  # the old lead dying mid-wait: dc_holder can see its pid with no pane for one scan (a dying process has no readable
+  # environment). That is the same holder going away, not "another process": the wait goes on. dc_holder is a seam here:
+  # a repo copy whose dc_holder answers pane, then pane-less, then nothing.
+  R3="$TT_DIR/repo3"; mkdir -p "$R3/bin" "$R3/tools/lib" "$R3/claude/plugin/scripts"
+  cp "$TT_REPO"/bin/{claude-orchestrator,_ab_claude.zsh,_tc_bins.zsh} "$R3/bin/"
+  cp "$TT_REPO"/tools/lib/discord*.zsh "$R3/tools/lib/"; cp "$TT_REPO/tools/discord_cache.py" "$R3/tools/"
+  cp "$TT_REPO"/claude/plugin/scripts/discord-mcp-* "$R3/claude/plugin/scripts/"
+  cp "$TT_REPO/claude/orchestrator.md" "$R3/claude/"
+  print -r -- "dc_holder() { local n=\$(( \$(<$R3/n) + 1 )); print -r -- \$n > $R3/n; case \$n in 1|2) print -r -- '4242 $NEXTP';; 3|4) print -r -- '4242 -';; esac }" >> "$R3/tools/lib/discord.zsh"
+  print -r -- 0 > "$R3/n"
+  run TC_DC_WAIT=30 TC_DC_POLL=1 "$R3/bin/claude-orchestrator" --continue
+  check "old lead dying mid-wait (pid seen without a pane): the wait goes on, channel added" test "$(nch)" = 1 -a "$(<$S/dsd)" = "$DC"
+  check "old lead dying mid-wait: one waiting line, no held line" test "$(<$S/err)" = "discord: waiting up to 30s for the lead in tt:claude-next to release tt's bot"
+  release; tt kill-window -t "$NEXTP"
+  for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F "start $FB" | grep -v grep)" ]] && break; sleep 0.1; done
+  # scoped to this run's own holders ($FB is unique): test_discord_holder.zsh runs fakes with the same --cwd in parallel
+  check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F "start $FB" | grep -v grep)"
 else
   print "skip - no node (guard cases)"
 fi

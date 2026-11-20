@@ -311,6 +311,29 @@ class DialogFixturesTest(unittest.TestCase):
         self.assertEqual(paneclass.classify("claude", rows, False), ("claude", "ready"))
 
 
+class LeadCaptureTest(unittest.TestCase):
+    """Real captures of a lead pane with a task list under the input box (fixtures/relay/README.md)."""
+    FIX = Path(__file__).resolve().parent / "fixtures" / "relay"
+
+    def rows(self, name):
+        rows = [l.rstrip() for l in (self.FIX / name).read_text().splitlines()]
+        while rows and not rows[-1]:
+            rows.pop()
+        return rows
+
+    def test_idle_lead_with_task_list_is_ready(self):
+        # mutation: _above_tasklist stops setting the task list aside and WORKING_RE/spinner_live matches a task row -> working
+        self.assertEqual(paneclass.classify("2.1.329", self.rows("idle-lead-tasklist.txt"), False), ("claude", "ready"))
+
+    def test_working_lead_with_task_list_is_working(self):
+        # mutation: make the esc-to-interrupt footer not count as working -> ready
+        self.assertEqual(paneclass.classify("2.1.329", self.rows("working-lead.txt"), False), ("claude", "working"))
+
+    def test_fresh_ready_record_on_idle_screen_is_ready(self):
+        # mutation: classify prefers the screen over mod for an idle lead and reads a row as working
+        self.assertEqual(paneclass.classify("2.1.329", self.rows("idle-lead-tasklist.txt"), False, "ready"), ("claude", "ready"))
+
+
 class WaitingOnLeadTest(unittest.TestCase):
     FX = HERE.parent / "tools" / "tests" / "fixtures" / "dialogs" / "team-waiting.txt"   # real capture, Task 1
 

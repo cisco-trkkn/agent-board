@@ -96,6 +96,40 @@ class WaitTest(unittest.TestCase):
         self.assertFalse(ok)
 
 
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "relay"
+
+
+def fixture_tmux(name):
+    """tmux stub answering display and capture-pane from a real capture of the lead's pane."""
+    text = (FIXTURES / name).read_text()
+
+    def tmux(*a, check=False):
+        return f"2.1.329{paneclass.SEP}0\n" if a[0] == "display" else text
+    return tmux
+
+
+class WaitRealCaptureTest(unittest.TestCase):
+    """Real read-only captures of a Claude lead pane with a task list under its input box (fixtures/relay/README.md).
+    mod_states is stubbed to {}: no agent-status file, so the screen decides."""
+
+    def setUp(self):
+        p = mock.patch.object(paneclass, "mod_states", return_value={})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_idle_lead_with_task_list_ends_the_wait(self):
+        # mutation: drop "ready" from relay.ENDED, or let classify read the task list rows as a spinner -> False
+        sleeps = []
+        self.assertTrue(relay.wait_turn_end(fixture_tmux("idle-lead-tasklist.txt"), "%5", sleep=sleeps.append))
+        self.assertEqual(len(sleeps), 1)
+
+    def test_working_lead_keeps_waiting_until_the_cap(self):
+        # mutation: make classify return ready for a claude pane whose footer shows `esc to interrupt` -> True
+        clock = iter(range(0, 1000, 2))
+        ok = relay.wait_turn_end(fixture_tmux("working-lead.txt"), "%5", cap=10, sleep=lambda s: None, clock=lambda: next(clock))
+        self.assertFalse(ok)
+
+
 class SessionRootTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -301,6 +335,236 @@ class RelayTest(unittest.TestCase):
             rc = relay.main(["--session", "proj", "--doc", "/d.md", "--state", "/tmp"])
         self.assertEqual(rc, 1)
         self.assertIn(shlex.quote(relay.orchestrator()) + " 'Read /d.md", err.getvalue())
+
+
+class LeadTmux:
+    """tmux stub for lead_pane / restart_lead: sessions as (name, group, bg) and windows as {session: [(name, id, pane)]}."""
+
+    def __init__(self, sessions, windows, root="/tmp", status="claude"):
+        self.sessions, self.windows, self.root, self.calls = sessions, windows, root, []
+
+    def __call__(self, *a, check=False):
+        self.calls.append(a)
+        if a[0] == "list-sessions":
+            return "".join(f"{n}{SEP}{g}{SEP}{b}\n" for n, g, b in self.sessions)
+        if a[0] == "list-windows":
+            sess = a[a.index("-t") + 1].lstrip("=").rstrip(":")
+            if sess not in self.windows:
+                raise RuntimeError(f"can't find session: {sess}")
+            return "".join(f"{n}{SEP}{i}{SEP}{p}\n" for n, i, p in self.windows[sess])
+        if a[0] == "display":
+            return self.root + "\n" if a[-1] == "#{session_path}" else "/bin/zsh\n"
+        return ""
+
+    def names(self):
+        return [c[0] for c in self.calls]
+
+
+class LeadPaneTest(unittest.TestCase):
+    def tmux(self, sessions, windows):
+        return LeadTmux(sessions, windows)
+
+    def test_claude_window_wins_over_claude_next(self):
+        t = self.tmux([("proj", "", "")], {"proj": [("claude-next", "@2", "%9"), ("claude", "@1", "%5")]})
+        self.assertEqual(relay.lead_pane(t, "proj"), ("proj", "%5", "claude"))
+
+    def test_claude_next_when_no_claude(self):
+        t = self.tmux([("proj", "", "")], {"proj": [("shell", "@1", "%3"), ("claude-next", "@2", "%9")]})
+        self.assertEqual(relay.lead_pane(t, "proj"), ("proj", "%9", "claude-next"))
+
+    def test_none_when_neither(self):
+        t = self.tmux([("proj", "", "")], {"proj": [("shell", "@1", "%3")]})
+        self.assertIsNone(relay.lead_pane(t, "proj"))
+
+    def test_unknown_project_is_none(self):
+        self.assertIsNone(relay.lead_pane(self.tmux([("other", "", "")], {}), "proj"))
+
+    def test_bg_session_is_never_the_project_session(self):
+        t = self.tmux([("proj-bg", "", "1"), ("proj", "", "")], {"proj-bg": [("claude", "@7", "%70")], "proj": [("claude", "@1", "%5")]})
+        self.assertEqual(relay.lead_pane(t, "proj"), ("proj", "%5", "claude"))
+
+    def test_a_bg_flagged_session_is_never_the_lead_even_under_the_project_name(self):
+        t = self.tmux([("proj", "", "1")], {"proj": [("claude", "@1", "%5")]})
+        self.assertIsNone(relay.lead_pane(t, "proj"))
+
+    def test_group_name_resolves_to_a_real_member_session(self):
+        # a grouped session: the project key is the group; list-windows -t =<group> would fail, a member name works
+        t = self.tmux([("proj-web1", "proj", ""), ("proj-bg", "", "1")], {"proj-web1": [("claude", "@1", "%5")]})
+        self.assertEqual(relay.lead_pane(t, "proj"), ("proj-web1", "%5", "claude"))
+        self.assertTrue(all("=proj-web1" in c or c[0] == "list-sessions" for c in t.calls))
+
+
+class SessionForPaneTest(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+        (self.d / "home" / "sessions").mkdir(parents=True)
+        (self.d / "state" / "agent-status").mkdir(parents=True)
+
+    def sess(self, name, tmux, sid, upd):
+        (self.d / "home" / "sessions" / name).write_text(json.dumps({"sessionId": sid, "tmux": tmux, "updatedAt": upd}))
+
+    def got(self, pane="%5"):
+        return relay.session_for_pane(pane, str(self.d / "home"), str(self.d / "state"))
+
+    def test_newest_updated_at_for_the_pane(self):
+        self.sess("a.json", "proj:@1.%5", "OLD", 100)
+        self.sess("b.json", "proj:@1.%5", "NEW", 200)
+        self.sess("c.json", "other:@2.%6", "ELSE", 900)
+        self.assertEqual(self.got(), "NEW")
+
+    def test_pane_id_must_match_whole_not_a_suffix(self):
+        self.sess("a.json", "proj:@1.%45", "WRONG", 100)
+        self.assertEqual(self.got(), "")
+
+    def test_falls_back_to_fresh_agent_status(self):
+        (self.d / "state" / "agent-status" / "S1.json").write_text(json.dumps(
+            {"session_id": "S1", "pane": "%5", "state": "ready", "updatedAt": time.time()}))
+        self.assertEqual(self.got(), "S1")
+
+    def test_stale_agent_status_is_ignored(self):
+        (self.d / "state" / "agent-status" / "S1.json").write_text(json.dumps(
+            {"session_id": "S1", "pane": "%5", "state": "ready", "updatedAt": time.time() - 600}))
+        self.assertEqual(self.got(), "")
+
+    def test_sessions_beat_agent_status(self):
+        self.sess("a.json", "proj:@1.%5", "FROMSESS", 100)
+        (self.d / "state" / "agent-status" / "S1.json").write_text(json.dumps(
+            {"session_id": "S1", "pane": "%5", "state": "ready", "updatedAt": time.time()}))
+        self.assertEqual(self.got(), "FROMSESS")
+
+    def test_none(self):
+        self.assertEqual(self.got(), "")
+
+
+class NewestHandoffTest(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+        (self.d / "drafts").mkdir()
+
+    def doc(self, rel, project, age):
+        p = self.d / rel
+        p.write_text(f"Project: {project}\n\n# h\n")
+        t = time.time() - age
+        os.utime(p, (t, t))
+        return str(p)
+
+    def test_newest_of_this_project_ignores_another_projects_newer_doc(self):
+        old = self.doc("a.md", "/r/one", 500)
+        new = self.doc("b.md", "/r/one", 100)
+        self.doc("c.md", "/r/two", 1)
+        self.assertEqual(relay.newest_handoff("/r/one", str(self.d)), new)
+        self.assertNotEqual(relay.newest_handoff("/r/one", str(self.d)), old)
+
+    def test_drafts_are_not_handoffs(self):
+        self.doc("drafts/x.md", "/r/one", 1)
+        self.assertIsNone(relay.newest_handoff("/r/one", str(self.d)))
+
+    def test_project_line_must_match_exactly(self):
+        self.doc("a.md", "/r/one-more", 10)
+        self.doc("b.md", "/r/one ", 10)
+        self.assertIsNone(relay.newest_handoff("/r/one", str(self.d)))
+
+    def test_missing_dir_is_none(self):
+        self.assertIsNone(relay.newest_handoff("/r/one", str(self.d / "nope")))
+
+
+class RestartLeadTest(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+        (self.d / "home" / "sessions").mkdir(parents=True)
+        (self.d / "state").mkdir()
+        (self.d / "handoffs").mkdir()
+        (self.d / "root").mkdir()
+        self.root = str((self.d / "root").resolve())
+        self.doc = self.d / "handoffs" / "h.md"
+        self.doc.write_text(f"Project: {os.path.realpath(self.root)}\n")
+        p = mock.patch.object(relay, "wait_started", return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.env = mock.patch.dict(os.environ, {"SHELL": "/bin/zsh"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def run_restart(self, tmux, **kw):
+        kw.setdefault("sleep", lambda s: None)
+        return relay.restart_lead(tmux, "proj", home=str(self.d / "home"), state=str(self.d / "state"),
+                                  handoffs=str(self.d / "handoffs"), **kw)
+
+    def tmux(self, win="claude"):
+        return LeadTmux([("proj", "", "")], {"proj": [(win, "@1", "%5")]}, root=self.root)
+
+    def respawn_cmd(self, t):
+        c = [c for c in t.calls if c[0] == "respawn-pane"][0]
+        return c
+
+    def test_doc_mode_respawns_with_command_and_types_nothing(self):
+        t = self.tmux()
+        out = self.run_restart(t)
+        c = self.respawn_cmd(t)
+        self.assertEqual(c[:7], ("respawn-pane", "-k", "-t", "%5", "-c", os.path.realpath(self.root), c[6]))
+        inner = shlex.split(c[6])[4]
+        self.assertIn(relay.orchestrator(), inner)
+        self.assertIn(shlex.quote(f"Read {self.doc} and continue from where the previous session left off."), inner)
+        self.assertEqual(shlex.split(c[6])[:4], ["/bin/zsh", "-f", "-i", "-c"])
+        self.assertTrue(inner.endswith("; exec /bin/zsh -l"))
+        self.assertNotIn("send-keys", t.names())
+        self.assertEqual(out["pane"], "%5")
+        self.assertEqual(out["what"], "doc h.md")
+
+    def test_resume_mode_uses_the_pane_session_id(self):
+        (self.d / "home" / "sessions" / "a.json").write_text(json.dumps({"sessionId": "SID1", "tmux": "proj:@1.%5", "updatedAt": 5}))
+        t = self.tmux()
+        out = self.run_restart(t, resume=True)
+        self.assertIn(" --resume SID1; exec", self.respawn_cmd(t)[6])
+        self.assertEqual(out["what"], "resume SID1")
+
+    def test_resume_without_id_changes_nothing(self):
+        t = self.tmux("claude-next")
+        with self.assertRaises(relay.LeadRestartError) as cm:
+            self.run_restart(t, resume=True)
+        self.assertIn("session id", str(cm.exception))
+        self.assertTrue(set(t.names()) <= {"list-sessions", "list-windows", "display"})
+
+    def test_no_handoff_changes_nothing(self):
+        self.doc.unlink()
+        t = self.tmux("claude-next")
+        with self.assertRaises(relay.LeadRestartError):
+            self.run_restart(t)
+        self.assertNotIn("rename-window", t.names())
+        self.assertNotIn("respawn-pane", t.names())
+
+    def test_no_lead_pane_message(self):
+        t = LeadTmux([("proj", "", "")], {"proj": [("shell", "@1", "%3")]}, root=self.root)
+        with self.assertRaises(relay.LeadRestartError) as cm:
+            self.run_restart(t)
+        self.assertEqual(str(cm.exception), "no lead pane for proj")
+        self.assertNotIn("respawn-pane", t.names())
+
+    def test_claude_next_is_renamed_before_the_respawn(self):
+        t = self.tmux("claude-next")
+        self.run_restart(t)
+        n = t.names()
+        self.assertLess(n.index("rename-window"), n.index("respawn-pane"))
+        self.assertIn(("rename-window", "-t", "%5", "claude"), t.calls)
+
+    def test_explicit_doc_wins_and_resume_with_doc_is_refused(self):
+        other = self.d / "mine.md"
+        other.write_text("x")
+        t = self.tmux()
+        self.run_restart(t, doc=str(other))
+        self.assertIn(str(other), self.respawn_cmd(t)[6])
+        with self.assertRaises(relay.LeadRestartError):
+            self.run_restart(self.tmux(), doc=str(other), resume=True)
+
+    def test_not_started_raises_with_the_pane_tail(self):
+        with mock.patch.object(relay, "wait_started", return_value=False) as ws:
+            with self.assertRaises(relay.LeadRestartError) as cm:
+                self.run_restart(self.tmux())
+        self.assertEqual(ws.call_args.kwargs["cap"], 60)
+        self.assertIn("did not start", str(cm.exception))
 
 
 if __name__ == "__main__":

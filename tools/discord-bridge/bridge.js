@@ -333,7 +333,34 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     st.presence = presenceText; save();   // a restarted process re-applies it on ready
     try { applyPresence(); say(`presence ${snip(presenceText)}`); } catch (e) { say(`presence failed: ${snip(e?.message)}`); }
   }
-  const handlers = { presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  // Interactions kept for ireply: iid -> {i, at}. Discord lets a bot edit an interaction's reply for 15 minutes; we stop at 14.
+  const IREPLY_TTL_MS = 840 * 1000;
+  const kept = new Map();
+  function keep(i) {
+    const t = now();
+    for (const [k, v] of kept) if (t - v.at > IREPLY_TTL_MS) kept.delete(k);
+    kept.set(String(i.id), { i, at: t });
+  }
+
+  async function opIreply(op) {
+    const iid = String(op.iid);
+    const k = kept.get(iid);
+    const content = cut(String(op.content ?? ''), REPLY_MAX);
+    if (k && now() - k.at <= IREPLY_TTL_MS) {
+      try {
+        await k.i.editReply({ content, allowedMentions: { parse: [] }, components: Array.isArray(op.components) ? toRows(op.components) : [] });
+        say(`ireply ${snip(iid)}`);
+      } catch (e) { say(`ireply ${snip(iid)} failed: ${snip(e?.message)}`); } // a transient error may have half-landed: never post a duplicate
+      return;
+    }
+    if (op.private === true) { kept.delete(iid); say(`ireply ${snip(iid)} dropped (private)`); return; }
+    kept.delete(iid);
+    const ch = await home();
+    await ch.send({ content, allowedMentions: { parse: [] }, ...(Array.isArray(op.components) && op.components.length ? { components: toRows(op.components) } : {}) });
+    say(`ireply ${snip(iid)} fell back to post`);
+  }
+
+  const handlers = { ireply: opIreply, presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -619,7 +646,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   function close() { closed = true; }
 
-  const ctx = { dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, fence, NO_MENTIONS };
+  const ctx = { dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
   return { ctx, tick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 

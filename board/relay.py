@@ -183,11 +183,132 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=S
     return f"relayed {sess}:claude to a fresh orchestrator with {doc}"
 
 
+class LeadRestartError(RuntimeError):
+    pass
+
+
+def lead_pane(tmux, project):
+    """(session, pane id, window name) of the project's lead, or None. The session is a real, non-bg one: the project
+    key may be a group name that list-windows cannot target. R3: window `claude`, else `claude-next`."""
+    rows = [l.split(SEP) for l in tmux("list-sessions", "-F", f"#{{session_name}}{SEP}#{{session_group}}{SEP}#{{@tc_bg}}").splitlines()]
+    live = [r for r in rows if len(r) == 3 and not r[2]]
+    names = [r[0] for r in live if r[0] == project] + [r[0] for r in live if r[1] == project and r[0] != project]
+    for sess in names:
+        try:
+            wins = [l.split(SEP) for l in tmux("list-windows", "-t", f"={sess}", "-F", f"#{{window_name}}{SEP}#{{window_id}}{SEP}#{{pane_id}}", check=True).splitlines()]
+        except RuntimeError:
+            continue
+        for want in ("claude", "claude-next"):
+            for w in wins:
+                if len(w) == 3 and w[0] == want:
+                    return sess, w[2], want
+    return None
+
+
+def session_for_pane(pane, home, state):
+    """R6: the newest ~/.claude/sessions/*.json entry whose tmux field ends with .<pane>, else a fresh agent-status record of the pane, else ''."""
+    best = (-1, "")
+    for f in sorted((Path(home) / "sessions").glob("*.json")):
+        try:
+            e = json.loads(f.read_text())
+            if str(e.get("tmux", "")).endswith("." + pane) and e.get("sessionId"):
+                upd = e.get("updatedAt") or 0
+                if upd > best[0]:
+                    best = (upd, str(e["sessionId"]))
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+    if best[1]:
+        return best[1]
+    rec = paneclass.mod_records(d=Path(state) / "agent-status").get(pane)
+    return str(rec.get("session_id") or "") if rec else ""
+
+
+def newest_handoff(root, handoffs):
+    """The newest handoffs/*.md (not drafts/) whose first line is `Project: <root>`, or None."""
+    best = (-1.0, None)
+    try:
+        names = sorted(os.listdir(handoffs))
+    except OSError:
+        return None
+    for n in names:
+        p = os.path.join(handoffs, n)
+        if not n.endswith(".md") or not os.path.isfile(p):
+            continue
+        try:
+            with open(p, errors="replace") as f:
+                first = f.readline().rstrip("\r\n")
+            m = os.path.getmtime(p)
+        except OSError:
+            continue
+        if first == f"Project: {root}" and m > best[0]:
+            best = (m, p)
+    return best[1]
+
+
+LEAD_START_CAP = 60.0
+
+
+def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, handoffs=None, **timing):
+    """Restart the project's lead pane (spec §2, R3 R4 R6). Everything is checked before anything changes; the respawn
+    command is the pane's own command and ends in a login shell, so the window survives claude's exit. Nothing is typed."""
+    if resume and doc:
+        raise LeadRestartError("usage: lead-restart <project> [--resume | --doc <handoff>]")
+    found = lead_pane(tmux, project)
+    if found is None:
+        raise LeadRestartError(f"no lead pane for {project}")
+    sess, pane, win = found
+    root = os.path.realpath(session_root(tmux, sess))
+    if resume:
+        sid = session_for_pane(pane, home or os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"), state or default_state())
+        if not sid:
+            raise LeadRestartError(f"no session id for {project}'s lead pane {pane}: cannot --resume")
+        args, what = f"--resume {shlex.quote(sid)}", f"resume {sid}"
+    else:
+        d = doc or newest_handoff(root, handoffs or str(tc_env.agent_base() / "handoffs"))
+        if not d:
+            raise LeadRestartError(f"no handoff doc for {root}: pass --doc <file> or --resume")
+        if not os.path.isfile(d):
+            raise LeadRestartError(f"no handoff doc '{d}'")
+        args, what = shlex.quote(prompt_for(d)), f"doc {os.path.basename(d)}"
+    if win == "claude-next":
+        tmux("rename-window", "-t", pane, "claude", check=True)
+    shell = os.environ.get("SHELL") or "/bin/zsh"
+    # `-i -c`: an interactive shell has job control, so the orchestrator is the tty's foreground job and tmux (paneclass)
+    # names it, not the wrapper. A plain `-c` (even with set -m) leaves the wrapper in the foreground. -f keeps zsh's rc out of it.
+    inner = f"{shlex.quote(orchestrator())} {args}; exec {shlex.quote(shell)} -l"
+    wrap = f"{shlex.quote(shell)} {'-f ' if os.path.basename(shell) == 'zsh' else ''}-i -c {shlex.quote(inner)}"
+    tmux("respawn-pane", "-k", "-t", pane, "-c", root, wrap, check=True)
+    if not wait_started(tmux, pane, cap=LEAD_START_CAP, **timing):
+        raise LeadRestartError(f"the new lead did not start in {root}; the pane shows:\n{pane_tail(tmux, pane)}")
+    return {"project": project, "pane": pane, "what": what}
+
+
+def lead_main(argv):
+    ap = argparse.ArgumentParser(prog="relay.py lead-restart")
+    ap.add_argument("project")
+    ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--doc", default=None)
+    ap.add_argument("--socket", default="")
+    a = ap.parse_args(argv)
+    tmux = paneclass.tmux_runner(["-S", a.socket] if a.socket else [])
+    try:
+        r = restart_lead(tmux, a.project, resume=a.resume, doc=a.doc)
+    except LeadRestartError as e:
+        print(f"lead-restart: {e}", file=sys.stderr)
+        return 1
+    print(f"lead-restart: {r['project']} restarted ({r['what']})")
+    print(f"pane {r['pane']}")
+    return 0
+
+
 def default_state():
     return str(tc_env.state_dir())
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["lead-restart"]:
+        return lead_main(argv[1:])
     ap = argparse.ArgumentParser(description="hand the claude window to a fresh orchestrator")
     ap.add_argument("--session", required=True)
     ap.add_argument("--doc", required=True)

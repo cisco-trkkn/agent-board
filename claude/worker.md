@@ -52,6 +52,8 @@ which carry session names and prompts, so they can kill other Claude sessions: t
 you, the lead and its whole team. Kill by PID only, the one you started (`$!`) or one you looked up and
 checked first. A hook blocks patterns that match a Claude process.
 
+- A Google auth error (`invalid_rapt`, `Reauthentication failed`, or missing Google credentials): stop that step and message the lead with the error line; do not retry or run gcloud auth yourself.
+
 ## Finish
 
 Commit your work: a worker on its own branch, a teammate as its brief says. Don't push, merge or

@@ -113,25 +113,29 @@ function fakeReaction({ emoji, message, partial = false }) {
 // A fake interaction: a component click or other. ephemeral: the clicked message is an ephemeral reply
 // (flags 64); values: the picked options of a select menu; component: the clicked button {style, label};
 // components: the clicked message's rows (plain {type:1, components:[{type:2, style, label, custom_id}]}). reply/followUp/update are recorded in replies.
-function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer, values, ephemeral = false, component, components } = {}) {
-  const i = { customId, user: { id: user }, message: { id: messageId, flags: ephemeral ? 64 : 0, ...(components ? { components } : {}) }, channelId, replies: [], updates: [], followUps: [], deferred: 0 };
+function fakeInteraction({ customId, user = 'U9', messageId = 'm1', channelId = 'C1', onDefer, values, ephemeral = false, component, components, id = 'iid-c' } = {}) {
+  const i = { id, customId, modals: [], edits: [], user: { id: user }, message: { id: messageId, flags: ephemeral ? 64 : 0, ...(components ? { components } : {}) }, channelId, replies: [], updates: [], followUps: [], deferred: 0 };
   if (values) i.values = values;
   if (component) i.component = component; // the clicked button: {style, label}
   i.deferUpdate = async () => { if (onDefer) onDefer(); i.deferred++; };
   i.reply = async (x) => { i.replies.push(x); };
   i.followUp = async (x) => { i.followUps.push(x); };
   i.update = async (x) => { i.updates.push(x); };
+  i.showModal = async (m) => { i.modals.push(m); };
+  i.editReply = async (x) => { i.edits.push(x); };
   return i;
 }
 
 // A chat-input command; options is {name: value}.
-function fakeCommand({ name, options = {}, user = 'U1', channelId = 'C1' } = {}) {
-  const i = { commandName: name, user: { id: user }, channelId, replies: [], updates: [], modals: [], deferred: 0 };
+function fakeCommand({ name, options = {}, user = 'U1', channelId = 'C1', id = 'iid-1' } = {}) {
+  const i = { id, edits: [], deferredReplies: [], commandName: name, user: { id: user }, channelId, replies: [], updates: [], modals: [], deferred: 0 };
   i.isChatInputCommand = () => true;
   i.isModalSubmit = () => false;
   i.options = { getString: (n) => (n in options ? options[n] : null) };
   i.reply = async (x) => { i.replies.push(x); };
   i.showModal = async (m) => { i.modals.push(m); };
+  i.deferReply = async (x) => { i.deferredReplies.push(x); };
+  i.editReply = async (x) => { i.edits.push(x); };
   return i;
 }
 

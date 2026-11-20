@@ -52,6 +52,10 @@
 #                                          (from the Stop-hook status files plus the `✦` windows); `no teammates` when none
 #   tmux-ctl handoff-mark [--clear]        a self-started handoff marks this session as not yet relayed (the Stop guard
 #                                          blocks its stops until `relay` runs); --clear removes the mark (handoff skill only)
+#   tmux-ctl lead-restart <project> [--resume | --doc <handoff>]
+#                                          restart the project's lead pane (claude, else claude-next) with a fresh
+#                                          orchestrator: --resume continues its session; else reads --doc or the
+#                                          project's newest handoff. Works outside tmux. Needs a started lead (60 s)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
 #                                          orchestrator that starts from <doc> (handoff skill only)
 #   tmux-ctl overview [project] [--json]   the overseer digest: one line per open project (plan, in-progress
@@ -62,6 +66,8 @@
 #   tmux-ctl discord merge-request --project <p> --task <id> --spec <s> --branch <b> [--target main] --tests <line> --verdict <text> [--finding <line>]…  post a merge approval (queue integration ask)
 #   tmux-ctl discord send [--thread <key>] [<file>…] [-m <text>] [--project <name>]  post up to 10 files; snap [<project>]  post a PNG of the board
 #   tmux-ctl discord watch --once|install|status|uninstall  the reconnect watchdog
+#   tmux-ctl gauth config <project> [--adc|--no-adc] [--impersonate <sa>] [--account <email>]  set the fixed Google re-auth command (terminal only, file mode 0600)
+#   tmux-ctl gauth start|status|close <project>  run it in window gauth-<project> of <project>-bg; the code is typed by the board (/gauth), never by this command
 #   tmux-ctl metrics backfill-tasks [--log P]  task lines (tasks.jsonl) for past runs that have none
 #   tmux-ctl metrics analyze [--since 7d|30d|ISO] [--json]  trends, flags, coverage over every project -> stats.json
 #   tmux-ctl metrics recommend [--since] [--stats P]  three recommendations over stats.json, evidence-checked
@@ -104,7 +110,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) ]] || die "not inside tmux"   # discord and context dream* work outside tmux
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart ]] || die "not inside tmux"   # discord, context dream*, gauth config and lead-restart work outside tmux
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -302,6 +308,10 @@ cmd="$1"; shift 2>/dev/null
 if [[ "$cmd" == discord ]]; then   # no tmux needed
   source "${0:A:h:h}/tools/lib/discord.zsh"
   discord_cmd "$@"; exit $?
+fi
+if [[ "$cmd" == gauth ]]; then   # config needs no tmux; the others reach tmux through board/gauth.py
+  [[ "$1" == (config|start|status|close) && -n "$2" ]] || die 'usage: tmux-ctl gauth config <project> [--adc|--no-adc] [--impersonate <sa>] [--account <email>] | start|status|close <project>'
+  python3 -I "${0:A:h:h}/board/gauth.py" "$@"; exit $?
 fi
 if [[ "$cmd" == context && ( "$1" == dream || "$1" == dream-report || "$1" == dream-file || "$1" == dream-revert || "$1" == dream-schedule ) ]]; then   # no tmux needed (launchd runs it)
   dsub="$1"; shift
@@ -656,11 +666,16 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     warn_web_key
     # lead-only: relay.py respawns the session's claude window as the lead. Called from a worker, teammate, lane or
     # shell window it must leave the lead alone and hand the user the manual start instead.
-    cwin=; csess=
-    [[ -n "$TMUX_PANE" ]] && { cwin="$(t display -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)"; csess="$(t display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; }
-    if [[ "$cwin" != claude || "$csess" != "$FEEDKEY" ]]; then
+    # R7: the lead is AGENT_BOARD_LEAD=1, in a window named claude (or claude-next, renamed below), in this session, not a teammate
+    cwin=; csess=; cmate=; creal=
+    [[ -n "$TMUX_PANE" ]] && { creal="$(t display -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)"; cwin="$(t display -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)"; csess="$(t display -p -t "$TMUX_PANE" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; cmate="$(t display -p -t "$TMUX_PANE" '#{@tc_teammate}' 2>/dev/null)"; }
+    if [[ "$AGENT_BOARD_LEAD" != 1 || ( "$cwin" != claude && "$cwin" != claude-next ) || "$csess" != "$FEEDKEY" || -n "$cmate" && "$cmate" != 0 ]]; then
       print -u2 -r -- "tmux-ctl: relay refused: only the lead, from the session's claude window, can relay (this is ${cwin:-no tmux pane}). The lead was not touched. Give the user this to start the new lead by hand: ${(q)TC_REPO}/bin/claude-orchestrator 'Read $doc and continue from where the previous session left off.'"
       exit 2
+    fi
+    if [[ "$cwin" == claude-next ]]; then   # relay.py finds the lead by the window name claude: rename only after every check passed
+      t list-windows -t "=$creal:" -F '#{window_name}' | grep -qx claude && { print -u2 -r -- "relay: a claude window already exists in $creal"; exit 2; }
+      t rename-window -t "$TMUX_PANE" claude || die "cannot rename the claude-next window"
     fi
     log="$STATE/relay-$FEEDKEY.log"
     sock="$(t display -p '#{socket_path}')"
@@ -674,6 +689,35 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
       [[ "$hm" =~ '^[A-Za-z0-9_-]+$' ]] && rm -f -- "$STATE/handoff-pending/$hm"
     done
     print -r -- "relay scheduled: ${FEEDKEY}:claude restarts with $doc once this turn ends (log: $log)" ;;
+
+  lead-restart)   # spec 2026-11-19-lead-recovery §2: works outside tmux (a Discord /lead, discord-watch)
+    lr_usage="usage: tmux-ctl lead-restart <project> [--resume | --doc <handoff>]"
+    [[ -n "$1" && "$1" != -* ]] || die "$lr_usage"
+    lr_proj="$1"; shift; lr_args=(); lr_resume=0; lr_doc=0
+    while (( $# )); do
+      case "$1" in
+        --resume) lr_resume=1; lr_args+=(--resume); shift ;;
+        --doc) [[ -n "$2" ]] || die "$lr_usage"; lr_doc=1; lr_args+=(--doc "${2:A}"); shift 2 ;;
+        *) die "$lr_usage" ;;
+      esac
+    done
+    (( lr_resume && lr_doc )) && { print -u2 -r -- "lead-restart: --resume and --doc exclude each other. $lr_usage"; exit 2; }
+    lr_sock="$(t display -p '#{socket_path}' 2>/dev/null)"; [[ -n "$lr_sock" ]] && lr_args+=(--socket "$lr_sock")
+    lr_out="$(python3 -I "${0:A:h:h}/board/relay.py" lead-restart "$lr_proj" "${lr_args[@]}")" || exit $?
+    lr_pane="${${(f)lr_out}[2]#pane }"
+    # the bot: the new lead's own MCP server takes a moment to claim the channel
+    source "${0:A:h:h}/tools/lib/discord.zsh"
+    lr_dir="$(_dc_root)/$lr_proj"; lr_bot="no bot"
+    if "$_DC_TOOLS/../claude/plugin/scripts/discord-mcp-launch" --has-token "$lr_dir" 2>/dev/null; then
+      lr_bot="not held"; lr_n="${LEAD_RESTART_BOT_WAIT:-20}"
+      while :; do
+        lr_hold="$(dc_holder "$lr_dir")"
+        [[ -n "$lr_hold" && "${lr_hold#* }" == "$lr_pane" ]] && { lr_bot="held by the new lead"; break }
+        (( lr_n-- > 0 )) || break
+        sleep 1
+      done
+    fi
+    print -r -- "${${(f)lr_out}[1]}; bot: $lr_bot" ;;
 
   overview)
     proj=""; jflag=()
@@ -689,7 +733,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,76p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

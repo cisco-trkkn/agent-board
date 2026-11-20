@@ -33,6 +33,35 @@ sleep 6   # relay.py would have polled twice (2s apart) and respawned the lead b
 check "lead pane untouched"  test "$(tt display -p -t "$lead" '#{pane_pid}')" = "$lead_pid0"
 check "no orchestrator started" test ! -e "$STUB/args"
 check "no lineage written"   test ! -e "$TC_LINEAGE/tt.jsonl"
+# R7: the lead's own window may also be named claude-next; it is renamed claude before the detached relay starts
+tt new-session -d -s nx -n claude-next -c "$TT_DIR"
+nxp="$(tt display -p -t '=nx:claude-next' '#{pane_id}')"
+rname() { tt display -p -t "$nxp" '#{window_name}' }
+nxrelay() { env TMUX_PANE=$nxp "$@" $C relay "$doc" 2>&1 }   # nxrelay [VAR=val ...]: relay as the nx pane
+out="$(nxrelay AGENT_BOARD_LEAD=0)"; rc=$?
+check "claude-next without AGENT_BOARD_LEAD refused"    test $rc -eq 2
+check "claude-next without AGENT_BOARD_LEAD keeps name" test "$(rname)" = claude-next
+out="$(env -u AGENT_BOARD_LEAD TMUX_PANE=$nxp $C relay "$doc" 2>&1)"; rc=$?
+check "claude-next with AGENT_BOARD_LEAD unset refused" test $rc -eq 2 -a "$(rname)" = claude-next
+tt set-option -w -t "$nxp" @tc_teammate 1
+out="$(nxrelay AGENT_BOARD_LEAD=1)"; rc=$?
+check "teammate-flagged claude-next refused"            test $rc -eq 2
+check "teammate-flagged claude-next keeps name"         test "$(rname)" = claude-next
+check "teammate-flagged refusal is the lead-only text"  zsh -c 'print -r -- "$1" | grep -q "relay refused: only the lead"' x "$out"
+tt set-option -w -t "$nxp" -u @tc_teammate
+out="$(nxrelay AGENT_BOARD_LEAD=1 TC_SESSION=tt)"; rc=$?   # session mismatch: the pane is in nx, the feed key says tt
+check "claude-next in another session refused"          test $rc -eq 2 -a "$(rname)" = claude-next
+tt rename-window -t "$nxp" other
+out="$(nxrelay AGENT_BOARD_LEAD=1)"; rc=$?
+check "other window name refused even as lead"          test $rc -eq 2 -a "$(rname)" = other
+tt rename-window -t "$nxp" claude-next
+# a claude window already in the session: a claude-next caller is refused and nothing is renamed
+tt new-window -d -t '=nx:' -n claude
+out="$(nxrelay AGENT_BOARD_LEAD=1)"; rc=$?
+check "claude-next beside a claude window refused"      test $rc -eq 2
+check "that refusal names the session"                  zsh -c 'print -r -- "$1" | grep -qF "relay: a claude window already exists in nx"' x "$out"
+check "both window names unchanged"                     test "$(rname)" = claude-next -a "$(tt list-windows -t '=nx:' -F '#{window_name}' | sort | tr '\n' ,)" = claude,claude-next,
+tt kill-window -t '=nx:claude'
 # handoff-mark: a self-started handoff marks its session until the relay is scheduled (spec 2026-11-10-queue-reliability §3)
 HP="$TC_STATE/handoff-pending"
 out="$(CLAUDE_CODE_SESSION_ID=OLD1 $C handoff-mark)"; rc=$?
@@ -56,7 +85,7 @@ CLAUDE_CODE_SESSION_ID=SELF1 $C handoff-mark >/dev/null
 CLAUDE_CODE_SESSION_ID=OTHER1 $C handoff-mark >/dev/null
 TMUX_PANE=$worker $C relay "$doc" --old-session OLD1 >/dev/null 2>&1
 check "refused relay: markers kept"            test -f "$HP/OLD1" -a -f "$HP/SELF1"
-out="$(CLAUDE_CODE_SESSION_ID=SELF1 $C relay "$doc" --old-session OLD1)"
+out="$(AGENT_BOARD_LEAD=1 CLAUDE_CODE_SESSION_ID=SELF1 $C relay "$doc" --old-session OLD1)"
 check "relay scheduled"     zsh -c 'print -r -- "$1" | grep -q "relay scheduled"' x "$out"
 check "relay: --old-session marker removed"    test ! -e "$HP/OLD1"
 check "relay: the caller's own marker removed" test ! -e "$HP/SELF1"
@@ -104,10 +133,17 @@ check "notice has no attempt line"         sh -c "! grep -q 'relay: attempt' '$T
 check "notice manual cds to the root (bad)" grep -qF "manual: cd -- " "$TC_STATE/relay-failed-bad.txt"
 # '#' in the doc path must survive tmux format expansion (relay from the lead; the lineage records the doc as relay.py received it)
 hd="$TT_DIR/h#H.md"; print x > "$hd"
-$C relay "$hd" >/dev/null
+AGENT_BOARD_LEAD=1 $C relay "$hd" >/dev/null
 check "hash in path kept"     tt_wait 15 sh -c "grep -q 'h#H.md' $TC_LINEAGE/tt.jsonl"
 $C relay /nope-$$.md 2>/dev/null; rc=$?
 check "missing doc refused" test $rc -eq 2
+# the lead in claude-next relays: renamed claude first, then relay.py restarts it with the doc (R7)
+tt set-environment -g RELAY_OUT "$STUB/args-nx"
+out="$(nxrelay AGENT_BOARD_LEAD=1)"; rc=$?
+check "claude-next lead: relay scheduled"       test $rc -eq 0 && zsh -c 'print -r -- "$1" | grep -q "relay scheduled"' x "$out"
+check "claude-next lead: window renamed claude" test "$(rname)" = claude
+check "claude-next lead: orchestrator started"  tt_wait 30 test -s "$STUB/args-nx"
+check "claude-next lead: prompt names doc"      grep -qF "Read $doc and continue from where the previous session left off." "$STUB/args-nx"
 check "help lists relay"    sh -c "$C help | grep -q 'tmux-ctl relay'"
 rm -rf "$STUB"
 tt_done

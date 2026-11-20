@@ -1,0 +1,22 @@
+⏺ Running 1 shell command…                                                      
+  ⎿  $ sleep 15; tmux list-panes -a -F '#{window_name} #{pane_dead}' | grep '✦'
+
+· Plan & run: docs/superpowers/specs/2026-11-19-lead-recovery-discord-com… 
+  ⎿  ◼ Plan & run: docs/superpowers/specs/2026-11-19-lead-recovery-disc…   
+     ◼ LR Task 1: Relay busy bug: reproduce on a real capture and       
+     ◻ User gate: reboot-auto-restore Task 7, install and a real reboot         
+     ◻ LR Task 10: Agent rules for re-auth                             
+     ◻ Plan & run:                                            › blocked by #18, 
+       docs/superpowers/specs/2026-11-12-execution-analytic… #19                
+     … +49 tasks (17 open, 32 done)                             
+busy 1                                                                      [-]
+                                                                              
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⚠ agent-board: 5h 18% · 7d 75% · ctx 17% · $3.13
+  Opus 5.5 · ctx 17% · 5h 18%
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide ta…
+
+  ⏺ main
+  ◯ lr-t1  LR Task 1 relay busy bug                                        18s

@@ -1,0 +1,22 @@
+│                                                                              │
+│ scout has shut down.                                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+⏺ Nothing new from scout: its findings already went to you on Discord, the note 
+  is committed to main (483eb44), and scout has shut down. lr-t1 is still       
+  working on Task 1 of #32.                                            
+                                                                                
+  32/54 tasks done · 2 in progress                                              
+  ◼ Plan & run: docs/superpowers/specs/2026-11-19-lead-recovery-disc…
+  ◼ LR Task 1: Relay busy bug: reproduce on a real capture and                 
+  ◻ User gate: reboot-auto-restore Task 7, install and a real reboot          
+  ◻ LR Task 10: Agent rules for re-auth                                         
+  ◻ Plan & run:                                               › blocked by #18, 
+    docs/superpowers/specs/2026-11-12-execution-analytic…    #19                
+  … +49 tasks (17 open, 32 done)                  
+                             
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⚠ agent-board: 5h 18% · 7d 75% · ctx 17% · $3.22                            
