@@ -432,8 +432,11 @@ def watch_once(env=None, now=None, table=None, panes=None, pane_idle=None, do_re
 
     plist = projects_with_token(sd) if projects is None else projects()
     if plist:
-        repair_botless(st, now, table, log, plist, holder or _holder, lead_of or _lead_of, pane_idle or _pane_idle,
-                       restart or _restart, post or _post, notify or _notify)
+        try:
+            repair_botless(st, now, table, log, plist, holder or _holder, lead_of or _lead_of, pane_idle or _pane_idle,
+                           restart or _restart, post or _post, notify or _notify)
+        except Exception as e:   # noqa: BLE001 -- the old reconnect path below must still run
+            log(f"repair skipped: {type(e).__name__}: {e}")
     grace = float(env.get("TC_DISCORD_WATCH_GRACE") or GRACE)
     for pid in leads:
         if has_server(pid, table):

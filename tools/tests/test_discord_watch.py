@@ -510,6 +510,19 @@ class Repair(unittest.TestCase):
         f = self.d / "discord-watch.log"
         return f.read_text().splitlines() if f.exists() else []
 
+    def test_a_raising_repair_does_not_stop_the_reconnect_path(self):
+        # mutation: drop the try/except in watch_once -> the UnicodeDecodeError aborts the run before the reconnect
+        def boom(proj):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        tbl = table((100, 1, 9, "-zsh"), (101, 100, 600, f"claude {CH}"))
+        recon = []
+        dw.watch_once(env=self.env, now=5000, table=tbl, panes={100: "%1"}, projects=lambda: ["p"],
+                      holder=boom, lead_of=lambda proj: self.lead, pane_idle=lambda p: True,
+                      do_reconnect=lambda p: (recon.append(p), "ok")[1],
+                      restart=lambda proj: (True, "x"), post=lambda proj, t: None, notify=lambda a, b: None)
+        self.assertEqual(recon, ["%1"])
+        self.assertTrue(any("repair skipped: UnicodeDecodeError" in l for l in self.log()))
+
     def test_restart_on_the_second_idle_run_not_the_first(self):
         self.go(5000)
         self.assertEqual(self.restarts, [])

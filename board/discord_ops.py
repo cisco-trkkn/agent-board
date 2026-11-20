@@ -133,7 +133,7 @@ def tasks_text(lead_tasks, floor):
 def lead_view(info, holders, tap, handoffs, now):
     """One project's views.json `leads` entry; every missing value is null."""
     sid = info.get("session_id") or None
-    pct = ((tap.get(sid) or {}).get("context_window") or {}).get("used_percentage") if sid else None
+    pct = usage._get(tap.get(sid), "context_window", "used_percentage") if sid else None
     doc = age = None
     if info.get("root"):
         doc = relay.newest_handoff(info["root"], handoffs)
@@ -510,7 +510,7 @@ def _gauth_modal(d, project, user, ev, spawn):
     iid = rec.get("iid")
     if late:
         _gauth_close(project)
-        _ireply(d, iid, f"gauth for {project} timed out; run /gauth again")
+        _ireply(d, iid, f"gauth for {project} timed out; run /gauth again", private=True)
         return "timed out"
     code = str(ev.get("text") or "").strip()
 
@@ -532,7 +532,7 @@ def _gauth_modal(d, project, user, ev, spawn):
         except Exception as e:   # noqa: BLE001 -- the text can echo the code: only the class leaves this function
             outcome, result = f"auth failed ({type(e).__name__}); run /gauth again", "auth failed"
         _gauth_close(project)
-        return result, outcome, {}
+        return result, outcome, {"private": True}
     spawn(lambda: _worker(d, user, "modal", f"{project}:gauth", iid, go))
     return "started"
 
@@ -544,7 +544,7 @@ def gauth_sweep(d, now):
     for project, rec in list(pend.items()):
         if now - (rec.get("url_ts") or 0) > GAUTH_WINDOW_S:
             _gauth_close(project)
-            _ireply(d, rec.get("iid"), f"gauth for {project} timed out; run /gauth again")
+            _ireply(d, rec.get("iid"), f"gauth for {project} timed out; run /gauth again", private=True)
             discord_feed.audit_append(d, str(rec.get("user") or ""), "gauth", f"{project}:gauth", "timed out")
 
 

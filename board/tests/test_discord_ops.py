@@ -866,6 +866,7 @@ class LeadGauth(Base):
         self.assertIn(("close", "a"), self.g.calls)
         self.assertIn("token ok", self.ireplies()[0]["content"])
         self.assertEqual(self.ireplies()[0]["iid"], "I2")
+        self.assertTrue(self.ireplies()[0].get("private"))   # mutation: drop private -> an expired interaction posts the outcome to the channel
         self.assertEqual(self.audit()[-1]["result"], "authenticated")
         self.assertEqual(json.loads((self.ops / "gauth-pending.json").read_text()), {})
 
@@ -899,6 +900,12 @@ class LeadGauth(Base):
         self.assertIn(("close", "a"), self.g.calls)
         self.assertEqual(self.audit()[-1]["result"], "timed out")
         self.assertIn("timed out", self.ireplies()[0]["content"])
+        self.assertTrue(self.ireplies()[0].get("private"))
+
+    def test_lead_view_survives_a_non_dict_context_window(self):
+        for bad in ("x", 5, None, ["a"]):
+            v = ops.lead_view({"session_id": "s"}, set(), {"s": {"context_window": bad}}, "/nonexistent", 1.0)
+            self.assertIsNone(v.get("context_pct"), bad)
 
     def test_modal_without_pending_is_ignored(self):
         self.send(self.modal())
@@ -1023,6 +1030,7 @@ class LeadGauth(Base):
         self.assertIn(("close", "a"), self.g.calls)
         self.assertEqual(json.loads((self.ops / "gauth-pending.json").read_text()), {})
         self.assertIn("timed out", self.ireplies()[0]["content"])
+        self.assertTrue(self.ireplies()[0].get("private"))
         self.assertEqual((self.audit()[-1]["target"], self.audit()[-1]["result"]), ("a:gauth", "timed out"))
 
     def test_tick_leaves_a_fresh_gauth_alone(self):
