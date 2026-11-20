@@ -70,7 +70,8 @@ Precondition: group 1 is merged, and the bridge, board and scratch lead are rest
 Take `<ISO>` from before you start: `date -u +%FT%TZ`.
 
 - [ ] **G1. A teammate's request in the lead's window.** In the scratch lead, ask it to start one teammate named `prober`
-  that runs `touch probe` (denied by the project settings so it asks). Expect a `🔐 <project> · prober (in the lead's
+  that runs `touch probe`. Setup: the scratch lead's repo has `.claude/settings.json` holding
+  `{"permissions": {"ask": ["Bash(touch probe)"]}}`, so the call asks (a `deny` rule would never ask). Expect a `🔐 <project> · prober (in the lead's
   window) wants to …` message on Discord. Tap Allow once, then expect the message to read `→ … (from Discord)`.
   Command: `tmux-ctl discord audit --since <ISO> | grep dialog`.
 - [ ] **G2. A gone teammate's request is denied.** Repeat G1, but kill `✦ prober` (`tmux kill-window -t '=<session>:✦ prober'`)
@@ -85,3 +86,9 @@ Take `<ISO>` from before you start: `date -u +%FT%TZ`.
   `⚠ … will automatically block this request in M:SS` row. Expect ONE Discord message for it, not one per tick. Before
   answering, save `tmux capture-pane -p -J -t <pane> > /tmp/countdown-80.txt` and hand it to the lead as a real fixture,
   since the current one is synthetic.
+- [ ] **G6. A foreground subagent's prompt has no `from`.** In a lead pane, run one foreground subagent whose prompt asks
+  for permission. While it waits, run
+  `tmux-ctl dialog <pane> show | python3 -c 'import json,sys; print(json.load(sys.stdin).get("from"))'`. Expect `None`;
+  a name there means the stale Deny could press No on it after 30 s.
+- [ ] **G7. A waiting box and a real dialog on one screen.** When a teammate's "waiting on the lead" box and a real dialog
+  are both on its screen, note whether the dialog still posted to Discord (the pane class scans 20 rows).
