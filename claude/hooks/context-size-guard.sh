@@ -16,14 +16,12 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
 event=$(printf '%s' "$input" | jq -r '.hook_event_name // "UserPromptSubmit"')
 [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
 
-# Context size = everything sent as input on the latest main-thread assistant turn.
-tokens=$(tail -n 400 "$transcript" \
-  | jq -c 'select(.type == "assistant" and (.isSidechain | not) and .message.usage != null)
-           | .message.usage
-           | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)' 2>/dev/null \
-  | tail -n 1)
-
-[ -n "$tokens" ] || exit 0
+# Context size = everything sent as input on the latest main-thread assistant turn. board/ctxsize.py holds the rule;
+# CLAUDE_CTXSIZE_PY points at another reader (tests). This file is reached through a symlink, hence realpath.
+self=$(realpath "$0" 2>/dev/null || printf '%s' "$0")
+reader="${CLAUDE_CTXSIZE_PY:-$(dirname "$self")/../../board/ctxsize.py}"
+tokens=$(python3 -I "$reader" last "$transcript" 2>/dev/null)
+case "$tokens" in ''|*[!0-9]*) exit 0 ;; esac
 sdir="${CLAUDE_CONTEXT_GUARD_STATE:-$HOME/.local/state/agent-board/context-guard}"
 if [ "$tokens" -lt "$THRESHOLD" ]; then
   # Below the threshold (e.g. after /compact): forget the band so the next crossing warns again.

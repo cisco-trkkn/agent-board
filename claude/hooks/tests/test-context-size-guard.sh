@@ -82,6 +82,13 @@ check "UPS repeated in same band: silent" "$(run UserPromptSubmit s8 "$FX" | wc 
 echo 3 > "$T/state/s9.band"; run Stop s9 "$FX" >/dev/null
 check "Stop leaves an existing band file alone" "$(cat "$T/state/s9.band")" "3"
 
+# the number comes from board/ctxsize.py: a stub reader's figure is the one reported, and a silent reader keeps the guard silent
+printf '#!/usr/bin/env python3\nprint(999000)\n' > "$T/stub.py"
+o=$(CLAUDE_CTXSIZE_PY="$T/stub.py" run UserPromptSubmit s10 "$FX")
+check "guard reads its number from ctxsize (stub says 999K)" "$(sm "$o" '.systemMessage' | grep -c '999K')" "1"
+printf '#!/usr/bin/env python3\n' > "$T/empty.py"
+check "reader prints nothing -> guard silent" "$(CLAUDE_CTXSIZE_PY="$T/empty.py" run UserPromptSubmit s11 "$FX" | wc -c | tr -d ' ')" "0"
+
 # real-state replay of session 48822fd2 (read-only)
 if [ -n "$REAL" ] && [ -f "$REAL" ]; then
   o=$(run PostToolUse real48822fd2 "$REAL")
