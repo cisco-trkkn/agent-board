@@ -14,7 +14,7 @@ TC_LINEAGE_DIR="${TC_LINEAGE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-board/
 TC_SHELLS='(zsh|bash|sh|fish|-zsh|-bash)'
 
 # Claude Code screens that wait on the user (permission prompt, question). ERE: valid for grep -iE and Python re.I.
-TC_PROMPT_RE='Do you want to|Would you like to|\(y/n\)|❯ *1\. *Yes|Allow this|Press Enter to continue|Enter to confirm|Enter to select|Enter to resume|Tab to amend'
+TC_PROMPT_RE='Do you want to|Would you like to|\(y/n\)|❯ *1\. *Yes|Allow this|Press Enter to continue|Enter to confirm|Enter to select|Enter to resume|Tab to amend|Review your answers'
 
 # Worker spawn choices (`tmux-ctl agent --model/--effort`, the board's + New agent) and their defaults.
 TC_MODELS=(haiku sonnet opus fable)

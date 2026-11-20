@@ -1,0 +1,18 @@
+{
+  "kind": "unknown",
+  "question": "→ Apple, Pear",
+  "options": [
+    {
+      "n": 1,
+      "label": "Submit answers",
+      "permanent": true
+    },
+    {
+      "n": 2,
+      "label": "Cancel",
+      "permanent": true
+    }
+  ],
+  "multi": false,
+  "other": false
+}

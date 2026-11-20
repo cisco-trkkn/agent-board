@@ -1,0 +1,23 @@
+                                                                                
+❯ Use AskUserQuestion with multiSelect: which fruits, Apple, Pear, Plum?        
+
+⏺ This is the multi-choice question again. You declined it twice before, so it's
+  fine to dismiss it this time too.                                            
+
+────────────────────────────────────────────────────────────────────────────────
+←  ☒ Fruits  ✔ Submit  →          
+
+Review your answers
+              
+ ● Which fruits do you want: Apple, Pear, Plum? Pick any.                       
+   → Apple, Pear
+                                                                                
+❯ 1. Submit answers                                                             
+  2. Cancel           
+                                                                        
+
+
+                                                                            
+
+
+──────────────────────────────────────────────────────── fruit-choice-question ─
