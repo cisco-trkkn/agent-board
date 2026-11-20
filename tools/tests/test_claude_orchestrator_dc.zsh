@@ -145,10 +145,13 @@ FC
       kill -0 $BGP 2>/dev/null || break; sleep 0.05
     done
   }
+  killtree() {   # killtree <pid>: the pid and every descendant (a launcher overrun must leave no grandchild)
+    local c; for c in $(pgrep -P $1 2>/dev/null); do killtree $c; done; kill $1 2>/dev/null
+  }
   settle() {   # settle <secs>: wait for the launcher up to <secs>, SETTLED=1 if it ended; else free it so the test fails, not hangs
     local i; SETTLED=0
     for i in {1..$(( $1 * 20 ))}; do kill -0 $BGP 2>/dev/null || { SETTLED=1; break }; sleep 0.05; done
-    (( SETTLED )) || { release; pkill -P $BGP 2>/dev/null; kill $BGP 2>/dev/null }
+    (( SETTLED )) || { release; killtree $BGP }
     wait $BGP 2>/dev/null; return 0
   }
   hold "$NEXTP"
@@ -194,7 +197,7 @@ discord: tt's bot is held by the lead in tt:claude-next (pid $HP); this lead sta
   done
   bgrun TC_DC_WAIT=6 TC_DC_POLL=1 "$L" --continue
   settle 40; el=$(( EPOCHREALTIME - ${WLT:-EPOCHREALTIME} ))
-  check "deadline: WAIT=6 never released ends about 6 s after the waiting line (one poll and scans over)" test $SETTLED = 1 -a $(( el >= 3 )) = 1 -a "$(nch)" = 0
+  check "deadline: WAIT=6 never released ends about 6 s after the waiting line (one poll and scans over)" test $SETTLED = 1 -a $(( el >= 3 && el < 20 )) = 1 -a "$(nch)" = 0
   bgrun TC_DC_WAIT=1x TC_DC_POLL=1 "$L" --continue
   release; settle 25
   check "TC_DC_WAIT=1x: no math error on stderr, falls back to 60 in the wait line" test -z "$(grep -i 'bad math\|not valid' $S/err)" -a -n "$(grep -x 'discord: waiting up to 60s for .*' $S/err)"
