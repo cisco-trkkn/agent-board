@@ -323,6 +323,9 @@ When `tmux-ctl discord status` shows `bridge: running` for the project, the brid
   A subagent (no `✦` window) is not seen by `wait-gone`, which would report it gone at once, so wait for the subagent's termination notice before you respawn it. Idle at its prompt is not dead; a queued message can revive it. Give every dispatch its own
   output path (`<deliverable>.<agent-name>.md`) and promote one to the canonical name yourself, so two
   writers never share a file. Snapshot an artefact before downstream agents start reading it by ID.
+- Teammate messages can arrive late or not at all. When a teammate looks idle, or a `<name> stopped at …`
+  reminder appears, read its report file before waiting longer (`tmux-ctl teammates` lists who stopped
+  and when). Act once on a report: a late duplicate message changes nothing.
 - Write briefs and prompts (teammate prompts, brief files, review prompts) with the Write tool. To
   insert a value such as a SHA, write a placeholder and substitute it with `sed`, or use a quoted
   heredoc (`<<'EOF'`). An unquoted heredoc runs every backticked span in the Markdown as a command;
