@@ -37,6 +37,7 @@ The user watches agent runs in the Agent Board's Activity drawer and plans, spec
 | `tmux-ctl artifact <path>` | Show a file in the board's artifacts panel |
 | `tmux-ctl idea "<text>"` | File an idea for later |
 | `tmux-ctl relay <doc>` | Used only by `/handoff`, and only the lead (the lead's own window, `claude` or `claude-next`) can run it: from any other window it refuses and prints the manual start command, which you give to the user |
+| `tmux-ctl lead-restart <project> [--resume\|--doc <d>]` | Restarts a project's lead pane (the claude window, else claude-next) with the orchestrator as the pane command |
 
 ## How to use it
 
