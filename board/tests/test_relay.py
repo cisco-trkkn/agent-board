@@ -96,6 +96,40 @@ class WaitTest(unittest.TestCase):
         self.assertFalse(ok)
 
 
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "relay"
+
+
+def fixture_tmux(name):
+    """tmux stub answering display and capture-pane from a real capture of the lead's pane."""
+    text = (FIXTURES / name).read_text()
+
+    def tmux(*a, check=False):
+        return f"2.1.329{paneclass.SEP}0\n" if a[0] == "display" else text
+    return tmux
+
+
+class WaitRealCaptureTest(unittest.TestCase):
+    """Real read-only captures of a Claude lead pane with a task list under its input box (fixtures/relay/README.md).
+    mod_states is stubbed to {}: no agent-status file, so the screen decides."""
+
+    def setUp(self):
+        p = mock.patch.object(paneclass, "mod_states", return_value={})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_idle_lead_with_task_list_ends_the_wait(self):
+        # mutation: drop "ready" from relay.ENDED, or let classify read the task list rows as a spinner -> False
+        sleeps = []
+        self.assertTrue(relay.wait_turn_end(fixture_tmux("idle-lead-tasklist.txt"), "%5", sleep=sleeps.append))
+        self.assertEqual(len(sleeps), 1)
+
+    def test_working_lead_keeps_waiting_until_the_cap(self):
+        # mutation: make classify return ready for a claude pane whose footer shows `esc to interrupt` -> True
+        clock = iter(range(0, 1000, 2))
+        ok = relay.wait_turn_end(fixture_tmux("working-lead.txt"), "%5", cap=10, sleep=lambda s: None, clock=lambda: next(clock))
+        self.assertFalse(ok)
+
+
 class SessionRootTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
