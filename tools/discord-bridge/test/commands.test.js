@@ -343,7 +343,10 @@ test('/lead restart: preview with Confirm and Cancel; busy suffix; no events yet
   const views = { ...VIEWS, leads: { alpha: { ...VIEWS.leads.alpha, state: 'working' } } };
   const s2 = setup({ views });
   const b = await s2.run(fakeCommand({ name: 'lead', options: { action: 'restart', project: 'alpha' } }));
-  assert.strictEqual(reply0(b).content, 'restart the alpha lead in window claude with --resume sess-abc; it is busy right now');
+  assert.strictEqual(reply0(b).content, 'restart the alpha lead in window claude with --resume sess-abc; it is working right now');
+  const v3 = { ...VIEWS, leads: { alpha: { ...VIEWS.leads.alpha, state: 'waiting' } } };
+  const c3 = await setup({ views: v3 }).run(fakeCommand({ name: 'lead', options: { action: 'restart', project: 'alpha' } }));
+  assert.strictEqual(reply0(c3).content, 'restart the alpha lead in window claude with --resume sess-abc; it is waiting right now');
 });
 
 test('/lead handoff: preview names the doc and its age', async () => {
@@ -386,7 +389,7 @@ test('/lead Confirm in time: deferUpdate, event with iid, the interaction is kep
   const t0 = 1700000000000;
   const s = setup({ clock: () => t0 + 1000 });
   const i = await s.run(fakeInteraction({ customId: `ab:lead:restart:alpha:${t0}`, user: 'U1', ephemeral: true, id: 'iid-77' }));
-  assert.strictEqual(i.deferred, 1);
+  assert.deepStrictEqual(i.updates.map((u) => [u.content, u.components]), [['running…', []]]);
   assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'lead', action: 'restart', project: 'alpha', user: 'U1', iid: 'iid-77' }]);
   fs.writeFileSync(path.join(s.dir, 'outbox', '1.json'), JSON.stringify({ op: 'ireply', iid: 'iid-77', content: 'restarted' }));
   await s.bridge.tick();
@@ -443,4 +446,57 @@ test('ireply: an interaction kept more than 14 minutes is expired and falls back
   assert.strictEqual(g.edits.length, 0);
   assert.deepStrictEqual(s.client.callsOf('send').map((c) => c.payload.content), ['late']);
   assert.ok(s.logs.some((l) => l.includes('ireply iid-old fell back to post')));
+});
+
+test('/lead Confirm twice on the same custom id: one event, the second says already confirmed; the first click is kept', async () => {
+  const t0 = 1700000000000;
+  const s = setup({ clock: () => t0 + 1000 });
+  const cid = `ab:lead:restart:alpha:${t0}`;
+  const a = await s.run(fakeInteraction({ customId: cid, user: 'U1', ephemeral: true, id: 'iid-a' }));
+  const b = await s.run(fakeInteraction({ customId: cid, user: 'U1', ephemeral: true, id: 'iid-b' }));
+  assert.strictEqual(evShape(s).length, 1);
+  assert.strictEqual(b.updates[0].content, 'already confirmed');
+  assert.deepStrictEqual(b.updates[0].components, []);
+  fs.writeFileSync(path.join(s.dir, 'outbox', '1.json'), JSON.stringify({ op: 'ireply', iid: 'iid-a', content: 'restarted' }));
+  await s.bridge.tick();
+  assert.strictEqual(a.edits[0].content, 'restarted');
+  assert.strictEqual(b.edits.length, 0);
+});
+
+test('/lead Cancel consumes the id: a later Confirm on it writes no event', async () => {
+  const t0 = 1700000000000;
+  const s = setup({ clock: () => t0 + 1000 });
+  await s.run(fakeInteraction({ customId: `ab:lead:cancel:alpha:${t0}`, user: 'U1', ephemeral: true }));
+  const c = await s.run(fakeInteraction({ customId: `ab:lead:restart:alpha:${t0}`, user: 'U1', ephemeral: true }));
+  assert.strictEqual(c.updates[0].content, 'already confirmed');
+  assert.strictEqual(evShape(s).length, 0);
+});
+
+test('ireply with private: true and an unknown iid posts nothing and logs dropped (private)', async () => {
+  const s = setup();
+  fs.writeFileSync(path.join(s.dir, 'outbox', '1.json'), JSON.stringify({ op: 'ireply', iid: 'nope', content: 'secret link', private: true }));
+  await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('send').length, 0);
+  assert.ok(s.logs.some((l) => l.includes('ireply nope dropped (private)')));
+});
+
+test('ireply: editReply throws -> no channel post, logs the failure', async () => {
+  const s = setup();
+  const g = await s.run(fakeCommand({ name: 'gauth', options: { project: 'alpha' }, id: 'iid-t' }));
+  g.editReply = async () => { throw new Error('boom 503'); };
+  fs.writeFileSync(path.join(s.dir, 'outbox', '1.json'), JSON.stringify({ op: 'ireply', iid: 'iid-t', content: 'x' }));
+  await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('send').length, 0);
+  assert.ok(s.logs.some((l) => l.includes('ireply iid-t failed: boom 503')));
+});
+
+test('/gauth modal: the answer follows the write; a failed write answers could not send', async () => {
+  const s = setup();
+  const sub = await s.run(fakeModal({ customId: 'ab:modal:gauth:alpha', fields: { code: 'abc' }, user: 'U1' }));
+  assert.strictEqual(sub.replies[0].content, 'Code sent.');
+  const s2 = setup();
+  fs.rmSync(path.join(s2.dir, 'events'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(s2.dir, 'events'), 'not a dir');
+  const bad = await s2.run(fakeModal({ customId: 'ab:modal:gauth:alpha', fields: { code: 'abc' }, user: 'U1' }));
+  assert.strictEqual(bad.replies[0].content, 'could not send the code; run /gauth again');
 });

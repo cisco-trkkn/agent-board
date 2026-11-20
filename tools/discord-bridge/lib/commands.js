@@ -73,7 +73,7 @@ async function leadPreview(i, ctx, action, project, l) {
   const miss = action === 'restart' ? (!l.pane ? 'no lead pane' : !l.session_id ? 'no session id' : null) : (!l.doc ? 'no handoff doc' : null);
   if (miss) { await ctx.answer(i, `cannot ${action} ${project}: ${miss}`); return; }
   const text = action === 'restart'
-    ? `restart the ${project} lead in window ${l.window} with --resume ${l.session_id}${l.state && l.state !== 'idle' ? '; it is busy right now' : ''}`
+    ? `restart the ${project} lead in window ${l.window} with --resume ${l.session_id}${l.state && l.state !== 'idle' ? `; it is ${l.state} right now` : ''}`
     : `start a fresh lead from ${base(l.doc)}, written ${Math.round((l.doc_age_s ?? 0) / 60)} min ago`;
   const ms = ctx.now();
   await ctx.answer(i, text, [{ type: 1, components: [btn(3, 'Confirm', `ab:lead:${action}:${project}:${ms}`), btn(2, 'Cancel', `ab:lead:cancel:${project}:${ms}`)] }]);
@@ -149,8 +149,9 @@ async function handleModal(i, ctx, m) {
   if (form === 'gauth') {
     const code = String(i.fields.getTextInputValue('code') ?? '').trim();
     if (!code) { await ctx.answer(i, 'Empty code.'); return; }
+    try { ctx.writeEvent({ type: 'modal', form: 'gauth', project, user: String(i.user?.id), text: code, ts: ctx.now() }); }
+    catch (e) { ctx.say(`modal gauth write failed: ${ctx.snip(e?.message)}`); await ctx.answer(i, 'could not send the code; run /gauth again'); return; }
     await ctx.answer(i, 'Code sent.');
-    ctx.writeEvent({ type: 'modal', form: 'gauth', project, user: String(i.user?.id), text: code, ts: ctx.now() });
     ctx.say(`modal gauth ${ctx.snip(project)} from ${ctx.snip(String(i.user?.id))}`); // never the code itself
     return;
   }
@@ -162,6 +163,8 @@ async function handleModal(i, ctx, m) {
   await ctx.answer(i, f.ack(project));
   ctx.writeEvent({ type: 'modal', form, project, fields, user: String(i.user?.id), ts: ctx.now() });
 }
+
+const consumedByCtx = new WeakMap(); // ctx -> Set of /lead Confirm and Cancel custom ids already clicked (a second click is a no-op)
 
 // A click on a /lead Confirm or Cancel, the /tasks select, or the /gauth Enter code button.
 async function handleComponent(i, ctx, c) {
@@ -177,9 +180,17 @@ async function handleComponent(i, ctx, c) {
     return;
   }
   const [, action, project, ms] = c;
-  if (action === 'cancel') { await ctx.answer(i, 'cancelled', []); return; }
+  if (!consumedByCtx.has(ctx)) consumedByCtx.set(ctx, new Set());
+  const consumed = consumedByCtx.get(ctx);
+  if (consumed.has(i.customId)) { await ctx.answer(i, 'already confirmed', []); return; }
+  consumed.add(i.customId);
+  if (action === 'cancel') {
+    consumed.add(`ab:lead:restart:${project}:${ms}`); consumed.add(`ab:lead:handoff:${project}:${ms}`);
+    await ctx.answer(i, 'cancelled', []); return;
+  }
+  consumed.add(`ab:lead:cancel:${project}:${ms}`);
   if (ctx.now() - Number(ms) > CONFIRM_TTL_MS) { await ctx.answer(i, 'expired; run /lead again', []); return; }
-  try { await i.deferUpdate(); } catch (e) { ctx.say(`ack failed: ${ctx.snip(e?.message)}`); }
+  await ctx.answer(i, 'running…', []); // drops the buttons at once
   ctx.keep(i);
   ctx.writeEvent({ type: 'slash', command: 'lead', action, project, user, iid: String(i.id), ts: ctx.now() });
 }

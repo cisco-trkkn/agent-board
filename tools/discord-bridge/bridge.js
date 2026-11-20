@@ -350,9 +350,10 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       try {
         await k.i.editReply({ content, allowedMentions: { parse: [] }, components: Array.isArray(op.components) ? toRows(op.components) : [] });
         say(`ireply ${snip(iid)}`);
-        return;
-      } catch (e) { say(`ireply ${snip(iid)}: ${snip(e?.message)}`); }
+      } catch (e) { say(`ireply ${snip(iid)} failed: ${snip(e?.message)}`); } // a transient error may have half-landed: never post a duplicate
+      return;
     }
+    if (op.private === true) { kept.delete(iid); say(`ireply ${snip(iid)} dropped (private)`); return; }
     kept.delete(iid);
     const ch = await home();
     await ch.send({ content, allowedMentions: { parse: [] }, ...(Array.isArray(op.components) && op.components.length ? { components: toRows(op.components) } : {}) });

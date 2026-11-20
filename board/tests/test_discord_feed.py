@@ -190,6 +190,14 @@ class OutboxTest(Base):
         self.assertEqual(len(ops), 200)
         self.assertEqual([o["op"] for o in ops if o["op"] == "dialog"], ["dialog"])
 
+    def test_cap_keeps_ireply(self):  # mutation: leave ireply out of _enforce_cap's keep list -> the oldest op, the ireply, is the one removed
+        df.outbox_write(self.dir, {"op": "ireply", "iid": "1", "content": "restarted"})
+        for i in range(205):
+            df.outbox_write(self.dir, post(f"p{i}"))
+        ops = [json.loads((self.dir / "outbox" / n).read_text()) for n in self.names()]
+        self.assertEqual(len(ops), 200)
+        self.assertEqual([o["op"] for o in ops if o["op"] == "ireply"], ["ireply"])
+
     def test_cap_drops_non_mention_after_cards(self):
         for i in range(201):
             df.outbox_write(self.dir, post(f"p{i}"))
@@ -368,12 +376,14 @@ class IreplyCheckTest(unittest.TestCase):
     def test_valid(self):
         df._check({"op": "ireply", "iid": "123", "content": "hi"})
         df._check({"op": "ireply", "iid": "123", "content": "hi", "components": self.ROW})
+        df._check({"op": "ireply", "iid": "123", "content": "hi", "private": True})
 
     def test_invalid(self):
         for op in ({"op": "ireply", "iid": "123"}, {"op": "ireply", "content": "hi"},
                    {"op": "ireply", "iid": 5, "content": "hi"}, {"op": "ireply", "iid": "1", "content": "hi", "extra": "y"},
                    {"op": "ireply", "iid": "1", "content": "hi", "components": [[{"label": "x"}]]},
-                   {"op": "ireply", "iid": "1", "content": "hi", "components": "no"}):
+                   {"op": "ireply", "iid": "1", "content": "hi", "components": "no"},
+                   {"op": "ireply", "iid": "1", "content": "hi", "private": "yes"}):
             with self.assertRaises(ValueError, msg=str(op)):
                 df._check(op)
 

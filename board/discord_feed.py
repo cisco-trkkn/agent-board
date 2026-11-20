@@ -51,7 +51,7 @@ def _check(op):
               "edit": ({"op", "key", "text"}, {"rows"}),
               "dialog": ({"op", "key", "text", "rows", "mention_user"}, set()),
               "presence": ({"op", "text"}, set()),
-              "ireply": ({"op", "iid", "content"}, {"components"}),
+              "ireply": ({"op", "iid", "content"}, {"components", "private"}),
               "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"})}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
@@ -59,9 +59,11 @@ def _check(op):
     keys = set(op)
     if not need <= keys or keys - need - opt:
         raise ValueError(f"bad keys for {kind}: {sorted(keys)}")
-    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons", "rows", "components"}:
+    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons", "rows", "components", "private"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
+    if "private" in op and not isinstance(op["private"], bool):
+        raise ValueError("private must be a bool")
     if kind == "presence" and (not op["text"] or len(op["text"]) > PRESENCE_MAX):
         raise ValueError("presence text must be 1..128 chars")
     if kind == "prompt":
@@ -123,7 +125,7 @@ def _enforce_cap(box):
             op = {}
         infos.append((f, op))
     for victim in ([f for f, o in infos if o.get("op") == "card"]
-                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive", "prompt", "edit", "approval", "dialog") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
+                   + [f for f, o in infos if o.get("op") not in ("card", "thread", "archive", "prompt", "edit", "approval", "dialog", "ireply") and not (o.get("op") == "post" and o.get("mention_user") is True)]):
         if over <= 0:
             break
         try:
