@@ -558,6 +558,20 @@ class AllSkipEmptyTest(DreamBase):
         self.assertEqual(out, "dream: p skipped, no repo root\n")
         self.assertEqual(rc, 0)
 
+    def test_all_passes_over_a_core_whose_only_text_line_is_not_a_bullet(self):
+        (self.D / "e.md").write_text(context.skeleton("e") + "\nstray prose, not an entry\n")
+        rc, out = self.run_dream("--all", project=None, root=False)
+        self.assertEqual(out, "dream: p skipped, no repo root\n")
+        self.assertEqual(rc, 0)
+
+    def test_a_core_that_is_not_utf8_fails_its_project_not_the_run(self):
+        # mutation: _empty_core catches only OSError -> UnicodeDecodeError escapes dream.main and p is never reached
+        (self.D / "e.md").write_bytes(b"\xff")
+        rc, out = self.run_dream("--all", project=None, root=False)
+        lines = out.splitlines()
+        self.assertTrue(any(l.startswith("dream: p ") for l in lines), out)
+        self.assertTrue(any(l.startswith("dream: e ") for l in lines), out)
+
     def test_named_empty_project_still_reports(self):
         (self.D / "e.md").write_text(context.skeleton("e"))
         rc, out = self.run_dream(project="e", root=False)

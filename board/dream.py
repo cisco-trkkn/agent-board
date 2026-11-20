@@ -565,7 +565,7 @@ def _empty_core(project):
     """True when the project's core has no '- ' entry lines (only title, Last curated and headings)."""
     try:
         return not context.entries(context.context_path(project).read_text())
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
