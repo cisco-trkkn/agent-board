@@ -22,7 +22,8 @@ _DLG_PERMANENT="don't ask again|always allow|switch to auto mode|accept edits|us
 _dlg_screen() { t capture-pane -p -J -t "$1" 2>/dev/null | LC_ALL=C tr -d '\000-\011\013-\037\177' | LC_ALL=C sed -e 's/ *$//' | LC_ALL=C grep -a -v '^$' }
 
 # _dlg_parse: stdin = the screen. Prints nothing when no dialog shows. Otherwise, in this order:
-#   K:<kind>   Q:<question>   M:<0|1> (multi-select)   W:<0|1> (a free-text row is present)
+#   K:<kind>   Q:<question>   F:<teammate name> (only a permission prompt of a teammate's request, read from its header row)
+#   M:<0|1> (multi-select)   W:<0|1> (a free-text row is present)
 #   O:<n>:<0|1>:<label>   one per option; the flag is `permanent`
 #   L:<line>              one per line of the dialog: the rows after its top rule up to, not including, the key-hint footer
 #                         (a teammate status divider `──── @name ─` or a task list after the footer is not part of it);
@@ -56,12 +57,12 @@ _dlg_parse() {
     }
     # emit: the tagged block of rows a..b; all = 1 flags every row permanent (an unknown dialog)
     function emit(kind, qt, a, b, all,   i, x) {
-      print "K:" kind; if (PAMB) print "A:ambiguous"; if (PTALL) print "U:tall"; print "Q:" qt; print "M:" (multi ? 1 : 0); print "W:" (other ? 1 : 0)
+      print "K:" kind; if (PAMB) print "A:ambiguous"; if (PTALL) print "U:tall"; print "Q:" qt; if (PFROM != "") print "F:" PFROM; print "M:" (multi ? 1 : 0); print "W:" (other ? 1 : 0)
       for (i = 1; i <= no; i++) print "O:" on[i] ":" ((all || op[i]) ? 1 : 0) ":" ol[i]
       for (i = a; i <= b; i++) {
         x = l[i]
-        # auto mode draws "block this request in M:SS" and it ticks every second: only the time of that exact warning row is masked
-        if (x ~ /^ *⚠ Claude Code will automatically block this request in [0-9][0-9]*:[0-9][0-9], to avoid holding up an unattended session$/)
+        # auto mode draws "block this request in M:SS" and it ticks every second: only the time of that warning row is masked, also when the row wraps at 80 columns (its second half is constant)
+        if (x ~ /^ *⚠ Claude Code will automatically block this request in [0-9][0-9]*:[0-9][0-9],/)
           sub(/request in [0-9][0-9]*:[0-9][0-9],/, "request in M:SS,", x)
         print "L:" x
       }
@@ -128,6 +129,11 @@ _dlg_parse() {
       }
       addrun(q + 1, e)
       PAMB = amb; PTALL = (mr ? 1 : 0)
+      # a request of a teammate: the only place its name shows is the header row right under the top rule,
+      # ` <Tool title> · from the <name> agent`, with a right-aligned `N of M` when requests are queued
+      if (!amb && !mr && s < q && s >= 1 && l[s+1] ~ / · from the .+ agent( +[0-9]+ of [0-9]+)?$/) {
+        PFROM = l[s+1]; sub(/^.* · from the /, "", PFROM); sub(/ agent( +[0-9]+ of [0-9]+)?$/, "", PFROM)
+      }
       return emit(amb ? "unknown" : "permission", ltrim(l[q]), a, (mr ? mr : e), amb)
     }
 
@@ -240,8 +246,8 @@ _dlg_parse() {
     BEGIN { np = split(permlist, perm, "|"); for (k = 1; k <= np; k++) perm[k] = tolower(perm[k]) }
     { l[NR] = $0 }
     END {
-      N = NR; N2 = N; TDIV = 0; TLIST = 0; PAMB = 0; PTALL = 0
-      if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / @[A-Za-z0-9_.-]+ ─$/) { N2--; TDIV = 1 }   # a teammate status divider as the last row
+      N = NR; N2 = N; TDIV = 0; TLIST = 0; PAMB = 0; PTALL = 0; PFROM = ""
+      if (N2 >= 1 && isdiv(l[N2]) && l[N2] ~ / ─$/) { N2--; TDIV = 1 }   # a teammate status divider, or (Claude Code 2.1.329) the session-name rule (any name text), as the last row
       i = tasklist(); if (i < N2) { N2 = i; TLIST = 1 }                                   # a task list as the last rows
       if (permission() || question() || plan() || trust() || resume()) exit
       generic()
@@ -259,6 +265,7 @@ _dlg_json() {
     {
       tag = substr($0, 1, 2); v = substr($0, 3)
       if (tag == "K:") kind = v
+      else if (tag == "F:") from = v
       else if (tag == "Q:") q = v
       else if (tag == "M:") multi = (v == "1")
       else if (tag == "W:") other = (v == "1")
@@ -270,7 +277,7 @@ _dlg_json() {
     }
     END {
       if (kind == "") exit 1
-      print "{\"kind\":" js(kind) ",\"question\":" js(q) ",\"options\":[" opts "],\"multi\":" (multi ? "true" : "false") ",\"other\":" (other ? "true" : "false") ",\"lines\":[" lines "]}"
+      print "{\"kind\":" js(kind) ",\"question\":" js(q) (from == "" ? "" : ",\"from\":" js(from)) ",\"options\":[" opts "],\"multi\":" (multi ? "true" : "false") ",\"other\":" (other ? "true" : "false") ",\"lines\":[" lines "]}"
     }'
 }
 

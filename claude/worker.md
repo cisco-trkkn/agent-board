@@ -89,6 +89,8 @@ sections above apply to you, except "Decide, don't ask", which this section repl
   and end your turn. Do not continue on a default while the question is unread: the answer arrives as
   a new message, and an ended turn is how you receive it. The "check your last paragraph" rule still
   holds for plans and promises; a question to the lead is the one last paragraph you may end on.
+- Write your report file before you send the done message, and name its path in the message. Messages
+  can reach the lead late; the file is what the lead reads first.
 - Your report ends with `Context learned:` bullets, each tagged with its section (`Map`, `How to run`,
   `Gotchas` or `Decisions`), citing its files (`(files: …)`), and limited to facts that would have saved
   you time searching; `Context learned: none` when there are none. Teammates never write the shared

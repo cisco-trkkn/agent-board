@@ -550,6 +550,34 @@ class AllTest(DreamBase):
         self.assertIn("ok", lines[2])
 
 
+class AllSkipEmptyTest(DreamBase):
+    def test_all_passes_over_an_empty_core(self):
+        # mutation: remove the `continue` in dream.main's --all loop -> "dream: e skipped, no repo root" appears
+        (self.D / "e.md").write_text(context.skeleton("e"))
+        rc, out = self.run_dream("--all", project=None, root=False)
+        self.assertEqual(out, "dream: p skipped, no repo root\n")
+        self.assertEqual(rc, 0)
+
+    def test_all_passes_over_a_core_whose_only_text_line_is_not_a_bullet(self):
+        (self.D / "e.md").write_text(context.skeleton("e") + "\nstray prose, not an entry\n")
+        rc, out = self.run_dream("--all", project=None, root=False)
+        self.assertEqual(out, "dream: p skipped, no repo root\n")
+        self.assertEqual(rc, 0)
+
+    def test_a_core_that_is_not_utf8_fails_its_project_not_the_run(self):
+        # mutation: _empty_core catches only OSError -> UnicodeDecodeError escapes dream.main and p is never reached
+        (self.D / "e.md").write_bytes(b"\xff")
+        rc, out = self.run_dream("--all", project=None, root=False)
+        lines = out.splitlines()
+        self.assertTrue(any(l.startswith("dream: p ") for l in lines), out)
+        self.assertTrue(any(l.startswith("dream: e ") for l in lines), out)
+
+    def test_named_empty_project_still_reports(self):
+        (self.D / "e.md").write_text(context.skeleton("e"))
+        rc, out = self.run_dream(project="e", root=False)
+        self.assertEqual(out, "dream: e skipped, no repo root\n")
+
+
 class UnexpectedErrorTest(DreamBase):
     def test_exception_in_one_project_is_a_failed_night_and_all_goes_on(self):
         for name in ("a", "b"):

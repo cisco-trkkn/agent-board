@@ -57,12 +57,19 @@
         "hooks": [
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/shutdown-record.sh\" --scoped", "timeout": 5 }
         ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/teammate-remind.sh\" --scoped", "timeout": 5 }
+        ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/lead-stop-guard.sh\" --scoped", "timeout": 10 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/lead-stop-guard.sh\" --scoped", "timeout": 10 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/teammate-stop.sh\" --scoped", "timeout": 5 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/teammate-remind.sh\" --scoped", "timeout": 5 }
         ]
       }
     ],

@@ -9,15 +9,76 @@ rows() { sed -n "$2,$3p" $1 | sed -e 's/ *$//' | grep -a -v '^$' }
 # its top rule up to the key-hint footer, never the scrollback above it
 # mutation: start `lines` at the first screen row → every "lines are" check below fails
 typeset -A FROM TO
-FROM=(trust 3 question-single 9 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3)
-TO=(trust 15 question-single 19 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13)
+FROM=(trust 3 question-single 9 question-named-session 10 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3 team-request 38)
+TO=(trust 15 question-single 19 question-named-session 20 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13 team-request 47)
+# team-waiting.txt is the teammate's own "Waiting for team lead approval" box, not a dialog (Task 3's pane-class fixture): no oracle
+ran=0
 for f in $FXD/*.txt; do
-  n=${f:t:r}; replay d-$n $f; dl d-$n show
-  check "$n: equals expect/$n.json, exit 0"   eval 'same_as $FXD/expect/$n.json && (( rc == 0 ))'
+  n=${f:t:r}
+  [[ $n == team-waiting ]] && continue
+  (( ran++ ))
+  replay d-$n $f; dl d-$n show
+  if [[ $n == team-request ]]; then   # the one fixture with a `from`: same_as compares the oracle without it, then `from` itself
+    full="$out"; out="$(print -r -- "$full" | python3 -I -c 'import json, sys; d = json.load(sys.stdin); d.pop("from", None); print(json.dumps(d, ensure_ascii=False))')"
+    python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); d.pop("from"); json.dump(d, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)' $FXD/expect/$n.json $S/team-expect.json
+    check "$n: equals expect/$n.json (without from), exit 0"  eval 'same_as $S/team-expect.json && (( rc == 0 ))'
+    out="$full"
+  else
+    check "$n: equals expect/$n.json, exit 0"   eval 'same_as $FXD/expect/$n.json && (( rc == 0 ))'
+  fi
   check "$n: lines are fixture rows $FROM[$n]-$TO[$n]"  test "$(lines_of)" = "$(rows $f $FROM[$n] $TO[$n])"
   check "$n: nothing on stderr"                test -z "$err"
 done
-check "all 7 dialogs fixtures ran"             test "$(print -rl -- $FXD/*.txt | wc -l | tr -d ' ')" = 7
+check "all 9 dialogs fixtures ran"             test $ran -eq 9 -a "$(print -rl -- $FXD/expect/*.json | wc -l | tr -d ' ')" = 9
+
+# --- Claude Code 2.1.329 draws one more row under the footer in a named session: a rule ending in the session name
+# mutation: accept only ` @name ─` as the trailing rule → question-named-session: dialog none, exit 1
+check "named session: the trailing rule is on the fixture"  test "$(tail -1 $FXD/question-named-session.txt)" = "$(grep -a -m1 ' fruit-choice-question ─$' $FXD/question-named-session.txt)"
+check "named session: options equal question-single's"  eval 'dl d-question-named-session show; test "$(jget "[(o[\"n\"], o[\"label\"]) for o in d[\"options\"]]")" = "$(print -r -- "$(<$FXD/expect/question-single.json)" | python3 -I -c "import json, sys; print([(o[\"n\"], o[\"label\"]) for o in json.load(sys.stdin)[\"options\"]])")"'
+
+# the rule's name may be any text, not only an ASCII word (_dlg_screen runs under LC_ALL=C, so the awk sees bytes)
+# mutation: back to the ` @?[A-Za-z0-9_.-]+ ─$` tail → every "name" variant below: dialog none, exit 1
+dl d-question-named-session show; nm0="$out"
+nmi=0
+for nm in '日本語' 'café' 'fix(tmux-ctl): dialog' 'a/b+c' 'two words (x)'; do
+  (( nmi++ ))
+  sed "\$s| fruit-choice-question ─\$| $nm ─|" $FXD/question-named-session.txt > $S/name$nmi.txt
+  check "name '$nm': variant carries the name"  test "$(tail -1 $S/name$nmi.txt | grep -a -c -F " $nm ─")" = 1
+  replay d-name$nmi $S/name$nmi.txt; dl d-name$nmi show
+  check "name '$nm': same JSON as the plain name, exit 0"  test "$out" = "$nm0" -a $rc -eq 0
+done
+# the rule is only dropped under a footer, and only as the last row: anything else is not a dialog
+# mutation: drop the footer test of the trailing-row rule → "rule with no footer" reads a dialog
+sed '$d' $FXD/question-named-session.txt > $S/nobar.txt
+replay d-nobar $S/nobar.txt; dl d-nobar show
+check "named session: with and without the rule, the same JSON (lines unchanged)"  test "$out" = "$nm0" -a -n "$nm0"
+{ cat $S/nobar.txt; print -r -- ' status row after the footer'; tail -1 $FXD/question-named-session.txt; } > $S/neg-status.txt
+{ cat $FXD/question-named-session.txt; print -r -- ' a row after the rule'; } > $S/neg-after.txt
+grep -a -v 'Esc to cancel' $FXD/question-named-session.txt > $S/neg-nofooter.txt
+for v in status after nofooter; do
+  replay n-$v $S/neg-$v.txt; dl n-$v show
+  check "named session, $v: no dialog, exit 1"  test $rc -eq 1 -a -z "$out" -a "$err" = "dialog: none in n-$v"
+done
+
+# --- a teammate's request in the lead's window (team-request.txt): the name is only in the header row
+# mutation: remove the `from` handling of _dlg_parse → every check below fails (no from)
+dl d-team-request show
+check "team-request: kind permission, question, exit 0"  test "$(jget 'd["kind"] + "|" + d["question"]')" = "permission|Do you want to proceed?" -a $rc -eq 0
+check "team-request: from is the bare name"    test "$(jget 'd["from"]')" = prober
+check "team-request: from equals the oracle's"  test "$(jget 'd["from"]')" = "$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["from"])' $FXD/expect/team-request.json)"
+check "team-request: options Yes / switch to auto mode / No, none permanent but the auto row"  test "$(jget '"|".join("%d %s %s" % (o["n"], o["label"], o["permanent"]) for o in d["options"])')" = "1 Yes False|2 Yes, and switch to auto mode · auto mode handles these prompts for you True|3 No False"
+check "team-request: lines open with the header row"  test "$(lines_of | head -1)" = " Bash command · from the prober agent"
+# every other fixture has no `from` at all
+for n in trust question-single plan resume; do dl d-$n show; check "$n: no from key"  test "$(jget '"from" in d')" = False; done
+dl d-team-request show
+# a queued request: the counter at the right end of the header row is not part of the name
+sed 's/^ Bash command · from the prober agent$/ Bash command · from the prober agent                                                                     2 of 2/' $FXD/team-request.txt > $S/team-queued.txt
+check "team-queued variant gained the counter"  test "$(grep -a -c 'prober agent  *2 of 2$' $S/team-queued.txt)" = 1
+replay d-tq $S/team-queued.txt; dl d-tq show
+check "team-queued: from is prober, without the counter"  test "$(jget 'd["from"]')" = prober -a $rc -eq 0
+# the teammate's own waiting box is not a dialog
+replay n-team-waiting $FXD/team-waiting.txt; dl n-team-waiting show
+check "team-waiting: no dialog, exit 1"        test $rc -eq 1 -a "$err" = "dialog: none in n-team-waiting" -a -z "$out"
 
 # --- permission prompts (fixtures/approve): the permanent rows are flagged by the one substring list
 replay p-git $FXA/bash-git.txt; before="$(snap p-git)"; dl p-git show; first="$out"
@@ -50,6 +111,17 @@ replay p-cd2 $S/countdown2.txt; dl p-cd2 show
 check "countdown: identical lines for 1:47 and 0:09"  test "$(lines_of)" = "$cd1" -a -n "$cd1"
 check "countdown: the row reads M:SS"          test "$(print -r -- "$cd1" | grep -a -c 'block this request in M:SS, to avoid')" = 1
 check "countdown: permission, Yes / No"        test "$(jget 'd["kind"] + "|" + "|".join(o["label"] for o in d["options"])')" = "permission|Yes|No"
+# the same row in an 80-column pane wraps onto two rows, and its time must still be masked (live bug: one prompt posted 15 times)
+# SYNTHETIC: the fixture's row split the way Claude Code wraps it at 80 columns, not a capture of an 80-column pane
+# mutation: end-anchor the countdown regex again (`…unattended session$`) → "wrapped countdown: identical lines" fails
+for t in 1:47 1:35; do
+  awk -v t=$t '$0 == " ⚠ Claude Code will automatically block this request in 1:47, to avoid holding up an unattended session" { print " ⚠ Claude Code will automatically block this request in " t ", to avoid"; print " holding up an unattended session"; next } { print }' $FXA/bash-auto-countdown.txt > $S/wrap-${t//:/-}.txt
+done
+check "wrapped countdown variants: two rows each, differing times"  test "$(grep -a -c '^ holding up an unattended session$' $S/wrap-1-47.txt)" = 1 -a "$(grep -a -c 'request in 1:35, to avoid$' $S/wrap-1-35.txt)" = 1 -a "$(grep -a -c 'request in 1:47, to avoid$' $S/wrap-1-35.txt)" = 0
+replay p-w1 $S/wrap-1-47.txt; dl p-w1 show; w1="$(lines_of)"
+replay p-w2 $S/wrap-1-35.txt; dl p-w2 show
+check "wrapped countdown: identical lines for 1:47 and 1:35"  test "$(lines_of)" = "$w1" -a -n "$w1"
+check "wrapped countdown: the first row reads M:SS"  test "$(print -r -- "$w1" | grep -a -c 'block this request in M:SS, to avoid$')" = 1
 
 # --- the teammate status divider after the footer is not part of the dialog
 TD=$FXA/bash-teammate-divider.txt

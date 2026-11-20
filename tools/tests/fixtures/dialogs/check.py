@@ -10,6 +10,8 @@ REQUIRED = ["trust", "question-single", "question-multi", "question-two", "quest
 KINDS = {"permission", "question", "trust", "resume", "login", "unknown"}
 bad = []
 readme = (D / "README.md").read_text(encoding="utf-8") if (D / "README.md").is_file() else ""
+# not dialogs: a teammate's own "Waiting for team lead approval" box (a pane-class fixture), no oracle
+NOT_DIALOGS = {"team-waiting"}
 names = sorted(p.stem for p in D.glob("*.txt"))
 for want in REQUIRED:
     if want not in names:
@@ -23,12 +25,14 @@ for n in names:
         bad.append(f"{n}.txt holds a /Users/ path")
     if f"`{n}.txt`" not in readme:
         bad.append(f"README.md has no row for `{n}.txt`")
+    if n in NOT_DIALOGS:
+        continue
     try:
         e = json.loads((D / "expect" / f"{n}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as x:
         bad.append(f"expect/{n}.json: {type(x).__name__}")
         continue
-    if set(e) != {"kind", "question", "options", "multi", "other"}:
+    if set(e) - {"from"} != {"kind", "question", "options", "multi", "other"} or ("from" in e and not (isinstance(e["from"], str) and e["from"])):
         bad.append(f"expect/{n}.json keys are {sorted(e)}")
         continue
     if e["kind"] not in KINDS or not isinstance(e["question"], str) or type(e["multi"]) is not bool or type(e["other"]) is not bool:

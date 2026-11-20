@@ -264,6 +264,16 @@ class RoutingTest(Base):
         self.assertEqual(r.calls, [])
         self.assertEqual(self.ops(), [])
 
+    def test_a_teammate_pane_waiting_on_the_lead_posts_nothing(self):
+        # mutation: _waiting accepts status "waiting-on-lead" -> the scan runs `show` on the pane and posts
+        rows_ = [r.rstrip() for r in (FX / "dialogs" / "team-waiting.txt").read_text(encoding="utf-8").split("\n")]
+        kind, status = paneclass.classify("claude", [r for r in rows_ if r], False)
+        self.assertEqual(status, "waiting-on-lead")
+        r = Runner({"%5": SINGLE})
+        dd.scan([sess(panes=[pane("%5", kind=kind, status=status)])], 100.0, r)
+        self.assertEqual(r.calls, [])
+        self.assertEqual(self.ops(), [])
+
     def test_project_with_a_channel_posts_to_its_own_dir(self):
         self.ops_on()
         dd.scan([sess()], 100.0, Runner({"%12": SINGLE}))
@@ -1005,6 +1015,218 @@ class RawReplyTest(ConsumerBase):
         self.assertIn(key_of("%12", ["a", "b"]), self.state())
 
 
+class QueueRunner:
+    """A lead pane's queue of requests: shows[pane] is a list, `show` answers its first element, a successful `press` removes it.
+    `press_error` (an Exception) makes every press fail instead."""
+
+    def __init__(self, shows, press_error=None):
+        self.shows, self.press_error, self.calls = shows, press_error, []
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        if argv[3] == "show":
+            q = self.shows.get(argv[2]) or []
+            if not q:
+                raise RuntimeError(f"dialog: none in {argv[2]}")
+            return json.dumps(q[0], ensure_ascii=False)
+        if self.press_error:
+            raise self.press_error
+        self.shows[argv[2]].pop(0)
+        return ""
+
+    def presses(self):
+        return [c for c in self.calls if c[3] == "press"]
+
+
+TEAM = fixture("team-request", 38, 47)   # the real fixture's show output: kind permission, from "prober"
+
+
+def req(name, tag=""):
+    """A teammate's request in the lead's window: the real fixture's show result, with its own `from` and one distinguishing line."""
+    d = dict(TEAM, **{"from": name})
+    d["lines"] = list(TEAM["lines"]) + ([f"tag {tag}"] if tag != "" else [])
+    return d
+
+
+def lead(mates=(), pid="%12", worker=False):
+    """build_state()["sessions"]: the lead window `claude` (pane `pid`, waiting) plus a `✦ <name>` teammate window per name in `mates`."""
+    wins = [{"name": "claude", "worker": worker, "teammate": False, "panes": [pane(pid)]}]
+    wins += [{"name": f"✦ {m}", "worker": False, "teammate": True, "panes": [pane(f"%2{i}", status="ready")]} for i, m in enumerate(mates)]
+    return [{"name": "proj", "windows": wins}]
+
+
+class StaleDenyTest(Base):
+    def audit(self):
+        p = self.d / "audit.jsonl"
+        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+
+    def feed(self):
+        p = tc_env.feed_path("proj")
+        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+
+    def deny_argv(self, show):
+        return [TC, "dialog", "%12", "press", "--option", "3", "--expect", "\n".join(show["lines"])]   # the real fixture's No is option 3
+
+    def test_a_request_with_no_no_option_presses_nothing(self):
+        # mutation: press a fixed number when the show result has no No option -> a press here
+        show = dict(req("prober"), options=[{"n": 1, "label": "Yes", "permanent": False}, {"n": 2, "label": "Allow all", "permanent": True}])
+        r = QueueRunner({"%12": [show]})
+        with mock.patch.object(sys, "stderr"):
+            dd.scan(lead(), 100.0, r)
+            dd.scan(lead(), 130.0, r)
+        self.assertEqual(r.presses(), [])
+        self.assertEqual([o["op"] for o in self.ops()], ["dialog"])
+
+    def test_a_from_outside_the_window_name_charset_is_never_stale_denied(self):
+        # mutation: drop the fullmatch guard in _deny_stale -> a press for "rev.1" (its window would be named "✦ rev", so it looks gone)
+        r = QueueRunner({"%12": [req("rev.1")]})
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(), 200.0, r)
+        self.assertEqual(r.presses(), [])
+
+    def test_lead_side_request_posts_once_with_the_lead_window_header(self):
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(["prober"]), 100.0, r)
+        dd.scan(lead(["prober"]), 200.0, r)
+        ops = self.ops()
+        self.assertEqual([o["op"] for o in ops], ["dialog"])
+        # the real fixture's question is "Do you want to proceed?": the leading "Do you want to " is dropped so it does not read twice
+        self.assertTrue(ops[0]["text"].startswith("🔐 proj · prober (in the lead's window) wants to proceed?\n```\n"), ops[0]["text"])
+        key = key_of("%12", req("prober")["lines"])
+        self.assertEqual([b["label"] for b in self.buttons(ops[0])], ["1. Yes", "2. Yes, and switch to auto mode · auto mode handles these prompts for you", "3. No"])
+        self.assertEqual(ops[0]["key"], key)
+        self.assertEqual(r.presses(), [])   # a live teammate's request is never denied
+        # mutation: drop the live-window check from the gone test -> the live teammate's request is pressed on the second scan
+
+    def test_gone_on_two_scans_30s_apart_presses_no_once(self):
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(), 100.0, r)
+        self.assertEqual(r.presses(), [])
+        self.assertEqual(len(self.ops()), 1)   # the first scan posts it like any request
+        dd.scan(lead(), 130.0, r)
+        self.assertEqual(r.presses(), [self.deny_argv(req("prober"))])
+        self.assertEqual(self.audit()[-1]["action"], "dialog")
+        self.assertEqual((self.audit()[-1]["target"], self.audit()[-1]["result"]), ("stale-deny", "prober"))
+        self.assertEqual([e["text"] for e in self.feed()], ["denied stale request from prober (window gone)"])
+        import discord_feed   # the line reaches Discord: ops_for_events posts a progress event's text whatever its kind
+        self.assertEqual([(o["op"], o["text"]) for o in discord_feed.ops_for_events(self.feed(), {})],
+                         [("post", "denied stale request from prober (window gone)")])
+        ops = self.ops()
+        self.assertEqual([o["op"] for o in ops], ["dialog", "edit"])
+        self.assertEqual(ops[1]["key"], ops[0]["key"])
+        self.assertEqual(ops[1]["text"], ops[0]["text"].split("\n")[0] + "\n→ denied: prober is gone")
+        self.assertEqual(self.state(), {})
+
+    def test_two_scans_less_than_30s_apart_press_nothing(self):
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(), 129.9, r)
+        # mutation: remove the 30 s check (press on any second gone scan) -> a press here
+        self.assertEqual(r.presses(), [])
+
+    def test_first_scan_only_presses_nothing(self):
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(), 100.0, r)
+        # mutation: press on the first gone scan -> a press here
+        self.assertEqual(r.presses(), [])
+        self.assertEqual(self.audit(), [])
+
+    def test_a_scan_that_sees_the_window_again_clears_the_record(self):
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(["prober"]), 110.0, r)
+        dd.scan(lead(), 140.0, r)   # gone again, but only 0 s since the first scan after the clear
+        self.assertEqual(r.presses(), [])
+        dd.scan(lead(), 170.0, r)
+        self.assertEqual(len(r.presses()), 1)
+
+    def gone_state(self):
+        p = tc_env.agent_base() / "dialogs" / "state.json"
+        return json.loads(p.read_text(encoding="utf-8")).get("gone", {})
+
+    def test_an_answered_request_ends_its_gone_record(self):
+        # mutation: prune only the records of panes still in `found` -> the record outlives the answered request and the later one is denied on its first scan
+        r = QueueRunner({"%12": [req("prober", "a")]})
+        dd.scan(lead(), 100.0, r)
+        r.shows["%12"] = []   # answered at the terminal: the pane shows no dialog
+        dd.scan(lead(), 110.0, r)
+        self.assertEqual(self.gone_state(), {})
+        r.shows["%12"] = [req("prober", "b")]
+        dd.scan(lead(), 300.0, r)   # a new request from the same name: first scan, however long since the old one
+        self.assertEqual(r.presses(), [])
+        dd.scan(lead(), 331.0, r)
+        self.assertEqual(len(r.presses()), 1)
+
+    def test_a_gone_record_of_a_pane_that_no_longer_exists_is_pruned(self):
+        # mutation: prune only the records of panes still in `found` -> the record of the vanished pane stays forever
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(), 100.0, r)
+        self.assertEqual(list(self.gone_state()), ["%12|prober"])
+        dd.scan([{"name": "proj", "windows": []}], 110.0, r)
+        self.assertEqual(self.gone_state(), {})
+
+    def test_a_request_with_no_from_is_never_denied(self):
+        show = dict(PERM)   # no `from`
+        r = QueueRunner({"%12": [show]})
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(), 200.0, r)
+        # mutation: remove the `from` check (treat an empty name as gone) -> a press here
+        self.assertEqual(r.presses(), [])
+
+    def test_a_tall_teammate_request_reads_without_from_and_posts_as_an_ordinary_dialog(self):
+        show = {k: v for k, v in req("prober").items() if k != "from"}   # show omits `from` when the request is taller than the pane (Task 2 review)
+        r = QueueRunner({"%12": [show]})
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(), 200.0, r)
+        self.assertTrue(self.ops()[0]["text"].startswith("🔐 proj · claude: Do you want to proceed?\n"), self.ops()[0]["text"])
+        self.assertEqual(r.presses(), [])
+
+    def test_a_worker_or_peer_pane_is_never_denied(self):
+        r = QueueRunner({"%12": [req("prober")]})
+        dd.scan(lead(worker=True), 100.0, r)
+        dd.scan(lead(worker=True), 200.0, r)
+        self.assertEqual(r.presses(), [])
+
+    def test_a_changed_recheck_presses_nothing_and_is_retried_next_tick(self):
+        r = QueueRunner({"%12": [req("prober")]}, press_error=RuntimeError("dialog: the dialog in %12 changed"))
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(), 131.0, r)
+        self.assertEqual(len(r.presses()), 1)   # tried, refused
+        self.assertEqual(self.audit(), [])
+        self.assertEqual(self.feed(), [])
+        self.assertEqual([o["op"] for o in self.ops()], ["dialog"])   # the post stands
+        r.press_error = None
+        dd.scan(lead(), 162.0, r)
+        self.assertEqual(len(r.presses()), 2)
+        self.assertEqual([o["op"] for o in self.ops()], ["dialog", "edit"])
+
+    def test_three_stale_requests_get_three_presses_in_one_tick(self):
+        qs = [req("prober", i) for i in range(3)]
+        r = QueueRunner({"%12": list(qs)})
+        dd.scan(lead(), 100.0, r)
+        self.assertEqual(r.presses(), [])
+        dd.scan(lead(), 131.0, r)
+        self.assertEqual(r.presses(), [self.deny_argv(q) for q in qs])
+        self.assertEqual(len(self.audit()), 3)
+
+    def test_eleven_stale_requests_press_ten_and_leave_the_eleventh_for_the_next_tick(self):
+        qs = [req("prober", i) for i in range(11)]
+        r = QueueRunner({"%12": list(qs)})
+        dd.scan(lead(), 100.0, r)
+        dd.scan(lead(), 131.0, r)
+        # mutation: remove the 10 cap -> eleven presses here
+        self.assertEqual(r.presses(), [self.deny_argv(q) for q in qs[:10]])
+        dd.scan(lead(), 162.0, r)
+        self.assertEqual(r.presses()[10:], [self.deny_argv(qs[10])])
+
+    def test_the_queue_stops_at_a_live_teammates_request(self):
+        qs = [req("prober", 0), req("other", 1), req("prober", 2)]
+        r = QueueRunner({"%12": list(qs)})
+        dd.scan(lead(["other"]), 100.0, r)
+        dd.scan(lead(["other"]), 131.0, r)
+        self.assertEqual(r.presses(), [self.deny_argv(qs[0])])
+
+
 class RealShowTest(unittest.TestCase):
     """One real `tmux-ctl dialog <pane id> show` on a scratch tmux server (-L, -f /dev/null) showing a real captured screen:
     the argv, the JSON and the `dialog: none in` error text scan relies on are the real ones."""
@@ -1067,6 +1289,26 @@ class RealShowTest(unittest.TestCase):
             got = dd._rows(run, pid)
             self.assertTrue(got and got[0].startswith("  ") and not got[0].startswith("   "), got)
             self.assertEqual(run([TC, "dialog", pid, "type", "--expect", "\n".join(got), "--text", "banana"]), f"dialog: {pid}: typed")
+
+    def test_stale_deny_argv_is_accepted_by_the_real_press(self):
+        # mutation: _deny passes `--option No` again -> the real CLI refuses it ("--option needs a number") and _deny returns False
+        self.t("new-window", "-d", "-t", "=tt:", "-n", "team", f"cat {FX / 'dialogs' / 'team-request.txt'}; sleep 600")
+        pid = self.t("display", "-p", "-t", "=tt:team", "#{pane_id}").strip()
+        for _ in range(100):
+            if "Do you want to proceed" in self.t("capture-pane", "-p", "-t", pid):
+                break
+            time.sleep(0.05)
+        got = dd._show(self.run_real, pid)
+        self.assertEqual(got.get("from"), "prober")
+        sent = []
+
+        def run(argv):
+            sent.append(argv)
+            return self.run_real(argv)
+
+        self.assertTrue(dd._deny({}, "k", pid, "tt", got, run, 100.0))
+        self.assertEqual(sent[0][3:5], ["press", "--option"])
+        self.assertEqual(sent[0][5], "3")
 
     def test_real_show_feeds_scan(self):
         ids = {}

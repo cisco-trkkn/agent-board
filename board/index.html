@@ -110,7 +110,7 @@ body.resizing iframe { pointer-events: none; }
 .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .pill.working { background: var(--blue-soft); color: var(--blue); }
 .pill.working::before { animation: pulse 1.2s infinite; }
-.pill.waiting { background: var(--amber-soft); color: var(--amber); }
+.pill.waiting, .pill.waiting-on-lead { background: var(--amber-soft); color: var(--amber); }
 .pill.ready, .pill.idle { background: var(--green-soft); color: var(--green); }
 .pill.running { background: var(--blue-soft); color: var(--blue); }
 @keyframes pulse { 50% { opacity: .25; } }
@@ -507,7 +507,7 @@ async function action(body) {
   } catch (e) { toast(String(e), true); return false; }
 }
 
-const STATUS_LABEL = { working: "Working", waiting: "Needs you", ready: "Ready", idle: "Idle", running: "Running" };
+const STATUS_LABEL = { working: "Working", waiting: "Needs you", ready: "Ready", "waiting-on-lead": "Waiting on lead", idle: "Idle", running: "Running" };
 const ICON = { claude: "✦", shell: "›_", program: "◆" };
 
 function session() { return data.sessions.find((s) => s.name === current) || data.sessions[0]; }
@@ -569,7 +569,7 @@ function card(s, w, p) {
   who.append(el("b", null, mate || task));
   const facts = lab ? [lab.role, lab.model, lab.effort] : [r && ROLE[r], `window ${w.index}`, r ? null : p.command];   // labelled: role · model · effort
   who.append(el("span", null, [...facts, mate && task !== w.name ? task : null].filter(Boolean).join(" · ")));
-  head.append(who, el("span", "pill " + p.status, STATUS_LABEL[p.status] || p.status));
+  head.append(who, el("span", "pill " + p.status, (STATUS_LABEL[p.status] || p.status) + (p.status === "waiting-on-lead" && p.waiting_on ? ` (${p.waiting_on} window)` : "")));
   if (p.discord) { const dc = el("span", "alert-badge dc", "dc"); dc.title = "Discord channel on (delivery not checked by the board)"; head.append(dc); }
   c.append(head);
   const alerts = (s.usage_alerts || {})[p.id] || [];

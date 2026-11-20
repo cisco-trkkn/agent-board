@@ -20,6 +20,9 @@ import tc_env  # noqa: E402
 SHELLS = tc_env.SHELLS
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")
 WAITING_RE = re.compile(tc_env.PROMPT_PATTERN, re.I)
+# a teammate's own pane while its permission request sits with the lead: a boxed `✽ Waiting for team lead approval` title
+WAITING_ON_LEAD_RE = re.compile(r"^\s*[│|]\s*\S?\s*Waiting for team lead approval\s*[│|]?\s*$", re.M)
+WAITING_ON_LEAD = "waiting-on-lead"
 WORKING_RE = re.compile(r"esc to interrupt", re.I)   # Claude Code before 2.1.316
 # 2.1.316+: `<glyph> <Word>… (<elapsed> · ↓ <n> tokens)`; the whole line, so prose quoting one does not match
 SPINNER_RE = re.compile(r"^[·✢✳✶✻✽*]\s+\S.*…\s*\((?:[^()]*·\s*)?\d+\s*[hms]\b[^)]*\)?\s*$")   # the bracket may start with hook text: `(running Stop hooks… 0/4 · 2s`
@@ -178,6 +181,9 @@ def classify(cmd, rows, bell, mod=None):
     if cmd in SHELLS:
         return "shell", "idle"
     if is_claude:
+        # the box is ~14 rows tall with the input box under it; it answers nothing here, the lead's own pane carries the dialog
+        if WAITING_ON_LEAD_RE.search("\n".join(_above_tasklist(rows)[-20:])):
+            return "claude", WAITING_ON_LEAD
         if mod:
             # a dialog the mod cannot see (subagent, sandbox network prompt) only shows in the pane: raise to waiting
             if mod != "waiting" and WAITING_RE.search(tail):

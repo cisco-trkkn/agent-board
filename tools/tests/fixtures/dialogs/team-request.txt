@@ -1,0 +1,49 @@
+
+⏺ Agent(Touch probe file)
+
+⏺ I've started a teammate named prober. Its only task is to run touch probe in this directory, send me "probe done", and
+  stop. I haven't run the command myself, and I'll wait for its message.
+
+
+› Message from @prober (ctrl+o to expand)
+
+  Listed 1 directory 
+
+⏺ prober sent "probe done", and the empty probe file is now in this directory (created 19:04). I only checked that it
+  exists; I didn't run the command myself.
+
+
+⏺ Teammate @prober finished
+  I ran `touch probe` in `/tmp/scratch`, and it finished 
+  without errors. I then sent "probe done" to `team-lead`, and the send was confirmed. I d…
+
+⏺ prober has now stopped and is idle. Its final report matches what we saw: it ran touch probe, sent "probe done", and
+  did nothing else. The task is finished.
+
+❯ Send prober a message asking it to run the Bash command touch probe2 and then message you "probe2 done". Right after  
+  sending that message, in the same turn, run the Bash command sleep 45 yourself and then say "slept".                  
+
+  Ran 1 shell command · 1 failed 
+
+⏺ I sent prober the request, but the harness blocked sleep 45, so I haven't slept and won't say "slept". The block says
+  a standalone foreground sleep isn't allowed and not to work around it with shorter sleeps.
+
+  I can still pause in two ways:
+  - Background sleep: run sleep 45 in the background, and I'd be woken when it finishes.
+  - Wait on a condition: use Monitor with a loop that waits for probe2 to appear.
+
+  prober's "probe2 done" reply hasn't arrived yet. When it does, I'll check that probe2 exists.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command · from the prober agent
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Create probe2 file
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ touch probe2
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and switch to auto mode · auto mode handles these prompts for you
+   3. No
+
+ Esc to cancel · Tab to amend

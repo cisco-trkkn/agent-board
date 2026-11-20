@@ -349,6 +349,16 @@ def _overseer_sessions(every, rows_by):
     return [{"name": OVERSEER_SESSION, "windows": [{"name": "claude", "panes": panes}]}] if panes else []
 
 
+def label_waiting_on_lead(sessions):
+    """A pane in status waiting-on-lead gets `waiting_on`: the name of its session's lead window (`claude` in a dev session)."""
+    for s in sessions:
+        lead = next((w["name"] for w in s["windows"] if w["name"] == "claude" and not w.get("teammate")), None)
+        for w in s["windows"]:
+            for p in w["panes"]:
+                if p["status"] == "waiting-on-lead" and lead:
+                    p["waiting_on"] = lead
+
+
 def build_state():
     fmt = SEP.join([
         "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}",
@@ -400,6 +410,7 @@ def build_state():
         s["windows"] = sorted(s["windows"].values(), key=lambda w: w["index"])
         s["worktrees"] = cached_worktrees(s["path"])
     out.sort(key=lambda s: (not s["attached"], s["name"]))
+    label_waiting_on_lead(out)
     global _dialog_sessions
     seen = out + _overseer_sessions(every, rows_by)
     _dialog_sessions = seen   # the dialog scan of the next feed tick reads these panes

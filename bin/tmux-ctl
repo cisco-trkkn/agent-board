@@ -48,6 +48,8 @@
 #                                          those rows are unchanged on two reads, the pane is not in copy mode and the input line is empty
 #   tmux-ctl wait-gone <name>... [--timeout S]  after shutdown_requests: wait (default 300 s) until every `✦ <name>` window of this
 #                                          session is gone; at the timeout kill the ones left (exit 3)
+#   tmux-ctl teammates                     this lead's teammates: name, window alive yes/no, busy/idle, last stop HH:MM, first line
+#                                          (from the Stop-hook status files plus the `✦` windows); `no teammates` when none
 #   tmux-ctl handoff-mark [--clear]        a self-started handoff marks this session as not yet relayed (the Stop guard
 #                                          blocks its stops until `relay` runs); --clear removes the mark (handoff skill only)
 #   tmux-ctl relay <doc> [--old-session ID] after this turn, restart the claude window as a fresh
@@ -345,6 +347,10 @@ case "$cmd" in
     if t has-session -t "=$BG" 2>/dev/null; then
       SESSION="$BG"; list_session | sed 's/$/  (bg)/'; SESSION="$MAIN"
     fi ;;
+
+  teammates)
+    source "${0:A:h:h}/tools/lib/teammates.zsh"
+    tm_list ;;
 
   read)
     [[ -n "$1" ]] || die "usage: tmux-ctl read <win> [feed|watch] [lines]"
@@ -683,7 +689,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

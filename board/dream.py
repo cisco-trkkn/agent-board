@@ -561,6 +561,14 @@ def report(project):
     return 0
 
 
+def _empty_core(project):
+    """True when the project's core has no '- ' entry lines (only title, Last curated and headings)."""
+    try:
+        return not context.entries(context.context_path(project).read_text())
+    except (OSError, ValueError):
+        return False
+
+
 def main(argv=None, now=None):
     ap = argparse.ArgumentParser(prog="dream")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -615,6 +623,8 @@ def main(argv=None, now=None):
         return 2
     rc = 0
     for n in names:
+        if a.all and _empty_core(n):
+            continue
         try:
             res = run_project(n, now, a.dry_run, a.force, a.root)
         except Exception as e:   # before the project's own guard (root lookup, lock file): still a failed night, and --all goes on

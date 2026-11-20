@@ -210,4 +210,13 @@ check "type, rows change between reads: rc 1 + message"  test $rc -eq 1 -a "$err
 touch $S/stop-p-tysw2; sleep 0.5
 check "type, rows change between reads: nothing sent"    test "$(tt capture-pane -p -J -t '=tt:p-tysw' | grep -a -o 'GOT:[0-9a-fNOE]*' | tail -1)" = GOT:NONE
 
+# --- a teammate's request in the lead's window (fixtures/dialogs/team-request.txt): No is option 3, a digit alone, like the lead's own prompt.
+# --expect is the `lines` of show, header row ` Bash command · from the prober agent` included.
+# mutation: remove the `from` handling of _dlg_parse (show) → the `from:` check fails with KeyError: 'from'
+pshow p-team $FXD/team-request.txt
+check "team request: show reads from prober"          test "$(jget 'd["from"]')" = prober
+pr p-team --option 3
+check "team request: pressed, chose No"               test $rc -eq 0 -a "$out" = 'dialog: p-team: chose "No"'
+check "team request: digit 3 alone"                   test "$(gotk p-team)" = GOT:33
+
 tt_done
