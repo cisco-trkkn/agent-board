@@ -604,7 +604,8 @@ def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=N
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     try:
-        discord_ops.consume(COMMENTS.add_line, lambda argv: run_script(argv, timeout=20), now, on_merge=discord_merge.on_merge)
+        discord_ops.consume(COMMENTS.add_line, lambda argv: run_script(argv, timeout=20), now, on_merge=discord_merge.on_merge,
+                             lead_run=lambda argv: run_script(argv, timeout=120))
     except Exception as e:   # noqa: BLE001
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     try:

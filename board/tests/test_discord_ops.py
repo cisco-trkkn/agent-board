@@ -768,7 +768,7 @@ class LeadGauth(Base):
 
     def send(self, ev, name="1.json"):
         self.event(name, ev)
-        ops.consume(self.add, self.fake_run, NOW)
+        ops.consume(self.add, self.fake_run, NOW, spawn=lambda f: f())
 
     def audit(self):
         return [json.loads(l) for l in (self.ops / "audit.jsonl").read_text().splitlines()]
@@ -801,8 +801,7 @@ class LeadGauth(Base):
     def test_lead_handoff_passes_the_newest_doc(self):
         (self.ops / "views.json").write_text(json.dumps({"leads": {"a": {"doc": "/h/new.md"}}}))
         self.send(self.lead("handoff"))
-        self.assertEqual(self.runs[0][-3:], ["a", "--doc", "/h/new.md"][-3:])
-        self.assertIn("--doc", self.runs[0])
+        self.assertEqual(self.runs[0], [str(ops.discord_dialogs.BIN / "tmux-ctl"), "lead-restart", "a", "--doc", "/h/new.md"])
         self.assertEqual(self.audit()[-1]["result"], "restarted")
 
     def test_lead_handoff_without_a_doc_does_not_restart(self):
@@ -857,7 +856,7 @@ class LeadGauth(Base):
         self.assertGreaterEqual(self.clock.t - NOW, 30)
         self.assertLess(self.clock.t - NOW, 40)
         self.assertEqual(self.audit()[-1]["result"], "failed")
-        self.assertFalse((self.ops / "gauth-pending.json").exists())
+        self.assertEqual(json.loads((self.ops / "gauth-pending.json").read_text()), {})
 
     # ---- /gauth modal ----
     def test_modal_same_user_within_window_sends_code_and_reports(self):
@@ -878,8 +877,7 @@ class LeadGauth(Base):
         self.assertEqual(self.audit()[-1]["result"], "auth failed")
         self.assertIn(("close", "a"), self.g.calls)
 
-    def test_modal_other_user_is_ignored_and_sends_nothing(self):
-        # mutation: drop the same-user comparison -> send_code is called for the stranger
+    def test_modal_non_allowlisted_user_is_rejected_and_sends_nothing(self):
         self.seed_pending()
         self.send(self.modal(user="U2"))
         self.assertFalse([c for c in self.g.calls if c[0] == "send_code"])
@@ -934,6 +932,87 @@ class LeadGauth(Base):
     # ---- tick ----
     def tick_now(self, now):
         return ops.tick([rec("a")], {}, None, now, self.add)
+
+    # ---- the slow work leaves consume ----
+    def test_consume_returns_before_any_slow_step(self):
+        # mutation: call the worker inline in handle_event (spawn(fn) -> fn()) -> start/read_url/run happen inside consume
+        spawned = []
+        self.event("1.json", self.gauth())
+        self.event("2.json", self.lead("restart"), )
+        ops.consume(self.add, self.fake_run, NOW, spawn=spawned.append)
+        self.assertEqual(len(spawned), 2)
+        self.assertEqual(self.runs, [])
+        self.assertEqual([c for c in self.g.calls if c[0] in ("start", "read_url")], [])
+        self.assertEqual(self.ireplies(), [])
+        self.assertIn("a", self.pending())   # written before the worker starts
+        self.assertEqual(self.clock.t, NOW)
+        spawned[0]()
+        self.assertIn(("start", "a"), self.g.calls)
+
+    def test_default_spawn_runs_the_worker_on_another_thread(self):
+        import threading
+        seen = []
+        done = threading.Event()
+        self.g.read_url = lambda p, tmux=None, timeout=15: (seen.append(threading.current_thread()), done.set(), self.g.url)[2]
+        self.event("1.json", self.gauth())
+        ops.consume(self.add, self.fake_run, NOW)
+        self.assertTrue(done.wait(5))
+        self.assertIsNot(seen[0], threading.main_thread())
+        self.assertTrue(seen[0].daemon)
+
+    def test_a_dead_gauth_worker_is_closed_by_the_tick_sweep(self):
+        self.event("1.json", self.gauth())
+        ops.consume(self.add, self.fake_run, NOW, spawn=lambda f: None)   # the worker never ran
+        self.tick_now(NOW + 601)
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertEqual(self.audit()[-1]["result"], "timed out")
+
+    def test_second_gauth_while_pending_is_busy(self):
+        self.event("1.json", self.gauth())
+        ops.consume(self.add, self.fake_run, NOW, spawn=lambda f: None)
+        self.send(self.gauth(iid="I3"), "2.json")
+        self.assertEqual(self.audit()[-1]["result"], "busy")
+
+    def test_lead_run_wins_over_run_for_lead_restart(self):
+        calls = []
+        self.event("1.json", self.lead("restart"))
+        ops.consume(self.add, self.fake_run, NOW, lead_run=lambda a: calls.append(a) or "ok line", spawn=lambda f: f())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.runs, [])
+        self.assertEqual(self.ireplies()[0]["content"], "ok line")
+
+    # ---- any exception in the worker closes the window ----
+    def test_read_url_raising_closes_and_ireplies(self):
+        # mutation: catch only GauthError in the slash worker -> window, .waiting and pending stay
+        self.g.read_url = mock.Mock(side_effect=RuntimeError("tmux capture failed"))
+        self.send(self.gauth())
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertFalse(json.loads((self.ops / "gauth-pending.json").read_text()))
+        self.assertIn("RuntimeError", self.ireplies()[0]["content"])
+        self.assertEqual(self.audit()[-1]["result"], "failed")
+
+    def test_result_raising_closes_and_ireplies(self):
+        self.seed_pending()
+        self.g.result = mock.Mock(side_effect=RuntimeError("tmux capture failed"))
+        self.send(self.modal())
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertFalse(json.loads((self.ops / "gauth-pending.json").read_text()))
+        self.assertIn("RuntimeError", self.ireplies()[0]["content"])
+        self.assertEqual(self.audit()[-1]["result"], "auth failed")
+
+    def test_start_raising_plain_exception_closes(self):
+        self.g.start_err = RuntimeError("boom")
+        self.send(self.gauth())
+        self.assertIn(("close", "a"), self.g.calls)
+        self.assertEqual(self.audit()[-1]["result"], "failed")
+
+    def test_modal_resubmit_while_sending_is_ignored(self):
+        self.seed_pending()
+        self.event("1.json", self.modal())
+        ops.consume(self.add, self.fake_run, NOW, spawn=lambda f: None)
+        self.send(self.modal(), "2.json")
+        self.assertFalse([c for c in self.g.calls if c[0] == "send_code"])
+        self.assertEqual(self.audit()[-1]["result"], "ignored")
 
     def test_tick_closes_a_timed_out_gauth(self):
         # mutation: drop the tick sweep -> window stays open and pending stays

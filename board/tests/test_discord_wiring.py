@@ -408,6 +408,16 @@ class OpsTickWiringTest(OpsBase):
         self.run_tick([rec("a"), rec("b")])
         self.assertEqual(self.order, [("feed", "a"), ("step", "a"), ("feed", "b"), ("step", "b"), "ops-tick", "ops-consume"])
 
+    def test_lead_restart_gets_a_120s_run_and_the_rest_20s(self):
+        # mutation: pass timeout=20 (or no lead_run) -> a slow successful restart reads as failed
+        self.configure("a"); self.configure_ops()
+        self.run_tick([rec("a")])
+        k = self.mc.call_args
+        with mock.patch.object(server, "run_script", return_value="") as rs:
+            k[0][1](["x"])
+            k[1]["lead_run"](["y"])
+        self.assertEqual([c.kwargs["timeout"] for c in rs.call_args_list], [20, 120])
+
     def test_tick_args_cover_every_project_even_without_a_channel(self):
         self.configure("a"); self.configure_ops()
         tasks = [{"id": "1", "subject": "s", "status": "pending"}]
