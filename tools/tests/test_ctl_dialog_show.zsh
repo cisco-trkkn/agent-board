@@ -9,15 +9,47 @@ rows() { sed -n "$2,$3p" $1 | sed -e 's/ *$//' | grep -a -v '^$' }
 # its top rule up to the key-hint footer, never the scrollback above it
 # mutation: start `lines` at the first screen row → every "lines are" check below fails
 typeset -A FROM TO
-FROM=(trust 3 question-single 9 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3)
-TO=(trust 15 question-single 19 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13)
+FROM=(trust 3 question-single 9 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3 team-request 38)
+TO=(trust 15 question-single 19 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13 team-request 47)
+# team-waiting.txt is the teammate's own "Waiting for team lead approval" box, not a dialog (Task 3's pane-class fixture): no oracle
+ran=0
 for f in $FXD/*.txt; do
-  n=${f:t:r}; replay d-$n $f; dl d-$n show
-  check "$n: equals expect/$n.json, exit 0"   eval 'same_as $FXD/expect/$n.json && (( rc == 0 ))'
+  n=${f:t:r}
+  [[ $n == team-waiting ]] && continue
+  (( ran++ ))
+  replay d-$n $f; dl d-$n show
+  if [[ $n == team-request ]]; then   # the one fixture with a `from`: same_as compares the oracle without it, then `from` itself
+    full="$out"; out="$(print -r -- "$full" | python3 -I -c 'import json, sys; d = json.load(sys.stdin); d.pop("from", None); print(json.dumps(d, ensure_ascii=False))')"
+    python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); d.pop("from"); json.dump(d, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)' $FXD/expect/$n.json $S/team-expect.json
+    check "$n: equals expect/$n.json (without from), exit 0"  eval 'same_as $S/team-expect.json && (( rc == 0 ))'
+    out="$full"
+  else
+    check "$n: equals expect/$n.json, exit 0"   eval 'same_as $FXD/expect/$n.json && (( rc == 0 ))'
+  fi
   check "$n: lines are fixture rows $FROM[$n]-$TO[$n]"  test "$(lines_of)" = "$(rows $f $FROM[$n] $TO[$n])"
   check "$n: nothing on stderr"                test -z "$err"
 done
-check "all 7 dialogs fixtures ran"             test "$(print -rl -- $FXD/*.txt | wc -l | tr -d ' ')" = 7
+check "all 8 dialogs fixtures ran"             test $ran -eq 8 -a "$(print -rl -- $FXD/expect/*.json | wc -l | tr -d ' ')" = 8
+
+# --- a teammate's request in the lead's window (team-request.txt): the name is only in the header row
+# mutation: remove the `from` handling of _dlg_parse → every check below fails (no from)
+dl d-team-request show
+check "team-request: kind permission, question, exit 0"  test "$(jget 'd["kind"] + "|" + d["question"]')" = "permission|Do you want to proceed?" -a $rc -eq 0
+check "team-request: from is the bare name"    test "$(jget 'd["from"]')" = prober
+check "team-request: from equals the oracle's"  test "$(jget 'd["from"]')" = "$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["from"])' $FXD/expect/team-request.json)"
+check "team-request: options Yes / switch to auto mode / No, none permanent but the auto row"  test "$(jget '"|".join("%d %s %s" % (o["n"], o["label"], o["permanent"]) for o in d["options"])')" = "1 Yes False|2 Yes, and switch to auto mode · auto mode handles these prompts for you True|3 No False"
+check "team-request: lines open with the header row"  test "$(lines_of | head -1)" = " Bash command · from the prober agent"
+# every other fixture has no `from` at all
+for n in trust question-single plan resume; do dl d-$n show; check "$n: no from key"  test "$(jget '"from" in d')" = False; done
+dl d-team-request show
+# a queued request: the counter at the right end of the header row is not part of the name
+sed 's/^ Bash command · from the prober agent$/ Bash command · from the prober agent                                                                     2 of 2/' $FXD/team-request.txt > $S/team-queued.txt
+check "team-queued variant gained the counter"  test "$(grep -a -c 'prober agent  *2 of 2$' $S/team-queued.txt)" = 1
+replay d-tq $S/team-queued.txt; dl d-tq show
+check "team-queued: from is prober, without the counter"  test "$(jget 'd["from"]')" = prober -a $rc -eq 0
+# the teammate's own waiting box is not a dialog
+replay n-team-waiting $FXD/team-waiting.txt; dl n-team-waiting show
+check "team-waiting: no dialog, exit 1"        test $rc -eq 1 -a "$err" = "dialog: none in n-team-waiting" -a -z "$out"
 
 # --- permission prompts (fixtures/approve): the permanent rows are flagged by the one substring list
 replay p-git $FXA/bash-git.txt; before="$(snap p-git)"; dl p-git show; first="$out"
