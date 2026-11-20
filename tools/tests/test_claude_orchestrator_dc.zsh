@@ -96,12 +96,12 @@ if (( $+commands[node] )); then
   cat > "$FB/fc.js" <<'FC'
 const { spawn } = require('child_process')
 require('fs').writeFileSync(process.argv[3], String(process.pid))
-spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start'],
+spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start', process.argv[4]],
   { env: { ...process.env, DISCORD_STATE_DIR: process.argv[2] }, stdio: 'ignore' }).on('exit', () => process.exit(0))
 FC
   typeset -a HPIDS=()
   hold() {   # hold <pane>: a live fake lead holding $DC, its TMUX_PANE being <pane>; sets HP
-    local f="$FB/pid.$RANDOM"; env TMUX_PANE="$1" "$FB/claude" "$FB/fc.js" "$DC" "$f" >/dev/null 2>&1 &
+    local f="$FB/pid.$RANDOM"; env TMUX_PANE="$1" "$FB/claude" "$FB/fc.js" "$DC" "$f" "$FB" >/dev/null 2>&1 &
     local i; for i in {1..50}; do [[ -s "$f" ]] && break; sleep 0.1; done
     HP="$(<$f)"; HPIDS+=($HP); sleep 0.5; HPIDS+=($(ps -A -o pid=,ppid= | awk -v p=$HP '$2==p{print $1}'))
   }
@@ -198,9 +198,23 @@ discord: tt's bot is held by the lead in tt:claude-next (pid $HP); this lead sta
   bgrun TC_DC_WAIT=1x TC_DC_POLL=1 "$L" --continue
   release; settle 25
   check "TC_DC_WAIT=1x: no math error on stderr, falls back to 60 in the wait line" test -z "$(grep -i 'bad math\|not valid' $S/err)" -a -n "$(grep -x 'discord: waiting up to 60s for .*' $S/err)"
+  # the old lead dying mid-wait: dc_holder can see its pid with no pane for one scan (a dying process has no readable
+  # environment). That is the same holder going away, not "another process": the wait goes on. dc_holder is a seam here:
+  # a repo copy whose dc_holder answers pane, then pane-less, then nothing.
+  R3="$TT_DIR/repo3"; mkdir -p "$R3/bin" "$R3/tools/lib" "$R3/claude/plugin/scripts"
+  cp "$TT_REPO"/bin/{claude-orchestrator,_ab_claude.zsh,_tc_bins.zsh} "$R3/bin/"
+  cp "$TT_REPO"/tools/lib/discord*.zsh "$R3/tools/lib/"; cp "$TT_REPO/tools/discord_cache.py" "$R3/tools/"
+  cp "$TT_REPO"/claude/plugin/scripts/discord-mcp-* "$R3/claude/plugin/scripts/"
+  cp "$TT_REPO/claude/orchestrator.md" "$R3/claude/"
+  print -r -- "dc_holder() { local n=\$(( \$(<$R3/n) + 1 )); print -r -- \$n > $R3/n; case \$n in 1|2) print -r -- '4242 $NEXTP';; 3|4) print -r -- '4242 -';; esac }" >> "$R3/tools/lib/discord.zsh"
+  print -r -- 0 > "$R3/n"
+  run TC_DC_WAIT=30 TC_DC_POLL=1 "$R3/bin/claude-orchestrator" --continue
+  check "old lead dying mid-wait (pid seen without a pane): the wait goes on, channel added" test "$(nch)" = 1 -a "$(<$S/dsd)" = "$DC"
+  check "old lead dying mid-wait: one waiting line, no held line" test "$(<$S/err)" = "discord: waiting up to 30s for the lead in tt:claude-next to release tt's bot"
   release; tt kill-window -t "$NEXTP"
-  for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F fake/discord/0.0.4 | grep -v grep)" ]] && break; sleep 0.1; done
-  check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F 'fake/discord/0.0.4' | grep -v grep)"
+  for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F "start $FB" | grep -v grep)" ]] && break; sleep 0.1; done
+  # scoped to this run's own holders ($FB is unique): test_discord_holder.zsh runs fakes with the same --cwd in parallel
+  check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F "start $FB" | grep -v grep)"
 else
   print "skip - no node (guard cases)"
 fi
