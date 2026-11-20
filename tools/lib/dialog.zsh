@@ -161,7 +161,7 @@ _dlg_parse() {
     # plan approval (dialogs/plan.txt), kind question: "… Would you like to proceed?" under an indented rule, the run, at most
     # the one sub-row of the feedback option, then the `ctrl+g to edit in …` footer. The plan box above (from "Ready to code?")
     # belongs to `lines` when it is on screen.
-    function plan(   i, j, n, q, e, qs, s) {
+    function plan(   i, j, n, q, e, qs, s, p) {
       reset(); q = 0; e = 0
       for (i = 1; i < N2; i++) {
         if (l[i] !~ /Would you like to proceed\?$/ || optnum(l[i+1]) != 1) continue
@@ -169,13 +169,17 @@ _dlg_parse() {
         while (j <= N2 && optnum(l[j]) == n) { j++; n++ }
         q = i; e = j - 1
       }
-      if (!q || l[N2] !~ /^[ \t]*ctrl\+g to edit in /) return 0
-      if (!(e == N2 - 1 || (e == N2 - 2 && ltrim(l[N2-1]) == "shift+tab to approve with this feedback"))) return 0
+      # the footer is one row, or two when its path wraps at 80 columns (the second row is the rest of the path: one word)
+      p = 0
+      if (l[N2] ~ /^[ \t]*ctrl\+g to edit in /) p = N2
+      else if (N2 >= 2 && l[N2-1] ~ /^[ \t]*ctrl\+g to edit in / && l[N2] ~ /^[ \t]+[^ \t]+$/) p = N2 - 1
+      if (!q || !p) return 0
+      if (!(e == p - 1 || (e == p - 2 && ltrim(l[p-1]) == "shift+tab to approve with this feedback"))) return 0
       qs = 0; for (i = q - 1; i >= 1 && i >= q - 3; i--) if (isdiv(ltrim(l[i]))) { qs = i; break }
       if (!qs) return 0
       s = qs; for (i = qs - 1; i >= 1; i--) if (isdiv(ltrim(l[i])) && ltrim(l[i+1]) == "Ready to code?") { s = i; break }
       for (i = q + 1; i <= e; i++) addopt(optnum(l[i]), optlabel(l[i]))
-      return emit("question", join(qs + 1, q), s + 1, N2 - 1, 0)
+      return emit("question", join(qs + 1, q), s + 1, p - 1, 0)
     }
 
     # trust (dialogs/trust.txt): the rows right above the footer, at one indent, exactly one of them under the cursor; they
@@ -199,15 +203,21 @@ _dlg_parse() {
     # resume (dialogs/resume.txt): a session is a title row followed by its `<age> · <branch> · <size>` row; the titles
     # carry no numbers on screen and are numbered 1, 2, … in screen order.
     function ismeta(x) { return x ~ /^[ \t]+[^ \t].* · .* · [0-9.]+[KMGT]?B$/ }
-    function resume(   i, s, n) {
+    # The key-hint footer wraps with the pane width (80 columns: two rows, 70: three, `Enter to` / `resume` split): it is the
+    # rows after the meta row of the last session, at most 3, joined with one blank before matching (dialogs/resume-80.txt, resume-70.txt).
+    function resume(   i, s, n, m, f, ft) {
       reset()
-      if (N2 < 5 || l[N2] !~ /Enter to resume/ || l[N2] !~ /Esc to close$/) return 0
-      s = 0; for (i = N2 - 1; i >= 1; i--) if (isdiv(l[i]) && l[i+1] ~ /^[ \t]*Resume session/) { s = i; break }
+      if (N2 < 5) return 0
+      m = 0; for (i = N2; i >= N2 - 3 && i >= 1; i--) if (ismeta(l[i])) { m = i; break }
+      if (!m) return 0
+      f = m + 1; ft = join(f, N2)
+      if (f > N2 || ft !~ /Enter to resume/ || ft !~ /Esc to close$/) return 0
+      s = 0; for (i = f - 1; i >= 1; i--) if (isdiv(l[i]) && l[i+1] ~ /^[ \t]*Resume session/) { s = i; break }
       if (!s) return 0
       n = 0
-      for (i = s + 3; i < N2; i++) if (ismeta(l[i]) && !ismeta(l[i-1])) addopt(++n, ltrim(nocur(l[i-1])))
+      for (i = s + 3; i < f; i++) if (ismeta(l[i]) && !ismeta(l[i-1])) addopt(++n, ltrim(nocur(l[i-1])))
       if (!n) return 0
-      return emit("resume", ltrim(l[s+1]), s + 1, N2 - 1, 0)
+      return emit("resume", ltrim(l[s+1]), s + 1, f - 1, 0)
     }
 
     # generic (a screen of no captured kind): the last contiguous run 1. 2. … of at least two rows with the cursor on exactly

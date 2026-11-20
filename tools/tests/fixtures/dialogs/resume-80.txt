@@ -1,0 +1,30 @@
+
+────────────────────────────────────────────────────────────────────────────────
+  Resume session
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ ⌕ Search…                                                                │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+    interiors-resume-probe
+
+  ❯ Beta
+    2 minutes ago · main · 369.4KB
+
+    Alpha
+    3 minutes ago · main · 368.8KB
+
+  Ctrl+A to show all projects · Ctrl+B to only show current branch · Space to 
+  preview · Ctrl+R to rename · Type to search · Enter to resume · Esc to close
+
+
+
+
+
+
+
+
+
+
+
+
+
+

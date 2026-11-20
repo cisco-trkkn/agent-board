@@ -9,8 +9,8 @@ rows() { sed -n "$2,$3p" $1 | sed -e 's/ *$//' | grep -a -v '^$' }
 # its top rule up to the key-hint footer, never the scrollback above it
 # mutation: start `lines` at the first screen row → every "lines are" check below fails
 typeset -A FROM TO
-FROM=(question-review 8 trust 3 question-single 9 question-named-session 10 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3 team-request 38)
-TO=(question-review 16 trust 15 question-single 19 question-named-session 20 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13 team-request 47)
+FROM=(question-review 8 trust 3 question-single 9 question-named-session 10 question-multi 28 question-two 38 question-handoff 38 plan 6 resume 3 resume-80 3 resume-70 3 team-request 38)
+TO=(question-review 16 trust 15 question-single 19 question-named-session 20 question-multi 41 question-two 48 question-handoff 48 plan 48 resume 13 resume-80 13 resume-70 13 team-request 47)
 # team-waiting.txt is the teammate's own "Waiting for team lead approval" box, not a dialog (Task 3's pane-class fixture): no oracle
 ran=0
 for f in $FXD/*.txt; do
@@ -29,7 +29,7 @@ for f in $FXD/*.txt; do
   check "$n: lines are fixture rows $FROM[$n]-$TO[$n]"  test "$(lines_of)" = "$(rows $f $FROM[$n] $TO[$n])"
   check "$n: nothing on stderr"                test -z "$err"
 done
-check "all 10 dialogs fixtures ran"            test $ran -eq 10 -a "$(print -rl -- $FXD/expect/*.json | wc -l | tr -d ' ')" = 10
+check "all 12 dialogs fixtures ran"            test $ran -eq 12 -a "$(print -rl -- $FXD/expect/*.json | wc -l | tr -d ' ')" = 12
 
 # --- Claude Code 2.1.329 draws one more row under the footer in a named session: a rule ending in the session name
 # mutation: accept only ` @name ─` as the trailing rule → question-named-session: dialog none, exit 1
@@ -190,6 +190,22 @@ replay a-fake $S/fake-divider.txt; dl a-fake show
 check "ambiguous: shown, kind unknown, exit 0" test "$(jget 'd["kind"] + "|" + d["question"]')" = "unknown|Do you want to proceed?" -a $rc -eq 0
 # mutation: stop forcing the flags of an ambiguous prompt (emit … 0) → [False, True, True, False]
 check "ambiguous: every row permanent"         test "$(jget '[o["permanent"] for o in d["options"]]')" = "[True, True, True, True]"
+
+# --- the plan footer `ctrl+g to edit in <editor> · <plan path>` is 78 columns with a short slug: a longer slug or editor name wraps it
+# onto a second row at 80 columns. Synthetic variant of plan.txt (not a capture): the footer split at its ` · `.
+# mutation: anchor the plan footer on the last row only → plan-wrapped: dialog none, exit 1
+python3 -I - $FXD/plan.txt $S/plan-wrapped.txt <<'PYEOF'
+import sys
+rows = open(sys.argv[1], encoding="utf-8").read().split("\n")
+i = max(k for k, r in enumerate(rows) if r.lstrip().startswith("ctrl+g to edit in "))
+head, tail = rows[i].split(" · ", 1)
+rows[i:i+1] = [head + " ·", " " * (len(head) - len(head.lstrip())) + tail]
+open(sys.argv[2], "w", encoding="utf-8").write("\n".join(rows))
+PYEOF
+check "plan-wrapped variant has the footer on two rows"  test "$(grep -a -c '^ *ctrl+g to edit in Vim ·$' $S/plan-wrapped.txt)" = 1
+replay d-plan-wrapped $S/plan-wrapped.txt; dl d-plan-wrapped show
+check "plan-wrapped: equals expect/plan.json, exit 0"  eval 'same_as $FXD/expect/plan.json && (( rc == 0 ))'
+check "plan-wrapped: lines are fixture rows $FROM[plan]-$TO[plan]"  test "$(lines_of)" = "$(rows $FXD/plan.txt $FROM[plan] $TO[plan])"
 
 # --- a dialog of no captured kind goes through the generic parse: unknown, question = the text line above the run, every row permanent
 sed 's/ctrl+g to edit in Vim/press a key to edit/' $FXD/plan.txt > $S/gen.txt                 # plan.txt with a footer no captured kind has
