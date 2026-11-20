@@ -112,12 +112,12 @@ PRICES = {"default_context": 200000, "models": {
 ROUTING = {"mechanical": "haiku", "standard": "sonnet", "frontier": "fable"}
 
 
-def row(ts, agent, model="claude-sonnet-5", out=1000):
+def row(ts, agent, model="claude-sonnet-5", out=1000, inp=0, cr=0, cw5=0, cw1=0, side=0, sub=0):
     # real row shape (usage index `calls`): a worktree cwd, git_branch 'main' (not the queue branch), team set
     return {"request_id": "r", "session_id": "s", "ts": float(ts), "model": model, "effort": "medium", "agent_name": agent,
-            "team_name": "t", "git_branch": "main", "cwd": "/root/.claude/worktrees/gone", "sidechain": 0,
-            "subagent_file": 0, "input": 0, "output": out,
-            "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
+            "team_name": "t", "git_branch": "main", "cwd": "/root/.claude/worktrees/gone", "sidechain": side,
+            "subagent_file": sub, "input": inp, "output": out,
+            "cache_read": cr, "cache_write_5m": cw5, "cache_write_1h": cw1}
 
 
 def tasks_json(*specs):
@@ -289,8 +289,34 @@ class TestBuild(unittest.TestCase):
         self.assertEqual(set(r[0]), set(
             "spec batch task_id subject tier model_mapped model_used escalated owner started_at ended_at "
             "active_s tokens usd review_tokens review_usd fix_rounds findings review_rounds outcome "
-            "code_in_steps partial".split()))
+            "code_in_steps partial context_tokens missing".split()))
         self.assertEqual((r[0]["task_id"], r[0]["tier"], r[0]["owner"], r[0]["outcome"]), (1, "standard", "dc-launch", "complete"))
+
+    def test_context_tokens_last_main_row_wins_over_larger_earlier(self):
+        r = build(DISCORD, self.two(), [row(900, "dc-launch", inp=1, cr=500000), row(1000, "dc-launch", inp=2, cr=30, cw5=4, cw1=5)])
+        self.assertEqual((r[0]["context_tokens"], r[0]["missing"]), (41, []))
+
+    def test_context_tokens_skips_sidechain_and_subagent_rows(self):
+        r = build(DISCORD, self.two(), [row(900, "dc-launch", cr=7), row(1000, "dc-launch", cr=999, side=1), row(1100, "dc-launch", cr=888, sub=1)])
+        self.assertEqual(r[0]["context_tokens"], 7)
+
+    def test_context_tokens_shared_owner_each_task_own_last_row(self):
+        rows = [row(900, "dc-launch", cr=10), row(950, "dc-launch", cr=20), row(2500, "dc-launch", cr=300), row(2600, "dc-launch", cr=40)]
+        r = build(DISCORD, self.two(), rows, ends={"28b98dd": 1000, "0bc8efc": 2000})
+        self.assertEqual([r[0]["context_tokens"], r[1]["context_tokens"]], [20, 40])
+
+    def test_context_tokens_reviewer_rows_never_supply_it(self):
+        r = build(DISCORD, self.two(), [row(900, "dc-launch", cr=5), row(950, "dc-review", cr=777)], ends={"28b98dd": 1000, "0bc8efc": 2000})
+        self.assertEqual(r[0]["context_tokens"], 5)
+        self.assertEqual(r[1]["context_tokens"], None)
+
+    def test_context_tokens_null_without_rows(self):
+        r = build(DISCORD, self.two(), [])
+        self.assertEqual((r[0]["context_tokens"], r[0]["missing"]), (None, ["context_tokens"]))
+
+    def test_context_tokens_only_sidechain_rows_is_null(self):
+        r = build(DISCORD, self.two(), [row(900, "dc-launch", cr=9, side=1)])
+        self.assertEqual((r[0]["context_tokens"], r[0]["missing"]), (None, ["context_tokens"]))
 
     def test_task_id_falls_back_to_index(self):
         r = build("", tasks_json(("setup", "standard", "")), [])

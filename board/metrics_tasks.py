@@ -21,7 +21,7 @@ FAMILIES = ("haiku", "sonnet", "opus", "fable")
 TOKEN_COLS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
 KEYS = ("spec", "batch", "task_id", "subject", "tier", "model_mapped", "model_used", "escalated", "owner",
         "started_at", "ended_at", "active_s", "tokens", "usd", "review_tokens", "review_usd", "fix_rounds",
-        "findings", "review_rounds", "outcome", "code_in_steps", "partial")
+        "findings", "review_rounds", "outcome", "code_in_steps", "partial", "context_tokens", "missing")
 
 
 def family(model):
@@ -228,6 +228,8 @@ def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_ti
         fams = {family(m) for m in led["dispatch_models"]} | {family(used)}
         fams.discard(None)
         mins = {int(r["ts"] // 60) for r in rs}
+        main = [r for r in rs if not r["sidechain"] and not r["subagent_file"]]
+        ctx = usage.context_tokens(max(main, key=lambda r: r["ts"])) if main else None
         out.append({
             "spec": spec, "batch": batch, "task_id": n, "subject": pt.get("subject"),
             "tier": tier, "model_mapped": mapped, "model_used": used,
@@ -242,5 +244,6 @@ def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_ti
             "outcome": "complete" if led["complete"] else pt.get("status"),
             "code_in_steps": _code_in_steps(pt.get("description"), plan_section(plan_text, n) if plan_text else None),
             "partial": not rs,
+            "context_tokens": ctx, "missing": [] if ctx is not None else ["context_tokens"],
         })
     return out
