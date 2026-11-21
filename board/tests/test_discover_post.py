@@ -127,9 +127,32 @@ class SelectTest(Base):
     def test_unchanged_is_still_open_changed_is_new(self):
         rep = {"todo:a": {"first_reported": "x", "last_evidence_count": 3}}
         same = dp.select([item("todo:a")], {"todo:a": cand("todo:a", 3)}, self.st(reported=rep), [])
-        chg = dp.select([item("todo:a")], {"todo:a": cand("todo:a", 4)}, self.st(reported=rep), [])
+        chg = dp.select([item("todo:a")], {"todo:a": cand("todo:a", 5)}, self.st(reported=rep), [])
         self.assertEqual((same["new"], same["still_open"]), ([], 1))
         self.assertEqual((len(chg["new"]), chg["still_open"]), (1, 0))
+
+    def sel(self, last, count, signal="todo"):
+        rep = {"todo:a": {"first_reported": "x", "last_evidence_count": last}}
+        c = cand("todo:a", count)
+        c["signal"] = signal
+        return dp.select([item("todo:a")], {"todo:a": c}, self.st(reported=rep), [])
+
+    def test_reported_item_is_new_only_at_1_5x(self):
+        for last, count, new in ((10, 14, 0), (10, 15, 1), (10, 9, 0), (3, 4, 0), (3, 5, 1)):
+            r = self.sel(last, count)
+            self.assertEqual((len(r["new"]), r["still_open"]), (new, 1 - new), (last, count))
+
+    def test_stale_idea_never_changes_once_reported(self):
+        for count in (41, 39, 400):
+            r = self.sel(40, count, "stale_idea")
+            self.assertEqual((r["new"], r["still_open"]), ([], 1), count)
+
+    def test_reposted_item_updates_last_evidence_count(self):
+        cs = {"todo:a": cand("todo:a", 15)}
+        s = self.st(reported={"todo:a": {"first_reported": "x", "last_evidence_count": 10}})
+        r = dp.select([item("todo:a")], cs, s, [])
+        dp.publish("p", "n1", r["new"], r["still_open"], [], cs, NOW)
+        self.assertEqual(dp.load_state("p")["reported"]["todo:a"]["last_evidence_count"], 15)
 
     def test_memory_overlap_ge3_is_also_memory(self):
         ev = [{"text": "r", "path": f"docs/superpowers/ledgers/L{i}/progress.md", "line": 3, "url": None} for i in range(4)]

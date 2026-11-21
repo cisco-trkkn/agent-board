@@ -87,6 +87,15 @@ def save_state(project, st):
         _write(project, st)
 
 
+def update(project, fn):
+    """Read-modify-write under the lock; fn(state) edits the dict in place. Returns the saved state."""
+    with _locked(project):
+        st = _read(project)
+        fn(st)
+        _write(project, st)
+        return st
+
+
 # ---- selection -------------------------------------------------------------------------------------------------------
 
 def memory_dirs(project):
@@ -121,9 +130,13 @@ def select(items, cands, st, memory):
             also.append(it)
             continue
         rep = st["reported"].get(key)
-        if rep and rep.get("last_evidence_count") == count:
-            still += 1
-            continue
+        if rep:
+            last = rep.get("last_evidence_count")
+            last = last if isinstance(last, (int, float)) and not isinstance(last, bool) else 0
+            # changed = grew by REGROWTH; a drop or smaller growth is unchanged. stale_idea's count is its age: never changed.
+            if c.get("signal") == "stale_idea" or not (count > last and count >= REGROWTH * last):
+                still += 1
+                continue
         new.append(dict(it, count=count))
     return {"new": new, "still_open": still, "also_memory": also}
 

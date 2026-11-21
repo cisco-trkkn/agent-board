@@ -43,6 +43,21 @@ class LoadHistoryTest(unittest.TestCase):
         self.assertEqual(dt.load_history(self.p, NOW), [good])
 
 
+class ForRootTest(unittest.TestCase):
+    def test_only_rows_under_the_project_root(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve() / "proj"
+            (root / ".claude" / "worktrees" / "w").mkdir(parents=True)
+            (Path(d) / "proj-other").mkdir()
+            h = [entry(NOW - DAY, {"a": [0, 1.0]}, root=str(root)),
+                 entry(NOW - DAY, {"b": [0, 1.0]}, root=str(root / ".claude" / "worktrees" / "w")),
+                 entry(NOW - DAY, {"c": [0, 1.0]}, root=str(Path(d) / "proj-other")),
+                 entry(NOW - DAY, {"d": [0, 1.0]}, root="/nowhere/else"),
+                 entry(NOW - DAY, {"e": [0, 1.0]}, root="")]
+            out = dt.for_root(h, str(root))
+        self.assertEqual([next(iter(x["jobs"])) for x in out], ["a", "b"])
+
+
 class FlakyTest(unittest.TestCase):
     def keys(self, hist):
         return [c["key"] for c in dt.flaky_tests(hist, NOW)]

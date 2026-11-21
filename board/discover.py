@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -62,8 +61,9 @@ def collect(project, root, now):
             hist = discover_tests.load_history(history_path, now)
         except Exception as e:   # noqa: BLE001
             no_hist = f"error: {type(e).__name__}: {e}"
-    run("flaky_test", lambda: discover_tests.flaky_tests(hist, now), no_hist)
-    run("slow_test", lambda: discover_tests.slow_tests(hist, now), no_hist)
+    mine = discover_tests.for_root(hist, root)
+    run("flaky_test", lambda: discover_tests.flaky_tests(mine, now), no_hist)
+    run("slow_test", lambda: discover_tests.slow_tests(mine, now), no_hist)
     run("failed_run", lambda: discover_tests.failed_runs(runs_path, root, now),
         None if runs_path.is_file() else "no run records")
     no_led = None if ledgers.is_dir() else "no ledgers"
@@ -240,10 +240,10 @@ def _fail(project, root, now, t0, night, why, ncand, skipped, info, dry):
     print(f"discover: {project}: failed: {why}")
     if dry:
         return True
-    st = discover_post.load_state(project)
-    st["failures"] += 1
-    st["root"] = str(root)
-    discover_post.save_state(project, st)
+    def bump(st):
+        st["failures"] += 1
+        st["root"] = str(root)
+    st = discover_post.update(project, bump)
     _log(now, project, f"failed: {why}")
     if st["failures"] == FAIL_POST_AT:
         text = f"🔎 discover: {project} failed {FAIL_POST_AT} nights running — {discover_post.escape(' '.join(why.split()))}"
@@ -257,7 +257,15 @@ def _night(project, root, now, dry):
     """True when the night failed (model, collect or post)."""
     t0 = time.time()
     night = time.strftime("%Y%m%d", time.localtime(now))
-    run_dir = Path(tempfile.mkdtemp(prefix="discover-dry-")) if dry else new_run_dir(project, now)
+    if not dry and night in discover_post.load_state(project)["posts"]:
+        # a second run on the same night would replace the posted items' buttons (same post key): publish nothing
+        print(f"discover: {project}: already posted {night}")
+        _log(now, project, "nothing-new")
+        _record(root, now, t0, project, "nothing-new", 0, 0, 0, [], {})
+        return
+    run_dir = new_run_dir(project, now)
+    if dry:
+        print(f"run dir: {run_dir}")
     try:
         try:
             fail, items, info = rank(project, root, now, run_dir)
@@ -280,7 +288,7 @@ def _night(project, root, now, dry):
         except ValueError as e:
             return _fail(project, root, now, t0, night, f"post: {e}", ncand, skipped, info, dry)
         outcome = "posted" if new else "nothing-new"
-        print(f"discover: {project}: {ncand} candidates, {len(items)} ranked, {len(new)} new, {'posted' if new else 'nothing new'}")
+        print(f"discover: {project}: {ncand} candidates, {len(items)} ranked, {len(new)} new, {('would post' if dry else 'posted') if new else 'nothing new'}")
         if dry:
             if op:
                 print(op["text"])
@@ -291,16 +299,13 @@ def _night(project, root, now, dry):
                 discover_post.publish(project, night, new, still, also, cands, now)
             except ValueError as e:
                 return _fail(project, root, now, t0, night, f"post: {e}", ncand, skipped, info, dry)
-        st = discover_post.load_state(project)
-        st["failures"], st["root"] = 0, str(root)
-        discover_post.save_state(project, st)
+        def good(st):
+            st["failures"], st["root"] = 0, str(root)
+        discover_post.update(project, good)
         _log(now, project, outcome)
         _record(root, now, t0, project, outcome, ncand, len(items), len(new), skipped, info)
     finally:
-        if dry:
-            shutil.rmtree(run_dir, ignore_errors=True)
-        else:
-            prune_runs(project)
+        prune_runs(project)
 
 
 def nightly(argv, now=None):

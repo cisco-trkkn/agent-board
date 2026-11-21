@@ -31,6 +31,10 @@ def tree(d):
     return sorted(str(p.relative_to(d)) for p in Path(d).rglob("*") if p.is_file()) if Path(d).exists() else []
 
 
+def no_runs(files):
+    return [f for f in files if "/runs/" not in f]
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -137,10 +141,30 @@ class NightTest(Base):
     def test_nothing_new(self):
         self.project()
         self.nightly()
-        rc, out, _ = self.nightly()
+        rc, out, _ = self.nightly(now=NOW + 86400)
         self.assertIn("discover: p: 1 candidates, 1 ranked, 0 new, nothing new", out)
         self.assertEqual(len(self.outbox()), 1)
         self.assertTrue(self.log()[-1].endswith(" p nothing-new"))
+
+    def test_second_nightly_same_night_publishes_nothing(self):
+        self.project()
+        self.nightly()
+        st1 = self.st()
+        self.coll = {"candidates": [cand(), cand("todo:b.py:22222222")], "sources_skipped": []}
+        self.result = json.dumps({"items": [item(), item("todo:b.py:22222222")]})
+        rc, out, _ = self.nightly()
+        self.assertEqual(rc, 0)
+        self.assertIn(f"discover: p: already posted {NIGHT}", out)
+        self.assertEqual(len(self.outbox()), 1)
+        self.assertEqual(self.st()["posts"], st1["posts"])
+        self.assertNotIn("todo:b.py:22222222", self.st()["reported"])
+
+    def test_already_posted_records_nothing_new(self):
+        root = self.project(metrics=True)
+        self.nightly()
+        self.nightly()
+        recs = [json.loads(l) for l in (root / "docs/superpowers/metrics/runs.jsonl").read_text().splitlines()]
+        self.assertEqual([r["outcome"] for r in recs], ["posted", "nothing-new"])
 
     def test_good_night_resets_failures(self):
         self.project()
@@ -174,16 +198,28 @@ class DryRunTest(Base):
     def test_dry_run_prints_and_writes_nothing(self):
         root = self.project(metrics=True)
         discover_post.save_state("p", dict(self.st(), failures=1))
-        before = (tree(self.state), tree(tc_env.discord_dir("p")), (root / "docs/superpowers/metrics/runs.jsonl").read_text(),
+        before = (no_runs(tree(self.state)), tree(tc_env.discord_dir("p")), (root / "docs/superpowers/metrics/runs.jsonl").read_text(),
                   (tc_env.agent_base() / "discover" / "p.json").read_text())
         rc, out, _ = self.nightly("--dry-run")
-        after = (tree(self.state), tree(tc_env.discord_dir("p")), (root / "docs/superpowers/metrics/runs.jsonl").read_text(),
+        after = (no_runs(tree(self.state)), tree(tc_env.discord_dir("p")), (root / "docs/superpowers/metrics/runs.jsonl").read_text(),
                  (tc_env.agent_base() / "discover" / "p.json").read_text())
         self.assertEqual(rc, 0)
         self.assertEqual(before, after)
         self.assertIn("🔎 discover p: 1 new", out)
         self.assertIn("File as idea 1", out)
         self.assertIn("Dismiss 1", out)
+        self.assertIn("would post", out)
+        self.assertNotIn("posted", out)
+
+    def test_dry_run_keeps_a_normal_run_dir_and_prints_it(self):
+        self.project()
+        rc, out, _ = self.nightly("--dry-run")
+        m = [l for l in out.splitlines() if l.startswith("run dir: ")]
+        self.assertEqual(len(m), 1, out)
+        d = Path(m[0][len("run dir: "):])
+        self.assertEqual(d.parent, D.runs_base("p"))
+        self.assertTrue((d / "collected.json").is_file())
+        self.assertEqual(self.log(), [])
 
     def test_dry_run_failure_does_not_touch_failures(self):
         self.project()
@@ -191,9 +227,41 @@ class DryRunTest(Base):
         before = tree(self.state)
         rc, _, _ = self.nightly("--dry-run")
         self.assertEqual(self.st()["failures"], 0)
-        self.assertEqual(before, tree(self.state))
+        self.assertEqual(no_runs(before), no_runs(tree(self.state)))
         self.assertEqual(self.log(), [])
         self.assertEqual(self.outbox(), [])
+
+
+class LockTest(Base):
+    def test_every_state_write_reads_inside_the_same_lock_hold(self):   # a click between a read and a save must not be lost
+        self.project()
+        import contextlib
+        holds, cur, reads, bad = [0], [None], set(), []
+        real_locked, real_read, real_write = discover_post._locked, discover_post._read, discover_post._write
+        @contextlib.contextmanager
+        def locked(p):
+            with real_locked(p):
+                holds[0] += 1
+                cur[0] = holds[0]
+                try:
+                    yield
+                finally:
+                    cur[0] = None
+        def read(p):
+            if cur[0]:
+                reads.add(cur[0])
+            return real_read(p)
+        def write(p, st):
+            if cur[0] not in reads:
+                bad.append(cur[0])
+            return real_write(p, st)
+        with mock.patch.object(discover_post, "_locked", locked), mock.patch.object(discover_post, "_read", read), \
+                mock.patch.object(discover_post, "_write", write):
+            self.nightly()
+            self.mode = "exit1"
+            self.nightly(now=NOW + 86400)
+        self.assertEqual(bad, [])
+        self.assertGreaterEqual(holds[0], 3)
 
 
 class FailureTest(Base):
@@ -293,9 +361,9 @@ class MetricsTest(Base):
     def test_record_nothing_new_and_failed(self):
         root = self.project(metrics=True)
         self.nightly()
-        self.nightly()
+        self.nightly(now=NOW + 86400)
         self.mode = "exit1"
-        self.nightly()
+        self.nightly(now=NOW + 2 * 86400)
         self.assertEqual([r["outcome"] for r in self.rec(root)], ["posted", "nothing-new", "failed"])
 
     def test_missing_runs_jsonl_no_record_no_error(self):

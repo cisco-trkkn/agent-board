@@ -79,6 +79,16 @@ class CollectTest(Base):
         self.assertFalse(sig & {"flaky_test", "slow_test", "failed_run", "repeated_ruling", "deferred_minor", "stale_idea"}, sig)
 
 
+class CollectRootFilterTest(Base):
+    def test_other_projects_history_gives_no_candidate(self):
+        (self.state / "tests").mkdir()
+        rows = [{"ts": NOW - 3600 * k, "root": "/Users/x/other-project", "head": "a" * 40, "dirty": False, "full": True,
+                 "jobs": {"board/test_x": [k % 2, 1.0]}} for k in range(1, 6)]
+        (self.state / "tests" / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        d = D.collect("p", str(self.root), NOW)
+        self.assertEqual([c for c in d["candidates"] if c["signal"] in ("flaky_test", "slow_test")], [])
+
+
 def fake_claude(t, result_text, mode="ok"):
     """A fake claude: records argv and cwd, prints an envelope whose result is the file's text."""
     res = t / "result.txt"

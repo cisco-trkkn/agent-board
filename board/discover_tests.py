@@ -43,6 +43,21 @@ def load_history(path, now):
     return out
 
 
+def for_root(history, root):
+    """Only the history rows whose root is `root` or lies under it (both resolved), so one project's tests never
+    become another project's candidates. history.jsonl is shared by every project."""
+    top = os.path.realpath(root)
+    out = []
+    for h in history:
+        r = h.get("root")
+        if not isinstance(r, str) or not r:
+            continue
+        r = os.path.realpath(r)
+        if r == top or r.startswith(top.rstrip(os.sep) + os.sep):
+            out.append(h)
+    return out
+
+
 def _job_results(history):
     """{job: [(ts, root, head, dirty, full, rc, secs)]} sorted by ts."""
     jobs = {}
