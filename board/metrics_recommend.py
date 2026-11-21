@@ -232,11 +232,9 @@ def _flag_lines(flags):
     return [_cap(l) for l in out]
 
 
-def weekly_text(stats, rec, stats_path=None):
-    """The weekly report: header, trends table, flags, recommendations, coverage, stats path. Model-written strings go in
-    as they are, newlines collapsed to spaces."""
-    w = stats["window"]
-    lines = [f"Execution analytics, {w['since'][:10]} → {w['until'][:10]}", "", "```"]
+def trends_table(stats):
+    """The trends code block as lines, both ``` fences included."""
+    lines = ["```"]
     names = list(stats["trends"])
     width = max(len(n) for n in names + ["metric"])
     cells = [("metric", "last week", "this week", "change")] + \
@@ -245,6 +243,14 @@ def weekly_text(stats, rec, stats_path=None):
     for r in cells:
         lines.append(f"{r[0]:<{width}} | {r[1]:<{cw[0]}} | {r[2]:<{cw[1]}} | {r[3]:<{cw[2]}}".rstrip())
     lines.append("```")
+    return lines
+
+
+def weekly_text(stats, rec, stats_path=None):
+    """The weekly report: header, trends table, flags, recommendations, coverage, stats path. Model-written strings go in
+    as they are, newlines collapsed to spaces."""
+    w = stats["window"]
+    lines = [f"Execution analytics, {w['since'][:10]} → {w['until'][:10]}", ""] + trends_table(stats)
     flag_lines = _flag_lines(stats["flags"])
     lines += ["Flags:"] + flag_lines if flag_lines else ["Flags: none"]
     lines.append("Recommendations:")
