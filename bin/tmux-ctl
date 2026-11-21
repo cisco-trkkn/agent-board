@@ -73,6 +73,9 @@
 #   tmux-ctl metrics recommend [--since] [--stats P]  three recommendations over stats.json, evidence-checked
 #   tmux-ctl metrics weekly [--dry-run [--json]] [--since] [--tasks-log P]  analyze + recommend; post to Discord (or print)
 #   tmux-ctl metrics schedule install|status|uninstall  the Monday 09:00 weekly post (launchd)
+#   tmux-ctl discover collect|rank <project> [--root <dir>] [--json]  opportunity discovery: candidates; model-ranked items
+#   tmux-ctl discover nightly [--project <p>] [--dry-run] [--force]  the nightly run (placeholder until it lands)
+#   tmux-ctl discover schedule install|status|uninstall  the 07:00 nightly job (launchd)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
@@ -111,7 +114,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, discover, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -313,6 +316,9 @@ fi
 if [[ "$cmd" == gauth ]]; then   # config needs no tmux; the others reach tmux through board/gauth.py
   [[ "$1" == (config|start|status|close) && -n "$2" ]] || die 'usage: tmux-ctl gauth config <project> [--adc|--no-adc] [--impersonate <sa>] [--account <email>] | start|status|close <project>'
   python3 -I "${0:A:h:h}/board/gauth.py" "$@"; exit $?
+fi
+if [[ "$cmd" == discover ]]; then   # no tmux needed (launchd runs it)
+  exec python3 -I "${0:A:h:h}/board/discover.py" "$@"
 fi
 if [[ "$cmd" == metrics && ( "$1" == schedule || "$1" == weekly ) ]]; then   # no tmux needed (launchd runs it)
   if [[ "$1" == schedule ]]; then
