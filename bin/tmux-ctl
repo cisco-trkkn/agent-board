@@ -765,6 +765,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/overview.py" "${popt[@]}" "${jflag[@]}" ;;
 
   registry)
+    command -v node >/dev/null || die "registry: node >= 22.13 is required"
     exec node "${0:A:h:h}/engine/bin/registry.js" "$@" ;;
 
   metrics)
