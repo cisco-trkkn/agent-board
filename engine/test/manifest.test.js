@@ -72,8 +72,9 @@ test("findPlan: working tree beats a branch; #part line beats a plain one", (t) 
   let f = g.findPlan(r.dir, spec + "#part-2");
   assert.strictEqual(f.path, P + "a-branch.md");
   assert.strictEqual(f.ref, null);
-  // plain spec: a-branch (working tree, core match, no exact suffix match? line contains spec) wins over branch
+  // plain spec: both plans match exactly (the line contains the core); the working-tree plan wins
   f = g.findPlan(r.dir, spec);
+  assert.strictEqual(f.path, P + "a-branch.md");
   assert.strictEqual(f.ref, null);
   // branch-only plan found with its ref
   r.write(P + "c-wt.md", `# C\n\n**Spec:** docs/superpowers/specs/only-feat-design.md\n`);
@@ -85,6 +86,23 @@ test("findPlan: working tree beats a branch; #part line beats a plain one", (t) 
   assert.strictEqual(f.path, P + "d-feat.md");
   assert.strictEqual(f.ref, "refs/heads/feat");
   assert.match(f.text, /zzz/);
+});
+
+test("findPlan: an exact #part-N line on a branch beats a working-tree plan naming only the core spec", (t) => {
+  const g = require(LIB + "git.js");
+  const r = scratchRepo();
+  t.after(() => cleanup(r.dir));
+  const P = "docs/superpowers/plans/";
+  const spec = "docs/superpowers/specs/f-design.md";
+  r.write(P + "wt-plain.md", `# W\n\n**Spec:** ${spec}\n`);
+  r.commit("base");
+  r.git("checkout", "-q", "-b", "feat");
+  r.write(P + "br-part.md", `# B\n\n**Spec:** ${spec}#part-2\n`);
+  r.commit("feat plan");
+  r.git("checkout", "-q", "main");
+  const f = g.findPlan(r.dir, spec + "#part-2");
+  assert.strictEqual(f.path, P + "br-part.md");
+  assert.strictEqual(f.ref, "refs/heads/feat");
 });
 
 // ---- validate ----
