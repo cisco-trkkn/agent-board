@@ -1,0 +1,150 @@
+{
+ "docs/superpowers/specs/2026-11-05-artifact-session-id-design.md": [
+  "board/planview.py",
+  "claude/plugin/scripts/artifact-register.sh",
+  "tools/tests/test_artifact_hook.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-05-mod-agent-status-design.md": [
+  "board/paneclass.py",
+  "board/server.py",
+  "board/tests/test_paneclass.py",
+  "claude/plugin/.claude-plugin/plugin.json",
+  "claude/plugin/hooks/hooks.json",
+  "claude/plugin/mods/agent-status.js",
+  "claude/plugin/mods/agent-status.test.ts",
+  "tools/tests/e2e-agent-status.md",
+  "tools/tests/test_plugin.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-05-mod-overview-design.md": [
+  "board/index.html",
+  "board/notify.py",
+  "board/overview.py",
+  "board/paneclass.py",
+  "board/server.py",
+  "board/tests/fixtures/agent-status/",
+  "board/tests/fixtures/agent-status/real-new-fields.json",
+  "board/tests/test_notify.py",
+  "board/tests/test_overview.py",
+  "board/tests/test_overview_home_ui.py",
+  "board/tests/test_paneclass.py",
+  "board/tests/test_usage.py",
+  "board/usage.py",
+  "claude/plugin/mods/agent-status.js",
+  "claude/plugin/mods/agent-status.test.ts",
+  "tools/tests/e2e-mod-overview.md"
+ ],
+ "docs/superpowers/specs/2026-11-05-mod-shell-hooks-design.md": [
+  "claude/plugin/.claude-plugin/plugin.json",
+  "claude/plugin/mods/artifact-register.js",
+  "claude/plugin/mods/artifact-register.test.ts",
+  "claude/plugin/mods/bash-mirror.js",
+  "claude/plugin/mods/bash-mirror.test.ts",
+  "claude/plugin/mods/index.js",
+  "claude/plugin/mods/kill-guard.js",
+  "claude/plugin/mods/kill-guard.test.ts",
+  "claude/plugin/mods/lib/env.js",
+  "claude/plugin/mods/lib/env.test.ts",
+  "claude/plugin/scripts/artifact-register.sh",
+  "claude/plugin/scripts/bash-mirror.sh",
+  "claude/plugin/scripts/kill-guard.sh",
+  "tools/tests/e2e-shell-hooks.md",
+  "tools/tests/test_artifact_hook.zsh",
+  "tools/tests/test_kill_guard.zsh",
+  "tools/tests/test_mirror.zsh",
+  "tools/tests/test_plugin.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-05-mod-team-band-design.md": [
+  "claude/plugin/.claude-plugin/plugin.json",
+  "claude/plugin/hooks/hooks.json",
+  "claude/plugin/mods/team-band.js",
+  "claude/plugin/mods/team-band.test.ts",
+  "tools/tests/e2e-team-band.md",
+  "tools/tests/test_plugin.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-05-mod-usage-gauges-design.md": [
+  "claude/plugin/.claude-plugin/plugin.json",
+  "claude/plugin/mods/agent-status.js",
+  "claude/plugin/mods/agent-status.test.ts",
+  "claude/plugin/mods/fixtures/statusline-tap.json",
+  "claude/plugin/mods/index.js",
+  "claude/plugin/mods/index.test.ts",
+  "claude/plugin/mods/team-band.js",
+  "claude/plugin/mods/team-band.test.ts",
+  "claude/plugin/mods/usage-gauges.js",
+  "claude/plugin/mods/usage-gauges.test.ts",
+  "tools/tests/e2e-usage-gauges.md",
+  "tools/tests/test_plugin.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-05-overnight-queue-design.md": [
+  "claude/orchestrator.md",
+  "claude/plugin/skills/handoff/SKILL.md",
+  "tools/tests/e2e-overnight-queue.md",
+  "tools/tests/test_plugin.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-05-queue-keep-awake-design.md": [
+  "bin/tmux-ctl",
+  "claude/orchestrator.md",
+  "claude/plugin/skills/handoff/SKILL.md",
+  "tools/tests/e2e-awake.md",
+  "tools/tests/fixtures/awake/",
+  "tools/tests/test_ctl_awake.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-05-tasks-window-polish-design.md": [
+  "board/taskwin.py",
+  "board/tests/fixtures/taskwin/narrow.txt",
+  "board/tests/fixtures/taskwin/wide.txt",
+  "board/tests/test_taskwin.py",
+  "board/tests/test_taskwin_cli.py"
+ ],
+ "docs/superpowers/specs/2026-11-09-lead-named-agents-design.md": [
+  "bin/claude-orchestrator",
+  "claude/orchestrator.md",
+  "claude/plugin/.claude-plugin/plugin.json",
+  "claude/plugin/hooks/hooks.json",
+  "claude/plugin/scripts/agent-name-guard.sh",
+  "docs/ARCHITECTURE.md",
+  "docs/INSTALL.md",
+  "tools/tests/e2e-lead-named-agents.md",
+  "tools/tests/test_agent_name_guard.zsh",
+  "tools/tests/test_plugin.zsh",
+  "tools/tests/test_prompt_argv.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-09-relay-launch-check-design.md": [
+  "bin/_tc_bins.zsh",
+  "bin/tmux-ctl",
+  "board/relay.py",
+  "board/tests/test_relay.py",
+  "tools/tests/test_ctl_relay.zsh",
+  "tools/tests/test_prompt_argv.zsh",
+  "tools/tests/test_tc_tmux_cwd.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-09-remote-access-design.md": [
+  "bin/claude-orchestrator",
+  "bin/tmux-ctl",
+  "board/index.html",
+  "board/server.py",
+  "board/tests/test_telegram_badge.py",
+  "claude/orchestrator.md",
+  "docs/INSTALL.md",
+  "tools/lib/telegram.zsh",
+  "tools/tests/e2e-remote-access.md",
+  "tools/tests/fixtures/approve/README.md",
+  "tools/tests/test_claude_orchestrator_tg.zsh",
+  "tools/tests/test_ctl_approve.zsh",
+  "tools/tests/test_ctl_telegram.zsh"
+ ],
+ "docs/superpowers/specs/2026-11-10-queue-metrics-design.md": [
+  "bin/tmux-ctl",
+  "board/metrics.py",
+  "board/tests/fixtures/metrics/remote-access-progress.md",
+  "board/tests/fixtures/metrics/remote-access.tasks.json",
+  "board/tests/test_metrics_backfill.py",
+  "board/tests/test_metrics_decide.py",
+  "board/tests/test_metrics_log.py",
+  "board/tests/test_metrics_record_git.py",
+  "board/tests/test_metrics_record_usage.py",
+  "board/tests/test_metrics_report.py",
+  "claude/orchestrator.md",
+  "claude/plugin/skills/handoff/SKILL.md"
+ ]
+}
