@@ -253,7 +253,7 @@ class DiscordTest(Base):
                             msg(108, f"not a request source: {self.url('/p/b.html')}")]
         items, state = sf.fetch(self.src, {})
         reqs = [i["request"] for i in items if "request" in i]
-        self.assertEqual(reqs[0], {"url": self.url("/p/a.html"), "why": "new pricing page, watch it", "message_id": "110", "author": "bob"})
+        self.assertEqual(reqs[0], {"url": self.url("/p/a.html"), "why": "new pricing page, watch it", "message_id": "110", "author": "bob", "author_id": "7"})
         self.assertEqual(reqs[1]["url"], "https://x.example/feed.xml")
         self.assertEqual(reqs[1]["why"], "why: a feed")
         pages = [i for i in items if "request" not in i]

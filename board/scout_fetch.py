@@ -531,7 +531,7 @@ def _discord_channel(source, state, installed_version):
         req = _SOURCE_REQ.match(content)
         if req:
             items.append({"request": {"url": req.group(1), "why": req.group(2).strip(), "message_id": str(m["id"]),
-                                      "author": author.get("username") or ""}})
+                                      "author": author.get("username") or "", "author_id": str(author.get("id") or "")}})
             continue
         for url in _URL.findall(content):
             url = url.rstrip(".,;:!?)")

@@ -33,8 +33,8 @@ _C0 = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 def scout_dir():
-    env = os.environ.get("TC_SCOUT_DIR")
-    return Path(env) if env else Path(os.environ.get("HOME") or str(Path.home())) / ".local" / "state" / "agent-board" / "scout"
+    import scout_sources  # the canonical definition; imported here to avoid an import cycle
+    return scout_sources.scout_dir()
 
 
 def _drafts():
