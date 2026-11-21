@@ -31,6 +31,7 @@ KEY_DAYS = 180
 REQUEST_DAYS = 14
 HEALTH_FAILURES = 3
 CHECK = "✅"
+_HTTP_OK_HOSTS = ()  # test seam: hosts whose requested URL may be http
 
 
 def _src(name, kind, url, prefix=None):
@@ -135,6 +136,14 @@ def _check_url(kind, url):
         raise Refusal("url must start with https://")
 
 
+def _check_request_url(url):
+    """The source-add URL rule for a requested URL (https only), except hosts in _HTTP_OK_HOSTS."""
+    u = urllib.parse.urlsplit(url or "")
+    if u.scheme == "http" and u.hostname in _HTTP_OK_HOSTS:
+        return
+    _check_url("rss", url)
+
+
 def add_source(name, kind, url, why="", prefix=None, now=None):
     if kind not in scout_fetch.KINDS:
         raise Refusal(f"unknown kind {kind!r} (one of {', '.join(sorted(scout_fetch.KINDS))})")
@@ -231,24 +240,34 @@ def _handle_requests(chan, reqs, seen, st, now):
     """New #scout requests -> a reply and a pending record. Only allowFrom user ids count."""
     allow = _allow()
     pending = {r.get("message_id") for r in seen["requests"].values()}
+    retry = False
     for r in reqs:
         if r["author_id"] not in allow or r["message_id"] in pending:
             continue
         url = r["url"]
         try:
-            if not url.startswith(("https://", "http://")):
-                raise scout_fetch.FetchError("not an http(s) url")
+            _check_request_url(url)
+        except Refusal as e:
+            _log(f"poll scout: request {url} refused: {e}", now)
+            continue
+        try:
             kind = _guess_kind(url)
-            taken = {s["name"] for s in st["sources"]} | {x["name"] for x in seen["requests"].values()}
-            name = request_name(url, taken)
+        except Exception as e:  # noqa: BLE001  (a dead URL is dropped, not retried)
+            _log(f"poll scout: request {url}: {type(e).__name__}: {e}", now)
+            continue
+        taken = {s["name"] for s in st["sources"]} | {x["name"] for x in seen["requests"].values()}
+        name = request_name(url, taken)
+        try:
             reply = scout_fetch.post_message(chan, f"source request: {name} ({kind}) — react {CHECK} to add",
                                              reply_to=r["message_id"])
         except Exception as e:  # noqa: BLE001
-            _log(f"poll scout: request {url}: {type(e).__name__}: {e}", now)
+            _log(f"poll scout: request {url}: reply failed, will retry: {type(e).__name__}: {e}", now)
+            retry = True
             continue
         if reply:
             seen["requests"][reply] = {"url": url, "why": r["why"], "name": name, "kind": kind, "channel": chan,
                                        "message_id": r["message_id"], "created": _iso(now)}
+    return retry
 
 
 def _check_requests(seen, st, now):
@@ -266,6 +285,12 @@ def _check_requests(seen, st, now):
             continue
         who = next((u for u in users if u in allow), None)
         if who is None:
+            continue
+        try:
+            _check_request_url(r["url"])
+        except Refusal as e:
+            _log(f"poll scout: request {r['url']} refused: {e}", now)
+            del seen["requests"][rid]
             continue
         name = r["name"]
         if any(s["name"] == name for s in st["sources"]):
@@ -327,11 +352,12 @@ def poll(now=None):
                     lines.append(json.dumps({"key": it["key"], "source": name, "kind": src["kind"], "title": it["title"],
                                              "url": it["url"], "published": it.get("published"), "fetched_at": _iso(now),
                                              "excerpt": it.get("excerpt") or ""}, ensure_ascii=False))
-                if new_state is not None:
+                retry = False
+                if src["kind"] == "discord_channel" and reqs:
+                    retry = _handle_requests(scout_fetch._channel(src["url"]), reqs, seen, st, now)
+                if new_state is not None and not retry:  # a failed reply keeps the old cursor: the request is seen again
                     seen["state"][name] = new_state
                 seen["sources"].setdefault(name, _iso(now))
-                if src["kind"] == "discord_channel" and reqs:
-                    _handle_requests(scout_fetch._channel(src["url"]), reqs, seen, st, now)
                 n_new += len(write)
                 h.update(failures=0, last_error="", last_ok=_iso(now))
             except Exception as e:  # noqa: BLE001

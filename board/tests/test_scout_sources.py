@@ -30,6 +30,7 @@ class Handler(BaseHTTPRequestHandler):
     routes = {}
     messages = []
     posted = []        # POST bodies
+    fail_posts = 0     # next N POSTs answer 500
     reacted = {}       # reply id -> [user ids]
     seen = []
 
@@ -53,6 +54,9 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and len(parts) == 5:
                 return self._send(200, json.dumps(Handler.messages).encode())
             if method == "POST" and len(parts) == 5:
+                if Handler.fail_posts > 0:
+                    Handler.fail_posts -= 1
+                    return self._send(500, b"{}")
                 body = json.loads(data)
                 Handler.posted.append(body)
                 return self._send(200, json.dumps({"id": str(9000 + len(Handler.posted))}).encode())
@@ -102,6 +106,7 @@ class Base(unittest.TestCase):
         self.addCleanup(p.stop)
         self.scout = Path(t) / "scout"
         Handler.routes, Handler.messages, Handler.posted, Handler.reacted, Handler.seen = {}, [], [], {}, []
+        Handler.fail_posts = 0
         self.now = 1_800_000_000.0
 
     def sources(self, *rows, health=None):
@@ -158,6 +163,7 @@ class SourcesTest(Base):
                (["Bad Name", "--kind", "rss", "--url", "https://a.example/"], "name"),
                (["x", "--kind", "rss", "--url", "http://a.example/"], "url"),
                (["x", "--kind", "discord_channel", "--url", "123"], "url"),
+               (["x", "--kind", "discord_channel", "--url", "abcdefghijklmnop"], "url"),
                (["claude-blog", "--kind", "rss", "--url", "https://a.example/"], "duplicate")]
         for args, what in bad:
             rc, out, err = self.cli("source", "add", *args, "--why", "w")
@@ -303,6 +309,9 @@ class RequestTest(Base):
         self.sources({"name": "scout", "kind": "discord_channel", "url": CHAN})
         self.serve("/blog/feed", '<?xml version="1.0"?><rss><channel></channel></rss>', "text/html")
         self.url = self.base + "/blog/feed"
+        p = mock.patch.object(ss, "_HTTP_OK_HOSTS", ("127.0.0.1",))
+        p.start()
+        self.addCleanup(p.stop)
 
     def request(self, **kw):
         Handler.messages = [dmsg(200, f"source: {self.url} a good feed", **kw)]
@@ -364,6 +373,41 @@ class RequestTest(Base):
         self.sources({"name": "other", "kind": "rss", "url": self.base + "/nope"})
         ss.poll(self.now)
         self.assertEqual(self.log().count("poll scout: skipped (no #scout channel set)"), 1)
+
+    def test_http_request_to_unlisted_host_is_refused(self):
+        with mock.patch.object(ss, "_HTTP_OK_HOSTS", ()):
+            self.request()
+        self.assertEqual(Handler.posted, [])
+        self.assertEqual(self.seen_state()["requests"], {})
+        self.assertIn(f"poll scout: request {self.url} refused: url must start with https://", self.log())
+
+    def test_pending_http_request_is_not_added_when_host_no_longer_listed(self):
+        self.request()
+        Handler.reacted["9001"] = [ALLOWED]
+        Handler.messages = []
+        with mock.patch.object(ss, "_HTTP_OK_HOSTS", ()):
+            ss.poll(self.now + 60)
+        self.assertEqual(self.names(), ["scout"])
+        self.assertEqual(self.seen_state()["requests"], {})
+
+    def test_failed_reply_keeps_cursor_and_retries(self):
+        Handler.fail_posts = 1
+        self.request()
+        self.assertEqual(self.seen_state()["requests"], {})
+        self.assertNotIn("scout", self.seen_state()["state"])
+        self.assertIn("reply failed", self.log())
+        ss.poll(self.now + 60)  # the same message is returned again
+        self.assertEqual(len(Handler.posted), 1)
+        self.assertEqual(self.seen_state()["requests"]["9001"]["message_id"], "200")
+        self.assertEqual(self.seen_state()["state"]["scout"], {"after": "200"})
+
+    def test_kind_guess(self):
+        self.serve("/a", "<html>x</html>", "application/atom+xml")
+        self.serve("/b", "<?xml version='1.0'?><x/>", "text/html")
+        self.serve("/c", "<feed></feed>", "text/plain")
+        self.serve("/d", "<html><body>hi</body></html>", "text/html")
+        self.assertEqual([ss._guess_kind(self.base + p) for p in "/a /b /c /d".split()],
+                         ["rss", "rss", "rss", "html_links"])
 
     def test_name_is_slugged_and_deduped(self):
         self.assertEqual(ss.request_name("https://www.Example.com/Some Path/x", {"scout"}), "example-some-path")
