@@ -210,6 +210,28 @@ class SpecSummary(Base):
             ops.spec_summary(root, t)
             self.assertEqual(len([r for r in reads if r.endswith("x-design.md")]), 2)
 
+    def test_odd_task_dicts_never_raise(self):
+        root, subj = self.spec()
+        for t in ({"subject": "Plan & run: a.md", "status": ["x"]}, {"subject": 5, "status": "pending"}, {"subject": subj, "metadata": "x"},
+                  {"subject": subj, "status": {"a": 1}, "metadata": ["m"]}, None, "str"):
+            self.assertIn("Status:", ops.spec_summary(root, t))
+        self.assertIn("Status: pending", ops.spec_summary("/tmp", {"subject": "Plan & run: a.md", "status": ["x"]}))
+        self.assertEqual(ops.specs_view(root, [{"id": "1", "subject": "Plan & run: a.md", "status": ["x"], "metadata": 3}])[0]["key"], "1")
+
+    def test_empty_name_falls_back_to_task_id(self):
+        root, _ = self.spec()
+        t = {"id": "7", "subject": "Plan & run:", "status": "pending"}
+        self.assertEqual(ops.spec_label(t), "task 7")
+        self.assertTrue(ops.spec_summary(root, t).startswith("**task 7**"))
+        self.assertEqual(ops.specs_view(root, [t])[0]["label"], "task 7")
+
+    def test_path_outside_root_is_not_found(self):
+        root, _ = self.spec()
+        for subj in ("Plan & run: /etc/hosts", "Plan & run: ../../../../etc/hosts"):
+            out = ops.spec_summary(root, {"subject": subj, "status": "pending"})
+            self.assertIn("(spec file not found)", out)
+            self.assertNotIn("localhost", out)
+
     def test_summary_cap(self):
         root, subj = self.spec(text="# " + "T" * 3000 + "\n## Problem\nx\n")
         self.assertLessEqual(len(ops.spec_summary(root, {"subject": subj, "status": "pending"})), 1900)

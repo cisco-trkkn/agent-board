@@ -137,7 +137,8 @@ _STATUS_WORDS = {"pending": "pending", "in_progress": "in progress", "completed"
 
 def _spec_path(task):
     """(path text, `#part-n` suffix or '') from a `Plan & run:` subject; the trailing ` (…)` is dropped."""
-    subj = str((task or {}).get("subject") or "")
+    subj = (task or {}).get("subject") if isinstance(task, dict) else None
+    subj = subj if isinstance(subj, str) else ""
     if not subj.startswith(discord_feed._PLAN_RUN):
         return "", ""
     rest = re.sub(r"\s+\([^()]*\)\s*$", "", subj[len(discord_feed._PLAN_RUN):].strip())
@@ -150,7 +151,9 @@ def _spec_parts(root, path):
     if not root or not path:
         return None
     try:
-        f = (Path(root) / path).resolve()
+        base = Path(root).resolve()
+        f = (base / path).resolve()
+        f.relative_to(base)   # ValueError: outside the repo root
         key = (str(f), f.stat().st_mtime)
         if key not in _SPEC_CACHE:
             text = f.read_text(errors="replace")
@@ -169,21 +172,32 @@ def _spec_parts(root, path):
 
 def spec_label(task):
     path, part = _spec_path(task)
-    return (os.path.basename(path) + part)[:LABEL_MAX]
+    name = os.path.basename(path)
+    if not name:
+        return f"task {task.get('id') if isinstance(task, dict) else ''}".strip()[:LABEL_MAX]
+    return (name + part)[:LABEL_MAX]
 
 
 def spec_summary(root, task):
     """The /queue spec summary of one `Plan & run:` task: title, Problem excerpt, status, branch. Never raises."""
+    try:
+        return _spec_summary(root, task)
+    except Exception:   # noqa: BLE001 -- one odd task dict must not abort the ops tick
+        return f"**{spec_label(task)}**\n(spec file not found)\nStatus: pending\nBranch: not started"[:SPEC_MAX]
+
+
+def _spec_summary(root, task):
     task = task if isinstance(task, dict) else {}
     path, _ = _spec_path(task)
     parts = _spec_parts(root, path)
-    name = os.path.basename(path)
+    name = os.path.basename(path) or spec_label(task)
     if parts:
         head = [f"**{parts[0] or name}**"] + ([parts[1]] if parts[1] else [])
     else:
         head = [f"**{name}**", "(spec file not found)"]
     meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    status = _STATUS_WORDS.get(task.get("status"), str(task.get("status") or "pending"))
+    st = task.get("status")
+    status = _STATUS_WORDS.get(st, str(st)) if isinstance(st, str) and st else "pending"
     if meta.get("outcome"):
         status += f" — {meta['outcome']}"
     if meta.get("branch"):
