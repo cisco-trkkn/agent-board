@@ -292,6 +292,25 @@ class PollTest(Base):
         self.poll(60)
         self.assertNotIn("oldkey", self.seen_state()["keys"])
 
+    def test_still_listed_key_is_not_rewritten_at_day_181(self):
+        self.serve("/c.md", changelog(6))
+        self.sources({"name": "cl", "kind": "changelog_md", "url": self.base + "/c.md"})
+        self.poll()
+        n = len(self.items())
+        self.assertEqual(self.poll(100 * 86400)[0], 0)
+        self.assertEqual(self.poll(181 * 86400)[0], 0)
+        self.assertEqual(len(self.items()), n)
+
+    def test_key_the_source_no_longer_lists_is_pruned_after_180_days(self):
+        self.serve("/c.md", changelog(6))
+        self.sources({"name": "cl", "kind": "changelog_md", "url": self.base + "/c.md"})
+        self.poll()
+        self.serve("/c.md", changelog(2))
+        self.poll(100 * 86400)
+        self.assertEqual(len(self.seen_state()["keys"]), 6)
+        self.poll(181 * 86400)
+        self.assertEqual(len(self.seen_state()["keys"]), 2)
+
 
 def dmsg(mid, content, author="alice", uid=ALLOWED):
     return {"id": str(mid), "content": content, "timestamp": "2026-11-20T10:00:00+00:00",

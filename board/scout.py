@@ -349,10 +349,9 @@ def _guarded(a, root, now, dry):
             return 0
         try:
             return ps.run()
-        except Exception as e:  # noqa: BLE001 -- launchd gets a line and an exit code, never a traceback; not a model failure
+        except Exception as e:  # noqa: BLE001 -- launchd gets a line and an exit code, never a traceback
             print(f"scout: error: {type(e).__name__}: {e}", file=sys.stderr)
-            _log(f"error: {type(e).__name__}: {e}", now)
-            return 1
+            return ps.fail(f"{type(e).__name__}: {e}")  # counted like a model failure: two Sundays post the critical line
 
 
 # ---- decisions from the shell ----------------------------------------------------------------------------------------

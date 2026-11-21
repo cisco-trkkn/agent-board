@@ -346,7 +346,7 @@ def poll(now=None):
                     write = fresh[:FIRST_POLL_CAP]
                 else:
                     write = fresh
-                for it in fresh:
+                for it in items:  # every key the source still lists is refreshed, so only vanished keys age out
                     seen["keys"][it["key"]] = _iso(now)
                 for it in write:
                     lines.append(json.dumps({"key": it["key"], "source": name, "kind": src["kind"], "title": it["title"],

@@ -124,6 +124,21 @@ class ValidateTest(Base):
         v, info = self.run_v([ent(item="zzz")])
         self.assertEqual((v, info["dropped"]), ([], {"unknown item": 1}))
 
+    def test_item_that_is_not_a_string_is_malformed_not_a_crash(self):
+        v, info = self.run_v([dict(ent(), item=x) for x in (["i1"], {"k": "i1"}, None, 7)])
+        self.assertEqual((v, info["dropped"]), ([], {"malformed": 4}))
+
+    def test_filtered_evidence_is_stored_on_the_entry(self):
+        its = items("i1", "i2")
+        its[0]["url"] = ""
+        v, _ = self.run_v([ent(evidence=["junk", {"url": "http://x/i2", "quote": "q"}])], its=its)
+        self.assertEqual(v[0]["evidence"], [{"url": "http://x/i2", "quote": "q"}])
+        r = se.pick(v, [], [])
+        self.assertEqual(len(r["picks"]), 1)
+        v2 = [dict(v[0], overlaps=["spec-a"])]
+        r = se.pick(v2, [], ["spec-a"])
+        self.assertIn("http://x/i2", r["notes"][0])
+
     def test_no_quote(self):
         v, info = self.run_v([ent(evidence=[{"url": "http://x/i1", "quote": "  "}]), ent(evidence=[])])
         self.assertEqual((v, info["dropped"]), ([], {"no quote": 2}))

@@ -99,7 +99,10 @@ def validate(entries, items, st, info=None):
         if not isinstance(e, dict):
             drop("malformed")
             continue
-        if e.get("item") not in by_key:
+        if not isinstance(e.get("item"), str):
+            drop("malformed")
+            continue
+        if e["item"] not in by_key:
             drop("unknown item")
             continue
         ev = e.get("evidence")
@@ -118,7 +121,7 @@ def validate(entries, items, st, info=None):
             drop("malformed")
             continue
         ov = e.get("overlaps")
-        e = dict(e, overlaps=[o for o in ov if isinstance(o, str)] if isinstance(ov, list) else [])
+        e = dict(e, evidence=ev, overlaps=[o for o in ov if isinstance(o, str)] if isinstance(ov, list) else [])
         key = finding_key(e["item"], comp)
         count = len(ev)
         if key in st["filed"]:

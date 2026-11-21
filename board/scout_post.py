@@ -19,6 +19,8 @@ import findings
 import ideas
 import tc_env
 
+REPO = Path(__file__).resolve().parents[1]  # the checkout holding this module: the root when no lead session runs
+
 PROJECT = "agent-board"
 LIMIT = 1900
 MARK_ROOM = 40
@@ -316,7 +318,7 @@ def click(user, cid, now, add_line=None, approve_fn=None):
         try:
             if approve_fn is None:
                 import scout_decisions
-                root = dream.resolve_root(PROJECT, {}, None)
+                root = dream.resolve_root(PROJECT, {"root": str(REPO)}, None)
                 scout_decisions.approve(approved, root, time.time(), add_line)
             else:
                 approve_fn(approved, add_line)

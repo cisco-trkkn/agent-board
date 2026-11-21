@@ -215,6 +215,14 @@ class ThrottleTest(Base):
         self.assertEqual(calls, [1000.0, 1601.0])
         self.assertEqual(st["scout_retry_at"], 1601.0)
 
+    def test_retry_without_live_session_uses_this_checkout(self):
+        import discord_controls as dc
+        got = []
+        with mock.patch.object(sd, "retry_copies", lambda root, now, add_line=None: got.append(root)), \
+                mock.patch("dream.live_session_root", return_value=None):
+            dc.step("agent-board", None, 9000.0, lambda a: "", lambda s, t: None)
+        self.assertEqual(got, [str(dc.scout_post.REPO.resolve())])
+
     def test_retry_failure_does_not_break_step(self):
         import discord_controls as dc
         with mock.patch.object(sd, "retry_copies", side_effect=RuntimeError("boom")), mock.patch("dream.resolve_root", return_value=self.root):

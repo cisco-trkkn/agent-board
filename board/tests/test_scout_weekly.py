@@ -443,6 +443,28 @@ class FailureTest(Base):
         self.assertEqual(self.run_scout("weekly", now=SUN + 7 * DAY)[0], 0)
         self.assertEqual(self.weekly()["failed_weeks"], 0)
 
+    def test_a_crash_in_the_pass_counts_as_a_failed_week(self):
+        self.add_items(SUN - 3600)
+        with mock.patch.object(scout._Pass, "run", side_effect=TypeError("unhashable")):
+            rc, out = self.run_scout("weekly")
+        self.assertEqual(rc, 1)
+        self.assertIn("unhashable", out)
+        self.assertEqual(self.weekly()["failed_weeks"], 1)
+        self.assertIn("failed:", self.log())
+        self.assertEqual([r["outcome"] for r in self.records()], ["failed"])
+        self.assertNotEqual(self.weekly().get("last_week"), WEEK)
+
+    def test_two_crashing_sundays_post_the_critical_line(self):
+        for n in range(2):
+            now = SUN + 7 * n * DAY
+            self.add_items(now - 3600, tag=str(n))
+            with mock.patch.object(scout._Pass, "run", side_effect=TypeError("boom")):
+                self.run_scout("weekly", now=now)
+        ops = self.outbox()
+        self.assertEqual(len(ops), 1)
+        self.assertEqual(ops[0]["tier"], "critical")
+        self.assertIn("two Sundays failed", ops[0]["text"])
+
     def test_a_dropped_draft_is_not_a_failed_week(self):
         self.add_items(SUN - 3600)
         self.plan({"evaluate": {"entries": [{"t": T1, "c": "Hooks"}]},

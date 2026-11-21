@@ -138,7 +138,7 @@ def _scout_retry(project, st, now, add_line):
     try:
         import dream
         import scout_decisions
-        scout_decisions.retry_copies(dream.resolve_root(project, {}, None), now, lambda t: add_line(project, t))
+        scout_decisions.retry_copies(dream.resolve_root(project, {"root": str(scout_post.REPO)}, None), now, lambda t: add_line(project, t))
     except Exception as e:  # noqa: BLE001 -- a failed retry never breaks the controls step
         print(f"discord_controls: scout retry failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 

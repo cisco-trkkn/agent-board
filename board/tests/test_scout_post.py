@@ -242,6 +242,14 @@ class ClickTest(Base):
         args = fake.approve.call_args.args
         self.assertEqual((args[0]["id"], args[1], args[3]), (self.did, "/r", "A"))
 
+    def test_default_approve_without_live_session_uses_this_checkout(self):
+        fake = mock.Mock()
+        fake.approve.return_value = None
+        with mock.patch.dict(sys.modules, {"scout_decisions": fake}), mock.patch.object(sp.dream, "live_session_root", return_value=None):
+            r = sp.click("U1", f"ab:scout:approve:agent-board:{self.did}", NOW, add_line="A")
+        self.assertEqual(r, "approved")
+        self.assertEqual(fake.approve.call_args.args[1], str(sp.REPO.resolve()))
+
     def test_two_threads_one_approval(self):
         calls, res, gate = [], [], threading.Barrier(2)
 
