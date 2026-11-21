@@ -429,6 +429,18 @@ class PostTest(Base):
             self.assertEqual((rc, err.getvalue()), (0, ""), cwd)
             self.assertIn("Execution analytics", out.getvalue(), cwd)
 
+    def test_json_without_dry_run_is_an_error(self):
+        # mutation: drop the check -> the run posts and the ops outbox holds 2 files
+        self.rich()
+        self.configure_ops()
+        self.answer([item("x", ("trends.specs_run.current", 2))])
+        before = self.runs.read_text()
+        rc, out, err = self.cli("--json")
+        self.assertEqual((rc, out, err), (1, "", "metrics: weekly: --json needs --dry-run\n"))
+        self.assertEqual(self.outbox(self.ops), [])
+        self.assertFalse(self.argv.exists(), "the model was called")
+        self.assertEqual(self.runs.read_text(), before)
+
     def test_dry_run_json_prints_ops_and_writes_nothing(self):
         self.rich()
         self.configure_ops()

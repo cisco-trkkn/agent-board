@@ -1787,6 +1787,8 @@ def cmd_weekly(repo, args):
     """`weekly`: analyze, recommend and post to Discord per destination, then record one kind:analytics line.
     `--dry-run` prints the report text (or, with --json, the ops) and writes nothing."""
     import metrics_recommend, analytics_post
+    if args.json and not args.dry_run:
+        raise MetricsError("--json needs --dry-run")
     if args.dry_run and not args.json:
         stats, path = write_stats(repo, args.since, tasks_log=args.tasks_log)
         if stats["trends"]["specs_run"]["current"] == 0:
