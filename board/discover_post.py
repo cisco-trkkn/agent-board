@@ -23,6 +23,7 @@ import tc_env
 LIMIT = 1900
 KEEP_NIGHTS = 14
 REGROWTH = 1.5
+URL_MAX = 150       # a longer url is rendered as plain text
 MARK_ROOM = 40      # kept free per item for "— 💡 filed" / "— ✖ dismissed" (and the longest mark)
 MARKS = {"filed": "💡 filed", "dismissed": "✖ dismissed"}
 _CID = re.compile(r"^ab:discover:(file|dismiss):([A-Za-z0-9._-]+):([0-9a-f]{12})$")
@@ -143,11 +144,11 @@ def _parts(c, it):
     return [(str(e["text"]), e.get("url")) for e in _evidence(c, it)]
 
 
-def _line(it, parts, cap):
+def _line(it, parts, cap, links=True):
     """The value line. A link whose text had to be cut is dropped (plain cut text), so a link is never cut in half."""
     ev = []
     for text, url in parts:
-        if url and len(text) <= cap:
+        if links and url and len(text) <= cap and len(str(url)) <= URL_MAX:
             ev.append(f"[{escape(text)}]({str(url).replace(')', '%29')})")
         else:
             ev.append(escape(_cut(text, cap)))
@@ -195,17 +196,23 @@ def _stored(project, new, cands):
 
 
 def _fit(project, night, stored, still_open, also_memory):
-    """Cut every item's title, why and evidence texts to one common cap (halving) until the text, with room for the
-    marks, fits LIMIT. Never slices the whole text, so every item and the footer survive."""
-    cap = 900
+    """Cut every item's title, why and evidence texts to one common cap (shrinking) until the text, with room for the
+    marks, fits LIMIT. Never slices the whole text, so every item and the footer survive. At the smallest cap the links
+    are dropped item by item from the last. Raises ValueError if it still does not fit."""
+    cap, nolink = 900, 0
     while True:
-        for i in stored:
+        for k, i in enumerate(stored):
             i["shown_title"], i["shown_why"] = _cut(i["title"], cap), _cut(i["why"], cap)
-            i["line"] = _line(i["_it"], i["_parts"], cap)
+            i["line"] = _line(i["_it"], i["_parts"], cap, links=k < len(stored) - nolink)
         footer = _footer(still_open, also_memory, max(cap // 2, 10))
-        if len(_render(project, night, stored, footer)) + MARK_ROOM * len(stored) <= LIMIT or cap <= 10:
+        if len(_render(project, night, stored, footer)) + MARK_ROOM * len(stored) <= LIMIT:
             return footer
-        cap = max(int(cap * 0.8), 10) if cap > 100 else max(cap - 10, 10)
+        if cap > 10:
+            cap = max(int(cap * 0.8), 10) if cap > 100 else max(cap - 10, 10)
+        elif nolink < len(stored):
+            nolink += 1
+        else:
+            raise ValueError("discover post does not fit in %d chars" % LIMIT)
 
 
 def _built(project, night, new, still_open, also_memory, cands):
@@ -213,6 +220,8 @@ def _built(project, night, new, still_open, also_memory, cands):
     footer = _fit(project, night, stored, still_open, also_memory)
     op = {"op": "post", "text": _render(project, night, stored, footer), "tier": "progress", "mention_user": False,
           "key": f"discover-{project}-{night}", "rows": _rows(project, stored)}
+    if len(op["text"]) > LIMIT:
+        raise ValueError("discover post text over %d chars" % LIMIT)
     discord_feed._check(op)
     for i in stored:
         del i["_it"], i["_parts"]

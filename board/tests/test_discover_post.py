@@ -206,6 +206,20 @@ class FitTest(Base):
         self.assertIn("also proposed by the memory run: ", t)
         self.assertEqual(t.count("]("), t.count("](") and len(__import__("re").findall(r"\]\([^)]*\)", t)))
 
+    def test_huge_urls_still_fit(self):   # mutation: links never dropped / url length unbounded -> text far over 1900
+        its = [item(f"todo:{i}", title="T" * 300) for i in range(5)]
+        cs = {i["key"]: cand(i["key"], 2, [{"text": "e" * 20, "path": None, "line": None, "url": "https://h/" + "u" * 800}] * 2) for i in its}
+        for i in its:
+            i["evidence_refs"] = [0, 1]
+        op = dp.build_op("p", "n", [dict(i, count=2) for i in its], 2, [item("repeated_ruling:q")], cs)
+        t = op["text"]
+        self.assertLessEqual(len(t), 1900)
+        for n in range(1, 6):
+            self.assertIn(f"\n{n}. ", t)
+        self.assertIn("still open: 2", t)
+        self.assertIn("also proposed by the memory run: ", t)
+        self.assertEqual(t.count("]("), len(re.findall(r"\[[^\]]*\]\([^)]*\)", t)))
+
     def test_header_names_project(self):
         its, cs = many(1)
         self.assertTrue(dp.build_op("projx", "20261121", [dict(its[0], count=2)], 0, [], cs)["text"].startswith("🔎 discover projx: 1 new"))
