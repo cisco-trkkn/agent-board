@@ -1,4 +1,4 @@
-import json, os, subprocess, sys, tempfile, unittest
+import fcntl, json, os, time, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -50,6 +50,20 @@ class TestAppend(AppendBase):
                 self.assertEqual(len(err.strip().splitlines()), 1)
                 self.assertIn("--json", err)
 
+    def test_append_waits_for_the_lock(self):
+        Path(self.log).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log + ".lock", "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            p = subprocess.Popen([sys.executable, "-I", METRICS, "--repo", str(self.repo), "append", "x", "--json", "{}", "--log", self.log])
+            try:
+                time.sleep(0.5)
+                self.assertIsNone(p.poll(), "append finished while the lock was held")
+                self.assertFalse(os.path.exists(self.log) and Path(self.log).read_text())
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+        self.assertEqual(p.wait(timeout=30), 0)
+        self.assertEqual(len(self.ln()), 1)
+
     def test_concurrent_appends_are_whole_lines(self):
         pad = "x" * 4000
         cmd = [sys.executable, "-I", METRICS, "--repo", str(self.repo), "append", "x", "--json", json.dumps({"pad": pad}), "--log", self.log]
@@ -84,6 +98,27 @@ class TestHasRuns(AppendBase):
         self.assertIsNone(d["runs"]["b.md"])
         self.assertEqual(d["runs"]["a.md"]["outcome"], "merged")
         self.assertEqual((d["base"], d["at"]), ("abc", "2026-11-21T00:00:00Z"))
+
+    def test_runs_specs_from_assignment_of_a_real_batch_line(self):
+        # shape written by `batch start`: assignment keyed by spec, no `specs` key
+        self.put({"kind": "batch", "batch": "b1", "at": "2026-11-21T00:00:00Z", "base": "abc", "assignment": {"b.md": "seq-sdd", "a.md": "seq-sdd"},
+                  "configs": ["seq-sdd"], "groups": []},
+                 {"kind": "run", "batch": "b1", "spec": "a.md", "outcome": "merged"})
+        rc, out, err = self.run_main("runs", "b1", "--json", "--log", self.log)
+        self.assertEqual(rc, 0, err)
+        d = json.loads(out)
+        self.assertEqual(d["specs"], ["a.md", "b.md"])
+        self.assertIsNone(d["runs"]["b.md"])
+
+    def test_runs_pairs_shape(self):
+        sb = lambda paths: {"result": "conflict", "paths": paths}
+        self.put({"kind": "batch", "batch": "b1", "at": "t", "base": "abc", "assignment": {"a.md": "x", "b.md": "x", "c.md": "x"}},
+                 {"kind": "run", "batch": "b1", "spec": "a.md", "stale_base": sb(["f.py", "g.py"])},
+                 {"kind": "run", "batch": "b1", "spec": "b.md", "stale_base": sb(["g.py"])},
+                 {"kind": "run", "batch": "b1", "spec": "c.md"})
+        rc, out, err = self.run_main("runs", "b1", "--json", "--log", self.log)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["pairs"], [{"a": "a.md", "b": "b.md", "clean": False, "paths": ["f.py", "g.py"]}])
 
     def test_runs_unknown_batch_exits_1(self):
         self.put({"kind": "batch", "batch": "b1", "specs": []})

@@ -9,3 +9,4 @@ audit-out/
 claude/plugin/tsconfig.json
 claude/plugin/.claude-plugin/types/
 tools/discord-bridge/node_modules/
+docs/superpowers/metrics/*.lock

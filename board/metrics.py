@@ -985,17 +985,22 @@ def _union_active(repo, runs, usage_db):
         conn.close()
 
 
+def _pair_usable(r):
+    """A run line can take part in a pair: a stale_base conflict, or a clean result with base and head."""
+    res = (r.get("stale_base") or {}).get("result")
+    return res == "conflict" or (res == "clean" and bool(r.get("base")) and bool(r.get("head")))
+
+
 def pair_results(repo, batch, runs):
     """[(a, b, clean, paths)] for every usable pair, or None when git merge-tree failed. Pair order and the usable
     rule are those of the report's parallel-buildable pairs: stale_base conflict or (clean with base and head)."""
     by = {r["spec"]: r for r in runs}
     cand = sorted(by)
 
-    def ok(r):
-        res = (r.get("stale_base") or {}).get("result")
-        return res == "conflict" or (res == "clean" and bool(r.get("base")) and bool(r.get("head")))
-    usable = [(a, b) for i, a in enumerate(cand) for b in cand[i + 1:] if ok(by[a]) and ok(by[b])]
+    usable = [(a, b) for i, a in enumerate(cand) for b in cand[i + 1:] if _pair_usable(by[a]) and _pair_usable(by[b])]
     out, trees = [], {}
+    if usable and not batch.get("base"):
+        raise MetricsError("batch line has no base")
     for a, b in usable:
         sa, sb = by[a]["stale_base"], by[b]["stale_base"]
         if sa["result"] == "conflict" or sb["result"] == "conflict":
@@ -1102,10 +1107,7 @@ def report_text(repo, batch_id, usage_db=None):
     by = {r["spec"]: r for r in runs}
     cand = [s for s in sorted(by)]
     cpairs = [(a, b) for i, a in enumerate(cand) for b in cand[i + 1:]]
-    def ok(r):
-        res = (r.get("stale_base") or {}).get("result")
-        return res == "conflict" or (res == "clean" and bool(r.get("base")) and bool(r.get("head")))
-    usable = [(a, b) for a, b in cpairs if ok(by[a]) and ok(by[b])]
+    usable = [(a, b) for a, b in cpairs if _pair_usable(by[a]) and _pair_usable(by[b])]
     res = pair_results(repo, batch, runs)
     failed = res is None
     clean = sum(1 for r in res if r[2]) if res else 0
@@ -1764,7 +1766,7 @@ def cmd_runs(repo, args):
         if batch is None:
             raise MetricsError(f"unknown batch {args.batch}")
         by = last_runs(lines)
-        specs = list(batch.get("specs") or [])
+        specs = sorted(batch.get("specs") or batch.get("assignment") or {})
         specs += sorted({k[1] for k in by if k[0] == args.batch and k[1] not in specs})
         runs = {s: by.get((args.batch, s)) for s in specs}
         res = pair_results(repo, batch, [r for r in runs.values() if r])
