@@ -160,7 +160,7 @@ tmux-ctl context dream-schedule uninstall
 
 ### Weekly execution analytics (optional)
 
-A LaunchAgent runs `tmux-ctl metrics weekly` every Monday at 09:00 local time: it analyses the last week of runs, asks a model for three recommendations (every cited number is checked) and posts trends, flags and recommendations to Discord, each recommendation with a "file as idea" button. It does not run at load, so a Mac that is asleep at 09:00 runs it at the next wake.
+A LaunchAgent runs `tmux-ctl metrics weekly` every Monday at 09:00 local time: it analyses the last week of runs, asks a model for three recommendations (every cited number is checked) and posts trends, flags and recommendations to Discord, each recommendation with a "file as idea" button. It does not run at load, so a Mac that is asleep at 09:00 runs it at the next wake. The job runs `weekly --repo <this checkout>` from the checkout (launchd's own directory is HOME, which may be a git repo). A second run in the same ISO week prints `already posted <week> to <dir>` and writes nothing, because a re-post would remap the old buttons; `weekly --force` posts again.
 
 ```zsh
 tmux-ctl metrics schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-analytics.plist and loads it
