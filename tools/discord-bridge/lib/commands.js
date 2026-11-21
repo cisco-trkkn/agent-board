@@ -26,7 +26,7 @@ function payload(ops) {
   return Object.keys(DESCRIPTIONS).filter((name) => ops || name !== 'ideas').map((name) => { // /ideas posts in the ops channel: project bots do not register it
     const c = { name, description: DESCRIPTIONS[name], type: 1 };
     if (name !== 'approvals') {
-      c.options = [{ name: 'project', description: 'Project name', type: 3, max_length: PROJECT_MAX, required: ops && NEEDS_PROJECT.has(name) }];
+      c.options = [{ name: 'project', description: 'Project name', type: 3, max_length: PROJECT_MAX, required: ops && NEEDS_PROJECT.has(name) && name !== 'queue' }];
     }
     if (name === 'lead') {
       c.options.unshift({ name: 'action', description: 'What to do', type: 3, required: true, choices: LEAD_ACTIONS.map((v) => ({ name: v, value: v })) });
@@ -96,6 +96,12 @@ async function handleCommand(i, ctx) {
   const inHome = !ctx.ops && !!homeId && (i.channelId === homeId || i.channel?.parentId === homeId); // an unknown home channel means no default
   const project = name === 'ideas' ? given : (given || (inHome ? own : null)); // /ideas covers every project unless one is given (R2)
 
+  if (name === 'queue' && ctx.ops && !project) { // one card per lead, posted by the board
+    const n = Object.keys(ctx.views()?.queue || {}).length;
+    await ctx.answer(i, `posting ${n} queue cards`);
+    event({ type: 'slash', command: 'queue', project: null });
+    return;
+  }
   if (NEEDS_PROJECT.has(name) && !project) { await ctx.answer(i, 'Pick a project.'); return; }
   if (crossDenied(ctx, project, user)) {
     await ctx.answer(i, `Not allowed for ${project}.`);

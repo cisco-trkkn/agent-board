@@ -792,6 +792,38 @@ class Events(Base):
         self.assertEqual(self.lines, [("a", PAUSE)])
         self.assertEqual(self.audit()[-1]["result"], "unknown project")
 
+    def _views(self, queue, specs):
+        (self.ops / "views.json").write_text(json.dumps({"queue": queue, "specs": specs}))
+
+    def test_queue_slash_without_project_posts_one_card_per_lead(self):
+        # mutation: leave /queue behind the _known(project) check -> "unknown project" and no card
+        self._views({"a": "a queue", "b": "b queue", "c": "c queue"},
+                    {"a": [{"key": "3", "label": "spec three", "summary": "S3"}, {"key": "5", "label": "spec five", "summary": "S5"}], "b": [], "c": []})
+        r = ops.handle_event(None, self.ops, {"type": "slash", "command": "queue", "project": None, "user": "U1", "ts": NOW}, self.add, {"U1"})
+        self.assertEqual(r, "posted 3")
+        self.assertEqual(self.audit()[-1]["result"], "posted 3")
+        o = self.outbox()
+        self.assertEqual([x["op"] for x in o], ["post"] * 3)
+        self.assertEqual([x["text"] for x in o], ["a queue", "b queue", "c queue"])
+        self.assertEqual(o[0]["select"], {"custom_id": "ab:ops:spec:a", "placeholder": "Pick a spec",
+                                          "options": [{"label": "spec three", "value": "3"}, {"label": "spec five", "value": "5"}]})
+        self.assertNotIn("select", o[1])
+        self.assertNotIn("select", o[2])
+
+    def test_queue_card_cuts_to_25_options_and_says_how_many_more(self):
+        specs = [{"key": str(n), "label": f"s{n}", "summary": "x"} for n in range(1, 31)]
+        self._views({"a": "a queue"}, {"a": specs})
+        ops.handle_event(None, self.ops, {"type": "slash", "command": "queue", "project": None, "user": "U1", "ts": NOW}, self.add, {"U1"})
+        (o,) = self.outbox()
+        self.assertEqual(len(o["select"]["options"]), 25)
+        self.assertEqual(o["text"].splitlines()[-1], "\u2026 5 more")
+
+    def test_queue_slash_with_a_project_is_not_a_card_request(self):
+        self._views({"a": "a queue"}, {"a": []})
+        ops.handle_event(None, self.ops, {"type": "slash", "command": "queue", "project": "nope", "user": "U1", "ts": NOW}, self.add, {"U1"})
+        self.assertEqual(self.outbox(), [])
+        self.assertEqual(self.audit()[-1]["result"], "unknown project")
+
     def test_ideas_slash_from_a_project_bridge_goes_through_ops(self):
         # mutation: pass ev.get("bridge") to discord_ideas.request -> the post, the click edit and the expiry land in the project's outbox
         import discord_ideas as di

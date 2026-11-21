@@ -198,6 +198,13 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (Array.isArray(op.buttons) && op.buttons.length) {
       payload.components = [{ type: 1, components: op.buttons.slice(0, 5).map((b) => ({ type: 2, style: Number(b.style) || 2, label: String(b.label).slice(0, 80), custom_id: String(b.custom_id) })) }];
     }
+    if (op.select !== undefined) {
+      const sl = op.select;
+      const okStr = (v) => typeof v === 'string' && v.length > 0 && v.length <= 100;
+      if (!sl || typeof sl !== 'object' || Array.isArray(sl) || !okStr(sl.custom_id) || !Array.isArray(sl.options) || !sl.options.length || sl.options.length > 25
+        || !sl.options.every((o) => o && typeof o === 'object' && okStr(o.label) && okStr(o.value))) throw new Error('post: malformed select');
+      payload.components = [...(payload.components || []), { type: 1, components: [{ type: 3, custom_id: sl.custom_id, placeholder: String(sl.placeholder ?? '').slice(0, 150), options: sl.options.map((o) => ({ label: o.label, value: o.value })) }] }];
+    }
     const sent = await target.send(payload);
     if (op.key) { st.posts[op.key] = sent.id; trim(st.posts, PROMPTS_KEEP); save(); }
     if (op.delete_files === true) {
@@ -512,6 +519,15 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
         const d = ev0?.diffs?.[file ? file.path : want];
         await answer(i, typeof d === 'string' ? `\`\`\`diff\n${fence(d).slice(0, 1850)}\n\`\`\`` : `No diff stored for ${cut(want, 200)}.`);
       }
+      read(id);
+      return;
+    }
+    if ((m = /^ab:ops:spec:([^:]+)$/.exec(id))) {
+      const data = views();
+      if (!data || typeof data !== 'object') { await answer(i, 'Board data not available yet.'); read(id); return; }
+      const want = String(i.values?.[0] ?? '');
+      const spec = (Array.isArray(data.specs?.[m[1]]) ? data.specs[m[1]] : []).find((x) => String(x?.key) === want);
+      await answer(i, spec ? cut(String(spec.summary ?? ''), REPLY_MAX) : 'that spec is no longer in the queue');
       read(id);
       return;
     }

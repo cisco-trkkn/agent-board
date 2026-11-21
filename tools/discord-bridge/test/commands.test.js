@@ -50,7 +50,7 @@ test('payload: 8 chat-input commands; project option required per mode', () => {
   assert.deepStrictEqual(p.map((c) => c.name), names.filter((n) => n !== 'ideas')); // project bots do not register /ideas
   assert.ok(o.every((c) => c.type === 1));
   const req = (list) => Object.fromEntries(list.map((c) => [c.name, c.options?.find((x) => x.name === 'project')?.required ?? null]));
-  assert.deepStrictEqual(req(o), { status: false, queue: true, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true });
+  assert.deepStrictEqual(req(o), { status: false, queue: false, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true });
   assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, approvals: null, tasks: false, lead: false, gauth: false });
   const act = o.find((c) => c.name === 'lead').options.find((x) => x.name === 'action');
   assert.deepStrictEqual([act.type, act.required, act.choices.map((c) => c.value)], [3, true, ['status', 'restart', 'handoff']]);
@@ -99,6 +99,17 @@ test('/status without project is the card; with project its block; one read even
   assert.strictEqual(b.replies[0].content, 'alpha block');
   assert.deepStrictEqual(a.replies[0].allowedMentions, { parse: [] });
   assert.deepStrictEqual(evShape(s), [{ type: 'read', what: '/status', user: 'U1' }, { type: 'read', what: '/status', user: 'U1' }]);
+});
+
+test('/queue with no project in ops mode: private "posting n queue cards" and a slash event; with a project the reply is unchanged', async () => {
+  // mutation: keep queue in NEEDS_PROJECT for ops -> "Pick a project." and no event
+  const views = { ...VIEWS, queue: { alpha: 'qa', beta: 'qb', gamma: 'qc' } };
+  const s = setup({ views });
+  const a = await s.run(fakeCommand({ name: 'queue' }));
+  assert.deepStrictEqual([a.replies[0].content, a.replies[0].flags], ['posting 3 queue cards', 64]);
+  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'queue', project: null, user: 'U1' }]);
+  const t = await s.run(fakeCommand({ name: 'queue', options: { project: 'alpha' } })); // with a project: today's reply
+  assert.strictEqual(t.replies[0].content, '```\nqa\n```');
 });
 
 test('/queue answers in a code block; unknown project says so with only the read event', async () => {
@@ -207,9 +218,9 @@ test('project option has max_length 60 so the modal custom_id stays under 100 ch
   assert.ok(`ab:modal:new-spec:${'p'.repeat(60)}`.length <= 100);
 });
 
-test('ops mode with no project: Pick a project. for pause/resume/idea/new-spec/queue; no event, no modal', async () => {
+test('ops mode with no project: Pick a project. for pause/resume/idea/new-spec; no event, no modal', async () => {
   const s = setup();
-  for (const name of ['pause', 'resume', 'idea', 'new-spec', 'queue']) {
+  for (const name of ['pause', 'resume', 'idea', 'new-spec']) {
     const i = await s.run(fakeCommand({ name }));
     assert.deepStrictEqual([i.replies[0]?.content, i.replies[0]?.flags, i.modals.length], ['Pick a project.', 64, 0], name);
   }

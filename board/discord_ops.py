@@ -633,6 +633,24 @@ def gauth_sweep(d, now):
             discord_feed.audit_append(d, str(rec.get("user") or ""), "gauth", f"{project}:gauth", "timed out")
 
 
+def _queue_cards(d):
+    """/queue with no project: one post per project with a lead, its queue block and a select of its specs (first 25)."""
+    views = _load(Path(d) / "views.json")
+    queue = views.get("queue") if isinstance(views.get("queue"), dict) else {}
+    specs = views.get("specs") if isinstance(views.get("specs"), dict) else {}
+    for p, text in queue.items():
+        sp = specs.get(p) if isinstance(specs.get(p), list) else []
+        op = {"op": "post", "text": str(text), "tier": "progress", "mention_user": False}
+        if len(sp) > 25:
+            op["text"] = (op["text"] + f"\n\u2026 {len(sp) - 25} more")
+        op["text"] = op["text"][:2000]
+        if sp:
+            op["select"] = {"custom_id": f"ab:ops:spec:{p}", "placeholder": "Pick a spec",
+                            "options": [{"label": str(x["label"]), "value": str(x["key"])} for x in sp[:25]]}
+        discord_feed.outbox_write(d, op)
+    return f"posted {len(queue)}"
+
+
 def handle_event(project, d, ev, add_line, allow, run=None, spawn=None, st=None):
     """slash / modal / read / rejected: act, audit in <d>/audit.jsonl, return the audit result. `project` is the default
     when the event names none (events forwarded from a project's controls)."""
@@ -651,6 +669,10 @@ def handle_event(project, d, ev, add_line, allow, run=None, spawn=None, st=None)
     elif ideas_slash:
         result = discord_ideas.request(ev.get("project"), "_ops", add_line, time.time())   # /ideas always posts in #command-center
         discord_feed.audit_append(d, user, kind, f"ideas:{ev.get('project') or 'all'}", result)
+        return result
+    elif kind == "slash" and ev.get("command") == "queue" and not project:
+        result = _queue_cards(d)
+        discord_feed.audit_append(d, user, kind, "queue:cards", result)
         return result
     elif not _known(project):
         result = "unknown project"

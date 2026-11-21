@@ -24,7 +24,7 @@ PRESENCE_EVERY = 60
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
 APPROVAL_KINDS = ("perm", "question", "merge", "other")
-_POST_OPT = {"key": str, "thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool, "buttons": list}
+_POST_OPT = {"select": dict, "key": str, "thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool, "buttons": list}
 _last_ms = 0
 _ms_lock = threading.Lock()   # the overview thread and the notifier sink both write
 
@@ -37,6 +37,17 @@ def _check_rows(rows):
                 and isinstance(b["custom_id"], str) and len(b["custom_id"]) <= 100 and type(b["style"]) is int
                 for b in r) for r in rows)):
         raise ValueError("rows must be at most 5 lists of at most 5 {label, style, custom_id}")
+
+
+def _check_select(sel):
+    """One select: custom_id, placeholder, at most 25 {label, value}; every string at most 100 characters (placeholder 150)."""
+    def ok(v):
+        return isinstance(v, str) and 0 < len(v) <= 100
+    if not (isinstance(sel, dict) and set(sel) <= {"custom_id", "placeholder", "options"} and ok(sel.get("custom_id"))
+            and isinstance(sel.get("placeholder", ""), str) and len(sel.get("placeholder", "")) <= 150
+            and isinstance(sel.get("options"), list) and 0 < len(sel["options"]) <= 25
+            and all(isinstance(o, dict) and set(o) == {"label", "value"} and ok(o["label"]) and ok(o["value"]) for o in sel["options"])):
+        raise ValueError("select must be {custom_id, placeholder, options: 1..25 of {label, value}} with strings of at most 100 chars")
 
 
 def _check(op):
@@ -59,7 +70,7 @@ def _check(op):
     keys = set(op)
     if not need <= keys or keys - need - opt:
         raise ValueError(f"bad keys for {kind}: {sorted(keys)}")
-    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons", "rows", "components", "private"}:
+    for k in keys - {"op", "mention_user", "files", "lines", "delete_files", "buttons", "select", "rows", "components", "private"}:
         if k != "tier" and not isinstance(op[k], str):
             raise ValueError(f"{k} must be a string")
     if "private" in op and not isinstance(op["private"], bool):
@@ -75,6 +86,8 @@ def _check(op):
             raise ValueError("mention_user must be a bool")
         if not (isinstance(op["lines"], list) and all(isinstance(l, str) for l in op["lines"])):
             raise ValueError("lines must be a list of strings")
+    if "select" in op:
+        _check_select(op["select"])
     if "rows" in op:
         _check_rows(op["rows"])
     if "components" in op:

@@ -370,6 +370,25 @@ class PresenceCheckTest(unittest.TestCase):
                 df._check(op)
 
 
+class SelectCheckTest(unittest.TestCase):
+    def sel(self, n=2, **kw):
+        s = {"custom_id": "ab:ops:spec:a", "placeholder": "Pick a spec", "options": [{"label": f"l{i}", "value": str(i)} for i in range(n)]}
+        s.update(kw)
+        return {"op": "post", "text": "t", "tier": "progress", "mention_user": False, "select": s}
+
+    def test_valid(self):
+        df._check(self.sel(2))
+        df._check(self.sel(25))
+
+    def test_invalid(self):
+        bad = [self.sel(26), {**self.sel(), "select": "no"}, self.sel(custom_id="c" * 101), self.sel(options=[{"label": "l" * 101, "value": "v"}]),
+               self.sel(options=[{"label": "l", "value": "v" * 101}]), self.sel(options=[{"label": "l"}])]
+        no_id = self.sel(); del no_id["select"]["custom_id"]
+        for op in bad + [no_id]:
+            with self.assertRaises(ValueError, msg=str(op)[:80]):
+                df._check(op)
+
+
 class IreplyCheckTest(unittest.TestCase):
     ROW = [[{"label": "Enter code", "style": 1, "custom_id": "ab:gauth:code:alpha"}]]
 

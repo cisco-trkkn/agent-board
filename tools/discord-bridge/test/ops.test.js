@@ -358,3 +358,44 @@ test('post buttons: at most 5, label cut to 80', async () => {
   assert.strictEqual(row.length, 5);
   assert.strictEqual(row[0].label.length, 80);
 });
+
+const SELECT = { custom_id: 'ab:ops:spec:alpha', placeholder: 'Pick a spec', options: [{ label: 'spec three', value: '3' }, { label: 'spec five', value: '5' }] };
+const SPEC_VIEWS = { ...VIEWS, specs: { alpha: [{ key: '3', label: 'spec three', summary: 'Summary of three' }, { key: '5', label: 'spec five', summary: 'S5' }] } };
+
+test('post with select renders its own type-3 row under the buttons row', async () => {
+  const s = setup();
+  const buttons = [{ label: 'Go', style: 2, custom_id: 'ab:x:1' }];
+  s.put({ op: 'post', text: 'card', tier: 'progress', mention_user: false, buttons, select: SELECT });
+  await s.bridge.tick();
+  const rows = sentTo(s, 'CC')[0].payload.components;
+  assert.strictEqual(rows.length, 2);
+  assert.strictEqual(rows[0].components[0].type, 2);
+  assert.deepStrictEqual(rows[1], { type: 1, components: [{ type: 3, custom_id: SELECT.custom_id, placeholder: 'Pick a spec', options: SELECT.options }] });
+});
+
+test('post with a malformed select fails the op', async () => {
+  // mutation: skip the select validation in opPost -> the malformed posts are sent and this fails
+  const s = setup();
+  const opt = (n) => Array.from({ length: n }, (_, k) => ({ label: `l${k}`, value: `${k}` }));
+  const bad = [
+    'nope', { ...SELECT, custom_id: undefined }, { ...SELECT, custom_id: 'c'.repeat(101) }, { ...SELECT, options: opt(26) },
+    { ...SELECT, options: [{ label: 'l'.repeat(101), value: 'v' }] }, { ...SELECT, options: [{ label: 'l', value: 'v'.repeat(101) }] },
+  ];
+  for (const select of bad) s.put({ op: 'post', text: 'card', tier: 'progress', mention_user: false, select });
+  await s.bridge.tick();
+  assert.strictEqual(sentTo(s, 'CC').length, 0);
+  assert.strictEqual(s.files().length, 0);
+  assert.strictEqual(fs.readdirSync(path.join(s.dir, 'outbox', 'failed')).filter((n) => n.endsWith('.json')).length, bad.length);
+});
+
+test('spec select answers privately with the summary; an unknown key says it is gone', async () => {
+  const s = setup({ views: SPEC_VIEWS });
+  const i = await click(s, { customId: 'ab:ops:spec:alpha', values: ['3'] });
+  assert.deepStrictEqual([i.replies[0].content, i.replies[0].flags], ['Summary of three', 64]);
+  const j = await click(s, { customId: 'ab:ops:spec:alpha', values: ['99'] });
+  assert.deepStrictEqual([j.replies[0].content, j.replies[0].flags], ['that spec is no longer in the queue', 64]);
+  const k = await click(s, { customId: 'ab:ops:spec:beta', values: ['3'] });
+  assert.strictEqual(k.replies[0].content, 'that spec is no longer in the queue');
+  const u = await click(s, { customId: 'ab:ops:spec:alpha', values: ['3'], user: 'U7' });
+  assert.strictEqual(u.replies[0].content, 'Not authorized.');
+});
