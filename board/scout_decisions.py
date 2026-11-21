@@ -79,6 +79,28 @@ def _copy(root, rec):
     return True
 
 
+def _follow(rec, now, add_line):
+    """The steps after the main commit, each on its own: one failing is logged to weekly.log and never stops the others."""
+    def jsonl():
+        d = scout_sources.scout_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / "approved.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps({"spec": rec["path"], "approved_at": findings.iso(now), "title": rec["title"],
+                                "protected": bool(rec.get("protected")), "consumed": False}, ensure_ascii=False) + "\n")
+    steps = [("add_done", lambda: ideas.add_done(PROJECT, f"scout: {rec['title']}", rec["path"])), ("approved.jsonl", jsonl)]
+    if add_line:
+        steps.append(("add_line", lambda: add_line(f"[Scout] approved: {rec['path']}")))
+    for name, fn in steps:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            try:
+                import scout_draft
+                scout_draft._log(f"approve {rec['id']}: {name} failed: {type(e).__name__}: {e}", now)
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def approve(draft, root, now, add_line=None):
     """"approved", "approved, waiting for main" or "already approved" (copied_at set: no second commit)."""
     ds = scout_post._drafts()
@@ -101,14 +123,7 @@ def approve(draft, root, now, add_line=None):
         st["drafts"][rec["id"]] = rec
         st["pending_copies"] = [i for i in st["pending_copies"] if i != rec["id"]]
         ds.write(st)
-        ideas.add_done(PROJECT, f"scout: {rec['title']}", rec["path"])
-        d = scout_sources.scout_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        with open(d / "approved.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"spec": rec["path"], "approved_at": findings.iso(now), "title": rec["title"],
-                                "protected": bool(rec.get("protected")), "consumed": False}, ensure_ascii=False) + "\n")
-    if add_line:
-        add_line(f"[Scout] approved: {rec['path']}")
+        _follow(rec, now, add_line)
     return "approved"
 
 
@@ -207,9 +222,12 @@ def expire(now):
 
 def cleanup(root):
     """Remove worktree and branch of every scout/<week> whose drafts are all decided. Never touches another branch."""
+    st = scout_post._drafts().read()
     by_week = {}
-    for rec in scout_post._drafts().read()["drafts"].values():
-        by_week.setdefault(rec.get("week"), []).append(rec.get("status"))
+    for rec in st["drafts"].values():
+        # an approved draft is decided only once its spec is on main: until then the retry still needs scout/<week>
+        waiting = rec.get("status") == "approved" and (not rec.get("copied_at") or rec.get("id") in st["pending_copies"])
+        by_week.setdefault(rec.get("week"), []).append("waiting" if waiting else rec.get("status"))
     removed = []
     for week, sts in sorted(by_week.items(), key=lambda kv: str(kv[0])):
         if not week or not all(s in DECIDED for s in sts):

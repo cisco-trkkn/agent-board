@@ -155,6 +155,17 @@ class ApproveTest(Base):
         self.assertEqual(len(self.lines), 1)
         self.assertEqual(len(ideas.load("agent-board")), 1)
 
+    def test_failing_follow_up_does_not_stop_the_others(self):
+        with mock.patch("ideas.add_done", side_effect=OSError("disk")):
+            self.assertEqual(sd.approve(self.d, self.root, NOW, self.add_line), "approved")
+        self.assertEqual(self.lines, [f"[Scout] approved: {SPEC}"])
+        self.assertTrue((Path(os.environ["TC_SCOUT_DIR"]) / "approved.jsonl").exists())
+        log = (Path(os.environ["TC_SCOUT_DIR"]) / "weekly.log").read_text()
+        self.assertIn("approve abc123abc123: add_done failed: OSError: disk", log)
+        n = self.commits()
+        self.assertEqual(sd.approve(self.d, self.root, NOW, self.add_line), "already approved")
+        self.assertEqual(self.commits(), n)
+
     def test_waiting_then_retry_commits_once(self):
         (self.root / ".git" / "MERGE_HEAD").write_text("x")
         sd.approve(self.d, self.root, NOW, self.add_line)
@@ -277,12 +288,22 @@ class CleanupTest(Base):
         self.store(self.draft(week="2026-11-15", id="a" * 12, key="a:c", status="rejected"),
                    self.draft(week="2026-11-15", id="c" * 12, key="c:c", status="superseded"),
                    self.draft(week=WEEK, id="b" * 12, key="b:c", status="pending"),
-                   self.draft(week=WEEK, id="d" * 12, key="d:c", status="approved"))
+                   self.draft(week=WEEK, id="d" * 12, key="d:c", status="approved", copied_at=findings.iso(NOW)))
         sd.cleanup(self.root)
         branches = git(self.root, "branch", "--format=%(refname:short)").split()
         self.assertEqual(sorted(branches), ["main", f"scout/{WEEK}"])
         self.assertFalse((self.root / ".claude" / "worktrees" / "scout-2026-11-15").exists())
         self.assertTrue((self.root / ".claude" / "worktrees" / f"scout-{WEEK}").exists())
+
+    def test_approved_waiting_for_copy_survives_until_copied(self):
+        self.week_branch()
+        d = self.draft()
+        self.store(d, pending=[d["id"]])
+        sd.cleanup(self.root)
+        self.assertIn(f"scout/{WEEK}", git(self.root, "branch", "--format=%(refname:short)"))
+        self.assertEqual(sd.approve(d, self.root, NOW), "approved")
+        sd.cleanup(self.root)
+        self.assertNotIn(f"scout/{WEEK}", git(self.root, "branch", "--format=%(refname:short)"))
 
     def test_revise_counts_as_undecided(self):
         self.week_branch()
