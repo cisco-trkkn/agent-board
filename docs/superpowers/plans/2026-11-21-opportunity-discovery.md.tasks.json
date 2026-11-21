@@ -81,7 +81,7 @@
       "id": 9,
       "nativeId": "103",
       "subject": "OD Task 9: full suite + read-only real-state",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         2,
@@ -105,5 +105,5 @@
       "description": "**Goal:** The user sees one real model-ranked report for this repo before the schedule is installed.\n\n> **USER-ORDERED GATE \u2014 NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:** none (a check)\n\n**Acceptance Criteria:**\n- [ ] `env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run` from `main` after the merge, with the real `claude`, exits 0 and prints at most 5 items, each key present in that night's `collected.json` (the run dir it names).\n- [ ] The user reads the printed post and says whether the items are worth having; their answer is recorded on the task.\n- [ ] Only after that, if the user wants it: `~/.local/bin/tmux-ctl discover schedule install` and `tmux-ctl discover schedule status` shows `loaded`.\n\n**Verify:** `env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run; echo rc=$?` \u2192 `rc=0` and \u2264 5 numbered items\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run; echo rc=$?\", \"acceptanceCriteria\": [\"real dry-run rc 0, <=5 items, keys in collected.json\", \"user's verdict recorded\", \"schedule installed only if the user wants it\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-21T08:44:51Z"
+  "lastUpdated": "2026-11-21T09:08:29Z"
 }
