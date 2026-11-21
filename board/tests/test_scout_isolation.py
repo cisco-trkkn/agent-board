@@ -32,11 +32,14 @@ def _stat(p):
 def snapshot():
     """Every real path the scout could touch, as {label: state}: absent paths show as None."""
     snap = {}
-    for root in (REAL_SCOUT, REAL_OUTBOX):
-        snap[str(root)] = _stat(root)
-        if root.is_dir():
-            for p in sorted(root.rglob("*")):
-                snap[str(p)] = _stat(p)
+    snap[str(REAL_SCOUT)] = _stat(REAL_SCOUT)
+    if REAL_SCOUT.is_dir():
+        for p in sorted(REAL_SCOUT.rglob("*")):
+            snap[str(p)] = _stat(p)
+    # the live bridge consumes the outbox, which moves the directory's mtime on its own: compare the listing (names only)
+    snap[str(REAL_OUTBOX)] = REAL_OUTBOX.is_dir()
+    for p in (REAL_OUTBOX.iterdir() if REAL_OUTBOX.is_dir() else ()):
+        snap[str(p)] = "listed"
     for p in REAL_IDEAS:
         snap[str(p)] = _stat(p)
     snap["git for-each-ref"] = subprocess.run(["git", "-C", str(REPO), "for-each-ref"], capture_output=True, text=True).stdout
@@ -57,7 +60,8 @@ class IsolationTest(W.Base):
         self.assertTrue((self.scout / "approved.jsonl").exists())
         self.assertTrue(self.outbox())
         after = snapshot()
-        self.assertEqual(before, after)
+        changed = {k: (before.get(k), after.get(k)) for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+        self.assertEqual(changed, {})
         print(f"\nscout isolation: compared {len(after)} real paths, none changed")
 
 

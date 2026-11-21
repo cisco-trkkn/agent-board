@@ -11,11 +11,11 @@ Read-only runs of the trend scout against this machine's real state, from the `s
 
 ## Default sources: `TC_SCOUT_DIR=$(mktemp -d) tmux-ctl scout source test <name>`
 
-Ten default sources (`scout source list`): claude-code-changelog, claude-code-npm, anthropic-news, anthropic-engineering, claude-blog, claude-code-release-notes, api-release-notes, models-overview, api-pricing, plugins.
+Ten default sources (`scout source list`): claude-code-changelog, claude-code-npm, anthropic-news, anthropic-engineering, claude-blog, claude-code-release-notes, api-release-notes, models-overview, api-pricing, plugins. No `SSL_CERT_FILE` set; the PATH `python3`.
 
-### Finding: every fetch fails with the default python3's TLS setup
+### Finding, fixed in this task: no CA bundle in the PATH python3
 
-The `python3` on PATH is the python.org 3.14.7 framework build; its OpenSSL looks for a CA file under `/Library/Frameworks/Python.framework/Versions/3.14/etc/openssl/cert.pem`, which is not there. Plain run, all ten sources:
+The `python3` on PATH is the python.org 3.14.7 framework build. Its OpenSSL looks for a CA file under `/Library/Frameworks/Python.framework/Versions/3.14/etc/openssl/cert.pem`, which does not exist, so the first run of every source failed (before the fix):
 
     === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-code-changelog
     scout: URLError: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1082)>
@@ -48,58 +48,44 @@ The `python3` on PATH is the python.org 3.14.7 framework build; its OpenSSL look
     scout: every marketplace fetch failed
     rc=1
 
-(`/usr/bin/python3` fetches `registry.npmjs.org` fine: 200.) A launchd poll or weekly run would fail the same way unless the environment carries a CA bundle (`SSL_CERT_FILE`) or the certificates are installed for that Python. This is an environment finding, not changed here.
+`board/scout_fetch.py` now builds its opener with `_ssl_context()`: when Python has no usable CA file or directory and `SSL_CERT_FILE` is unset, it loads `/etc/ssl/cert.pem`. Verification stays on. After the fix, the same ten commands, still without `SSL_CERT_FILE`:
 
-### With `SSL_CERT_FILE=/etc/ssl/cert.pem` (a per-command env var, no code change)
-
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-code-changelog
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-code-changelog
     Claude Code 2.1.330	https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
     Claude Code 2.1.329	https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
     Claude Code 2.1.328	https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
-    Claude Code 2.1.327	https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
-    Claude Code 2.1.326	https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
-    Claude Code 2.1.325	https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-code-npm
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-code-npm
     @anthropic-ai/claude-code 2.1.330	https://www.npmjs.com/package/@anthropic-ai/claude-code
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test anthropic-news
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test anthropic-news
     Announcements	https://www.anthropic.com/news/announcements
-    Investing in the public benefit We’re committing a portion of Anthropic’s shares to the Anthropic Public Benefit Fund, a new entity with a structure that increa
-    Anthropic files S-1 with the SEC for proposed initial public offering Today, Anthropic, PBC filed a registration statement on Form S-1 with the U.S. Securities 
-    Features	https://www.anthropic.com/news/features
-    Anthropic announces closing of initial public offering, including full exercise of underwriters’ option to purchase additional shares, and closing of concurrent
-    Anthropic prices initial public offering	https://www.anthropic.com/news/anthropic-prices-initial-public-offering
+    Investing in the public benefit We’re committing a portion of Anthropic’s shares to the Anthropic Public Benefit Fund, a new entity with a s
+    Anthropic files S-1 with the SEC for proposed initial public offering Today, Anthropic, PBC filed a registration statement on Form S-1 with 
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test anthropic-engineering
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test anthropic-engineering
     The components of agent memory	https://www.anthropic.com/research/components-of-agent-memory
     Redesigning source control at Anthropic	https://www.anthropic.com/research/redesigning-source-control
     Harness design for long-running application development	https://www.anthropic.com/research/harness-design-long-running-apps
-    Designing AI-resistant technical evaluations	https://www.anthropic.com/research/AI-resistant-technical-evaluations
-    Building strong safety evaluations	https://www.anthropic.com/research/building-strong-safety-evaluations
-    How we contain Claude across products	https://www.anthropic.com/research/how-we-contain-claude
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-blog
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-blog
     Linked billing on the Claude Platform	https://claude.com/resources/articles/linked-billing-on-claude-platform
     The Claude Tag guide for startups	https://claude.com/resources/articles/claude-tag-guide-for-startups
     Building always-on agents	https://claude.com/resources/articles/building-always-on-agents
-    Operate Claude Managed Agents inside your security perimeter	https://claude.com/resources/articles/self-hosted-claude-managed-agents
-    J. Crew brings its signature approach to styling to life with Claude	https://claude.com/resources/articles/j-crew-style-advisor-with-claude
-    Introducing Claude for Manufacturing	https://claude.com/resources/articles/claude-for-manufacturing
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-code-release-notes
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test claude-code-release-notes
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test api-release-notes
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test api-release-notes
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test models-overview
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test models-overview
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test api-pricing
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test api-pricing
     rc=0
-    === SSL_CERT_FILE=/etc/ssl/cert.pem TC_SCOUT_DIR=<tmp> tmux-ctl scout source test plugins
+    === TC_SCOUT_DIR=<tmp> tmux-ctl scout source test plugins
     superpowers-extended-cc 6.5.3-dev → 7.1.2	https://github.com/pcvelz/superpowers
     rc=0
 
-The four `html_diff` sources (`claude-code-release-notes`, `api-release-notes`, `models-overview`, `api-pricing`) print no items and exit 0: on a fresh scratch dir the first fetch only stores the page hash as its baseline (by design, "first poll of a source"), so a one-shot `source test` has nothing to diff. The fetch itself succeeded (rc 0, no URLError). The other six print at least one item.
+The four `html_diff` sources (`claude-code-release-notes`, `api-release-notes`, `models-overview`, `api-pricing`) print no items and exit 0: on a fresh scratch dir the first fetch only stores the page hash as its baseline (by design), so a one-shot `source test` has nothing to diff. The fetch itself succeeded. The other six print at least one item.
 
 ## Context pack: `tmux-ctl scout pack --root /Users/francisco.ruiz/agent-board`
 
@@ -120,4 +106,10 @@ Run once, with the real model; no usage limit hit.
 
 ## Isolation leak check
 
-`python3 -m unittest board.tests.test_scout_isolation -v` → `OK`, printing `scout isolation: compared 10 real paths, none changed` (real scout dir and its tree, real outbox dir, real ideas files, `git for-each-ref` of this repo; before = after).
+`python3 -m unittest board.tests.test_scout_isolation -v` → `OK`, printing `scout isolation: compared 6 real paths, none changed` (real scout dir and its tree, the real discord outbox listing by name, the real ideas files, `git for-each-ref` of this repo; before = after).
+
+Mutation check: a copy of the test whose scout step first writes `leak.txt` into the real scout dir FAILS (`FAILED (failures=1)`, the diff names `scout/leak.txt`); the real test then passes again, and the leak was removed (`ls ~/.local/state/agent-board/scout` → No such file or directory). The outbox is compared by names, not directory mtime: the live bridge consumes the outbox and moved its mtime during a run (one failure in about four).
+
+## Full suite
+
+`zsh tools/tests/all.zsh; echo rc=$?` → `ALL PASS 200 jobs in 9m25s`, `SLOW: 9m25s over the 5 min budget`, `rc=4`. (The first run had `FAIL 9/200` from the help range; fixed by `sed -n '2,84p'` in `bin/tmux-ctl`.)
