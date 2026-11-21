@@ -94,6 +94,12 @@ class IdeasTest(unittest.TestCase):
         self.assertEqual([i["status"] for i in ideas.load("p")], ["open", "taken", "dropped"])
         self.assertEqual(ideas.open_count("p"), 1)
 
+    def test_add_done_line_loads_as_taken_with_spec(self):
+        line = ideas.add_done("p", "scout: Thing", "docs/superpowers/specs/x-design.md")
+        self.assertRegex(line, r"^- \[x\] \d{4}-\d{2}-\d{2} \d{2}:\d{2} · scout: Thing → docs/superpowers/specs/x-design.md$")
+        got = ideas.load("p")
+        self.assertEqual([(i["status"], i["text"]) for i in got], [("taken", "scout: Thing → docs/superpowers/specs/x-design.md")])
+
     def test_bad_input(self):
         for bad in ("a/b", "..", ""):
             with self.assertRaises(ValueError):

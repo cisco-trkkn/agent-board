@@ -126,6 +126,23 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
                 pass
 
 
+SCOUT_RETRY_EVERY = 600
+
+
+def _scout_retry(project, st, now, add_line):
+    """Retry the scout's waiting approvals at most every SCOUT_RETRY_EVERY seconds (last call kept in st["scout_retry_at"])."""
+    last = st.get("scout_retry_at")
+    if isinstance(last, (int, float)) and 0 <= now - last < SCOUT_RETRY_EVERY:
+        return
+    st["scout_retry_at"] = now
+    try:
+        import dream
+        import scout_decisions
+        scout_decisions.retry_copies(dream.resolve_root(project, {}, None), now, lambda t: add_line(project, t))
+    except Exception as e:  # noqa: BLE001 -- a failed retry never breaks the controls step
+        print(f"discord_controls: scout retry failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
 def step(project, record, now, run, add_line, lead_run=None, spawn=None):
     d = tc_env.discord_dir(project)
     d.mkdir(parents=True, exist_ok=True)
@@ -135,6 +152,8 @@ def step(project, record, now, run, add_line, lead_run=None, spawn=None):
         st = _load(sp)
         try:
             consume_events(d, project, st, run, add_line, lead_run=lead_run, spawn=spawn)
+            if project == scout_post.PROJECT:
+                _scout_retry(project, st, now, add_line)
         finally:
             tmp = sp.with_name(sp.name + ".tmp")
             tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")

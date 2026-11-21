@@ -608,8 +608,13 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     print -r -- "registered $p (${k:-unknown})" ;;
 
   idea)
-    [[ -n "$*" ]] || die "usage: tmux-ctl idea <text>"
-    python3 -I "${0:A:h:h}/board/ideas.py" add --project "$FEEDKEY" -- "$*" ;;
+    if [[ "$1" == --done ]]; then
+      [[ -n "$2" && "$3" == --spec && -n "$4" ]] || die 'usage: tmux-ctl idea --done "<text>" --spec <path>'
+      python3 -I "${0:A:h:h}/board/ideas.py" add-done --project "$FEEDKEY" --spec "$4" -- "$2"
+    else
+      [[ -n "$*" ]] || die "usage: tmux-ctl idea <text>"
+      python3 -I "${0:A:h:h}/board/ideas.py" add --project "$FEEDKEY" -- "$*"
+    fi ;;
 
   context)
     sub="$1"; [[ -n "$sub" ]] && shift

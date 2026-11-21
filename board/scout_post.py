@@ -237,13 +237,15 @@ def publish(week, drafts, others, overlaps, dropped, health, tokens, now):
 
 
 def _edit(week, dst, fst):
-    post = fst["posts"].get(week)
-    if not post:
-        return
+    """Edit the week's digest post and the posts of its revisions (posts["<week>-<id>"]) from the draft statuses."""
     statuses = {k: v.get("status") for k, v in dst["drafts"].items()}
-    op = {"op": "edit", "key": post["key"], "text": _render(week, post, statuses), "rows": _rows(post, statuses)}
-    discord_feed._check(op)
-    discord_feed.outbox_write(tc_env.discord_dir(PROJECT), op)
+    for name in sorted(fst["posts"]):
+        post = fst["posts"][name]
+        if name != week and not name.startswith(week + "-"):
+            continue
+        op = {"op": "edit", "key": post["key"], "text": _render(week, post, statuses), "rows": _rows(post, statuses)}
+        discord_feed._check(op)
+        discord_feed.outbox_write(tc_env.discord_dir(PROJECT), op)
 
 
 def refresh(week):

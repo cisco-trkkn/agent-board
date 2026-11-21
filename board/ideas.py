@@ -9,6 +9,7 @@ An idea pushed to GitLab carries " · gl#<iid>" before any " → …" suffix (se
 The board can edit, drop/restore and move ideas; a move appends to the target and marks the source "[-] … → moved to <target>".
 
   ideas.py add --project P [--detail D] -- TEXT
+  ideas.py add-done --project P --spec PATH -- TEXT
   ideas.py list --project P
   ideas.py sync --project P [--dry-run]
 """
@@ -101,6 +102,18 @@ def add(project, text, detail="", now=None):
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(now))
     first = f"- [ ] {stamp} · {text}"
     _append(project, first, _clean_detail(detail))
+    _kick(project)
+    return first
+
+
+def add_done(project, text, spec, now=None):
+    """Append an already taken-up idea: "- [x] <stamp> · <text> → <spec>" (the scout's approved spec)."""
+    text = _split_issue(" ".join(str(text).split()))[0]
+    spec = " ".join(str(spec).split())
+    if not text or not spec:
+        raise ValueError("empty idea or spec")
+    first = f"- [x] {time.strftime('%Y-%m-%d %H:%M', time.localtime(now))} · {text} → {spec}"
+    _append(project, first, [])
     _kick(project)
     return first
 
@@ -250,6 +263,10 @@ def main(argv=None):
     a.add_argument("--project", required=True)
     a.add_argument("--detail", default="")
     a.add_argument("text", nargs="+")
+    ad = sub.add_parser("add-done")
+    ad.add_argument("--project", required=True)
+    ad.add_argument("--spec", required=True)
+    ad.add_argument("text", nargs="+")
     ls = sub.add_parser("list")
     ls.add_argument("--project", required=True)
     sy = sub.add_parser("sync")
@@ -261,6 +278,8 @@ def main(argv=None):
     try:
         if args.cmd == "add":
             print(f"noted for later: {add(args.project, ' '.join(args.text), args.detail)}")
+        elif args.cmd == "add-done":
+            print(f"noted as done: {add_done(args.project, ' '.join(args.text), args.spec)}")
         else:
             print(json.dumps(load(args.project), indent=1))
         return 0
