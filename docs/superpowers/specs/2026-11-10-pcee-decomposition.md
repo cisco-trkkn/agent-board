@@ -40,8 +40,8 @@ passes.
 | Stage | Spec | Gate | State | Evidence | Date |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `docs/superpowers/specs/2026-11-10-queue-metrics-design.md` | — | passed | merged: `board/metrics.py`, `tmux-ctl metrics`, `docs/superpowers/metrics/runs.jsonl` | 2026-11-19 |
-| 2 | `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` | K1 | queued (revised 2026-11-19: Node, `engine/`) | — | 2026-11-19 |
-| 3 | `docs/superpowers/specs/2026-11-10-pcee-engine-design.md` | K2 | queued (two parts, revised 2026-11-19: Node, interfaces), entry gated by K1 | — | 2026-11-19 |
+| 2 | `docs/superpowers/specs/2026-11-10-pcee-registry-design.md` | K1 | running (merged `7da6e35`; gate K1 not passed: too early) | merged 2026-11-21, `docs/superpowers/ledgers/2026-11-21-pcee-registry/`, analysis `docs/superpowers/metrics/analysis/2026-11-21-1.md` | 2026-11-21 |
+| 3 | `docs/superpowers/specs/2026-11-10-pcee-engine-design.md` | K2 | failed (both parts held by gate K1: too early; the supervised improvement loop then failed on the missing engine) | gate K1 failed: `manifest.recall_existing` and `manifest_tokens/tokens.total` too early, `analysis.parallelism` 1.5 passes; runs `77ec9b2`, `d4ded08`; loop note `8289363` | 2026-11-21 |
 | 4 | — | K3 | not started | — | 2026-11-10 |
 | 5 | — | K4 | not started | — | 2026-11-10 |
 | 6 | — | — | not started | — | 2026-11-10 |
