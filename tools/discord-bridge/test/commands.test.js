@@ -103,13 +103,20 @@ test('/status without project is the card; with project its block; one read even
 
 test('/queue with no project in ops mode: private "posting n queue cards" and a slash event; with a project the reply is unchanged', async () => {
   // mutation: keep queue in NEEDS_PROJECT for ops -> "Pick a project." and no event
-  const views = { ...VIEWS, queue: { alpha: 'qa', beta: 'qb', gamma: 'qc' } };
+  const views = { ...VIEWS, queue: { alpha: 'qa', beta: 'qb', gamma: 'qc' }, leads: { alpha: {}, beta: {}, gamma: {} } };
   const s = setup({ views });
   const a = await s.run(fakeCommand({ name: 'queue' }));
   assert.deepStrictEqual([a.replies[0].content, a.replies[0].flags], ['posting 3 queue cards', 64]);
   assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'queue', project: null, user: 'U1' }]);
   const t = await s.run(fakeCommand({ name: 'queue', options: { project: 'alpha' } })); // with a project: today's reply
   assert.strictEqual(t.replies[0].content, '```\nqa\n```');
+});
+
+test('/queue with no project counts only projects with a lead; zero leads says posting 0', async () => {
+  const s = setup({ views: { ...VIEWS, queue: { alpha: 'qa', beta: 'qb' }, leads: { alpha: {} } } });
+  assert.strictEqual((await s.run(fakeCommand({ name: 'queue' }))).replies[0].content, 'posting 1 queue cards');
+  const z = setup({ views: { ...VIEWS, queue: { alpha: 'qa' }, leads: {} } });
+  assert.strictEqual((await z.run(fakeCommand({ name: 'queue' }))).replies[0].content, 'posting 0 queue cards');
 });
 
 test('/queue answers in a code block; unknown project says so with only the read event', async () => {

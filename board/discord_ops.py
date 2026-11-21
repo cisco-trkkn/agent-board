@@ -638,6 +638,8 @@ def _queue_cards(d):
     views = _load(Path(d) / "views.json")
     queue = views.get("queue") if isinstance(views.get("queue"), dict) else {}
     specs = views.get("specs") if isinstance(views.get("specs"), dict) else {}
+    leads = views.get("leads") if isinstance(views.get("leads"), dict) else {}
+    queue = {p: t for p, t in queue.items() if p in leads}
     for p, text in queue.items():
         sp = specs.get(p) if isinstance(specs.get(p), list) else []
         op = {"op": "post", "text": str(text), "tier": "progress", "mention_user": False}

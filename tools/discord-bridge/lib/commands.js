@@ -97,7 +97,7 @@ async function handleCommand(i, ctx) {
   const project = name === 'ideas' ? given : (given || (inHome ? own : null)); // /ideas covers every project unless one is given (R2)
 
   if (name === 'queue' && ctx.ops && !project) { // one card per lead, posted by the board
-    const n = Object.keys(ctx.views()?.queue || {}).length;
+    const n = Object.keys(ctx.views()?.leads || {}).filter((p) => p in (ctx.views()?.queue || {})).length;
     await ctx.answer(i, `posting ${n} queue cards`);
     event({ type: 'slash', command: 'queue', project: null });
     return;

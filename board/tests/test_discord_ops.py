@@ -793,7 +793,7 @@ class Events(Base):
         self.assertEqual(self.audit()[-1]["result"], "unknown project")
 
     def _views(self, queue, specs):
-        (self.ops / "views.json").write_text(json.dumps({"queue": queue, "specs": specs}))
+        (self.ops / "views.json").write_text(json.dumps({"queue": queue, "specs": specs, "leads": {p: {} for p in queue}}))
 
     def test_queue_slash_without_project_posts_one_card_per_lead(self):
         # mutation: leave /queue behind the _known(project) check -> "unknown project" and no card
@@ -809,6 +809,32 @@ class Events(Base):
                                           "options": [{"label": "spec three", "value": "3"}, {"label": "spec five", "value": "5"}]})
         self.assertNotIn("select", o[1])
         self.assertNotIn("select", o[2])
+
+    def test_queue_slash_posts_cards_only_for_projects_with_a_lead(self):
+        # mutation: iterate views["queue"] instead of views["leads"] -> a card for b too
+        self.configure(); self.project("a"); self.project("b")
+        ops.tick([rec("a"), rec("b")], {"a": [], "b": []}, None, NOW, self.add, lead_info={"a": {"pane": "%1"}}, holder_panes=lambda p: set())
+        before = len(self.outbox())
+        r = ops.handle_event(None, self.ops, {"type": "slash", "command": "queue", "project": None, "user": "U1", "ts": NOW}, self.add, {"U1"})
+        self.assertEqual(r, "posted 1")
+        posts = [x for x in self.outbox()[before:] if x["op"] == "post"]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0]["text"], json.loads((self.ops / "views.json").read_text())["queue"]["a"])
+
+    def test_queue_slash_reads_the_specs_a_real_tick_wrote(self):
+        self.configure(); self.project("a")
+        root = Path(self.tmp.name) / "repo"
+        (root / "docs" / "superpowers" / "specs").mkdir(parents=True)
+        (root / "docs" / "superpowers" / "specs" / "2026-01-01-x-design.md").write_text("# My Title\n\n## Problem\n\nfoo\n")
+        subj = "Plan & run: docs/superpowers/specs/2026-01-01-x-design.md"
+        ops.tick([rec("a")], {"a": [{"id": "2", "subject": subj, "status": "pending"}]}, None, NOW, self.add,
+                 lead_info={"a": {"pane": "%1", "root": str(root)}}, holder_panes=lambda p: set())
+        specs = json.loads((self.ops / "views.json").read_text())["specs"]["a"]
+        self.assertTrue(specs)
+        before = len(self.outbox())
+        ops.handle_event(None, self.ops, {"type": "slash", "command": "queue", "project": None, "user": "U1", "ts": NOW}, self.add, {"U1"})
+        (o,) = self.outbox()[before:]
+        self.assertEqual([(x["value"], x["label"]) for x in o["select"]["options"]], [(x["key"], x["label"]) for x in specs])
 
     def test_queue_card_cuts_to_25_options_and_says_how_many_more(self):
         specs = [{"key": str(n), "label": f"s{n}", "summary": "x"} for n in range(1, 31)]
