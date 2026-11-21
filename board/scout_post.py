@@ -27,6 +27,7 @@ NOTE_MAX = 500
 HEALTH_FAILURES = 3
 STATUS_MARKS = {"approved": "✅ approved", "rejected": "✖ rejected", "revise": "✏ revise", "expired": "⌛ expired",
                 "superseded": "♻ superseded"}
+KEEP_ON_REPUBLISH = ("approved", "rejected", "expired", "superseded")
 _CID = re.compile(r"^ab:scout:(approve|reject|revise|file|dismiss):([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$")
 _REPLY = re.compile(r"^ab:scout:(reject|revise):([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$")
 _C0 = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -179,8 +180,9 @@ def _fit(week, post):
 def _copy_files(week, drafts):
     out = []
     for d in drafts:
-        src = Path(str(d.get("path") or ""))
-        if src.is_file():
+        # a Draft's path is repo-relative: the file is in its scout worktree (an absolute path stands as it is)
+        src = Path(str(d.get("worktree") or "")) / str(d.get("path") or "")
+        if d.get("path") and src.is_file():
             dst = scout_dir() / "runs" / week / "files" / src.name
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
@@ -212,13 +214,19 @@ def build_op(week, drafts, others, overlaps, dropped, health, tokens):
 
 
 def publish(week, drafts, others, overlaps, dropped, health, tokens, now):
-    """Write the post op, then both states under the two locks: a failed outbox write leaves them as they were."""
+    """Write the post op, then both states under the two locks: a failed outbox write leaves them as they were. A draft the
+    user already decided (a second publish in the same week, `weekly --force`) keeps its stored record, and the post shows
+    its mark instead of its buttons."""
     op, post = _built(week, drafts, others, overlaps, dropped, health, tokens)
     with _both() as (ds, fs):
         dst, fst = ds.read(), fs.read()
+        kept = False
         for d in drafts:
             rec = dict(d)
             rec["id"] = d.get("id") or draft_id(d["key"])
+            if (dst["drafts"].get(rec["id"]) or {}).get("status") in KEEP_ON_REPUBLISH:
+                kept = True
+                continue
             rec.update(status="pending", post_key=op["key"], week=week)
             rec.setdefault("created_at", findings.iso(now))
             for k in ("note", "reason", "decided_at", "decided_by"):
@@ -230,6 +238,10 @@ def publish(week, drafts, others, overlaps, dropped, health, tokens, now):
                 fst["reported"][i["key"]] = {"first_reported": old["first_reported"] if old else findings.iso(now),
                                              "last_evidence_count": i["count"]}
         fst["posts"][week] = post
+        if kept:
+            statuses = {i["id"]: (dst["drafts"].get(i["id"]) or {}).get("status", "pending") for i in post["items"] if i["kind"] == "draft"}
+            op["text"], op["rows"] = _render(week, post, statuses), _rows(post, statuses)
+            discord_feed._check(op)
         discord_feed.outbox_write(tc_env.discord_dir(PROJECT), op)
         ds.write(dst)
         fs.write(fst)

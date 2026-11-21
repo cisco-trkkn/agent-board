@@ -95,6 +95,15 @@ class BuildTest(Base):
         self.assertTrue(Path(op["files"][0]).is_file())
         discord_feed._check(op)
 
+    def test_files_resolve_a_repo_relative_path_under_the_worktree(self):
+        wt = Path(self.tmp.name) / "wt2"
+        rel = "docs/superpowers/specs/2026-11-22-x-design.md"
+        (wt / rel).parent.mkdir(parents=True)
+        (wt / rel).write_text("# X\n")
+        op = self.build([self.draft(1, path=rel, worktree=str(wt))], [])
+        self.assertEqual([Path(f).name for f in op["files"]], ["2026-11-22-x-design.md"])
+        self.assertEqual(Path(op["files"][0]).read_text(), "# X\n")
+
     def test_empty_sections_left_out(self):
         t = self.build([self.draft(1)], [])["text"]
         for s in ("Other findings:", "Overlaps:", "Dropped:", "Source health:"):
@@ -133,6 +142,21 @@ class PublishTest(Base):
         self.assertIn(WEEK, f["posts"])
         self.assertEqual(len(self.outbox()), 1)
         self.assertTrue(sp.scout_dir().joinpath("drafts.json").is_file())
+
+    def test_republish_keeps_a_decided_draft(self):
+        d1, d2 = self.draft(1), self.draft(2)
+        self.publish(drafts=[d1, d2])
+        self.assertEqual(self.click("approve", d1["id"]), "approved")
+        before = self.dstate()["drafts"][d1["id"]]
+        self.publish(drafts=[d1, d2])                      # weekly --force in the same week
+        after = self.dstate()["drafts"]
+        self.assertEqual({k: after[d1["id"]][k] for k in ("status", "decided_at", "decided_by")},
+                         {k: before[k] for k in ("status", "decided_at", "decided_by")})
+        self.assertEqual(after[d2["id"]]["status"], "pending")
+        op = self.outbox()[-1]
+        self.assertEqual(op["op"], "post")
+        self.assertIn("✅ approved", op["text"])
+        self.assertEqual([b["label"] for r in op["rows"] for b in r], ["Approve 2", "Reject 2", "Revise 2"])
 
     def test_outbox_failure_leaves_both_states(self):
         with mock.patch.object(discord_feed, "outbox_write", side_effect=OSError("boom")):
