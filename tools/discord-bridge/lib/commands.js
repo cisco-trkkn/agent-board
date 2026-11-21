@@ -23,7 +23,7 @@ const FORMS = {
 };
 
 function payload(ops) {
-  return Object.keys(DESCRIPTIONS).map((name) => {
+  return Object.keys(DESCRIPTIONS).filter((name) => ops || name !== 'ideas').map((name) => { // /ideas posts in the ops channel: project bots do not register it
     const c = { name, description: DESCRIPTIONS[name], type: 1 };
     if (name !== 'approvals') {
       c.options = [{ name: 'project', description: 'Project name', type: 3, max_length: PROJECT_MAX, required: ops && NEEDS_PROJECT.has(name) }];

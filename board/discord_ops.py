@@ -564,7 +564,7 @@ def handle_event(project, d, ev, add_line, allow, run=None, spawn=None, st=None)
     elif kind == "read":
         result = "answered"
     elif ideas_slash:
-        result = discord_ideas.request(ev.get("project"), ev.get("bridge"), add_line, time.time())
+        result = discord_ideas.request(ev.get("project"), "_ops", add_line, time.time())   # /ideas always posts in #command-center
         discord_feed.audit_append(d, user, kind, f"ideas:{ev.get('project') or 'all'}", result)
         return result
     elif not _known(project):

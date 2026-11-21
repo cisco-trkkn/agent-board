@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -689,6 +690,30 @@ class Events(Base):
         self.consume()
         self.assertEqual(self.lines, [("a", PAUSE)])
         self.assertEqual(self.audit()[-1]["result"], "unknown project")
+
+    def test_ideas_slash_from_a_project_bridge_goes_through_ops(self):
+        # mutation: pass ev.get("bridge") to discord_ideas.request -> the post, the click edit and the expiry land in the project's outbox
+        import discord_ideas as di
+        ideas_dir = Path(self.tmp.name) / "ideas"
+        ideas_dir.mkdir()
+        (ideas_dir / "a.md").write_text("- [ ] 2026-11-18 10:00 · a one\n")
+        with mock.patch.dict(os.environ, {"TC_IDEAS_DIR": str(ideas_dir)}), mock.patch.object(ops.ideas, "_kick"):
+            r = ops.handle_event(None, self.ops, {"type": "slash", "command": "ideas", "project": "a", "bridge": "a", "user": "U1", "ts": NOW}, self.add, {"U1"})
+            self.assertEqual(r, "asked")
+            T = time.time()
+            req = self.lines[-1][1].split()[2].rstrip(":")
+            self.assertEqual(json.loads((self.ops / "ideas" / f"req-{req}.json").read_text())["bridge"], "_ops")
+            ids = [i for i, _, _ in di.open_ideas("a")]
+            self.assertEqual(di.post({"request": req, "groups": [{"title": "G", "emoji": "🔧", "project": "a", "ideas": ids}]}, T + 1)[0], 0)
+            self.assertEqual([o["key"] for o in self.outbox()], [f"ideas-{req}-0"])
+            self.assertEqual(di.click("U1", f"ab:ideas:park:{req}:0", self.add, T + 2), "parked")
+            self.assertEqual([o["op"] for o in self.outbox()], ["post", "edit"])
+        self.assertEqual(self.outbox(self.pd), [])
+        r2 = ops.handle_event(None, self.ops, {"type": "slash", "command": "ideas", "project": None, "bridge": "a", "user": "U1", "ts": NOW}, self.add, {"U1"})
+        req2 = self.lines[-1][1].split()[2].rstrip(":")
+        self.assertEqual(di.expire(time.time() + 10_000), 1)
+        self.assertEqual([o["key"] for o in self.outbox()][-1], f"ideas-{req2}-timeout")
+        self.assertEqual(self.outbox(self.pd), [])
 
     def test_modal_idea_and_new_spec(self):
         with mock.patch.object(ops.ideas, "add") as add:

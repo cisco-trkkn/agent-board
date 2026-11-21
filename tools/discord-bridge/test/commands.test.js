@@ -47,10 +47,11 @@ test('payload: 8 chat-input commands; project option required per mode', () => {
   const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'ideas', 'approvals', 'tasks', 'lead', 'gauth'];
   const o = commands.payload(true), p = commands.payload(false);
   assert.deepStrictEqual(o.map((c) => c.name), names);
+  assert.deepStrictEqual(p.map((c) => c.name), names.filter((n) => n !== 'ideas')); // project bots do not register /ideas
   assert.ok(o.every((c) => c.type === 1));
   const req = (list) => Object.fromEntries(list.map((c) => [c.name, c.options?.find((x) => x.name === 'project')?.required ?? null]));
   assert.deepStrictEqual(req(o), { status: false, queue: true, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true });
-  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, ideas: false, approvals: null, tasks: false, lead: false, gauth: false });
+  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, approvals: null, tasks: false, lead: false, gauth: false });
   const act = o.find((c) => c.name === 'lead').options.find((x) => x.name === 'action');
   assert.deepStrictEqual([act.type, act.required, act.choices.map((c) => c.value)], [3, true, ['status', 'restart', 'handoff']]);
   assert.ok(o.every((c) => (c.options || []).every((x) => x.type === 3)));

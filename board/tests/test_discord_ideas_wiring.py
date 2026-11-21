@@ -54,10 +54,10 @@ class Slash(Base):
         self.assertEqual(self.audit(self.ops)[-1]["result"], "asked")
         self.assertEqual(self.audit(self.ops)[-1]["target"], "ideas:all")
 
-    def test_named_project_passes_through_with_bridge(self):
+    def test_named_project_passes_through_on_the_ops_bridge(self):   # whatever bridge the event names, /ideas posts through _ops
         with mock.patch.object(discord_ideas, "request", return_value="unknown project") as rq:
             self.assertEqual(self.slash("alpha", bridge="alpha"), "unknown project")
-        self.assertEqual(rq.call_args.args[:2], ("alpha", "alpha"))
+        self.assertEqual(rq.call_args.args[:2], ("alpha", "_ops"))
         self.assertEqual(self.audit(self.ops)[-1]["target"], "ideas:alpha")
 
     def test_disallowed_user_is_rejected_without_request(self):   # mutation: branch before the allow check
