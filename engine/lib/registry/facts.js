@@ -24,7 +24,7 @@ function computeFacts(repo, spec, base, head) {
   const parsed = parseManifest(text);
   if (parsed.error) throw noManifest();
   const mf = parsed.manifest;
-  const d = git(repo, ["diff", "--name-only", `${base}..${head}`]);
+  const d = git(repo, ["diff", "--no-renames", "--name-only", `${base}..${head}`]);
   if (d.rc !== 0) throw new Error(`cannot diff ${base}..${head}`);
   const touched = d.out.split("\n").filter((p) => p && !p.startsWith(EXCLUDED));
   const writes = mf.writes.filter((w) => !w.path.startsWith(EXCLUDED));

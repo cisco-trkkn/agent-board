@@ -8,7 +8,7 @@ function computeStale(repo, spec, mainRef) {
   const parsed = plan ? parseManifest(plan.text) : { error: "no manifest" };
   if (parsed.error) return { state: "no manifest", paths: [] };
   const mf = parsed.manifest;
-  const d = git(repo, ["diff", "--name-only", mf.base, mainRef]);
+  const d = git(repo, ["diff", "--no-renames", "--name-only", mf.base, mainRef]);
   if (d.rc !== 0) throw new Error(`cannot diff ${mf.base} ${mainRef}`);
   const changed = new Set(d.out.split("\n").filter(Boolean));
   const watched = new Set([...mf.writes.filter((w) => w.mode !== "create").map((w) => w.path), ...(mf.reads || [])]);

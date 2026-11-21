@@ -65,6 +65,14 @@ test("stale: no manifest -> stdout 'no manifest', exit 3", (t) => {
   assert.deepStrictEqual([res.code, res.stdout, res.stderr], [3, "no manifest\n", ""]);
 });
 
+test("stale: main renaming a declared modify path is stale (rename listed by source too)", (t) => {
+  const body = "line 0 of a reasonably long file\nline 1 of a reasonably long file\nline 2 of a reasonably long file\nline 3 of a reasonably long file\nline 4 of a reasonably long file\nline 5 of a reasonably long file\nline 6 of a reasonably long file\nline 7 of a reasonably long file\nline 8 of a reasonably long file\nline 9 of a reasonably long file\nline 10 of a reasonably long file\nline 11 of a reasonably long file\nline 12 of a reasonably long file\nline 13 of a reasonably long file\nline 14 of a reasonably long file\nline 15 of a reasonably long file\nline 16 of a reasonably long file\nline 17 of a reasonably long file\nline 18 of a reasonably long file\nline 19 of a reasonably long file\n";
+  const { r } = setup(t, { "a.txt": body }, [W("a.txt", "modify")]);
+  r.git("mv", "a.txt", "a2.txt"); r.commit("main renames a");
+  const res = run(["stale", SPEC], { cwd: r.dir });
+  assert.deepStrictEqual([res.code, res.stdout], [1, "stale\na.txt\n"]);
+});
+
 // ---- facts ----
 test("facts: recall, precision and the declared/touched/both/missed counts", (t) => {
   const { r, base } = setup(t, { "a.txt": "1\n", "b.txt": "1\n", "c.txt": "1\n" },
@@ -82,6 +90,15 @@ test("facts: recall, precision and the declared/touched/both/missed counts", (t)
   assert.deepStrictEqual(json.append_violations, []);
   assert.deepStrictEqual([json.refreshes, json.stale_paths], [0, 0]);
   assert.deepStrictEqual(json.writes, [W("a.txt", "modify"), W("c.txt", "modify"), W("n1.txt", "create")]);
+});
+test("facts: a run renaming a declared file counts both the source and the destination as touched", (t) => {
+  const body = "line 0 of a reasonably long file\nline 1 of a reasonably long file\nline 2 of a reasonably long file\nline 3 of a reasonably long file\nline 4 of a reasonably long file\nline 5 of a reasonably long file\nline 6 of a reasonably long file\nline 7 of a reasonably long file\nline 8 of a reasonably long file\nline 9 of a reasonably long file\nline 10 of a reasonably long file\nline 11 of a reasonably long file\nline 12 of a reasonably long file\nline 13 of a reasonably long file\nline 14 of a reasonably long file\nline 15 of a reasonably long file\nline 16 of a reasonably long file\nline 17 of a reasonably long file\nline 18 of a reasonably long file\nline 19 of a reasonably long file\n";
+  const { r, base } = setup(t, { "a.txt": body }, [W("a.txt", "modify")]);
+  r.git("mv", "a.txt", "a2.txt"); r.commit("work renames a");
+  const { code, json } = facts(r, base);
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.touched, 2);
+  assert.deepStrictEqual(json.missed, ["a2.txt"]);
 });
 test("facts: nothing touched that existed or was created -> null recalls; no writes -> null precision", (t) => {
   const { r, base } = setup(t, { "a.txt": "1\n" }, []);
