@@ -301,6 +301,128 @@ class QuestionsHandoffsTest(Base):
         self.assertEqual(self.rec()["handoffs"], 0)
 
 
+class LeadFieldsTest(Base):
+    """The four lead fields, missing_reason and the failure fence (Task 7)."""
+    PHRASE = "continue from where the previous session left off"
+
+    def slugdir(self):
+        d = self.proj / self.root.replace("/", "-").replace(".", "-")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def turn(self, ts, rid, inp):
+        return json.dumps({"type": "assistant", "timestamp": metrics.utc(ts), "requestId": rid, "isSidechain": False,
+                           "message": {"role": "assistant", "content": [], "usage": {
+                               "input_tokens": inp, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                               "output_tokens": 5}}}) + "\n"
+
+    def transcript(self, sid, turns, doc=None):
+        text = ""
+        if doc:
+            text += json.dumps({"type": "user", "timestamp": metrics.utc(turns[0][0] - 1),
+                                "message": {"role": "user", "content": f"{self.PHRASE} {doc}"}}) + "\n"
+        for i, (ts, inp) in enumerate(turns):
+            text += self.turn(ts, f"{sid[:4]}-{i}", inp)
+        (self.slugdir() / f"{sid}.jsonl").write_text(text)
+
+    def lineage_lines(self, *lines):
+        self.lineage.mkdir(exist_ok=True)
+        (self.lineage / "proj.jsonl").write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+
+    def two_sessions(self, handoff_ts=None):
+        handoff_ts = handoff_ts or self.t0 + 300
+        self.lineage_lines({"ts": handoff_ts, "old_session_id": SID_A, "doc": "/Users/x/handoff-one.md", "pane": "%1"})
+        self.transcript(SID_A, [(self.t0 + 10, 1000), (self.t0 + 200, 4000)])
+        self.transcript(SID_B, [(self.t0 + 400, 2500), (self.t0 + 500, 3000)], doc="/Users/x/handoff-one.md")
+
+    def test_two_lead_sessions_give_peak_and_one_handoff(self):
+        self.start(SPEC1)
+        self.two_sessions()
+        r = self.rec()
+        self.assertEqual(r["lead_context_peak"], 4000)
+        self.assertEqual(r["lead_handoffs"], 1)
+        self.assertEqual(len(r["post_handoff_tokens"]), 1)
+        self.assertEqual(len(r["rereads"]), 1)
+        for k in ("lead_context_peak", "post_handoff_tokens", "rereads"):
+            self.assertNotIn(k, r["missing"])
+
+    def test_record_json_holds_no_path_and_no_session_id(self):
+        self.start(SPEC1)
+        self.two_sessions()
+        text = json.dumps(self.rec())
+        for bad in ("Users", str(self.t), SID_A, SID_B, "handoff-one"):
+            self.assertNotIn(bad, text)
+
+    def test_no_lineage_file_is_null_peak_missing_and_zero_handoffs(self):
+        self.start(SPEC1)
+        r = self.rec()
+        self.assertIsNone(r["lead_context_peak"])
+        self.assertEqual(r["lead_handoffs"], 0)
+        self.assertEqual((r["post_handoff_tokens"], r["rereads"]), ([], []))
+        self.assertIn("lead_context_peak", r["missing"])
+
+    def test_boundary_handoff_counted_with_a_previous_run_in_the_batch(self):
+        # SPEC2's window starts after SPEC1's run ended; the handoff sits between the two
+        prev_end = self.t0 - 300
+        metrics.append(self.repo, {"kind": "run", "batch": "B", "spec": SPEC1, "ended_at": metrics.utc(prev_end),
+                                   "at": metrics.utc(prev_end)})
+        self.start(SPEC2, at=self.t0)
+        self.two_sessions(handoff_ts=self.t0 - 100)
+        self.assertEqual(self.rec(SPEC2)["lead_handoffs"], 1)
+
+    def test_boundary_handoff_not_counted_without_a_previous_run(self):
+        self.start(SPEC2, at=self.t0)
+        self.two_sessions(handoff_ts=self.t0 - 100)
+        self.assertEqual(self.rec(SPEC2)["lead_handoffs"], 0)
+
+    def test_lead_fields_failure_never_fails_the_record(self):
+        self.start(SPEC1)
+        err = io.StringIO()
+        with mock.patch("metrics_lead.lead_fields", side_effect=RuntimeError("boom /Users/x/secret")), \
+                contextlib.redirect_stderr(err):
+            r = self.rec()
+        self.assertIsNone(r["lead_context_peak"])
+        self.assertEqual((r["lead_handoffs"], r["post_handoff_tokens"], r["rereads"]), (0, [], []))
+        for k in ("lead_context_peak", "lead_handoffs", "post_handoff_tokens", "rereads"):
+            self.assertIn(k, r["missing"])
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("metrics: record: lead fields skipped: "))
+        self.assertNotIn("/Users", lines[0])
+
+
+class MissingReasonTest(Base):
+    def test_no_taps_gives_the_record_time_reason(self):
+        self.start(SPEC1)
+        r = self.rec()
+        self.assertEqual(r["missing_reason"], {"limits": "no statusline tap with rate_limits at record time"})
+
+    def test_backfilled_record_gives_the_backfill_reason(self):
+        self.start(SPEC1)
+        r = self.rec(backfilled=True)
+        self.assertEqual(r["missing_reason"], {"limits": "backfilled run: no tap reading exists for a past window"})
+        self.assertEqual(r["limits"], {"start": None, "record": None})
+
+    def test_tap_reading_has_no_missing_reason(self):
+        self.start(SPEC1)
+        d = self.state / "statusline"
+        d.mkdir(parents=True)
+        (d / "x.json").write_text(json.dumps({"session_id": SID_LEAD, "received_at": time.time(),
+                                              "rate_limits": {"five_hour": {"used_percentage": 9}, "seven_day": None}}))
+        r = self.rec()
+        self.assertNotIn("missing_reason", r)
+        self.assertNotIn("limits", r["missing"])
+
+    def test_start_without_taps_writes_the_start_reason(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            metrics.main(["--repo", str(self.repo), "start", SPEC1, "--batch", "B"])
+        rec = [d for d in metrics.read_log(self.repo)[0] if d.get("kind") == "start"][-1]
+        self.assertEqual(rec["missing"], ["limits"])
+        self.assertEqual(rec["missing_reason"], {"limits": "no statusline tap with rate_limits at start"})
+        self.assertIsNone(rec["limits"])
+
+
 class MergeMissingTest(Base):
     def test_unmerged_kept_is_not_missing_but_merged_outcome_is(self):
         self.start(SPEC1)

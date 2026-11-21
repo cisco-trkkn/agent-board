@@ -219,6 +219,86 @@ class SyntheticTest(Base):
         self.assertIn("Limits at start: five_hour 5, seven_day 40", out)
         self.assertIn("Limits at end: five_hour 30, seven_day 44", out)
 
+    SCOPE = ("Re-reads count files read with Read, cat, sed, head, tail or grep in the new lead's first 10 turns "
+             "that the previous lead also read; Grep and Glob calls are not counted.")
+
+    def lead(self, spec, peak, handoffs, rereads, **kw):
+        self.run_line(spec, lead_context_peak=peak, lead_handoffs=handoffs, post_handoff_tokens=[1] * handoffs,
+                      rereads=rereads, **kw)
+
+    def lead_lines(self, out):
+        return [l for l in out.splitlines() if ": Lead: " in l]
+
+    def test_lead_line_with_peak_and_no_handoffs(self):
+        self.batch()
+        self.lead(S1, 123456, 0, [])
+        _, out, _ = self.report()
+        self.assertEqual(self.lead_lines(out), [f"{S1}: Lead: peak 123K tokens, 0 handoffs"])
+        self.assertNotIn(self.SCOPE, out)
+        lines = out.splitlines()
+        self.assertTrue(lines[lines.index(self.lead_lines(out)[0]) - 1].startswith("Limits at end"))
+
+    def test_lead_line_with_handoffs_and_rereads_and_the_scope_line(self):
+        self.batch()
+        self.lead(S1, 200999, 2, [3, None])
+        _, out, _ = self.report()
+        self.assertEqual(self.lead_lines(out), [f"{S1}: Lead: peak 200K tokens, 2 handoffs, 3 re-reads after handoff"])
+        self.assertEqual(out.count(self.SCOPE), 1)
+        lines = out.splitlines()
+        self.assertEqual(lines[lines.index(self.lead_lines(out)[0]) + 1], self.SCOPE)
+
+    def test_no_scope_line_when_rereads_are_all_null_or_empty(self):
+        self.batch()
+        self.lead(S1, 1000, 1, [None])
+        _, out, _ = self.report()
+        self.assertEqual(self.lead_lines(out), [f"{S1}: Lead: peak 1K tokens, 1 handoffs"])
+        self.assertNotIn(self.SCOPE, out)
+
+    def test_null_peak_prints_a_dash(self):
+        self.batch()
+        self.lead(S1, None, 0, [])
+        _, out, _ = self.report()
+        self.assertEqual(self.lead_lines(out), [f"{S1}: Lead: peak - tokens, 0 handoffs"])
+
+    def test_old_record_without_the_key_has_no_lead_line(self):
+        self.batch()
+        self.run_line(S1)
+        _, out, _ = self.report()
+        self.assertEqual(self.lead_lines(out), [])
+        self.assertNotIn("Re-reads count", out)
+
+    def test_lead_lines_sorted_by_spec(self):
+        self.batch()
+        self.lead(S2, 2000, 0, [])
+        self.lead(S1, 1000, 0, [])
+        _, out, _ = self.report()
+        self.assertEqual([l.split(":")[0] for l in self.lead_lines(out)], [S1, S2])
+
+    def test_printed_figures_equal_the_record_fields(self):
+        self.batch()
+        self.lead(S1, 87654, 2, [4, 1])
+        _, out, _ = self.report()
+        rec = [d for d in metrics.read_log(self.repo)[0] if d.get("kind") == "run"][-1]
+        self.assertEqual(self.lead_lines(out), [
+            f"{S1}: Lead: peak {rec['lead_context_peak'] // 1000}K tokens, {rec['lead_handoffs']} handoffs, "
+            f"{sum(x for x in rec['rereads'] if x is not None)} re-reads after handoff"])
+
+    def test_limits_missing_lines_for_runs_and_starts(self):
+        self.batch()
+        metrics.append(self.repo, {"kind": "start", "batch": "B", "spec": S2, "at": iso(self.t0), "main": "x",
+                                   "limits": None, "missing": ["limits"],
+                                   "missing_reason": {"limits": "no statusline tap with rate_limits at start"}})
+        self.run_line(S1, missing_reason={"limits": "backfilled run: no tap reading exists for a past window"})
+        _, out, _ = self.report()
+        self.assertIn(f"Limits missing: {S1}: backfilled run: no tap reading exists for a past window", out)
+        self.assertIn(f"Limits missing: start {S2}: no statusline tap with rate_limits at start", out)
+
+    def test_no_limits_missing_line_without_reasons(self):
+        self.batch()
+        self.run_line(S1)
+        _, out, _ = self.report()
+        self.assertNotIn("Limits missing", out)
+
     def test_limits_at_end_come_from_the_run_with_the_latest_at(self):
         self.batch()
         lim = lambda n: {"start": None, "record": {"five_hour": {"used_percentage": n}, "seven_day": {"used_percentage": n}}}

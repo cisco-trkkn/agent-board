@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
+import metrics_lead  # noqa: E402
 import metrics_tasks  # noqa: E402
 import tc_env  # noqa: E402
 import usage  # noqa: E402
@@ -195,6 +196,12 @@ def cmd_batch_start(repo, args):
         print(f"{s} {asg[s]}")
 
 
+REASON_BACKFILL = "backfilled run: no tap reading exists for a past window"
+REASON_RECORD = "no statusline tap with rate_limits at record time"
+REASON_START = "no statusline tap with rate_limits at start"
+LEAD_FIELDS = ("lead_context_peak", "lead_handoffs", "post_handoff_tokens", "rereads")
+
+
 def cmd_start(repo, args):
     if not any(d.get("kind") == "batch" and d.get("batch") == args.batch for d in read_log(repo)[0]):
         raise MetricsError(f"unknown batch {args.batch}")
@@ -206,6 +213,7 @@ def cmd_start(repo, args):
     else:
         rec["limits"] = None
         rec["missing"] = ["limits"]
+        rec["missing_reason"] = {"limits": REASON_START}
     append(repo, rec)
 
 
@@ -665,6 +673,31 @@ def _other_windows(lines, batch, spec, now):
     return out
 
 
+def _lead_part(lines, batch, spec, root, project, lo, hi, missing):
+    """The four lead fields; any failure gives null/0/[]/[] with every name in `missing` and one stderr line."""
+    try:
+        ends = []
+        for (b, sp), run in last_runs(lines).items():
+            if b == batch and sp != spec and run.get("ended_at"):
+                try:
+                    e = _epoch(run["ended_at"])
+                except ValueError:
+                    continue
+                if e < lo:
+                    ends.append(e)
+        prev_end = max(ends) if ends else None
+        got = metrics_lead.lead_fields(usage.root() / slug_of(root), tc_env.lineage_dir() / f"{project or Path(root).name}.jsonl",
+                                       lo, hi, prev_end)
+        out = {k: got[k] for k in LEAD_FIELDS}
+        names = list(got.get("missing") or [])
+    except Exception as e:
+        print(f"metrics: record: lead fields skipped: {type(e).__name__}", file=sys.stderr)
+        out = {"lead_context_peak": None, "lead_handoffs": 0, "post_handoff_tokens": [], "rereads": []}
+        names = list(LEAD_FIELDS)
+    missing.extend(k for k in names if k not in missing)
+    return out
+
+
 def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, project=None, window=None, plan=None, merge=None,
                  batch_base=None, backfilled=False):
     """The whole `run` line: build_record_static plus the usage half. `window` = (start_ts, end_ts, kind) overrides
@@ -706,12 +739,15 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
         # today's tap reading says nothing about a run that ended days ago; ready_at/wait_s have no batch line either
         rec["limits"] = {"start": None, "record": None}
         missing.extend(k for k in ("limits", "ready_at", "wait_s") if k not in missing)
+        rec["missing_reason"] = {"limits": REASON_BACKFILL}
     else:
         pl = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
         rec["limits"] = {"start": (start or {}).get("limits"),
                          "record": {"five_hour": pl.get("five_hour"), "seven_day": pl.get("seven_day")} if pl else None}
         if not pl:
             missing.append("limits")
+            rec["missing_reason"] = {"limits": REASON_RECORD}
+    rec.update(_lead_part(lines, batch, spec, root, project, lo, hi, missing))
     rec["questions"] = count_questions(root, (lo, hi))
     if rec["questions"] is None:
         missing.append("questions")
@@ -873,6 +909,45 @@ def _limits_line(label, lim):
     return f"{label}: five_hour {_pct(lim.get('five_hour'))}, seven_day {_pct(lim.get('seven_day'))}"
 
 
+REREADS_SCOPE = ("Re-reads count files read with Read, cat, sed, head, tail or grep in the new lead's first 10 turns "
+                 "that the previous lead also read; Grep and Glob calls are not counted.")
+
+
+def _lead_lines(runs):
+    """One line per run record with the key lead_context_peak. Sources, all fields of that record: lead_context_peak
+    (peak, divided by 1000, rounded down), lead_handoffs (handoffs), rereads (sum of the non-null entries)."""
+    out, scoped = [], False
+    for r in runs:
+        if "lead_context_peak" not in r:
+            continue
+        peak = r.get("lead_context_peak")
+        n = r.get("lead_handoffs")
+        shown = f"{int(peak) // 1000}K" if isinstance(peak, (int, float)) and not isinstance(peak, bool) else "-"
+        line = f"{r['spec']}: Lead: peak {shown} tokens"
+        line += f", {_cell(n)} handoffs"
+        nums = [x for x in (r.get("rereads") or []) if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        if isinstance(n, (int, float)) and n > 0 and nums:
+            line += f", {sum(nums)} re-reads after handoff"
+            scoped = True
+        out.append(line)
+    if scoped:
+        out.append(REREADS_SCOPE)
+    return out
+
+
+def _limits_missing_lines(runs, starts):
+    out = []
+    for r in runs:
+        why = (r.get("missing_reason") or {}).get("limits")
+        if why:
+            out.append(f"Limits missing: {r['spec']}: {why}")
+    for d in starts:
+        why = (d.get("missing_reason") or {}).get("limits")
+        if why:
+            out.append(f"Limits missing: start {d.get('spec')}: {why}")
+    return out
+
+
 def _cell(v):
     return "-" if v is None else str(v)
 
@@ -1028,6 +1103,8 @@ def report_text(repo, batch_id, usage_db=None):
     last = max(runs, key=lambda r: r.get("at") or "") if runs else None
     out.append(_limits_line("Limits at start", (first or {}).get("limits")))
     out.append(_limits_line("Limits at end", ((last or {}).get("limits") or {}).get("record")))
+    out += _lead_lines(runs)
+    out += _limits_missing_lines(runs, starts)
     out.append("")
     out.append("Excluded: " + ("; ".join(excluded) if excluded else "none"))
     out.append(f"Malformed log lines: {malformed}")
