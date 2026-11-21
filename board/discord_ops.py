@@ -130,6 +130,76 @@ def tasks_text(lead_tasks, floor):
     return "\n".join(lines)[:QUEUE_MAX]
 
 
+SPEC_MAX, PROBLEM_MAX, LABEL_MAX = 1900, 600, 100
+_SPEC_CACHE = {}   # (resolved path, mtime) -> (title, problem); status and branch change without the file, so they are not cached
+_STATUS_WORDS = {"pending": "pending", "in_progress": "in progress", "completed": "completed"}
+
+
+def _spec_path(task):
+    """(path text, `#part-n` suffix or '') from a `Plan & run:` subject; the trailing ` (…)` is dropped."""
+    subj = str((task or {}).get("subject") or "")
+    if not subj.startswith(discord_feed._PLAN_RUN):
+        return "", ""
+    rest = re.sub(r"\s+\([^()]*\)\s*$", "", subj[len(discord_feed._PLAN_RUN):].strip())
+    path, _, frag = rest.partition("#")
+    return path.strip(), ("#" + frag if frag else "")
+
+
+def _spec_parts(root, path):
+    """(title, problem) of the spec file, cached per (resolved path, mtime); None when it cannot be read."""
+    if not root or not path:
+        return None
+    try:
+        f = (Path(root) / path).resolve()
+        key = (str(f), f.stat().st_mtime)
+        if key not in _SPEC_CACHE:
+            text = f.read_text(errors="replace")
+            title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
+            m = re.search(r"^## Problem[ \t]*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+            problem = " ".join(m.group(1).split()) if m else ""
+            if len(problem) > PROBLEM_MAX:
+                problem = problem[:PROBLEM_MAX - 1].rsplit(" ", 1)[0].rstrip() + "…"
+            if len(_SPEC_CACHE) > 200:
+                _SPEC_CACHE.clear()
+            _SPEC_CACHE[key] = (title, problem)
+        return _SPEC_CACHE[key]
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def spec_label(task):
+    path, part = _spec_path(task)
+    return (os.path.basename(path) + part)[:LABEL_MAX]
+
+
+def spec_summary(root, task):
+    """The /queue spec summary of one `Plan & run:` task: title, Problem excerpt, status, branch. Never raises."""
+    task = task if isinstance(task, dict) else {}
+    path, _ = _spec_path(task)
+    parts = _spec_parts(root, path)
+    name = os.path.basename(path)
+    if parts:
+        head = [f"**{parts[0] or name}**"] + ([parts[1]] if parts[1] else [])
+    else:
+        head = [f"**{name}**", "(spec file not found)"]
+    meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    status = _STATUS_WORDS.get(task.get("status"), str(task.get("status") or "pending"))
+    if meta.get("outcome"):
+        status += f" — {meta['outcome']}"
+    if meta.get("branch"):
+        branch = f"Branch: {meta['branch']}" + (f" · worktree {meta['worktree']}" if meta.get("worktree") else "")
+    else:
+        branch = "Branch: not started"
+    tail = f"\nStatus: {status}\n{branch}"
+    return ("\n".join(head)[:max(0, SPEC_MAX - len(tail))] + tail)[:SPEC_MAX]
+
+
+def specs_view(root, lead_tasks):
+    runs = sorted((t for t in (lead_tasks or []) if isinstance(t, dict) and str(t.get("subject", "")).startswith(discord_feed._PLAN_RUN)),
+                  key=discord_feed._tid)
+    return [{"key": str(t.get("id")), "label": spec_label(t), "summary": spec_summary(root, t)} for t in runs]
+
+
 def lead_view(info, holders, tap, handoffs, now):
     """One project's views.json `leads` entry; every missing value is null."""
     sid = info.get("session_id") or None
@@ -345,7 +415,8 @@ def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=
             hd = handoffs or str(tc_env.agent_base() / "handoffs")
             for p, i in lead_info.items():
                 leads_view[p] = lead_view(i, holders, tap, hd, now)
-        _write_json(d / "views.json", {"tasks": tasks_view, "leads": leads_view, "ts": now, "projects": sorted(links), "status": status,
+        specs = {r["project"]: specs_view((lead_info.get(r["project"]) or {}).get("root"), tasks_by_project.get(r["project"])) for r in records}
+        _write_json(d / "views.json", {"tasks": tasks_view, "leads": leads_view, "specs": specs, "ts": now, "projects": sorted(links), "status": status,
                                        "queue": {r["project"]: queue_text(tasks_by_project.get(r["project"]), floors[r["project"]]) for r in records},
                                        "approvals": _approvals_view(st, now), "evidence": _evidence_view(st)})
         return {"approvals": len(st["approvals"])}

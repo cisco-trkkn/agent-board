@@ -158,6 +158,85 @@ class BlockersSplit(Base):
         self.assertIn("tasks 1/1", v["status"]["_all"])
 
 
+class SpecSummary(Base):
+    def spec(self, name="2026-01-01-x-design.md", text=None):
+        root = Path(self.tmp.name) / "repo"
+        d = root / "docs" / "superpowers" / "specs"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(text if text is not None else "# My Title\n\n## Problem\n\nfoo   bar\nbaz\n\n## Next\nzzz\n")
+        return root, f"Plan & run: docs/superpowers/specs/{name}"
+
+    def test_summary_lines(self):
+        root, subj = self.spec()
+        t = {"id": "1", "subject": subj, "status": "in_progress", "metadata": {"outcome": "ok", "branch": "feat/x", "worktree": ".claude/worktrees/x"}}
+        self.assertEqual(ops.spec_summary(root, t).split("\n"), ["**My Title**", "foo bar baz", "Status: in progress — ok",
+                                                               "Branch: feat/x · worktree .claude/worktrees/x"])
+        t = {"id": "1", "subject": subj + " (retry)", "status": "pending"}
+        self.assertEqual(ops.spec_summary(root, t).split("\n")[-2:], ["Status: pending", "Branch: not started"])
+
+    def test_part_suffix_stripped(self):
+        root, subj = self.spec()
+        self.assertTrue(ops.spec_summary(root, {"subject": subj + "#part-2", "status": "completed"}).startswith("**My Title**"))
+
+    def test_problem_cut_at_word_boundary(self):
+        root, subj = self.spec(text="# T\n## Problem\n" + "word " * 300 + "\n## End\n")
+        lines = ops.spec_summary(root, {"subject": subj, "status": "pending"}).split("\n")
+        self.assertLessEqual(len(lines[1]), 600)
+        self.assertTrue(lines[1].endswith("word…"))
+
+    def test_missing_spec_never_raises(self):
+        root, _ = self.spec()
+        out = ops.spec_summary(root, {"subject": "Plan & run: docs/nope.md", "status": "pending"}).split("\n")
+        self.assertEqual(out, ["**nope.md**", "(spec file not found)", "Status: pending", "Branch: not started"])
+        self.assertIn("(spec file not found)", ops.spec_summary(root, {}))
+        self.assertIn("(spec file not found)", ops.spec_summary(root, {"subject": "Plan & run:"}))
+        self.assertIn("(spec file not found)", ops.spec_summary(None, {"subject": "Plan & run: a.md"}))
+
+    def test_cached_per_path_and_mtime(self):
+        # mutation: drop the cache -> the second call reads again and this fails
+        root, subj = self.spec()
+        t = {"subject": subj, "status": "pending"}
+        real = Path.read_text
+        reads = []
+        def counting(self_, *a, **k):
+            reads.append(str(self_))
+            return real(self_, *a, **k)
+        with mock.patch.object(Path, "read_text", counting):
+            ops.spec_summary(root, t)
+            ops.spec_summary(root, t)
+            self.assertEqual(len([r for r in reads if r.endswith("x-design.md")]), 1)
+            f = root / subj.split(": ")[1]
+            os.utime(f, (NOW + 99, NOW + 99))
+            ops.spec_summary(root, t)
+            self.assertEqual(len([r for r in reads if r.endswith("x-design.md")]), 2)
+
+    def test_summary_cap(self):
+        root, subj = self.spec(text="# " + "T" * 3000 + "\n## Problem\nx\n")
+        self.assertLessEqual(len(ops.spec_summary(root, {"subject": subj, "status": "pending"})), 1900)
+
+    def test_real_spec_file(self):
+        root = Path(__file__).resolve().parents[2]
+        s = ops.spec_summary(root, {"subject": "Plan & run: docs/superpowers/specs/2026-11-19-discord-ops-fixes-design.md", "status": "pending"})
+        self.assertTrue(s.startswith("**Discord bridge and ops fixes"))
+        self.assertIn("Six small defects", s)
+
+    def test_specs_view_in_views_json(self):
+        self.configure()
+        self.project("a")
+        self.project("b")
+        root, subj = self.spec()
+        tasks = {"a": [run_task(10, "z", "pending"), {"id": "2", "subject": subj + "#part-1", "status": "pending"},
+                       {"id": "3", "subject": "other", "status": "pending"}], "b": []}
+        info = {"a": {"pane": "%1", "root": str(root)}}
+        ops.tick([rec("a"), rec("b")], tasks, None, NOW, self.add, lead_info=info, holder_panes=lambda p: set())
+        v = json.loads((self.ops / "views.json").read_text())["specs"]
+        self.assertEqual([e["key"] for e in v["a"]], ["2", "10"])
+        self.assertEqual(v["a"][0]["label"], "2026-01-01-x-design.md#part-1")
+        self.assertTrue(v["a"][0]["summary"].startswith("**My Title**"))
+        self.assertIn("(spec file not found)", v["a"][1]["summary"])
+        self.assertEqual(v["b"], [])
+
+
 class Tick(Base):
     def test_unconfigured_writes_nothing(self):
         # mutation: drop the configured() guard -> files appear under _ops and the test fails
