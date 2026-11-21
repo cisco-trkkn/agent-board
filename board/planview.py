@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """planview: the active plan's tasks with their owners' pane state, for board consumers (`view()`).
 
-view(session, root, home, state_dir, tmux) -> {"name", "active", "tasks": [{"id","subject","status","owner","state","tier","blockedBy"}]}
+view(session, root, home, state_dir, tmux) -> {"name", "active", "tasks": [{"id","subject","status","owner","state","tier","blockedBy",
+  "outcome","answeredAt","planPath"}]}  (the last three: metadata.outcome, metadata.queue.answeredAt, metadata.plan, else "")
 `home` is the Claude config dir (~/.claude): it holds sessions/ and tasks/.
 Reads the lead's live task list (<home>/tasks/session-<id8>/, else its team's <home>/tasks/<team>/), falls back to the plan's .md.tasks.json.
 Never raises: missing files, bad JSON and a failing tmux give an empty or partial view.
@@ -71,10 +72,17 @@ def _tier(t):
     return v.get("modelTier", "") if isinstance(v, dict) and isinstance(v.get("modelTier", ""), str) else ""
 
 
+def _str(d, k):
+    v = d.get(k) if isinstance(d, dict) else None
+    return v if isinstance(v, str) else ""
+
+
 def _norm(t):
+    meta = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
     return {"id": str(t.get("id", "")), "subject": str(t.get("subject", "")), "status": str(t.get("status", "pending")),
             "owner": str(t.get("owner") or ""), "blockedBy": [str(b) for b in (t.get("blockedBy") or [])],
-            "tier": _tier(t)}
+            "tier": _tier(t), "outcome": _str(meta, "outcome"), "answeredAt": _str(meta.get("queue"), "answeredAt"),
+            "planPath": _str(meta, "plan")}
 
 
 def _finish(tasks):
@@ -86,7 +94,8 @@ def _finish(tasks):
         if st == "pending" and any(b not in done for b in t["blockedBy"]):
             st = "blocked"
         out.append({"id": t["id"], "subject": t["subject"], "status": st, "owner": t["owner"], "state": "",
-                    "tier": t["tier"], "blockedBy": t["blockedBy"]})
+                    "tier": t["tier"], "blockedBy": t["blockedBy"], "outcome": t.get("outcome", ""),
+                    "answeredAt": t.get("answeredAt", ""), "planPath": t.get("planPath", "")})
     return out
 
 

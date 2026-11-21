@@ -420,3 +420,21 @@ class RawLiveTasksTest(unittest.TestCase):
             (Path(td) / "teams" / "team-x" / "config.json").write_text(json.dumps({"name": "team-x", "leadSessionId": SID2}))
             self.assertEqual([x["id"] for x in planview.raw_live_tasks(td, SID2)], ["1"])
             self.assertEqual(planview.raw_live_list(td, SID2)[0], "team-x")
+
+
+class QueueFieldsTest(unittest.TestCase):
+    """_norm/_finish carry metadata.outcome, metadata.queue.answeredAt and metadata.plan as strings, else ""."""
+
+    def test_queue_fields_from_metadata(self):
+        d = {"id": "4", "subject": "Plan & run: docs/superpowers/specs/x-design.md", "status": "completed",
+             "metadata": {"outcome": "merged abc1234", "plan": "docs/superpowers/plans/x.md",
+                          "queue": {"batch": "b", "answeredAt": "2026-11-12T06:27:47Z"}}}
+        t = planview._finish([planview._norm(d)])[0]
+        self.assertEqual((t["outcome"], t["answeredAt"], t["planPath"]),
+                         ("merged abc1234", "2026-11-12T06:27:47Z", "docs/superpowers/plans/x.md"))
+
+    def test_missing_or_malformed_metadata_gives_empty_strings(self):
+        for meta in (None, 3, {}, {"outcome": 5, "queue": "x", "plan": ["p"]}, {"queue": {"answeredAt": 1}}):
+            d = {"id": "1", "subject": "s", "status": "pending", "metadata": meta}
+            t = planview._finish([planview._norm(d)])[0]
+            self.assertEqual((t["outcome"], t["answeredAt"], t["planPath"]), ("", "", ""), meta)
