@@ -172,6 +172,16 @@ class Canvas:
                 used += w
         return x
 
+    def invert_row(self, y):
+        """Add `inverse` to every cell of row y up to its last non-blank one (the cursor row in colour)."""
+        if not (0 <= y < self.h):
+            return
+        end = self.w
+        while end > 0 and self.ch[y][end - 1] in (" ", ""):
+            end -= 1
+        for x in range(end):
+            self.st[y][x] = tuple(self.st[y][x]) + ("inverse",) if "inverse" not in self.st[y][x] else self.st[y][x]
+
     def get(self, x, y):
         return self.ch[y][x] if 0 <= x < self.w and 0 <= y < self.h else None
 
@@ -333,7 +343,7 @@ def _summary(tasks):
 
 # ---------------------------------------------------------------- header
 
-def _header(cv, view, tasks, timing, width, now, frame, tabs=None, name=None):
+def _header(cv, view, tasks, timing, width, now, frame, tabs=None, name=None, note=""):
     name = name if name is not None else (view.get("name") or "Tasks")
     x0 = cv.put_segs(0, 0, tabs, width) + 2 if tabs else 0
     done, total = sum(t["status"] == "completed" for t in tasks), len(tasks)
@@ -342,11 +352,16 @@ def _header(cv, view, tasks, timing, width, now, frame, tabs=None, name=None):
     elapsed = fmt_dur(now - min(starts)) if starts else "—"
     right = f"{done}/{total} done   elapsed {elapsed}"
     room = width - cells(right) - 2 - x0
-    if room >= 6:
-        cv.put(x0, 0, truncate(name, room), ("bold",))
+    def fit(room):  # the plan name gives way before the filter note does
+        if not note:
+            return truncate(name, room)
+        return truncate(name, room - cells(note) - 3) + " · " + note if room - cells(note) - 3 >= 4 else truncate(note, room)
+
+    if room >= 6 and (not note or room - cells(note) - 3 >= 4):
+        cv.put(x0, 0, fit(room), ("bold",))
         cv.put(width - cells(right), 0, right, ("grey",))
     else:
-        cv.put(x0, 0, truncate(name, width - x0), ("bold",))
+        cv.put(x0, 0, fit(width - x0), ("bold",))
     filled = round(width * done / total) if total else 0
     cv.put(0, 1, "━" * filled, ("green",))
     cv.put(filled, 1, "─" * (width - filled), ("grey",))
@@ -586,7 +601,7 @@ def _draw_edges(cv, cols, cw, pos, card_h=CARD_H):
             cv.put(x, y, "▸", ("grey",))
 
 
-def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model=None, crit=None):
+def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model=None, crit=None, sel=None):
     plan = _plan_graph(tasks, width, avail)
     if plan is None:
         return None
@@ -612,15 +627,22 @@ def _graph_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier
             draw(cv, x, r * (card_h + GAP), cw, t, timing, now, frame, t["id"] in crit, t["id"] in flash_ids,
                        tier_model, color)
     _draw_edges(cv, cols, cw, pos, card_h)
+    if sel in pos:  # heavy corners on the cursor's card, after the edges so nothing overwrites them
+        c, r = pos[sel]
+        x0, y0 = c * (cw + GUTTER), r * (card_h + GAP)
+        for (cx, cy), ch in (((x0, y0), "┏"), ((x0 + cw - 1, y0), "┓"),
+                             ((x0, y0 + card_h - 1), "┗"), ((x0 + cw - 1, y0 + card_h - 1), "┛")):
+            old = cv.st[cy][cx] if 0 <= cy < cv.h and 0 <= cx < cv.w else ()
+            cv.put(cx, cy, ch, tuple(old) + (("bold",) if "bold" not in old else ()))
     return head + cv.lines(color)
 
 
 # ---------------------------------------------------------------- list layout
 
-def _list_line(cv, y, width, t, timing, now, frame, flash, tier_model=None, mark=False):
-    extra = ("inverse",) if flash else ()
+def _list_line(cv, y, width, t, timing, now, frame, flash, tier_model=None, mark=False, sel=False, sel_mark=False):
+    extra = ("inverse",) if flash or sel else ()
     st = t["status"]
-    head = [(_status_glyph(t, frame), (STATUS_STYLE.get(st, "grey"),)), (" " + ("*" if mark else "") + t["id"] + "  ", ("bold",))]
+    head = [(_status_glyph(t, frame), (STATUS_STYLE.get(st, "grey"),)), (" " + (">" if sel_mark else "") + ("*" if mark else "") + t["id"] + "  ", ("bold",))]
     # tail pieces in display order; `drop` is the order they go when the line is too narrow
     parts = {}
     badge = _badge(t, tier_model)
@@ -658,10 +680,11 @@ def _list_line(cv, y, width, t, timing, now, frame, flash, tier_model=None, mark
     cv.put_segs(width - tw, y, tail, tw, extra)  # right-aligned, so the hints line up at the edge
 
 
-def _list_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model=None, crit=None):
+def _list_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model=None, crit=None,
+                sel=None, summarize=True):
     rows = list(tasks)
     summary = None
-    if len(rows) > avail:
+    if summarize and len(rows) > avail:
         done = [t for t in tasks if t["status"] == "completed"]
         if done:
             summary = _summary(done)
@@ -674,15 +697,22 @@ def _list_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_
         y += 1
     crit = set(critical_path(tasks)) if crit is None else crit
     room = n - y
-    show = rows
+    show, first = rows, 0
     if len(rows) > room:
-        show = rows[:max(0, room - 1)]
+        at = next((i for i, t in enumerate(rows) if t["id"] == sel), 0)
+        cap = max(0, room - 1)  # the last line is `+N more` while rows follow
+        first = 0 if at < cap else at - cap + 1
+        if len(rows) - first <= room:  # the tail fits: no `+N more`, show it all
+            first = max(0, len(rows) - room)
+            show = rows[first:]
+        else:
+            show = rows[first:first + cap]
     for t in show:
         _list_line(cv, y, width, t, timing, now, frame, t["id"] in flash_ids, tier_model,
-                   color == "none" and t["id"] in crit)
+                   color == "none" and t["id"] in crit, t["id"] == sel, color == "none" and t["id"] == sel)
         y += 1
-    if len(show) < len(rows) and y < n:
-        cv.put(0, y, truncate(f"+{len(rows) - len(show)} more", width), ("grey",))
+    if first + len(show) < len(rows) and y < n:
+        cv.put(0, y, truncate(f"+{len(rows) - first - len(show)} more", width), ("grey",))
     return cv.lines(color)
 
 
@@ -774,12 +804,45 @@ def _render_ui(view, timing, width, height, now, frame, color, session, tier_mod
 
 
 def _plan_screen(view, tasks, timing, width, height, now, frame, color, session, tier_model, ui, model):
-    # Task 6 replaces this with the cursor, filter and collapse; until then today's body under the tab header.
-    if not tasks:
-        cv = Canvas(width, HEADER_ROWS)
-        _header(cv, view, tasks, timing, width, now, frame, _tabs("plan"))
-        return cv.lines(color)
-    return _plan_lines(view, tasks, timing, width, height, now, frame, color, tier_model, _tabs("plan"))
+    plan = taskwin_views.split(tasks)[1]
+    tabs = _tabs("plan")
+    if not plan:  # today's idle screen, line 0 replaced by the tabs and the name
+        lines = _idle(view, width, height, color, session)
+        top = Canvas(width, 1)
+        x = top.put_segs(0, 0, tabs, width) + 2
+        top.put(x, 0, truncate(view.get("name") or "Tasks", max(0, width - x)), ("bold",))
+        return [top.lines(color)[0]] + lines[1:]
+    ndone, shown = taskwin_views.plan_tasks(tasks, ui)
+    rows = model["rows"]["plan"]
+    sel = rows[ui["cursor"]["plan"]] if rows else None
+    note = FILTER_NOTE.get(ui["filter"], "")
+    cv = Canvas(width, HEADER_ROWS)
+    _header(cv, view, plan, timing, width, now, frame, tabs, note=note)
+    avail = max(0, height - HEADER_ROWS)
+    head = []
+    if ndone:
+        on = sel == taskwin_views.DONE_KEY
+        text = f"{'> ' if on and color == 'none' else ''}✓ {ndone} done"
+
+        def draw(c):
+            c.put(0, 0, truncate(text, width), ("green",))
+            if on:
+                c.invert_row(0)
+        head = [_line(width, color, draw)]
+        avail -= 1
+    if not shown:
+        body = [] if ndone else [_line(width, color, lambda c: c.put(0, 0, f"no tasks match {note}", ("grey",)))]
+    else:
+        flash_ids = _young_ids(timing, now)
+        crit = set(critical_path(shown))
+        sid = sel[2:] if sel and sel != taskwin_views.DONE_KEY else None
+        body = None
+        if width >= GRAPH_MIN_WIDTH:
+            body = _graph_lines(shown, timing, width, avail, now, frame, color, flash_ids, tier_model, crit, sid)
+        if body is None:
+            body = _list_lines(shown, timing, width, avail, now, frame, color, flash_ids, tier_model, crit,
+                               sid, False)
+    return cv.lines(color) + head + body
 
 
 def _history_screen(tasks, timing, width, height, now, frame, color, ui, ctx):
@@ -813,10 +876,12 @@ def _queue_row(t, timing, width, color, ctx, cursor, frame):
     label = truncate(label, room)
 
     def draw(cv):
-        cv.put(0, 0, "▸ " if cursor else "  ", ("inverse",) if cursor else ())
+        cv.put(0, 0, "▸ " if cursor else "  ", ())
         cv.put(2, 0, glyph, (STATUS_STYLE.get(t["status"], "grey"),))
         end = cv.put(x, 0, label, ("bold",) if t["status"] == "in_progress" else ())
         cv.put_segs(end + 2, 0, right, max(0, width - end - 2))
+        if cursor:
+            cv.invert_row(0)
     return _line(width, color, draw)
 
 

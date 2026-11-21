@@ -124,5 +124,81 @@ class QueueScreenTest(unittest.TestCase):
         self.assertNotIn("[1 queue]", taskwin.render(v, QTIMING, 120, 40, NOW, 0, "none"))
 
 
+class PlanScreenTest(unittest.TestCase):
+    def test_queue_items_not_in_plan_view(self):
+        out = render(u=ui(view="plan"))
+        self.assertNotIn("Plan & run", out)
+        self.assertIn("Task 2: two", out)
+
+    def test_header_counts_plan_tasks_only(self):
+        self.assertIn("1/4 done", render(u=ui(view="plan")).split("\n")[0])
+
+    def test_filter_hide_done(self):
+        for w in (60, 120):
+            out = render(width=w, u=ui(view="plan", filter="hide_done"))
+            self.assertIn("filter: hide done", out.split("\n")[0])
+            self.assertNotIn("Task 1: one", out)
+            self.assertIn("Task 4: four", out)
+
+    def test_filter_active(self):
+        out = render(width=60, u=ui(view="plan", filter="active"))
+        self.assertIn("filter: active", out.split("\n")[0])
+        self.assertIn("Task 2: two", out)
+        self.assertIn("Task 3: three", out)
+        self.assertNotIn("Task 4: four", out)
+        self.assertNotIn("Task 1: one", out)
+
+    def test_no_filter_note_for_all(self):
+        self.assertNotIn("filter:", render(u=ui(view="plan")))
+
+    def test_empty_filter_says_no_match(self):
+        tasks = [task(1, "a", "completed")]
+        out = render(tasks=tasks, u=ui(tasks, view="plan", filter="active"))
+        self.assertIn("no tasks match filter: active", out)
+
+    def test_collapsed_done_line(self):
+        for w in (60, 120):
+            lines = [taskwin.strip(l) for l in render(width=w, u=ui(view="plan", collapsed={"p:done": True}, cursor={"plan": 1})).split("\n")]
+            self.assertEqual(lines[3].strip(), "✓ 1 done")
+            self.assertFalse(any("Task 1: one" in l for l in lines))
+
+    def test_done_line_cursor_marker(self):
+        out = render(width=60, u=ui(view="plan", collapsed={"p:done": True}))
+        self.assertEqual(taskwin.strip(out.split("\n")[3]).strip(), "> ✓ 1 done")
+        self.assertIn("\x1b[7", render(width=60, color="256", u=ui(view="plan", collapsed={"p:done": True})).split("\n")[3])
+
+    def test_list_cursor(self):
+        out = render(width=60, u=ui(view="plan", cursor={"plan": 1}))
+        self.assertRegex(taskwin.strip(line_with(out, "Task 2: two")), r"^\S >\*?11 ")
+        self.assertIn("\x1b[7", line_with(render(width=60, color="256", u=ui(view="plan", cursor={"plan": 1})), "Task 2: two"))
+
+    def test_list_cursor_inverse_covers_row_text(self):
+        row = line_with(render(width=60, color="256", u=ui(view="plan", cursor={"plan": 1})), "Task 2: two")
+        before_text = row.split("Task 2: two")[0]
+        self.assertTrue(before_text.rindex("\x1b[7") > before_text.rfind("\x1b[0m"), row)  # inverse still on at the subject
+
+    def test_queue_cursor_inverse_covers_row_text(self):
+        row = line_with(render(color="256", u=ui(cursor={"queue": 1})), "Beta spec")
+        before_text = row.split("Beta spec")[0]
+        self.assertTrue(before_text.rindex("\x1b[7") > before_text.rfind("\x1b[0m"), row)
+
+    def test_graph_cursor_heavy_corners(self):
+        out = render(width=120, u=ui(view="plan", cursor={"plan": 1}))
+        self.assertEqual(out.count("┏"), 1)
+        self.assertRegex(line_with(out, "┏"), r" \*?11 ")
+
+    def test_list_scrolls_to_cursor(self):
+        tasks = [task(i, f"t{i}", "pending") for i in range(1, 31)]
+        out = render(tasks=tasks, width=60, height=12, u=ui(tasks, view="plan", cursor={"plan": 25}))
+        self.assertRegex(out, r"(?m)^\S >\*?26 ")
+        self.assertLessEqual(len(out.split("\n")), 12)
+
+    def test_plan_view_idle_without_plan_tasks(self):
+        tasks = [t for t in QTASKS if t["subject"].startswith("Plan & run")]
+        out = render(tasks=tasks, u=ui(tasks, view="plan"))
+        self.assertIn(taskwin.IDLE_LINE, out)
+        self.assertIn("[2 plan]", out.split("\n")[0])
+
+
 if __name__ == "__main__":
     unittest.main()
