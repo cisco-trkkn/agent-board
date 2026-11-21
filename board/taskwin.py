@@ -862,7 +862,7 @@ def _history_row(e, width, color, cursor):
 def _history_children(e, width, color):
     out = []
     for t in e.get("tasks") or []:
-        parts = [f"✓ #{t['id']} {t['subject']}"] + [t[k] for k in ("owner", "tier") if t.get(k)]
+        parts = [f"✓ #{t.get('id', '')} {t.get('subject', '')}"] + [t[k] for k in ("owner", "tier") if t.get(k)]
         parts.append(taskwin_hist.hm(t["at"]))
         out.append(" · ".join(parts))
     if not out:

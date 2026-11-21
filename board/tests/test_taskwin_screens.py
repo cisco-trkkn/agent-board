@@ -260,6 +260,17 @@ class HistoryScreenTest(unittest.TestCase):
         self.assertIn("▸ p16 · merged aaa1111", [taskwin.strip(l) for l in out.split("\n")])
         self.assertLessEqual(len(out.split("\n")), 10)
 
+    def test_expanded_task_without_id_or_subject_does_not_raise(self):
+        h = [dict(HISTORY[0], tasks=[{"kind": "task_done", "at": T1}])]
+        out = render(ctx={"titles": {}, "report": "", "history": h},
+                     u=ui(view="history", collapsed={"h:plan:2026-11-21-b": False}))
+        self.assertIn("✓ #", out)
+
+    def test_cursor_inverse_covers_row_text(self):
+        row = line_with(render(color="256", ctx=HCTX, u=ui(view="history")), "2026-11-21-b")
+        before = row.split("kept spec-b")[0]
+        self.assertTrue(before.rindex("\x1b[7") > before.rfind("\x1b[0m"), row)
+
 
 if __name__ == "__main__":
     unittest.main()
