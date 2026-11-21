@@ -158,6 +158,22 @@ tmux-ctl context dream-schedule uninstall
 - **Switches.** `TC_DREAM=0` in the job's environment, or an empty file `~/.local/state/agent-board/context/dream.off`, makes every run do nothing; remove either to resume.
 - **It runs whatever branch the main checkout holds.** The job executes the code of the checkout `tmux-ctl` links into, so keep `main` checked out there while the job is installed.
 
+### Weekly execution analytics (optional)
+
+A LaunchAgent runs `tmux-ctl metrics weekly` every Monday at 09:00 local time: it analyses the last week of runs, asks a model for three recommendations (every cited number is checked) and posts trends, flags and recommendations to Discord, each recommendation with a "file as idea" button. It does not run at load, so a Mac that is asleep at 09:00 runs it at the next wake.
+
+```zsh
+tmux-ctl metrics schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-analytics.plist and loads it
+tmux-ctl metrics schedule status       # first line loaded or not loaded, then last run: <time> <outcome> (or none), then any off switch set
+tmux-ctl metrics schedule uninstall
+```
+
+`install` backs up an existing plist as `.bak-YYYYMMDD` and points the job at `~/.local/bin/tmux-ctl`, else the `tmux-ctl` beside this checkout. Its output goes to `~/.local/state/agent-board/analytics.launchd.log` (`$TC_STATE/` when set). macOS only: elsewhere the command prints `macOS only` and exits 2.
+
+- **Where it posts.** With the ops bot configured, one post set goes to the ops bot's #command-center over all projects; otherwise each project with a Discord channel gets its own post in its home channel.
+- **Switches.** `TC_ANALYTICS=0` in the job's environment, or an empty file `~/.local/state/agent-board/analytics.off`, makes every run print `analytics: off` and do nothing; remove either to resume. `tmux-ctl metrics weekly --dry-run` ignores both and prints instead of posting.
+- **It runs whatever branch the main checkout holds.** The job executes the code of the checkout `tmux-ctl` links into, so keep `main` checked out there while the job is installed.
+
 ### Usage tab statusLine (optional)
 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):

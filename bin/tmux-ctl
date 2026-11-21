@@ -111,7 +111,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake ]] || die "not inside tmux"   # discord, context dream*, gauth config, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -313,6 +313,13 @@ fi
 if [[ "$cmd" == gauth ]]; then   # config needs no tmux; the others reach tmux through board/gauth.py
   [[ "$1" == (config|start|status|close) && -n "$2" ]] || die 'usage: tmux-ctl gauth config <project> [--adc|--no-adc] [--impersonate <sa>] [--account <email>] | start|status|close <project>'
   python3 -I "${0:A:h:h}/board/gauth.py" "$@"; exit $?
+fi
+if [[ "$cmd" == metrics && ( "$1" == schedule || "$1" == weekly ) ]]; then   # no tmux needed (launchd runs it)
+  if [[ "$1" == schedule ]]; then
+    [[ "$2" == (install|status|uninstall) ]] || die 'usage: tmux-ctl metrics schedule install|status|uninstall'
+    exec python3 -I "${0:A:h:h}/board/analytics_schedule.py" "$2"
+  fi
+  exec python3 -I "${0:A:h:h}/board/metrics.py" "$@"
 fi
 if [[ "$cmd" == context && ( "$1" == dream || "$1" == dream-report || "$1" == dream-file || "$1" == dream-revert || "$1" == dream-schedule ) ]]; then   # no tmux needed (launchd runs it)
   dsub="$1"; shift
