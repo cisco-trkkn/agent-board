@@ -90,9 +90,9 @@ def _ideas_file(project):
 def validate(items, candidates):
     """Keep only items with a known key, in-range int evidence_refs, valid enums and text fields; at most 5."""
     by_key = {c["key"]: c for c in candidates}
-    out = []
+    out, seen = [], set()
     for it in items if isinstance(items, list) else []:
-        if not isinstance(it, dict) or it.get("key") not in by_key:
+        if not isinstance(it, dict) or not isinstance(it.get("key"), str) or it["key"] not in by_key or it["key"] in seen:
             continue
         if it.get("expected_value") not in VALUES or it.get("effort") not in EFFORTS:
             continue
@@ -102,6 +102,7 @@ def validate(items, candidates):
         n = len(by_key[it["key"]].get("evidence") or [])
         if not isinstance(refs, list) or not all(type(r) is int and 0 <= r < n for r in refs):
             continue
+        seen.add(it["key"])
         out.append({k: it[k] for k in ("key", "title", "why", "expected_value", "effort", "risk", "evidence_refs")})
     return out[:MAX_ITEMS]
 
@@ -118,7 +119,7 @@ def _parse_result(text):
 
 def run_model(run_dir, prompt):
     """(failure text or None, items-or-None, info)."""
-    argv = [os.environ.get("TC_DISCOVER_CLAUDE") or "claude", "-p", "--model", "sonnet", "--effort", "medium",
+    argv = [os.environ.get("TC_DISCOVER_CLAUDE") or "claude", "-p", "--model", "sonnet", "--effort", "medium", "--restricted",
             "--tools", "Read", "--permission-mode", "dontAsk", "--strict-mcp-config", "--disable-slash-commands",
             "--no-session-persistence", "--output-format", "json"]
     env = {k: v for k, v in os.environ.items() if k not in dream.SCRUB}
@@ -180,6 +181,7 @@ def rank(project, root, now, run_dir):
     """-> (failure text or None, items, info). Writes collected.json, and rank.json only on success."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "rank.json").unlink(missing_ok=True)   # a failed run must not leave an earlier run's answer
     coll = collect(project, root, now)
     (run_dir / "collected.json").write_text(json.dumps(coll, indent=1))
     prompt = (REPO / "claude" / "discover.md").read_text() + f"\n\nProject: {project}\nCandidates: collected.json in the current directory\n"

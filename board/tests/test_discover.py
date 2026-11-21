@@ -139,7 +139,7 @@ class RankTest(Base):
     def test_argv_cwd_env_stdin(self):
         self.run_rank(json.dumps({"items": []}))
         rec = json.loads((self.t / "argv.json").read_text())
-        self.assertEqual(rec["argv"][1:], ["-p", "--model", "sonnet", "--effort", "medium", "--tools", "Read",
+        self.assertEqual(rec["argv"][1:], ["-p", "--model", "sonnet", "--effort", "medium", "--restricted", "--tools", "Read",
                                            "--permission-mode", "dontAsk", "--strict-mcp-config",
                                            "--disable-slash-commands", "--no-session-persistence",
                                            "--output-format", "json"])
@@ -175,9 +175,30 @@ class RankTest(Base):
         self.run_rank(json.dumps({"items": [bad, item(title=""), item(risk=3), item()]}))
         self.assertEqual(len(self.items()), 1)
 
+    def test_unhashable_or_non_str_key_dropped(self):
+        self.run_rank(json.dumps({"items": [item(key=["todo:a.py:11111111"]), item(key={"a": 1}), item(key=5), item()]}))
+        self.assertEqual([i["key"] for i in self.items()], ["todo:a.py:11111111"])
+
+    def test_duplicate_keys_keep_first(self):
+        self.run_rank(json.dumps({"items": [item(title="first"), item(title="second"), item("todo:b.py:22222222")]}))
+        self.assertEqual([(i["key"], i["title"]) for i in self.items()],
+                         [("todo:a.py:11111111", "first"), ("todo:b.py:22222222", "t")])
+
+    def test_failed_rank_removes_stale_rank_json(self):
+        self.run_rank(json.dumps({"items": [item()]}))
+        self.assertTrue((self.run_dir / "rank.json").exists())
+        claude = fake_claude(self.t, "{}", "exit1")
+        coll = {"project": "p", "root": str(self.root), "at": "x", "head": "h", "candidates": CANDS, "sources_skipped": []}
+        with mock.patch.dict(os.environ, {"TC_DISCOVER_CLAUDE": str(claude)}), mock.patch.object(D, "collect", return_value=coll):
+            r = D.rank("p", str(self.root), NOW, self.run_dir)
+        self.assertEqual(r[0], "model exit 1")
+        self.assertFalse((self.run_dir / "rank.json").exists())
+
     def test_cut_to_five(self):
-        self.run_rank(json.dumps({"items": [item() for _ in range(8)]}))
-        self.assertEqual(len(self.items()), 5)
+        many = [dict(CANDS[0], key=f"todo:k{i}", evidence=[{"text": "a"}]) for i in range(8)]
+        with mock.patch.object(sys.modules[__name__], "CANDS", many):
+            self.run_rank(json.dumps({"items": [item(f"todo:k{i}") for i in range(8)]}))
+        self.assertEqual([i["key"] for i in self.items()], [f"todo:k{i}" for i in range(5)])
 
     def test_fenced_json(self):
         self.run_rank("```json\n" + json.dumps({"items": [item()]}) + "\n```\n")
