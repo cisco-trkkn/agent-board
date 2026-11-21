@@ -41,6 +41,8 @@ Coming from the author's earlier global setup? `./install.sh --migrate` (see [do
 
 `agent-board dev [dir]`, `ctl <cmd>` (tmux-ctl), `dash [cmd]`, `jump`, `cleanup`, `help`. The same scripts are in `bin/`; the lead and workers find them on `PATH` (`tmux-ctl`, …) in agent-board sessions.
 
+`tmux-ctl scout …` runs the trend scout: a daily source poll, a Sunday pass that drafts specs and posts a digest, and `approve` / `reject` / `revise` for each draft.
+
 ## Layout
 
 | Repo path | Role |
@@ -48,6 +50,7 @@ Coming from the author's earlier global setup? `./install.sh --migrate` (see [do
 | `install.sh` | installs the one link; `--check`, `--uninstall`, `--migrate` |
 | `bin/` | the commands; `bin/agent-board` is the single entry point |
 | `board/` | the Agent Board server and page |
+| `board/scout.py`, `board/scout_sources.py`, `board/scout_fetch.py`, `board/scout_pack.py`, `board/scout_eval.py`, `board/scout_draft.py`, `board/scout_post.py`, `board/scout_decisions.py`, `board/scout_schedule.py` | the trend scout: the CLI, its source list, fetching, context packs, evaluation, spec drafts, the digest post, approval decisions, and its LaunchAgents |
 | `claude/orchestrator.md`, `claude/worker.md`, `claude/session-settings.json`, `claude/overseer.md`, `claude/overseer-settings.json` | lead and worker rules, settings for agent teams, and the read-only overseer's rules and permissions |
 | `claude/plugin/` | the session plugin: hooks, `tmux-orchestrator` and `handoff` skills, `effort-*` agents |
 | `claude/CLAUDE.md`, `claude/settings.json`, `claude/agents/`, `claude/skills/`, `claude/hooks/` | the author's own global `~/.claude` config (mirror; `bin/claude-config-link` / `claude-config-sync`). Not used by agent-board sessions or `install.sh`; the session settings and hooks come from `claude/session-settings.json` and `claude/plugin/` |

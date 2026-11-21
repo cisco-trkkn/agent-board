@@ -180,6 +180,7 @@ A LaunchAgent runs `tmux-ctl discover nightly` every day at 07:00 local time. Fo
 
 ```zsh
 tmux-ctl discover schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-discover.plist and loads it
+tmux-ctl scout schedule install         # writes the two scout LaunchAgents (poll, weekly) and loads them
 tmux-ctl discover schedule status       # first line loaded or not loaded, then any off switch set, then last night: <the last line of discover.log> (or none)
 tmux-ctl discover schedule uninstall
 ```
