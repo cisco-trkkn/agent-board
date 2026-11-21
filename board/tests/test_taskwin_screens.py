@@ -200,5 +200,66 @@ class PlanScreenTest(unittest.TestCase):
         self.assertIn("[2 plan]", out.split("\n")[0])
 
 
+T1 = time.mktime((2026, 11, 21, 9, 30, 0, 0, 0, -1))
+HISTORY = [
+    {"key": "plan:2026-11-21-b", "day": "2026-11-21", "name": "2026-11-21-b", "spec": "", "outcome": "kept spec-b",
+     "ledger": "", "tasks": [{"kind": "task_done", "at": T1, "plan": "2026-11-21-b", "id": "2", "subject": "B two",
+                              "owner": "ann", "tier": "standard"}]},
+    {"key": "plan:2026-11-20-a", "day": "2026-11-20", "name": "2026-11-20-a", "spec": "docs/superpowers/specs/a-design.md",
+     "outcome": "merged aaa1111", "ledger": "docs/superpowers/ledgers/2026-11-20-a/", "tasks": []},
+    {"key": "spec:docs/superpowers/specs/c-design.md", "day": "2026-11-20", "name": "docs/superpowers/specs/c-design.md",
+     "spec": "docs/superpowers/specs/c-design.md", "outcome": "", "ledger": "", "tasks": []},
+]
+HCTX = {"titles": {}, "report": "", "history": HISTORY}
+
+
+class HistoryScreenTest(unittest.TestCase):
+    def lines(self, **kw):
+        out = render(ctx=HCTX, u=ui(view="history", **kw))
+        return [taskwin.strip(l) for l in out.split("\n")]
+
+    def test_grouped_by_day_newest_first(self):
+        ls = self.lines()
+        self.assertTrue(ls[0].startswith("1 queue 2 plan [3 history]  History"))
+        body = [l for l in ls[3:] if l.strip()]
+        self.assertEqual(body, ["2026-11-21",
+                                "▸ 2026-11-21-b · 1 task · kept spec-b",
+                                "2026-11-20",
+                                "  2026-11-20-a · merged aaa1111",
+                                "  docs/superpowers/specs/c-design.md · —"])
+
+    def test_expand_shows_journaled_tasks(self):
+        ls = self.lines(collapsed={"h:plan:2026-11-21-b": False})
+        self.assertIn(f"    ✓ #2 B two · ann · standard · {th.hm(T1)}", ls)
+
+    def test_expand_without_journal_shows_ledger(self):
+        ls = self.lines(collapsed={"h:plan:2026-11-20-a": False}, cursor={"history": 1})
+        self.assertIn("    docs/superpowers/ledgers/2026-11-20-a/", ls)
+        self.assertIn("▸ 2026-11-20-a · merged aaa1111", ls)
+
+    def test_filter_does_not_apply(self):
+        self.assertEqual(self.lines(filter="active")[3:], self.lines()[3:])
+
+    def test_failed_outcome_red(self):
+        h = [dict(HISTORY[1], outcome="failed — x")]
+        out = render(color="256", ctx={"titles": {}, "report": "", "history": h}, u=ui(view="history"))
+        self.assertIn(RED256, line_with(out, "failed — x"))
+
+    def test_empty_history(self):
+        out = render(ctx={"titles": {}, "report": "", "history": []}, u=ui(view="history"))
+        self.assertIn("no history yet", out)
+
+    def test_history_without_tasks(self):
+        out = render(tasks=[], ctx=HCTX, u=ui([], view="history"))
+        self.assertIn("2026-11-21-b", out)
+
+    def test_scrolls_to_cursor(self):
+        h = [dict(HISTORY[1], key=f"plan:p{i}", name=f"p{i}", day=f"2026-10-{i:02d}") for i in range(1, 21)]
+        out = render(height=10, ctx={"titles": {}, "report": "", "history": h},
+                     u=ui(view="history", cursor={"history": 15}))
+        self.assertIn("▸ p16 · merged aaa1111", [taskwin.strip(l) for l in out.split("\n")])
+        self.assertLessEqual(len(out.split("\n")), 10)
+
+
 if __name__ == "__main__":
     unittest.main()

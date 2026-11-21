@@ -845,11 +845,50 @@ def _plan_screen(view, tasks, timing, width, height, now, frame, color, session,
     return cv.lines(color) + head + body
 
 
+def _history_row(e, width, color, cursor):
+    n = len(e.get("tasks") or [])
+    outcome = str(e.get("outcome") or "") or "—"
+    left = e["name"] + (f" · {n} task{'' if n == 1 else 's'}" if n else "") + " · "
+
+    def draw(cv):
+        cv.put(0, 0, "▸ " if cursor else "  ", ())
+        end = cv.put(2, 0, truncate(left, max(0, width - 2)), ())
+        cv.put(end, 0, truncate(outcome, max(0, width - end)), ("red",) if outcome.startswith("failed") else ())
+        if cursor:
+            cv.invert_row(0)
+    return _line(width, color, draw)
+
+
+def _history_children(e, width, color):
+    out = []
+    for t in e.get("tasks") or []:
+        parts = [f"✓ #{t['id']} {t['subject']}"] + [t[k] for k in ("owner", "tier") if t.get(k)]
+        parts.append(taskwin_hist.hm(t["at"]))
+        out.append(" · ".join(parts))
+    if not out:
+        out = [e.get("ledger") or e.get("spec") or ""]
+    return [_line(width, color, lambda cv, s=s: cv.put(4, 0, truncate(s, max(0, width - 4)), ("grey",)))
+            for s in out if s]
+
+
 def _history_screen(tasks, timing, width, height, now, frame, color, ui, ctx):
-    # Task 7 draws the entries; until then the header with an empty body.
     cv = Canvas(width, HEADER_ROWS)
     _header(cv, {}, tasks, timing, width, now, frame, _tabs("history"), "History")
-    return cv.lines(color)
+    entries = ctx.get("history") or []
+    body, at, day = [], 0, None
+    if not entries:
+        body = [_line(width, color, lambda c: c.put(0, 0, "no history yet", ("grey",)))]
+    cursor = ui["cursor"]["history"]
+    for i, e in enumerate(entries):
+        if e["day"] != day:
+            day = e["day"]
+            body.append(_line(width, color, lambda c, d=day: c.put(0, 0, d, ("bold",))))
+        if i == cursor:
+            at = len(body)
+        body.append(_history_row(e, width, color, i == cursor))
+        if not taskwin_ui.is_collapsed(ui, "h:" + e["key"]):
+            body += _history_children(e, width, color)
+    return cv.lines(color) + _scroll(body, at, height - HEADER_ROWS)
 
 
 def _line(width, color, draw):
