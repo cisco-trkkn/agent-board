@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """metrics: the queue run log (docs/superpowers/metrics/runs.jsonl) and its commands.
 
-Run log: one JSON object per line, kind in batch|start|run|defect|error|dream|analytics (analysis is reserved; readers ignore unknown
+Run log: one JSON object per line, kind in batch|start|run|defect|error|dream|analytics|discover|scout (analysis is reserved; readers ignore unknown
 kinds). Append-only; readers take the last `run` per (batch, spec); a malformed line is skipped and counted.
 Nothing private goes in a line: no session ids, prompts, agent names, absolute paths.
 

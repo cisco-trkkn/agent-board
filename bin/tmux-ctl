@@ -76,6 +76,9 @@
 #   tmux-ctl discover collect|rank <project> [--root <dir>] [--json]  opportunity discovery: candidates; model-ranked items
 #   tmux-ctl discover nightly [--project <p>] [--dry-run] [--force]  the nightly run: rank, post to Discord (--dry-run prints)
 #   tmux-ctl discover schedule install|status|uninstall  the 07:00 nightly job (launchd)
+#   tmux-ctl scout poll | source add <name> --kind <k> --url <u> [--why <t>] | source list|remove|test [<name>]  trend scout: daily poll, sources
+#   tmux-ctl scout weekly [--dry-run] [--force] [--retry]  the Sunday pass: evaluate, draft specs, post the digest (--dry-run prints, writes nothing)
+#   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
@@ -114,7 +117,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, discover, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, discover, scout, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -323,6 +326,9 @@ if [[ "$cmd" == discover ]]; then   # no tmux needed (launchd runs it)
     exec python3 -I "${0:A:h:h}/board/discover_schedule.py" "$2"
   fi
   exec python3 -I "${0:A:h:h}/board/discover.py" "$@"
+fi
+if [[ "$cmd" == scout ]]; then   # no tmux needed (launchd runs it)
+  exec python3 -I "${0:A:h:h}/board/scout.py" "$@"
 fi
 if [[ "$cmd" == metrics && ( "$1" == schedule || "$1" == weekly ) ]]; then   # no tmux needed (launchd runs it)
   if [[ "$1" == schedule ]]; then
