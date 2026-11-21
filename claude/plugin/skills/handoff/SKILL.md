@@ -59,7 +59,7 @@ A handoff at the end of a `Plan & run:` spec (step 4 names the trigger) writes t
   - Finished history (task progress, review rounds, fix loops) stays in git and the archived ledger.
   - Durable knowledge (gotchas, how to run, where things live) goes to the shared context file with `tmux-ctl context add` before the handoff.
 - **Shape**, four `## ` sections in this order:
-  1. `## Queue state`: the next spec's path, every queued task's `metadata.queue`, the batch id.
+  1. `## Queue state`: the next spec's path, every queued task's `metadata.queue`, `metadata.worktree` and `metadata.branch`, the batch id.
   2. `## Live state`: keep-awake, uncommitted files and why, open worktrees and leftovers, user gates waiting.
   3. `## Carried over`: rulings and open user decisions that affect later specs, one line each with a pointer.
   4. `## Pointers`: the spec to start from, the last report, the archived ledger.
