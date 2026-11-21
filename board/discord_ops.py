@@ -316,7 +316,7 @@ def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=
             try:
                 import ticker
                 pline = ticker.ops_line(records, live, limits, tasks_by_project, now, floors=floors, lead_sids=lead_sids or {})
-                pres = discord_feed.presence_op_due(st, pline, now)
+                pres = discord_feed.presence_op_due(st, pline, now, _load(d / "bridge-state.json"))
                 if pres:
                     discord_feed.outbox_write(d, pres)
                     st["presence_text"], st["presence_ts"] = pline, now

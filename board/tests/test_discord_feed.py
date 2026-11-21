@@ -437,10 +437,20 @@ def primed():
 class PresenceDueTest(unittest.TestCase):
     def test_due(self):
         st = {"presence_text": "a", "presence_ts": 1000.0}
-        self.assertIsNone(df.presence_op_due(st, "a", 1300.0))
+        self.assertIsNone(df.presence_op_due(st, "a", 1300.0, {"presence": "a"}))
         self.assertIsNone(df.presence_op_due(st, "b", 1059.0))
         self.assertEqual(df.presence_op_due(st, "b", 1060.0), {"op": "presence", "text": "b"})
         self.assertEqual(df.presence_op_due({}, "b", NOW), {"op": "presence", "text": "b"})
+
+    def test_bridge_lost_presence(self):
+        # mutation: drop the >= PRESENCE_EVERY check on the bridge branch -> the 59 s assertion fails
+        st = {"presence_text": "a", "presence_ts": 1000.0}
+        self.assertIsNone(df.presence_op_due(st, "a", 1059.0, {"presence": "old"}))
+        self.assertEqual(df.presence_op_due(st, "a", 1060.0, {"presence": "old"}), {"op": "presence", "text": "a"})
+        self.assertIsNone(df.presence_op_due(st, "a", 9999.0, {"presence": "a"}))
+        self.assertEqual(df.presence_op_due(st, "a", 1060.0, None), {"op": "presence", "text": "a"})
+        self.assertEqual(df.presence_op_due(st, "a", 1060.0, {}), {"op": "presence", "text": "a"})
+        self.assertIsNone(df.presence_op_due(st, "a", 1059.0, {}))
 
 
 class DeriveBase(Base):
@@ -802,10 +812,18 @@ class TickTest(DeriveBase):
         self.ptick(NOW + 61, 2.0)
         self.assertEqual(len(self.presence()), 2)
         self.assertIn("$2.00", self.presence()[1]["text"])
+        (tc_env.discord_dir("proj") / "bridge-state.json").write_text(json.dumps({"presence": self.presence()[1]["text"]}))
         self.ptick(NOW + 120, 2.0)
         self.assertEqual(len(self.presence()), 2)
         st = json.loads((tc_env.discord_dir("proj") / "feed-state.json").read_text())
         self.assertEqual((st["presence_text"], st["presence_ts"]), (self.presence()[1]["text"], NOW + 61))
+
+    def test_presence_resent_when_bridge_state_lost_it(self):
+        self.ptick(NOW, 1.0)
+        text = self.presence()[0]["text"]
+        (tc_env.discord_dir("proj") / "bridge-state.json").write_text(json.dumps({"presence": "old"}))
+        self.ptick(NOW + 61, 1.0)
+        self.assertEqual([o["text"] for o in self.presence()], [text, text])
 
     def test_no_presence_when_live_is_none(self):
         self.tick(self.prime)

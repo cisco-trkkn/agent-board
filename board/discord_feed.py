@@ -292,13 +292,13 @@ def card_op_due(state, text, now):
     return {"op": "card", "text": text}
 
 
-def presence_op_due(state, text, now):
-    """A presence op when text changed and at least PRESENCE_EVERY seconds passed since state['presence_ts'], else None."""
-    if text == state.get("presence_text"):
-        return None
+def presence_op_due(state, text, now, bridge_state=None):
+    """A presence op when the text changed, or the bridge's own state lost it, and PRESENCE_EVERY seconds passed since state['presence_ts']; else None."""
     if now - state.get("presence_ts", 0) < PRESENCE_EVERY:
         return None
-    return {"op": "presence", "text": text}
+    if text != state.get("presence_text") or (bridge_state or {}).get("presence") != text:
+        return {"op": "presence", "text": text}
+    return None
 
 
 def audit_append(dir, user, action, target, result):
@@ -590,7 +590,7 @@ def tick(project, record, root, now, lead_tasks=None, list_id="", live=None, lim
                 import ticker
                 pline = ticker.project_line(record, live, limits, lead_tasks or [], now,
                                             floor=st.get("spec_floor", {}).get(st.get("running_thread_key")), lead_sid=lead_sid)
-                pres = presence_op_due(st, pline, now)
+                pres = presence_op_due(st, pline, now, _load(d / "bridge-state.json"))
             except Exception as e:   # noqa: BLE001 -- a bad line never stops the card or the other ops
                 print(f"discord_feed: presence line failed ({project}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             if pres:

@@ -417,10 +417,22 @@ class Tick(Base):
         self.assertEqual(len(self.presence()), 1)
         self.ptick(NOW + 61, 2.0)
         self.assertEqual(len(self.presence()), 2)
+        bs = self.ops / "bridge-state.json"
+        bs.write_text(json.dumps({"presence": self.presence()[1]["text"]}))
         self.ptick(NOW + 120, 2.0)
         self.assertEqual(len(self.presence()), 2)
         st = self.state()
         self.assertEqual((st["presence_text"], st["presence_ts"]), (self.presence()[1]["text"], NOW + 61))
+
+    def test_presence_resent_when_bridge_state_lost_it(self):
+        self.configure()
+        self.project("a")
+        self.ptick(NOW, 1.0)
+        text = self.presence()[0]["text"]
+        bs = self.ops / "bridge-state.json"
+        bs.write_text(json.dumps({"presence": "old"}))
+        self.ptick(NOW + 61, 1.0)
+        self.assertEqual([o["text"] for o in self.presence()], [text, text])
 
     def test_no_presence_when_live_is_none(self):
         self.configure()
