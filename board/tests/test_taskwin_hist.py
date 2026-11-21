@@ -116,5 +116,64 @@ class FakeRootTest(unittest.TestCase):
         self.assertEqual(th.queue_report(self.root, []), "")
 
 
+class FixRound1Test(unittest.TestCase):
+    """Review fixes: wrong-typed journal fields, shared-spec ledgers, #part spec matching."""
+
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = Path(td.name)
+        self.j = self.root / "j.jsonl"
+        self.t = time.mktime((2026, 11, 20, 12, 0, 0, 0, 0, -1))
+
+    def ledger(self, stem, spec):
+        d = self.root / th.LEDGERS / stem
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "progress.md").write_text(
+            f"# SDD ledger — plan: docs/superpowers/plans/{stem}.md\nSpec: {spec} · branch main\n")
+
+    def report(self, name, rows):
+        (self.root / th.REPORTS).mkdir(parents=True, exist_ok=True)
+        body = "".join(f"| {i} | `{s}` | {o} | `{l}` |\n" for i, (s, o, l) in enumerate(rows, 1))
+        (self.root / th.REPORTS / name).write_text(
+            "# r\n## Outcomes\n\n| # | Spec | Outcome | Ledger |\n| --- | --- | --- | --- |\n" + body)
+
+    def journal(self, lines):
+        self.j.write_text("\n".join(lines) + "\n")
+
+    def test_wrong_typed_journal_fields_are_dropped_not_raised(self):
+        good = '{"kind": "task_done", "at": %r, "plan": "2026-11-20-g", "id": "1", "subject": "G"}' % self.t
+        self.journal([
+            '{"kind": "task_done", "at": 1e999, "plan": "p", "id": "1"}',
+            '{"kind": "task_done", "at": 1e30, "plan": "p", "id": "1"}',
+            '{"kind": "task_done", "at": true, "plan": "p", "id": "1"}',
+            '{"kind": "task_done", "at": 5, "plan": 5}',
+            '{"kind": "task_done", "at": %r, "plan": "p", "id": 3}' % self.t,
+            '{"kind": "queue_outcome", "at": 5, "plan": 7, "spec": "s"}',
+            '{"kind": "queue_outcome", "at": %r, "spec": ["s"], "outcome": "x"}' % self.t,
+            good,
+        ])
+        self.assertEqual(len(th.read_journal(self.j)), 1)
+        es = th.entries(self.root, self.j)
+        self.assertEqual([e["key"] for e in es], ["plan:2026-11-20-g"])
+
+    def test_report_row_prefers_ledger_match_over_spec_match(self):
+        self.ledger("2026-11-16-x-part-1", "docs/superpowers/specs/x-design.md")
+        self.ledger("2026-11-21-x-part2", "docs/superpowers/specs/x-design.md")
+        self.report("2026-11-21-queue.md", [("docs/superpowers/specs/x-design.md", "merged bbb",
+                                             "docs/superpowers/ledgers/2026-11-21-x-part2/")])
+        es = {e["key"]: e for e in th.entries(self.root, None)}
+        self.assertEqual(es["plan:2026-11-21-x-part2"]["outcome"], "merged bbb")
+        self.assertEqual(es["plan:2026-11-16-x-part-1"]["outcome"], "")
+
+    def test_queue_outcome_part_spec_attaches_to_ledger_without_duplicate(self):
+        self.ledger("2026-11-20-a", "docs/superpowers/specs/a-design.md")
+        self.journal([json.dumps({"kind": "queue_outcome", "at": self.t,
+                                  "spec": "docs/superpowers/specs/a-design.md#part-1", "outcome": "merged x"})])
+        es = th.entries(self.root, self.j)
+        self.assertEqual([e["key"] for e in es], ["plan:2026-11-20-a"])
+        self.assertEqual(es[0]["outcome"], "merged x")
+
+
 if __name__ == "__main__":
     unittest.main()

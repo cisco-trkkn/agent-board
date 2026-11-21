@@ -7,6 +7,7 @@ entries(root, journal) -> [{"key", "day", "name", "spec", "outcome", "tasks": [t
 newest day first; within a day, newest activity first.
 """
 import json
+import math
 import re
 import time
 from pathlib import Path
@@ -121,6 +122,23 @@ def queue_report(root, queue_tasks):
     return str(rel) if (Path(root) / rel).is_file() else ""
 
 
+_STR_FIELDS = ("plan", "spec", "id", "subject", "outcome", "owner", "tier")
+
+
+def _valid(e):
+    """A journal line whose `at` is a real timestamp and whose text fields are strings when present."""
+    at = e.get("at")
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        return False
+    try:
+        if not math.isfinite(at):
+            return False
+        time.localtime(at)
+    except (OverflowError, OSError, ValueError):
+        return False
+    return all(isinstance(e[k], str) for k in _STR_FIELDS if k in e)
+
+
 def _journal(p):
     out = []
     for line in p.read_text(encoding="utf-8").splitlines():
@@ -128,8 +146,7 @@ def _journal(p):
             e = json.loads(line)
         except ValueError:
             continue
-        if isinstance(e, dict) and e.get("kind") in ("task_done", "queue_outcome") \
-                and isinstance(e.get("at"), (int, float)):
+        if isinstance(e, dict) and e.get("kind") in ("task_done", "queue_outcome") and _valid(e):
             out.append(e)
     return out
 
@@ -162,8 +179,9 @@ def entries(root, journal):
     for j in lines:
         if j["kind"] != "queue_outcome":
             continue
+        spec = str(j.get("spec") or "").split("#")[0]
         e = by_key.get("plan:" + j["plan"]) if j.get("plan") else None
-        e = e or next((x for x in by_key.values() if x["spec"] and x["spec"] == j.get("spec")), None)
+        e = e or next((x for x in by_key.values() if spec and x["spec"].split("#")[0] == spec), None)
         if e is None:
             e = get("spec:" + str(j.get("spec")), str(j.get("spec")))
             e["spec"] = str(j.get("spec"))
@@ -172,8 +190,8 @@ def entries(root, journal):
         if not e["day"]:
             e["day"], e["_at"] = day_of(j["at"]), j["at"]
     for r in report_rows(root):
-        e = next((x for x in by_key.values() if (r["ledger"] and x["ledger"] == r["ledger"])
-                  or (r["spec"] and x["spec"] == r["spec"])), None)
+        e = next((x for x in by_key.values() if r["ledger"] and x["ledger"] == r["ledger"]), None)
+        e = e or next((x for x in by_key.values() if r["spec"] and x["spec"] == r["spec"]), None)
         if e is None:
             e = get("spec:" + r["spec"], r["spec"])
             e.update(spec=r["spec"], day=r["day"])
