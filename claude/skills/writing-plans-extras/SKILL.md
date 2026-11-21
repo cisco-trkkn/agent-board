@@ -119,7 +119,7 @@ Example: one task counted re-reads with the Read tool only, while another task's
 
 After the plan's header, add one fenced block tagged `json:manifest`:
 
-    {"spec": "<spec path>", "base": "<commit of main the plan was written against>",
+    {"spec": "<spec path>", "base": "<`git rev-parse main` at plan-writing time>",
      "depends_on": [{"spec": "<spec path>", "kind": "hard" | "soft", "interface": "<soft only>"}],
      "writes": [{"path": "<file>", "mode": "create" | "modify" | "append"}],
      "reads": ["<file>"], "produces": ["<name>"], "consumes": ["<name>"], "tests": ["<test file>"]}
