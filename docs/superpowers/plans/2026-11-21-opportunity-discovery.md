@@ -329,7 +329,7 @@
 **Files:** none (a check)
 
 **Acceptance Criteria:**
-- [ ] `env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run` from `main` after the merge, with the real `claude`, exits 0 and prints at most 5 items, each key present in that night's `collected.json` (the run dir it names).
+- [ ] `env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run` from `main` after the merge, with the real `claude`, exits 0 and prints at most 5 items, each key present in that night's `collected.json` (in the `run dir:` it prints). While weekly usage is ≥ 85 % the guard prints `discover: skipped, weekly <n>%`: add `--force` to this command and to Verify (ruled in the ledger, 2026-11-21).
 - [ ] The user reads the printed post and says whether the items are worth having; their answer is recorded on the task.
 - [ ] Only after that, if the user wants it: `~/.local/bin/tmux-ctl discover schedule install` and `tmux-ctl discover schedule status` shows `loaded`.
 
