@@ -359,6 +359,14 @@ def label_waiting_on_lead(sessions):
                     p["waiting_on"] = lead
 
 
+def _lead_root(p):
+    """The lead view's root: relay.session_root, or "" when the project folder is gone (shown, not raised)."""
+    try:
+        return str(relay.session_root(tmux, p))
+    except relay.FolderGone:
+        return ""
+
+
 def build_state():
     fmt = SEP.join([
         "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}",
@@ -387,7 +395,7 @@ def build_state():
     for f in panes:
         sess, attached, widx, wname, bell, agent, pidx, pid, title, cmd, path, pact, wact, mate = f[:14]
         rows = rows_by[pid]
-        s = sessions.setdefault(sess, {"name": sess, "attached": attached != "0", "windows": {}, "path": relay.root_for(f[15])})
+        s = sessions.setdefault(sess, {"name": sess, "attached": attached != "0", "windows": {}, "path": relay.root_for(f[15]) or f[15]})
         w = s["windows"].setdefault(widx, {
             "index": int(widx), "name": wname, "bell": bell == "1",
             "worker": agent == "1", "teammate": mate == "1", "active": wact == "1", "panes": [],
@@ -537,7 +545,7 @@ def lead_infos(projects, lead_sids, lead_pids):
             rows = capture_panes([pane]).get(pane, [])
             status = classify(cmd, rows, bell == "1", mod_states().get(pane))[1]
             out[p] = {"window": "claude", "pane": pane, "pane_pid": int(ppid), "pid": lead_pids.get(p) or 0,
-                      "session_id": lead_sids.get(p) or "", "root": str(relay.session_root(tmux, p) or ""),
+                      "session_id": lead_sids.get(p) or "", "root": _lead_root(p),
                       "state": "waiting" if status in ("waiting", "waiting-on-lead") else "busy" if status == "working" else "idle"}
         except Exception as e:   # noqa: BLE001 -- no claude window or a bad capture: the project has no lead view
             print(f"tmux-dash: lead info skipped ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
@@ -666,7 +674,7 @@ def label_targets(run=None):
         if len(f) != 10 or f[0].startswith("_web-") or f[5] == "1":
             continue
         sess, widx, wname, agent, mate, _, pid, path, label, start = f
-        s = sessions.setdefault(sess, {"name": sess, "path": relay.root_for(start), "windows": {}})
+        s = sessions.setdefault(sess, {"name": sess, "path": relay.root_for(start) or start, "windows": {}})
         w = s["windows"].setdefault(widx, {"name": wname, "worker": agent == "1", "teammate": mate == "1",
                                            "label": label, "panes": []})
         w["panes"].append({"id": pid, "path": path})

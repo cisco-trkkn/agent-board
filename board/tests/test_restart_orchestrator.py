@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 os.environ.setdefault("TMUX_DASH_TOKEN", "test-token")
@@ -108,6 +109,20 @@ class RestartOrchestratorTest(unittest.TestCase):
         finally:
             server.tmux = saved
         self.assertNotIn("=proj-bg", [c[2] for c in fake.find("kill-session")])
+
+    def test_gone_folder_refuses_without_respawn(self):   # mutation: catch FolderGone and fall back to $HOME -> respawn-pane called
+        fake = Fake([(1, "claude", False)], cmd="zsh")
+        fake.session_path = self.elsewhere + "/gone"
+        saved = (server.tmux, server.pane_text)
+        server.tmux, server.pane_text = fake.tmux, (lambda target, lines=40: fake.rows)
+        try:
+            with mock.patch.dict(os.environ, {"HOME": self.elsewhere}), self.assertRaises(RuntimeError) as cm:
+                server._act({"action": "restart_orchestrator", "session": "proj"})
+        finally:
+            server.tmux, server.pane_text = saved
+        self.assertEqual(str(cm.exception), f"project folder is gone: {self.elsewhere}/gone")
+        self.assertEqual(fake.find("respawn-pane"), [])
+        self.assertEqual(fake.find("new-window"), [])
 
     def test_web_session_rejected(self):
         fake = Fake([(1, "claude", False)])

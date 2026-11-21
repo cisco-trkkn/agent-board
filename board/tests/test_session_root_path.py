@@ -181,9 +181,11 @@ class BuildStateRootTest(RootedBase):
     def test_worktree_start_maps_to_main_checkout(self):
         self.assertEqual(self.state(str(self.r.wt))["path"], str(self.r.repo))
 
-    def test_removed_or_empty_start_is_home(self):
-        self.assertEqual(self.state(str(self.r.repo / "gone"))["path"], self.home.name)
-        self.assertEqual(self.state("")["path"], self.home.name)
+    def test_removed_start_maps_to_repo_gone_non_git_shows_as_given(self):   # mutation: drop `or start` -> None
+        self.assertEqual(self.state(str(self.r.repo / "gone"))["path"], str(self.r.repo))
+        gone = str(Path(self.home.name) / "gone")
+        self.assertEqual(self.state(gone)["path"], gone)
+        self.assertEqual(self.state("")["path"], "")
 
 
 class LabelTargetsRootTest(RootedBase):
@@ -199,9 +201,11 @@ class LabelTargetsRootTest(RootedBase):
     def test_worktree_start_maps_to_main_checkout(self):
         self.assertEqual(self.targets(str(self.r.wt))["path"], str(self.r.repo))
 
-    def test_removed_or_empty_start_is_home(self):
-        self.assertEqual(self.targets(str(self.r.repo / "gone"))["path"], self.home.name)
-        self.assertEqual(self.targets("")["path"], self.home.name)
+    def test_removed_start_maps_to_repo_gone_non_git_shows_as_given(self):   # mutation: drop `or start` -> None
+        self.assertEqual(self.targets(str(self.r.repo / "gone"))["path"], str(self.r.repo))
+        gone = str(Path(self.home.name) / "gone")
+        self.assertEqual(self.targets(gone)["path"], gone)
+        self.assertEqual(self.targets("")["path"], "")
 
 
 if __name__ == "__main__":
