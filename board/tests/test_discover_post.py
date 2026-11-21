@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -110,6 +111,19 @@ class SelectTest(Base):
         self.assertEqual([i["key"] for i in r15["new"]], ["todo:a"])
         self.assertEqual(r15["new"][0]["count"], 15)
 
+    def test_regrown_dismissed_item_is_reposted_once(self):   # mutation: keep `and not regrown` -> new again on nights 2 and 3
+        s = self.st(dismissed={"todo:a": {"at": "x", "evidence_count": 10}},
+                    reported={"todo:a": {"first_reported": "x", "last_evidence_count": 10}})
+        cs = {"todo:a": cand("todo:a", 15)}
+        seen = []
+        for night in ("n1", "n2", "n3"):
+            r = dp.select([item("todo:a")], cs, s, [])
+            seen.append((len(r["new"]), r["still_open"]))
+            dp.publish("p", night, r["new"], r["still_open"], [], cs, NOW) if r["new"] else None
+            s = dp.load_state("p") if r["new"] else s
+            s["dismissed"] = {"todo:a": {"at": "x", "evidence_count": 10}}
+        self.assertEqual(seen, [(1, 0), (0, 1), (0, 1)])
+
     def test_unchanged_is_still_open_changed_is_new(self):
         rep = {"todo:a": {"first_reported": "x", "last_evidence_count": 3}}
         same = dp.select([item("todo:a")], {"todo:a": cand("todo:a", 3)}, self.st(reported=rep), [])
@@ -175,7 +189,37 @@ class BuildOpTest(Base):
             self.assertIn(f"{n}. Fix todo:{n - 1}", op["text"])   # every item survives, the whys were cut
 
 
+class FitTest(Base):
+    def test_long_titles_and_evidence_keep_items_footer_and_links(self):   # mutation: slice text[:LIMIT] -> items 4-5/footer lost
+        its = [item(f"todo:{i}", title="T" * 500, why="w" * 500, expected_value="v" * 300) for i in range(5)]
+        cs = {i["key"]: cand(i["key"], 2, [{"text": "E" * 500, "path": None, "line": None, "url": "https://h/x(1)"},
+                                           {"text": "short", "path": None, "line": None, "url": "https://h/y"}]) for i in its}
+        for i in its:
+            i["evidence_refs"] = [0, 1]
+        op = dp.build_op("p", "n", [dict(i, count=2) for i in its], 4, [item("repeated_ruling:q", title="Q" * 500)], cs)
+        discord_feed._check(op)
+        t = op["text"]
+        self.assertLessEqual(len(t), 1900)
+        for n in range(1, 6):
+            self.assertIn(f"\n{n}. ", t)
+        self.assertIn("still open: 4", t)
+        self.assertIn("also proposed by the memory run: ", t)
+        self.assertEqual(t.count("]("), t.count("](") and len(__import__("re").findall(r"\]\([^)]*\)", t)))
+
+    def test_header_names_project(self):
+        its, cs = many(1)
+        self.assertTrue(dp.build_op("projx", "20261121", [dict(its[0], count=2)], 0, [], cs)["text"].startswith("🔎 discover projx: 1 new"))
+
+
 class PublishTest(Base):
+    def test_failed_outbox_write_leaves_state(self):   # mutation: save state before the outbox write -> reported[] set
+        its, cs = many(1)
+        with mock.patch.object(dp.discord_feed, "outbox_write", side_effect=OSError("disk")):
+            with self.assertRaises(OSError):
+                dp.publish("p", "20261121", [dict(its[0], count=2)], 0, [], cs, NOW)
+        st = dp.load_state("p")
+        self.assertEqual((st["reported"], st["posts"]), ({}, {}))
+
     def test_nothing_new_writes_nothing(self):   # mutation: drop the early return -> an op is written
         self.assertEqual(dp.publish("p", "20261121", [], 2, [], {}, NOW), 0)
         self.assertEqual(self.outbox(), [])
@@ -251,6 +295,17 @@ class ClickTest(Base):
         self.assertIn(kid("todo:1"), eds[0]["rows"][0][0]["custom_id"])
         self.assertIn("— ✖ dismissed", eds[1]["text"])
         self.assertEqual(eds[1]["rows"], [])
+
+    def test_decided_by_key_across_nights(self):   # mutation: decide per post item only -> second night's button acts again
+        its, cs = many(2)
+        dp.click("p", "U", self.cid("file"), NOW)
+        dp.click("p", "U", self.cid("dismiss", kid("todo:1")), NOW)
+        dp.publish("p", "20261122", [dict(i, count=2) for i in its], 0, [], cs, NOW)
+        n = len(self.idea_lines())
+        self.assertEqual(dp.click("p", "U", self.cid("dismiss"), NOW), "already filed")
+        self.assertEqual(dp.click("p", "U", self.cid("file"), NOW), "already filed")
+        self.assertEqual(dp.click("p", "U", self.cid("dismiss", kid("todo:1")), NOW), "already dismissed")
+        self.assertEqual(len(self.idea_lines()), n)
 
     def test_exception_is_error_type(self):
         with mock.patch.object(dp.ideas, "add", side_effect=OSError("boom")):
