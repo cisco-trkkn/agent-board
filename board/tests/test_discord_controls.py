@@ -208,6 +208,42 @@ class DiscoverClickTest(Base):
         self.assertEqual(self.audit()[-1]["result"], "rejected")
 
 
+class ScoutRouteTest(Base):
+    CID = "ab:scout:approve:agent-board:0123456789ab"
+    KEY = "ab:scout:reject:agent-board:0123456789ab"
+
+    def run_event(self, ev, fn, ret):
+        self.event("1-a.json", dict(ev, message_id="m", channel_id="c", ts=1))
+        with mock.patch.object(dc.scout_post, fn, return_value=ret) as c, \
+                mock.patch.object(dc.discord_dialogs, "reply", side_effect=AssertionError("dialog consumer must not see it")):
+            self.step(Runner())
+        return c
+
+    def test_click_routes_with_add_line(self):   # mutation: no ab:scout: click branch -> audit says "ignored"
+        c = self.run_event({"type": "click", "custom_id": self.CID, "user": "U1"}, "click", "approved")
+        c.assert_called_once()
+        self.assertEqual(c.call_args.args[:2], ("U1", self.CID))
+        c.call_args.kwargs["add_line"]("[Scout] x")
+        self.assertEqual(self.lines, [("p", "[Scout] x")])
+        self.assertEqual([(a["action"], a["target"], a["result"]) for a in self.audit()], [("click", self.CID, "approved")])
+
+    def test_click_other_user_rejected(self):
+        c = self.run_event({"type": "click", "custom_id": self.CID, "user": "X"}, "click", "approved")
+        c.assert_not_called()
+        self.assertEqual(self.audit()[-1]["result"], "rejected")
+
+    def test_reply_routes_before_dialogs(self):   # mutation: dialog consumer first -> the AssertionError above
+        c = self.run_event({"type": "reply", "key": self.KEY, "text": "too risky", "user": "U1"}, "reply", "noted")
+        c.assert_called_once()
+        self.assertEqual((c.call_args.args[:3]), ("U1", self.KEY, "too risky"))
+        self.assertEqual([(a["action"], a["target"], a["result"]) for a in self.audit()], [("scout-reply", self.KEY, "noted")])
+
+    def test_reply_other_user_rejected(self):
+        c = self.run_event({"type": "reply", "key": self.KEY, "text": "t", "user": "X"}, "reply", "noted")
+        c.assert_not_called()
+        self.assertEqual(self.audit()[-1]["result"], "rejected")
+
+
 class ProjectBotLeadGauthTest(Base):
     """/lead restart|handoff and /gauth arrive as slash events in a project bot's dir: they reach the same runner and spawn
     seam the ops consumer uses (nothing here restarts a lead or starts gcloud)."""

@@ -17,6 +17,7 @@ import discord_feed
 import discord_ideas
 import discover_post
 import dream_discord
+import scout_post
 import tc_env
 
 BIN = Path(__file__).resolve().parent.parent / "bin"
@@ -59,6 +60,17 @@ def _cross_denied(own, ev, user):
     return user not in _allow(tc_env.ops_dir())
 
 
+def _scout(project, ev, allow, add_line):
+    """(audit action, target, result) for an `ab:scout:` click or reply (checked before the dialog consumer, which takes every reply), else None."""
+    user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
+    cid, key = str(ev.get("custom_id") or ""), str(ev.get("key") or "")
+    if kind == "click" and cid.startswith("ab:scout:"):
+        return "click", cid, scout_post.click(user, cid, time.time(), add_line=lambda t: add_line(project, t)) if user in allow else "rejected"
+    if kind == "reply" and key.startswith("ab:scout:"):
+        return "scout-reply", key, scout_post.reply(user, key, ev.get("text"), time.time()) if user in allow else "rejected"
+    return None
+
+
 def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
     ev_dir = d / "events"
     allow = _allow(d)
@@ -73,7 +85,7 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
             continue
         user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
         try:
-            dlg = discord_dialogs.consume_event(d, ev, allow, run, time.time(), add_line=add_line)
+            dlg = _scout(project, ev, allow, add_line) or discord_dialogs.consume_event(d, ev, allow, run, time.time(), add_line=add_line)
             if dlg:
                 discord_feed.audit_append(d, user, *dlg)
             elif kind == "perm":   # the old prompt buttons are gone: a leftover event is only audited
