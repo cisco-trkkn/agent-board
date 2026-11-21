@@ -15,6 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
@@ -45,6 +46,7 @@ def get(url, accept=None, headers=None):
         with _OPENER.open(req, timeout=TIMEOUT) as r:
             return r.status, r.read(MAX_BYTES), r.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
+        e.close()
         raise FetchError(f"HTTP {e.code} for {url}") from None
     except Exception as e:  # URLError, timeout, ssl, bad url, connection reset
         raise FetchError(f"{type(e).__name__}: {e}") from None
@@ -100,20 +102,25 @@ def strip_tags(s):
 
 
 def _iso_date(s):
-    """RFC 822 (RSS) -> ISO UTC; anything else (Atom ISO) passes through; None when empty."""
+    """RFC 822 (RSS) or ISO 8601 (Atom) -> UTC 'YYYY-MM-DDTHH:MM:SSZ'; None when empty or unparseable."""
     s = (s or "").strip()
     if not s:
         return None
-    if re.match(r"\d{4}-\d\d-\d\d", s):
-        return s
     try:
-        return parsedate_to_datetime(s).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except (TypeError, ValueError):
-        return s
+        if re.match(r"\d{4}-\d\d-\d\d", s):
+            d = datetime.fromisoformat(s.replace("Z", "+00:00").replace("z", "+00:00"))
+        else:
+            d = parsedate_to_datetime(s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError, IndexError):
+        return None
 
 
 def _newest_first(items):
-    return sorted(items, key=lambda i: i["published"] or "", reverse=True)  # stable: ties keep feed order
+    # stable: ties keep feed order; unparseable dates (None) sort last
+    return sorted(items, key=lambda i: (i["published"] is not None, i["published"] or ""), reverse=True)
 
 
 # ---- changelog_md -------------------------------------------------------------------------
@@ -323,15 +330,20 @@ def _html_diff(source, state, installed_version):
 # ---- npm ----------------------------------------------------------------------------------
 
 def _npm(source, state, installed_version):
-    data = json.loads(_text(_body(source["url"], "application/json")))
-    latest = data["dist-tags"]["latest"]
+    """source url = <registry>/<pkg> (e.g. https://registry.npmjs.org/@anthropic-ai/claude-code);
+    reads the small <registry>/-/package/<pkg>/dist-tags document, not the full packument."""
+    u = urllib.parse.urlsplit(source["url"])
+    pkg = u.path.strip("/")
+    if not pkg:
+        raise FetchError("npm source url has no package")
+    tags_url = urllib.parse.urlunsplit((u.scheme, u.netloc, f"/-/package/{pkg}/dist-tags", "", ""))
+    latest = json.loads(_text(_body(tags_url, "application/json")))["latest"]
+    if not isinstance(latest, str) or not latest:
+        raise FetchError("bad dist-tags latest")
     new_state = {"latest": latest}
     if latest == (state or {}).get("latest"):
         return [], new_state
-    name = data.get("name") or "package"
-    published = (data.get("time") or {}).get(latest)
-    url = "https://www.npmjs.com/package/" + name
-    return [_item(f"{name} {latest}", url, version=latest, published=published)], new_state
+    return [_item(f"{pkg} {latest}", "https://www.npmjs.com/package/" + pkg, version=latest)], new_state
 
 
 KINDS = {"changelog_md": _changelog_md, "github_releases": _github_releases, "rss": _rss,

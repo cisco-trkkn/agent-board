@@ -1,6 +1,7 @@
 """scout_fetch: the web fetchers, against a local 127.0.0.1 server that serves board/tests/fixtures/scout/."""
 import json
 import os
+import warnings
 import stat
 import sys
 import tempfile
@@ -88,7 +89,7 @@ class GetTest(Base):
     def test_get_ok_headers_and_no_cookie_replay(self):
         st, body, ct = sf.get(self.base + "/npm.json", accept="application/json", headers={"X-A": "1"})
         self.assertEqual(st, 200)
-        self.assertIn(b"dist-tags", body)
+        self.assertIn(b"latest", body)
         self.assertEqual(ct, "application/json")
         sf.get(self.base + "/npm.json")
         h = Handler.seen[0][1]
@@ -101,6 +102,16 @@ class GetTest(Base):
         for p in ("/500", "/nothere"):
             with self.assertRaises(sf.FetchError):
                 sf.get(self.base + p)
+
+    def test_http_error_closes_response_no_resourcewarning(self):
+        import gc
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            for p in ("/500", "/nothere"):
+                with self.assertRaises(sf.FetchError):
+                    sf.get(self.base + p)
+            gc.collect()
+        self.assertEqual([x for x in w if issubclass(x.category, ResourceWarning)], [])
 
     def test_network_error_raises_fetcherror(self):
         with self.assertRaises(sf.FetchError):
@@ -259,6 +270,24 @@ class RssTest(Base):
         self.assertEqual(items[1]["excerpt"], "Body")
         self.assertEqual(items[1]["published"], "2026-11-10T01:00:00Z")
 
+    def test_dates_converted_to_utc_and_bad_dates_none_sorted_last(self):
+        cases = {"Tue, 17 Nov 2026 12:00:00 +0200": "2026-11-17T10:00:00Z",
+                 "Tue, 17 Nov 2026 12:00:00 -0500": "2026-11-17T17:00:00Z",
+                 "Tue, 17 Nov 2026 12:00:00 GMT": "2026-11-17T12:00:00Z",
+                 "2026-11-20T01:00:00Z": "2026-11-20T01:00:00Z",
+                 "2026-11-20T03:00:00+02:00": "2026-11-20T01:00:00Z",
+                 "not a date": None, "": None}
+        for raw, want in cases.items():
+            self.assertEqual(sf._iso_date(raw), want, raw)
+        feed = ("<rss><channel>" + "".join(
+            f"<item><title>{n}</title><link>https://e.com/{n}</link><pubDate>{d}</pubDate></item>" for n, d in
+            (("bad", "garbage"), ("a", "Tue, 17 Nov 2026 12:00:00 +0200"), ("b", "Tue, 17 Nov 2026 11:00:00 GMT"))
+        ) + "</channel></rss>")
+        Handler.extra["/d.xml"] = (feed.encode(), "application/xml")
+        items, _ = sf.fetch(self.src("rss", "/d.xml"), {})
+        self.assertEqual([i["title"] for i in items], ["b", "a", "bad"])  # b 11:00Z > a 10:00Z; None last
+        self.assertIsNone(items[2]["published"])
+
     def test_long_summary_cut(self):
         big = "<rss><channel><item><title>t</title><link>https://e.com/x</link><description>" + "é" * 10000 + "</description></item></channel></rss>"
         Handler.extra["/b.xml"] = (big.encode(), "application/xml")
@@ -390,31 +419,42 @@ class HtmlDiffTest(Base):
 
 
 class NpmTest(Base):
+    TAGS = "/-/package/@anthropic-ai/claude-code/dist-tags"
+    PKG = "/@anthropic-ai/claude-code"
+
+    def setUp(self):
+        super().setUp()
+        Handler.extra[self.TAGS] = ((FIX / "npm.json").read_bytes(), "application/json")
+
+    def test_reads_dist_tags_url_built_from_source_path(self):
+        sf.fetch(self.src("npm", self.PKG), {})
+        self.assertEqual([p for p, _ in Handler.seen], [self.TAGS])
+
     def test_new_version(self):
-        items, state = sf.fetch(self.src("npm", "/npm.json"), {})
+        items, state = sf.fetch(self.src("npm", self.PKG), {})
         self.assertEqual(state, {"latest": "2.1.330"})
         self.assertEqual(len(items), 1)
         it = items[0]
         self.assertShape(it)
         self.assertEqual(it["version"], "2.1.330")
-        self.assertIn("2.1.330", it["title"])
-        self.assertEqual(it["published"], "2026-11-20T19:16:01.070Z")
+        self.assertEqual(it["title"], "@anthropic-ai/claude-code 2.1.330")
+        self.assertEqual(it["url"], "https://www.npmjs.com/package/@anthropic-ai/claude-code")
 
     def test_unchanged(self):
-        items, state = sf.fetch(self.src("npm", "/npm.json"), {"latest": "2.1.330"})
+        items, state = sf.fetch(self.src("npm", self.PKG), {"latest": "2.1.330"})
         self.assertEqual(items, [])
         self.assertEqual(state, {"latest": "2.1.330"})
 
     def test_changed(self):
-        items, state = sf.fetch(self.src("npm", "/npm.json"), {"latest": "2.1.329"})
+        items, state = sf.fetch(self.src("npm", self.PKG), {"latest": "2.1.329"})
         self.assertEqual([i["version"] for i in items], ["2.1.330"])
         self.assertEqual(state, {"latest": "2.1.330"})
 
     def test_broken(self):
-        Handler.extra["/bad.json"] = (b"nope", "application/json")
-        Handler.extra["/nodist.json"] = (b'{"name": "x"}', "application/json")
-        Handler.extra["/empty"] = (b"", "application/json")
-        for p in ("/500", "/bad.json", "/nodist.json", "/empty"):
+        Handler.extra["/-/package/bad/dist-tags"] = (b"nope", "application/json")
+        Handler.extra["/-/package/nolatest/dist-tags"] = (b'{"next": "1.0.0"}', "application/json")
+        Handler.extra["/-/package/empty/dist-tags"] = (b"", "application/json")
+        for p in ("/500", "/bad", "/nolatest", "/empty", "/missing", "/"):
             with self.assertRaises(sf.FetchError, msg=p):
                 sf.fetch(self.src("npm", p), {})
 
@@ -423,7 +463,8 @@ class IsolationTest(Base):
     def test_real_scout_dir_untouched(self):
         real = Path.home() / ".local/state/agent-board/scout"
         before = sorted(p.name for p in real.iterdir()) if real.exists() else None
-        sf.fetch(self.src("npm", "/npm.json"), {})
+        Handler.extra[NpmTest.TAGS] = ((FIX / "npm.json").read_bytes(), "application/json")
+        sf.fetch(self.src("npm", NpmTest.PKG), {})
         after = sorted(p.name for p in real.iterdir()) if real.exists() else None
         self.assertEqual(before, after)
 
