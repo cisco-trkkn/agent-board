@@ -75,9 +75,8 @@ function build(batchId, plans, missing, relations, relNote) {
   return o.join("\n") + "\n";
 }
 
-function runAnalyse(repo, batchId, relationsPath, opts) {
-  const extra = (opts && opts.extra) || [];
-  const batch = readBatch(repo, batchId, extra);
+// loadPlans(repo, batch, relationsPath) -> {plans, missing, relations, note}: the inputs of every analysis of a batch.
+function loadPlans(repo, batch, relationsPath) {
   const plans = [];
   const missing = [];
   for (const spec of batch.specs || []) {
@@ -90,6 +89,24 @@ function runAnalyse(repo, batchId, relationsPath, opts) {
   const { list: rawRel, note } = loadRelations(relationsPath);
   const planned = new Set(plans.map((p) => p.spec));
   const relations = rawRel.filter((r) => r && r.a !== r.b && planned.has(r.a) && planned.has(r.b) && REL_KINDS.includes(r.kind));
+  return { plans, missing, relations, note };
+}
+
+// analysisLine(batchId, plans, relations, verified) -> the kind=analysis metrics line.
+function analysisLine(batchId, plans, relations, verified) {
+  const s = G.summary(plans, relations);
+  return {
+    kind: "analysis", batch: batchId, specs: plans.length, waves: s.waves,
+    parallelism: s.parallelism, parallelism_strict: s.parallelism_strict,
+    parallelism_writes_only: s.parallelism_writes_only,
+    appends_verified: verified, clusters: s.clusters, relations: relations.length,
+  };
+}
+
+function runAnalyse(repo, batchId, relationsPath, opts) {
+  const extra = (opts && opts.extra) || [];
+  const batch = readBatch(repo, batchId, extra);
+  const { plans, missing, relations, note } = loadPlans(repo, batch, relationsPath);
   let doc = build(batchId, plans, missing, relations, note);
   const root = mainRoot(repo);
   const docPath = path.join(root, "docs/superpowers/metrics/analysis", `${batchId}.md`);
@@ -101,13 +118,7 @@ function runAnalyse(repo, batchId, relationsPath, opts) {
   } catch (_) { /* first run */ }
   fs.mkdirSync(path.dirname(docPath), { recursive: true });
   fs.writeFileSync(docPath, doc + keep);
-  const s = G.summary(plans, relations);
-  const line = {
-    kind: "analysis", batch: batchId, specs: plans.length, waves: s.waves,
-    parallelism: s.parallelism, parallelism_strict: s.parallelism_strict,
-    parallelism_writes_only: s.parallelism_writes_only,
-    appends_verified: false, clusters: s.clusters, relations: relations.length,
-  };
+  const line = analysisLine(batchId, plans, relations, false);
   appendAnalysis(repo, line, extra);
   return { docPath, line };
 }
@@ -125,4 +136,4 @@ function main(argv, ctx) {
   return 0;
 }
 
-module.exports = { runAnalyse, main };
+module.exports = { runAnalyse, main, loadPlans, analysisLine, PRED };
