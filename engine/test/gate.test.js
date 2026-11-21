@@ -26,10 +26,10 @@ test("an analysis line appended with metrics append is read back by metrics gate
     fs.appendFileSync(log, JSON.stringify({ kind: "run", batch: "b", spec: `s${i}`, refreshes: 0,
       tokens: { total: 1000 }, manifest: { recall_existing: 0.95 }, manifest_tokens: 50 }) + "\n");
   }
-  const ap = ctl("--repo", r.dir, "append", "analysis", "--json",
+  const ap = ctl("append", "analysis", "--repo", r.dir, "--json",
     JSON.stringify({ appends_verified: true, parallelism: 2, waves: { append: 2 } }), "--batch", "b", "--log", log);
   assert.equal(ap.status, 0, ap.stderr);
-  const g = ctl("--repo", r.dir, "gate", "K1", "--log", log);
+  const g = ctl("gate", "K1", "--repo", r.dir, "--log", log);
   assert.equal(g.status, 0, g.stdout + g.stderr);
   assert.match(g.stdout, /^gate K1: pass\n/);
   assert.match(g.stdout, /analysis\.parallelism 2 \(min 1\.5\) \(append waves 2\) pass/);
