@@ -45,4 +45,12 @@
 - Fixed environment variables written by a SessionStart hook being lost with `claude -p --continue`
 - Fixed `claude -p` exiting 0 with no message when its output went to a file on a full disk: it now prints an error and exits 1, though a full NFS export may go unnoticed
 - Fixed the system prompt keeping the earlier model's instructions when the model was changed after `/context` but before the first message
-- Fixed Claude sometimes replying to its commit attribution reminder and ending the turn early after the model changed mid-t
+
+## 2.1.329
+
+- Fixed `/resume` listing sessions from other projects
+- Added `--print-timing` to show per-turn latency
+
+## 2.1.328
+
+- Fixed a crash when the terminal was resized during a tool call
