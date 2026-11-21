@@ -102,8 +102,8 @@ def _features(root):
     except (ValueError, KeyError, TypeError):
         hooks = []
     lines.append("hook events: " + (", ".join(hooks) if hooks else NONE))
-    mods = root / "claude/mods"
-    names = sorted(p.name for p in mods.iterdir()) if mods.is_dir() else []
+    mods = root / "claude/plugin/mods"
+    names = sorted(p.name for p in mods.glob("*.js")) if mods.is_dir() else []
     lines.append("mods: " + (", ".join(names) if names else NONE))
     try:
         keys = list(json.loads(_read(root / "claude/session-settings.json")))

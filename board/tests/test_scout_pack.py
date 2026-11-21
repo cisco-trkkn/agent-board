@@ -95,6 +95,10 @@ class Build(Base):
         (self.root / "claude/plugin/hooks").mkdir(parents=True)
         (self.root / "claude/plugin/hooks/hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [], "Stop": []}}))
         (self.root / "claude/session-settings.json").write_text(json.dumps({"env": {}, "teammateMode": "auto"}))
+        mods = self.root / "claude/plugin/mods"
+        (mods / "fixtures").mkdir(parents=True)
+        for n in ("index.js", "kill-guard.js", "kill-guard.test.ts"):
+            (mods / n).write_text("//\n")
         self.spec("2026-11-12-alpha-design.md", "# Alpha title\n")
         Path(os.environ["TC_CONTEXT_DIR"]).mkdir(parents=True)
         (Path(os.environ["TC_CONTEXT_DIR"]) / "agent-board.md").write_text("CTXLINE\n")
@@ -122,7 +126,8 @@ class Build(Base):
         self.assertIn("foo@mkt 1.2.3", pack)
         self.assertIn("SessionStart", pack)
         self.assertIn("teammateMode", pack)
-        self.assertIn("(none)", pack.split("mods")[1])
+        mods_line = [l for l in pack.splitlines() if l.startswith("- mods:")][0]
+        self.assertEqual(mods_line, "- mods: index.js, kill-guard.js")
 
     def test_missing_inputs_give_none(self):
         pack = scout_pack.build(self.root, 0)
@@ -132,6 +137,7 @@ class Build(Base):
         self.assertIn("(none)", body)
         self.assertIn("(none)", pack.split("## Open ideas")[1].split("## Versions")[0])
         self.assertIn("(none)", pack.split("## Specs")[1].split("## Open ideas")[0])
+        self.assertIn("- mods: (none)", pack)
 
     def test_claude_failure(self):
         Path(self.tmp.name, "bin/claude").write_text("#!/bin/sh\nexit 3\n")
