@@ -157,6 +157,25 @@ class Build(Base):
         pack = scout_pack.build(self.root, 0)
         self.assertLessEqual(len(pack.encode()), 30720)
         self.assertTrue(pack.endswith("\n"))
+        for h in HEADINGS:
+            self.assertIn(h, pack)
+        self.assertIn("(cut)", pack.split("## Layout")[1].split("## Specs")[0])
+
+    def test_hard_cut_keeps_all_headings_with_big_variable_sections(self):
+        import ideas
+        for i in range(200):
+            ideas.add("agent-board", f"idea {i} " + "z" * 200)
+        ctx = Path(os.environ["TC_CONTEXT_DIR"])
+        ctx.mkdir(parents=True, exist_ok=True)
+        (ctx / "agent-board.md").write_text(("c" * 99 + "\n") * 520)
+        for i in range(200):
+            self.spec(f"2026-01-{i:03d}-s{i}-design.md", f"# Spec {i} " + "t" * 60 + "\n")
+        pack = scout_pack.build(self.root, 0)
+        self.assertLessEqual(len(pack.encode()), 30720)
+        for h in HEADINGS:
+            self.assertIn(h, pack)
+        self.assertIn("2.1.330", pack.split("## Versions")[1])
+        self.assertIn("more not shown)", pack.split("## Open ideas")[1].split("## Versions")[0])
 
 
 if __name__ == "__main__":

@@ -149,14 +149,46 @@ def build(root, now=None):
     versions = f"- {_claude_version()}\n" + "\n".join(f"- {p}" for p in plugins) if plugins else f"- {_claude_version()}\n- plugins: {NONE}"
     layout, features = _layout(root), _features(root)
 
-    def make(ns, ni, nc):
-        return _render(_cut_lines(shared, nc) if shared else "", layout, spec_lines[:ns], idea_lines[:ni], versions, features)
+    def more(lines, n):
+        return lines[:n] + ([f"(… {len(lines) - n} more not shown)"] if n < len(lines) else [])
 
-    for args in ((len(spec_lines), len(idea_lines), len(shared.encode()) + 1),
-                 (SPECS_KEEP, len(idea_lines), len(shared.encode()) + 1),
-                 (SPECS_KEEP, IDEAS_KEEP, len(shared.encode()) + 1),
+    def make(ns, ni, nc, nl=None):
+        sh = _cut_lines(shared, nc) if shared else ""
+        if shared and sh != shared:
+            sh = sh.rstrip("\n") + "\n(cut)"
+        lay = layout
+        if nl is not None and nl < len(layout.splitlines()):
+            lay = "\n".join(layout.splitlines()[:nl] + ["(cut)"])
+        return _render(sh, lay, more(spec_lines, ns), more(idea_lines, ni), versions, features)
+
+    def fits(pack):
+        return len(pack.encode()) <= CAP
+
+    full_c = len(shared.encode()) + 1
+    for args in ((len(spec_lines), len(idea_lines), full_c),
+                 (SPECS_KEEP, len(idea_lines), full_c),
+                 (SPECS_KEEP, IDEAS_KEEP, full_c),
                  (SPECS_KEEP, IDEAS_KEEP, CONTEXT_KEEP)):
         pack = make(*args)
-        if len(pack.encode()) <= CAP:
+        if fits(pack):
             return pack
-    return _cut_lines(pack, CAP)
+    # Hard cut: Layout, Versions and Features stay; shrink ideas, then specs, then context.
+    ns, ni, nc = min(SPECS_KEEP, len(spec_lines)), min(IDEAS_KEEP, len(idea_lines)), CONTEXT_KEEP
+    while ni > 0:
+        ni -= 1
+        if fits(make(ns, ni, nc)):
+            return make(ns, ni, nc)
+    while ns > 0:
+        ns -= 1
+        if fits(make(ns, ni, nc)):
+            return make(ns, ni, nc)
+    while nc > 0:
+        nc = max(0, nc - 1024)
+        if fits(make(ns, ni, nc)):
+            return make(ns, ni, nc)
+    nl = len(layout.splitlines())
+    while nl > 0:
+        nl -= 1
+        if fits(make(ns, ni, nc, nl)):
+            break
+    return make(ns, ni, nc, nl)
