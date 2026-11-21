@@ -1572,9 +1572,14 @@ def gate_eval(repo, gate_id):
             if last is None or not _where_ok(last, c.get("where")):
                 early = True
             else:
-                val = _dig(last, m[len("analysis."):] if m.startswith("analysis.") else m)
+                val = _dig(last, m)
+                if val is None and m.startswith("analysis."):
+                    val = _dig(last, m[len("analysis."):])   # the registry writes the analysis line flat
                 early = val is None
-                waves = _dig(last, "waves.append") if m.startswith("analysis.") else None
+                if m.startswith("analysis."):
+                    waves = _dig(last, "analysis.waves.append")
+                    if waves is None:
+                        waves = _dig(last, "waves.append")
         elif agg == "ratio_of_sums" or "/" in m:
             num, _, den = m.partition("/")
             if agg == "ratio_of_sums":
