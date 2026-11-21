@@ -19,10 +19,9 @@ test("an unknown subcommand prints the usage line and exits 2", () => {
 });
 
 test("a subcommand that throws prints one error line and exits 1", () => {
-  // no sub module exists yet, so every known sub is the stub that throws "not built"
-  const r = run(["facts", "x"]);
+  const r = run(["facts"]);
   assert.equal(r.code, 1);
-  assert.equal(r.stderr, "registry: facts: not built\n");
+  assert.match(r.stderr, /^registry: facts: [^\n]+\n$/);
 });
 
 test("scratchRepo makes a main-branch git repo and cleanup removes it", () => {
