@@ -81,30 +81,69 @@ def main_checkout(d):
 _roots = {}
 
 
-def root_for(start_path):
-    """The project's main checkout for a session started in start_path: that dir, else $HOME, else Path.home().
+def _gone_root(start_path):
+    """The main checkout for a start path that no longer exists (a removed worktree): the repo of its nearest existing
+    parent, stopping before /. None when that parent is in no repo, git cannot run, or the repo's toplevel is $HOME."""
+    p = os.path.dirname(os.path.normpath(start_path))
+    while p != os.path.dirname(p) and not os.path.isdir(p):
+        p = os.path.dirname(p)
+    if p == os.path.dirname(p):   # reached /
+        return None
+    try:
+        r = subprocess.run(["git", "-C", p, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = r.stdout.splitlines()
+    if r.returncode != 0 or len(lines) < 2 or not lines[0].strip():
+        return None
+    home = os.environ.get("HOME", "")
+    if home and os.path.realpath(lines[1].strip()) == os.path.realpath(home):
+        return None
+    return str(Path(lines[0].strip()).parent)
 
-    A path that is empty or no longer a directory (a removed worktree) is skipped and its cache entry dropped.
+
+def root_for(start_path):
+    """The project's main checkout for a session started in start_path, or None when it cannot be known.
+
+    An existing dir maps as before (cached per path). A path that is gone maps to the repo of its nearest existing
+    parent (a removed <repo>/.claude/worktrees/x gives <repo>), unless that repo is ~ itself; its cache entry is
+    dropped. An empty path, or a gone path in no repo, gives None: never a silent $HOME.
     """
-    for d in (start_path, os.environ.get("HOME", "")):
-        if d and os.path.isdir(d):
-            has_git = os.path.exists(os.path.join(d, ".git"))
-            hit = _roots.get(d)
-            if hit is not None and hit[0] == has_git:
-                return hit[1]
-            root = _git_root(d)
-            if root is None:
-                return d
-            _roots[d] = (has_git, root)
-            return root
-        _roots.pop(d, None)
-    return str(Path.home())
+    if not start_path:
+        return None
+    if not os.path.isdir(start_path):
+        _roots.pop(start_path, None)
+        return _gone_root(start_path)
+    has_git = os.path.exists(os.path.join(start_path, ".git"))
+    hit = _roots.get(start_path)
+    if hit is not None and hit[0] == has_git:
+        return hit[1]
+    root = _git_root(start_path)
+    if root is None:
+        return start_path
+    _roots[start_path] = (has_git, root)
+    return root
+
+
+class FolderGone(RuntimeError):
+    """The session's start path is gone and maps to no main checkout."""
+
+
+def session_start(tmux, sess):
+    """The session's start path (#{session_path}) as tmux reports it, possibly empty or gone."""
+    return tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip()
 
 
 def session_root(tmux, sess):
     """Where the new lead starts: the project's main checkout, never a worktree (auto-cleanup may remove it).
-    The claude pane's current path is not used: Claude Code follows the lead's cd."""
-    return root_for(tmux("display", "-p", "-t", f"={sess}:", "#{session_path}").strip())
+    The claude pane's current path is not used: Claude Code follows the lead's cd. Raises FolderGone when the start
+    path is gone and maps to no checkout: the caller refuses to respawn."""
+    start = session_start(tmux, sess)
+    root = root_for(start)
+    if root is None:
+        raise FolderGone(f"project folder is gone: {start}")
+    return root
 
 
 def orchestrator():
@@ -163,9 +202,9 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=S
     pane = claude_pane(tmux, sess)
     if pane is None:
         raise RuntimeError(f"no claude window in {sess}")
+    root = session_root(tmux, sess)   # FolderGone before the wait: nothing is respawned into a folder that is gone
     if not wait_turn_end(tmux, pane, **wait):
         raise RuntimeError("the lead is still busy after the wait; not switching. Run tmux-ctl relay again when it is idle")
-    root = session_root(tmux, sess)
     timing = {k: wait[k] for k in ("sleep", "clock") if k in wait}
     shown = ""
     for n in range(1, attempts + 1):
@@ -257,7 +296,10 @@ def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, h
     if found is None:
         raise LeadRestartError(f"no lead pane for {project}")
     sess, pane, win = found
-    root = os.path.realpath(session_root(tmux, sess))
+    try:
+        root = os.path.realpath(session_root(tmux, sess))
+    except FolderGone as e:
+        raise LeadRestartError(str(e)) from None
     if resume:
         sid = session_for_pane(pane, home or os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"), state or default_state())
         if not sid:

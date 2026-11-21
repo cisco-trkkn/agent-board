@@ -36,10 +36,15 @@ class RootForTest(unittest.TestCase):
     def test_worktree_maps_to_main_checkout(self):
         self.assertEqual(relay.root_for(str(self.r.wt)), str(self.r.repo))
 
-    def test_missing_or_empty_falls_back_to_home(self):
+    def test_removed_worktree_maps_to_main_checkout(self):   # mutation: return None for every gone path -> fails
+        git("worktree", "remove", "--force", str(self.r.wt), cwd=self.r.repo)
         with mock.patch.dict(os.environ, {"HOME": self.home.name}):
-            self.assertEqual(relay.root_for(str(self.r.repo / "gone")), self.home.name)
-            self.assertEqual(relay.root_for(""), self.home.name)
+            self.assertEqual(relay.root_for(str(self.r.wt)), str(self.r.repo))
+
+    def test_gone_non_git_path_and_empty_are_none(self):   # mutation: restore the $HOME fallback -> home returned
+        with mock.patch.dict(os.environ, {"HOME": self.home.name}):
+            self.assertIsNone(relay.root_for(str(Path(self.home.name) / "gone" / "deeper")))
+            self.assertIsNone(relay.root_for(""))
 
     def test_cached_per_start_path(self):   # mutation: drop the cache -> called twice
         with mock.patch.object(relay, "_git_root", wraps=relay._git_root) as mc:
@@ -60,6 +65,10 @@ class HomeGuardTest(unittest.TestCase):
         git("init", "-q", cwd=self.home); commit(self.home)
         p = mock.patch.dict(os.environ, {"HOME": str(self.home)}); p.start(); self.addCleanup(p.stop)
         self.base = base
+
+    def test_gone_path_under_the_home_repo_is_none(self):   # mutation: drop the toplevel == $HOME check -> ~ returned
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            self.assertIsNone(relay.root_for(str(self.home / "gone-project" / "x")))
 
     def test_plain_child_of_home_repo_is_itself(self):   # mutation: remove the guard -> home
         child = self.home / "newproj"; child.mkdir()

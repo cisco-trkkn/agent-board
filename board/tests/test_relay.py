@@ -1,3 +1,4 @@
+import contextlib
 import io
 import itertools
 import os
@@ -159,10 +160,16 @@ class SessionRootTest(unittest.TestCase):
     def test_session_path_in_live_worktree_resolves_to_main_checkout(self):
         self.assertEqual(self.root(RootTmux({}, session_path=str(self.wt))), str(self.repo))
 
-    def test_deleted_worktree_session_path_falls_back_to_home(self):
+    def test_deleted_worktree_session_path_maps_to_main_checkout(self):
         git(self.repo, "worktree", "remove", "--force", str(self.wt))
         with mock.patch.dict(os.environ, {"HOME": str(self.plain)}):
-            self.assertEqual(self.root(RootTmux({"%5": str(self.repo)}, session_path=str(self.wt))), str(self.plain))
+            self.assertEqual(self.root(RootTmux({"%5": str(self.plain)}, session_path=str(self.wt))), str(self.repo))
+
+    def test_gone_non_git_session_path_raises_folder_gone(self):   # mutation: return $HOME instead -> no raise
+        gone = str(self.plain / "gone")
+        with mock.patch.dict(os.environ, {"HOME": str(self.plain)}), self.assertRaises(relay.FolderGone) as cm:
+            self.root(RootTmux({"%5": str(self.repo)}, session_path=gone))
+        self.assertEqual(str(cm.exception), f"project folder is gone: {gone}")
 
     def test_session_subdir_resolves_to_main_checkout(self):
         self.assertEqual(self.root(RootTmux({}, session_path=str(self.repo / ".claude"))), str(self.repo))
@@ -174,9 +181,10 @@ class SessionRootTest(unittest.TestCase):
     def test_non_git_session_path_is_returned_as_is(self):
         self.assertEqual(self.root(RootTmux({}, session_path=str(self.plain))), str(self.plain))
 
-    def test_nothing_usable_falls_back_to_home(self):
-        with mock.patch.dict(os.environ, {"HOME": str(self.plain)}):
-            self.assertEqual(self.root(RootTmux({"%5": "/gone"}, session_path="")), str(self.plain))
+    def test_empty_session_path_raises_folder_gone(self):
+        with mock.patch.dict(os.environ, {"HOME": str(self.plain)}), self.assertRaises(relay.FolderGone) as cm:
+            self.root(RootTmux({"%5": "/gone"}, session_path=""))
+        self.assertEqual(str(cm.exception), "project folder is gone: ")
 
 
 TMUX_BIN = os.path.expanduser("~/.local/bin/tmux") if os.access(os.path.expanduser("~/.local/bin/tmux"), os.X_OK) else shutil.which("tmux")
@@ -569,3 +577,36 @@ class RestartLeadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FolderGoneRefusalTest(unittest.TestCase):
+    """A gone, non-git start path: relay and lead-restart refuse before any respawn (spec restart-recovery §5)."""
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.gone = str(self.d / "gone")
+        self.env = mock.patch.dict(os.environ, {"HOME": str(self.d), "SHELL": "/bin/zsh"}); self.env.start(); self.addCleanup(self.env.stop)
+
+    def test_relay_refuses_without_waiting_or_respawning(self):   # mutation: move session_root after the wait -> wait_turn_end called
+        fake = FakeTmux(); fake.root = self.gone
+        with mock.patch.object(relay, "wait_turn_end") as wait, self.assertRaises(relay.FolderGone) as cm:
+            relay.relay(fake, "proj", "/d.md", str(self.d), "OLD1", sleep=lambda s: None)
+        self.assertEqual(str(cm.exception), f"project folder is gone: {self.gone}")
+        wait.assert_not_called()
+        self.assertNotIn("respawn-pane", fake.names())
+
+    def test_relay_cli_exits_1_with_the_message(self):
+        fake = FakeTmux(); fake.root = self.gone
+        err = io.StringIO()
+        with mock.patch.object(paneclass, "tmux_runner", return_value=fake), contextlib.redirect_stderr(err):
+            rc = relay.main(["--session", "proj", "--doc", "/d.md", "--state", str(self.d)])
+        self.assertEqual(rc, 1)
+        self.assertIn(f"relay failed: project folder is gone: {self.gone}", err.getvalue())
+        self.assertNotIn("respawn-pane", fake.names())
+
+    def test_lead_restart_refuses_with_lead_restart_error(self):   # mutation: drop the FolderGone -> LeadRestartError wrap -> FolderGone escapes
+        t = LeadTmux([("proj", "", "")], {"proj": [("claude", "@1", "%5")]}, root=self.gone)
+        with self.assertRaises(relay.LeadRestartError) as cm:
+            relay.restart_lead(t, "proj", resume=True, home=str(self.d), state=str(self.d))
+        self.assertEqual(str(cm.exception), f"project folder is gone: {self.gone}")
+        self.assertNotIn("respawn-pane", t.names())
