@@ -645,6 +645,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     const m = /^ab:perm:(.+):(allow|deny)$/.exec(id);
     if (m) writeEvent({ type: 'perm', key: m[1], choice: m[2], ...base });
     else writeEvent({ type: 'click', custom_id: id, user: base.user, message_id: base.message_id, channel_id: i.channelId, ts });
+    if (!m && base.message_id && /^ab:scout:(reject|revise):/.test(id)) { st.reply_armed[base.message_id] = id; trim(st.reply_armed, DIALOGS_KEEP); save(); }   // the digest's reply carries the reason or note
     say(`event ${snip(id)}`);
   }
 
