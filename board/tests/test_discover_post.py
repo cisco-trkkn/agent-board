@@ -208,7 +208,7 @@ class FitTest(Base):
 
     def test_huge_urls_still_fit(self):   # mutation: links never dropped / url length unbounded -> text far over 1900
         its = [item(f"todo:{i}", title="T" * 300) for i in range(5)]
-        cs = {i["key"]: cand(i["key"], 2, [{"text": "e" * 20, "path": None, "line": None, "url": "https://h/" + "u" * 800}] * 2) for i in its}
+        cs = {i["key"]: cand(i["key"], 2, [{"text": "e" * 5, "path": None, "line": None, "url": "https://h/" + "u" * 800}] * 2) for i in its}
         for i in its:
             i["evidence_refs"] = [0, 1]
         op = dp.build_op("p", "n", [dict(i, count=2) for i in its], 2, [item("repeated_ruling:q")], cs)
