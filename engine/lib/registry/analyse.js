@@ -89,7 +89,7 @@ function runAnalyse(repo, batchId, relationsPath, opts) {
   }
   const { list: rawRel, note } = loadRelations(relationsPath);
   const planned = new Set(plans.map((p) => p.spec));
-  const relations = rawRel.filter((r) => r && planned.has(r.a) && planned.has(r.b) && REL_KINDS.includes(r.kind));
+  const relations = rawRel.filter((r) => r && r.a !== r.b && planned.has(r.a) && planned.has(r.b) && REL_KINDS.includes(r.kind));
   let doc = build(batchId, plans, missing, relations, note);
   const root = mainRoot(repo);
   const docPath = path.join(root, "docs/superpowers/metrics/analysis", `${batchId}.md`);

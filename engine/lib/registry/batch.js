@@ -18,7 +18,7 @@ function runMetrics(repo, args) {
 // readBatch(repo, id, extra) -> parsed `metrics runs <id> --json`
 function readBatch(repo, id, extra) {
   const r = runMetrics(repo, ["runs", id, "--json", ...(extra || [])]);
-  if (r.rc !== 0) throw new Error(`unknown batch ${id}`);
+  if (r.rc !== 0) throw new Error(/unknown batch/.test(r.err) ? `unknown batch ${id}` : (r.err || `metrics runs failed (rc ${r.rc})`));
   try { return JSON.parse(r.out); } catch (_) { throw new Error(`bad metrics runs output for ${id}`); }
 }
 

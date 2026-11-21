@@ -119,7 +119,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs (registry calls them), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then

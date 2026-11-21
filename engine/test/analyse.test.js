@@ -114,7 +114,7 @@ test("rerun keeps an existing Prediction against outcome section", (t) => {
 test("unknown batch throws unknown batch <id>", (t) => {
   const { r, tmp } = setup(t);
   const bad = path.join(tmp, "bad.js");
-  fs.writeFileSync(bad, 'process.stderr.write("metrics: runs: nope\\n");process.exit(1);');
+  fs.writeFileSync(bad, 'process.stderr.write("metrics: runs: unknown batch ZZ\\n");process.exit(1);');
   process.env.REGISTRY_METRICS_CMD = `${process.execPath} ${bad}`;
   assert.throws(() => runAnalyse(r.dir, "ZZ", null), /unknown batch ZZ/);
 });
@@ -135,4 +135,32 @@ else{const x=cp.spawnSync("zsh",[${JSON.stringify(path.join(REPO_ROOT, "bin/tmux
   assert.strictEqual(lines[0].kind, "analysis");
   assert.strictEqual(lines[0].batch, "B1");
   assert.strictEqual(lines[0].specs, line.specs);
+});
+
+test("real metrics runs and append work with TMUX removed, on a batch line in the real shape", (t) => {
+  const { r, tmp } = setup(t);
+  const log = path.join(tmp, "real2.jsonl");
+  const base = r.git("rev-parse", "HEAD");
+  const batchLine = { kind: "batch", batch: "B9", at: "2026-11-21T10:00:00Z", base, assignment: { [spec("a")]: "seq-sdd", [spec("b")]: "seq-sdd", [spec("c")]: "seq-sdd" }, configs: ["seq-sdd"], groups: [] };
+  fs.writeFileSync(log, JSON.stringify(batchLine) + "\n");
+  process.env.REGISTRY_METRICS_CMD = `zsh ${path.join(REPO_ROOT, "bin/tmux-ctl")} metrics`;
+  const saved = process.env.TMUX;
+  delete process.env.TMUX;
+  t.after(() => { if (saved !== undefined) process.env.TMUX = saved; });
+  const b = require("../lib/registry/batch.js").readBatch(r.dir, "B9", ["--log", log]);
+  assert.strictEqual(b.batch, "B9");
+  assert.deepStrictEqual(b.specs, [spec("a"), spec("b"), spec("c")]);
+  assert.throws(() => require("../lib/registry/batch.js").readBatch(r.dir, "NOPE", ["--log", log]), /unknown batch NOPE/);
+  const { line } = runAnalyse(r.dir, "B9", null, { extra: ["--log", log] });
+  assert.strictEqual(line.specs, 3);
+  const last = fs.readFileSync(log, "utf8").trim().split("\n").pop();
+  assert.strictEqual(JSON.parse(last).kind, "analysis");
+});
+
+test("a non-'unknown batch' failure relays the metrics stderr line", (t) => {
+  const { r, tmp } = setup(t);
+  const bad = path.join(tmp, "bad2.js");
+  fs.writeFileSync(bad, 'process.stderr.write("tmux-ctl: not inside tmux\\n");process.exit(2);');
+  process.env.REGISTRY_METRICS_CMD = `${process.execPath} ${bad}`;
+  assert.throws(() => runAnalyse(r.dir, "B1", null), /not inside tmux/);
 });
