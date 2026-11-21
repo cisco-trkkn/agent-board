@@ -229,17 +229,31 @@ def _squash_mr(repo, branch, sha):
 NEW_GRACE = 24 * 3600   # seconds a branch with no commits of its own counts as brand new
 
 
-def _is_new(repo, branch, now):
-    """True when the branch's reflog holds only its creation entry and that entry is under 24 h old: a worktree made
-    by plain `git worktree add` (no lock, often no pane) whose HEAD is trivially an ancestor of base. An unreadable
-    reflog gives False (no grace)."""
-    # %gd with --date=unix is `<branch>@{<epoch of the reflog entry>}`; %ct would be the date of the commit
-    r = _git(repo, "reflog", "show", "--format=%gd", "--date=unix", f"refs/heads/{branch}")
-    entries = r.stdout.split()
-    m = re.search(r"@\{(\d+)\}$", entries[0]) if len(entries) == 1 else None
-    if r.returncode != 0 or not m:
+def _is_new(repo, branch, now, refs=()):
+    """True when the branch has no commits of its own and its newest reflog entry is under 24 h old: every entry is its
+    creation (`branch: Created from …`), a fast-forward (`merge …: Fast-forward`, `pull: Fast-forward`), or a
+    `reset: moving to` a commit that is an ancestor of one of `refs` (the sweep's base refs). A fresh spec branch that
+    was fast-forwarded to main is such a branch: its HEAD is an ancestor of main, yet it is not merged work. Any other
+    entry (`commit:`, `commit (amend):`, a real merge), an empty or unreadable reflog gives False (no grace)."""
+    # %gd with --date=unix is `<branch>@{<epoch of the reflog entry>}`; %H is the entry's commit; %ct would be the commit date
+    r = _git(repo, "reflog", "show", "--format=%gd %H %gs", "--date=unix", f"refs/heads/{branch}")
+    lines = [l for l in r.stdout.splitlines() if l.strip()] if r.returncode == 0 else []
+    m = re.match(r"\S*@\{(\d+)\} ", lines[0]) if lines else None
+    if not m:
         return False
-    return (now - datetime.fromtimestamp(int(m.group(1)), timezone.utc)).total_seconds() < NEW_GRACE
+    if (now - datetime.fromtimestamp(int(m.group(1)), timezone.utc)).total_seconds() >= NEW_GRACE:
+        return False
+    for line in lines:
+        parts = line.split(" ", 2)
+        if len(parts) < 3:
+            return False
+        _, sha, subj = parts
+        if subj.startswith("branch: Created from ") or ": Fast-forward" in subj:
+            continue
+        if subj.startswith("reset: moving to ") and any(_is_ancestor(repo, sha, ref) for ref in refs):
+            continue
+        return False
+    return True
 
 
 def _worktrees(repo):
@@ -308,7 +322,7 @@ def _classify_one(ctx, wt):
     if err:
         return done("kept", err)
 
-    if branch and _is_new(ctx.repo, branch, ctx.now):
+    if branch and _is_new(ctx.repo, branch, ctx.now, ctx.refs):
         return done("kept", "new, no commits yet")
 
     if any(_is_ancestor(ctx.repo, sha, r) for r in ctx.refs):

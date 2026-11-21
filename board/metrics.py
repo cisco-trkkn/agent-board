@@ -36,6 +36,11 @@ class MetricsError(Exception):
     pass
 
 
+class UsageError(MetricsError):
+    """A bad argument value: exit 2."""
+    code = 2
+
+
 def _git(repo, *args):
     p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if p.returncode != 0:
@@ -203,6 +208,7 @@ LEAD_FIELDS = ("lead_context_peak", "lead_handoffs", "post_handoff_tokens", "rer
 
 
 def cmd_start(repo, args):
+    wt = rel_worktree(repo, args.worktree) if args.worktree else None
     if not any(d.get("kind") == "batch" and d.get("batch") == args.batch for d in read_log(repo)[0]):
         raise MetricsError(f"unknown batch {args.batch}")
     now = time.time()
@@ -214,6 +220,8 @@ def cmd_start(repo, args):
         rec["limits"] = None
         rec["missing"] = ["limits"]
         rec["missing_reason"] = {"limits": REASON_START}
+    if wt:
+        rec["worktree"] = wt
     append(repo, rec)
 
 
@@ -732,6 +740,8 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
     root = main_root(repo)
     others = _other_windows(lines, batch, spec, now) if start and kind == "stamped" else []
     wt = worktree_dirs(repo, root, rec["branch"], conn)
+    if start and start.get("worktree"):
+        wt = set(wt) | {os.path.join(root, start["worktree"])}   # rows of a worktree removed before record still count
     weighted = attributed_rows(conn, root, rec["branch"], wt, (lo, hi), others)
     rec.update(budget(weighted, usage.load_prices()))
     rec.update(time_fields((batch_line or {}).get("at"), lo, hi, weighted))
@@ -1160,6 +1170,7 @@ def _parser():
     st = sp.add_parser("start", parents=[common])
     st.add_argument("spec")
     st.add_argument("--batch", required=True)
+    st.add_argument("--worktree")
     df = sp.add_parser("defect", parents=[common])
     df.add_argument("spec")
     df.add_argument("what")
@@ -1898,6 +1909,18 @@ def rel_spec(repo, spec):
     raise MetricsError(f"spec outside the repo: {os.path.basename(spec)}")
 
 
+def rel_worktree(repo, path):
+    """--worktree as `.claude/worktrees/<name>[/…]` relative to the main checkout; anything else is a UsageError."""
+    root = os.path.realpath(main_root(repo))
+    p = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
+    rp = os.path.realpath(p) if os.path.exists(p) else os.path.join(os.path.realpath(os.path.dirname(p)), os.path.basename(p))
+    rel = os.path.relpath(rp, root)
+    parts = rel.split(os.sep)
+    if len(parts) < 3 or parts[:2] != [".claude", "worktrees"] or ".." in parts:
+        raise UsageError("--worktree must be under .claude/worktrees/")
+    return rel
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     sub = "metrics"
@@ -1936,7 +1959,7 @@ def main(argv=None):
         print(f"metrics: {sub}: {e}", file=sys.stderr)
         if sub != "weekly":   # the weekly job reports to stderr (the launchd log) only
             _log_error(repo, sub, e, getattr(args, "log", None) or getattr(args, "tasks_log", None))
-        return 1
+        return getattr(e, "code", 1)
 
 
 if __name__ == "__main__":

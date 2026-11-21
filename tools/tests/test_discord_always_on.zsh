@@ -46,6 +46,14 @@ check "launcher: failing helper: claude still starts" test -s $S/argv
 # --- part 3: `tmux-ctl discord watch --once` against a fake claude TUI in a scratch tmux window
 if (( ! $+commands[python3] )); then print "skip - no python3"; tt_done; exit 0; fi
 MARK="dcfake-$$-$RANDOM"
+# a failure anywhere below must not leave the stub or its fake server running: reap by this run's own mark only
+dc_reap() {
+  local p
+  for p in $(pgrep -f "$MARK"); do kill $p 2>/dev/null; done
+  [[ -n "$(pgrep -f "$MARK")" ]] && { sleep 1; for p in $(pgrep -f "$MARK"); do kill -9 $p 2>/dev/null; done }
+  return 0
+}
+trap 'dc_reap; tt_teardown' EXIT INT TERM
 ln -sf "${commands[zsh]:A}" "$STUB/claude"   # a process whose command line starts with claude (tmux still calls its command zsh)
 FAKE="$TT_REPO/tools/tests/fixtures/fake_claude_tui.zsh"
 tt new-window -d -n lead -c "$TT_DIR" "$STUB/claude -f $FAKE $MARK --channels plugin:discord@claude-plugins-official"
@@ -124,6 +132,7 @@ check "backoff: one banner line"           test "$(grep -c "pane $LP.*notified" 
 tt kill-window -t "$LP"; sleep 0.5; for p in $(pgrep -f "discord/server.ts $MARK"); do kill $p; done
 check "leak: no fake server left"          test "$(nserv)" = 0
 check "leak: no fake lead left"            test "$(pgrep -f "fake_claude_tui.zsh $MARK" | wc -l | tr -d ' ')" = 0
+check "leak: nothing with the test's mark left" test -z "$(pgrep -f "$MARK")"
 
 # --- part 3: the launchd job through tmux-ctl, against a fake launchctl and a scratch HOME (never the real LaunchAgents)
 LC="$TT_DIR/launchctl"; LCALLS="$TT_DIR/lcalls"

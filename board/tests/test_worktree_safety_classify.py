@@ -1,6 +1,7 @@
 """test_worktree_safety, part "classify": ClassifyStates, Timeout, Cli (the fixtures are in worktree_fixtures.py)."""
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -53,6 +54,42 @@ class ClassifyStates(Base):
     def test_the_grace_ends_after_24_hours(self):
         add_worktree(self.repo, "w1", created_hours_ago=25)
         self.assertEqual(self.one()["state"], "safe")
+
+    def backdate_all(self, name, hours):
+        # every reflog entry (not only the creation) to NOW - hours; git stamps entries with the wall clock
+        log = self.repo / ".git" / "logs" / "refs" / "heads" / name
+        t = int((NOW - timedelta(hours=hours)).timestamp())
+        log.write_text(re.sub(r"> \d+ ", f"> {t} ", log.read_text()))
+
+    def ff_worktree(self, name="w1"):
+        wt = add_worktree(self.repo, name, created_hours_ago=1)
+        git("commit", "--allow-empty", "-m", "on main", cwd=self.repo)
+        git("merge", "--ff-only", "main", cwd=wt)
+        return wt
+
+    def test_fast_forwarded_young_branch_is_kept(self):   # mutation: drop the ': Fast-forward' clause -> fails
+        self.ff_worktree()
+        self.backdate_all("w1", 1)
+        item = self.one()
+        self.assertEqual((item["state"], item["reason"]), ("kept", "new, no commits yet"))
+
+    def test_fast_forwarded_branch_past_24h_is_safe(self):   # mutation: drop the age check -> fails
+        self.ff_worktree()
+        self.backdate_all("w1", 25)
+        self.assertEqual(self.one()["state"], "safe")
+
+    def test_own_commit_gets_no_grace(self):   # mutation: accept any reflog subject -> fails
+        add_worktree(self.repo, "w1", commits=1, created_hours_ago=1)
+        self.backdate_all("w1", 1)
+        item = self.one()
+        self.assertNotEqual((item["state"], item["reason"]), ("kept", "new, no commits yet"))
+
+    def test_reset_to_an_ancestor_of_base_is_kept(self):   # mutation: drop the reset clause -> fails
+        wt = self.ff_worktree()
+        git("reset", "--hard", "HEAD~1", cwd=wt)
+        self.backdate_all("w1", 1)
+        item = self.one()
+        self.assertEqual((item["state"], item["reason"]), ("kept", "new, no commits yet"))
 
     def test_a_young_worktree_with_a_merged_commit_is_safe(self):
         wt = add_worktree(self.repo, "w1", commits=1, age_days=0, created_hours_ago=1)

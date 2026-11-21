@@ -68,9 +68,11 @@ class Base(unittest.TestCase):
         metrics.append(r, {"kind": "batch", "batch": "B", "base": git(r, "rev-parse", "main"), "configs": ["cfg"],
                            "assignment": {SPEC1: "cfg", SPEC2: "cfg"}, "groups": [], "at": metrics.utc(self.t0 - 600)})
 
-    def start(self, spec, at=None, limits=None):
-        metrics.append(self.repo, {"kind": "start", "batch": "B", "spec": spec, "at": metrics.utc(at or self.t0),
-                                   "main": "x", "limits": limits})
+    def start(self, spec, at=None, limits=None, worktree=None):
+        d = {"kind": "start", "batch": "B", "spec": spec, "at": metrics.utc(at or self.t0), "main": "x", "limits": limits}
+        if worktree:
+            d["worktree"] = worktree
+        metrics.append(self.repo, d)
 
     def row(self, ts, model=OPUS, sid=SID_LEAD, agent=None, branch=None, cwd=None, side=0, sub=0, inp=1000, out=500, cr=0, cw5=0, cw1=0):
         self.n += 1
@@ -183,6 +185,55 @@ class AttributionTest(Base):
         self.row(self.t0 + 10, branch="feat/x", inp=1, out=2, cr=3, cw5=4, cw1=5)
         t = self.rec()["tokens"]
         self.assertEqual((t["input"], t["output"], t["cache_read"], t["cache_write"], t["total"]), (1, 2, 3, 9, 15))
+
+
+    def test_removed_worktree_rows_counted_when_start_names_it(self):   # mutation: drop the wt union in build_record -> fails
+        self.start(SPEC1, worktree=".claude/worktrees/gone")
+        self.row(self.t0 + 60, agent="impl", branch="main", cwd=self.root + "/.claude/worktrees/gone/board")   # dir never existed
+        self.assertEqual(self.rec()["tokens"]["total"], 1500)
+
+    def test_removed_worktree_rows_not_counted_without_it(self):
+        self.start(SPEC1)
+        self.row(self.t0 + 60, agent="impl", branch="main", cwd=self.root + "/.claude/worktrees/gone/board")
+        self.assertEqual(self.rec()["tokens"]["total"], 0)
+
+    def test_branch_and_worktree_row_counted_once(self):
+        self.start(SPEC1, worktree=".claude/worktrees/gone")
+        self.row(self.t0 + 60, agent="impl", branch="feat/x", cwd=self.root + "/.claude/worktrees/gone")
+        self.assertEqual(self.rec()["tokens"]["total"], 1500)
+
+
+class StartWorktreeTest(Base):
+    def run_start(self, wt):
+        err = io.StringIO()
+        before = metrics.read_log(self.repo)[0]
+        with contextlib.redirect_stderr(err):
+            rc = metrics.main(["--repo", str(self.repo), "start", SPEC1, "--batch", "B", "--worktree", wt])
+        return rc, err.getvalue(), before
+
+    def test_bad_paths_exit_2_and_append_nothing(self):   # mutation: skip rel_worktree validation -> fails
+        for bad in ("/tmp/elsewhere", ".claude/worktrees/../../x", ".claude/worktrees"):
+            rc, err, before = self.run_start(bad)
+            self.assertEqual(rc, 2, bad)
+            self.assertEqual(err, "metrics: start: --worktree must be under .claude/worktrees/\n", bad)
+            added = metrics.read_log(self.repo)[0][len(before):]   # main's convention: a failure logs one kind:error line
+            self.assertEqual([d["kind"] for d in added], ["error"], bad)
+            self.assertEqual(metrics.read_log(self.repo)[0][:len(before)], before, bad)
+            before = before + added
+
+    def test_valid_worktree_recorded(self):
+        for given in (".claude/worktrees/w1", self.root + "/.claude/worktrees/w1/"):
+            rc, err, before = self.run_start(given)
+            self.assertEqual((rc, err), (0, ""))
+            st = [d for d in metrics.read_log(self.repo)[0] if d["kind"] == "start"][-1]
+            self.assertEqual(st["worktree"], ".claude/worktrees/w1")
+
+    def test_no_flag_no_key(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            rc = metrics.main(["--repo", str(self.repo), "start", SPEC1, "--batch", "B"])
+        self.assertEqual(rc, 0)
+        st = [d for d in metrics.read_log(self.repo)[0] if d["kind"] == "start"][-1]
+        self.assertNotIn("worktree", st)
 
 
 class TimeTest(Base):

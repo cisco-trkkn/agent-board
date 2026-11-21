@@ -932,9 +932,11 @@ class FailedRunLogTest(DeriveBase):
         r.update(over)
         return r
 
-    def failed(self):
+    def failed(self, worktree=None):
         done = fx("1.json")
         done["metadata"]["outcome"] = "failed — tests red"
+        if worktree is not None:
+            done["metadata"]["worktree"] = worktree
         evs, st = self.derive([done], primed())
         return evs, st, df.ops_for_events(evs, st)
 
@@ -942,6 +944,30 @@ class FailedRunLogTest(DeriveBase):
     def hhmm(ts):
         import datetime
         return datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
+
+    def test_worktree_narrows_to_own_run(self):   # mutation: drop the worktree narrowing -> fails
+        a, b = str(self.root) + "/.claude/worktrees/a", str(self.root) + "/.claude/worktrees/b"
+        self.write_runs(self.rec("ra", ts=self.NOW_I - 600, cmd="a cmd", cwd=a), self.rec("rb", ts=self.NOW_I - 60, cmd="b cmd", cwd=b))
+        evs, st, ops = self.failed(worktree=".claude/worktrees/a")
+        self.assertEqual(ops[1]["text"], f"failed run log: a cmd (exit 1) · a · {self.hhmm(self.NOW_I - 600)}")
+
+    def test_worktree_without_own_run_posts_no_log(self):   # mutation: drop the narrowing -> b's log is posted
+        a, b = str(self.root) + "/.claude/worktrees/a", str(self.root) + "/.claude/worktrees/b"
+        self.write_runs(self.rec("ra", cwd=a), self.rec("rb", cwd=b))
+        evs, st, ops = self.failed(worktree=".claude/worktrees/c")
+        self.assertEqual(ops[1]["text"], "failed — no failing test run recorded")
+
+    def test_no_worktree_keeps_newest_pick(self):
+        a, b = str(self.root) + "/.claude/worktrees/a", str(self.root) + "/.claude/worktrees/b"
+        self.write_runs(self.rec("ra", ts=self.NOW_I - 600, cmd="a cmd", cwd=a), self.rec("rb", ts=self.NOW_I - 60, cmd="b cmd", cwd=b))
+        evs, st, ops = self.failed()
+        self.assertEqual(ops[1]["text"], f"failed run log: b cmd (exit 1) · b · {self.hhmm(self.NOW_I - 60)}")
+
+    def test_sibling_prefix_worktree_not_matched(self):   # mutation: startswith(base) without '/' -> fails
+        ab = str(self.root) + "/.claude/worktrees/ab"
+        self.write_runs(self.rec("rab", cwd=ab))
+        evs, st, ops = self.failed(worktree=".claude/worktrees/a")
+        self.assertEqual(ops[1]["text"], "failed — no failing test run recorded")
 
     def test_post_names_worktree_and_time(self):
         self.write_runs(self.rec(cwd="/x/.claude/worktrees/queue-reliability"))
