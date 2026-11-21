@@ -874,6 +874,14 @@ class Events(Base):
         self.assertEqual([o["key"] for o in self.outbox()][-1], f"ideas-{req2}-timeout")
         self.assertEqual(self.outbox(self.pd), [])
 
+    def test_analytics_click_routes_and_audits(self):   # mutation: no ab:analytics branch in _click -> audit says "ignored"
+        self.configure()
+        self.event("1-a.json", ok("ab:analytics:idea:2026-W47:2"))
+        with mock.patch.object(ops.analytics_post, "click", return_value="filed") as c:
+            self.consume()
+        c.assert_called_once_with(self.ops, "U1", "ab:analytics:idea:2026-W47:2", NOW)
+        self.assertEqual(json.loads((self.ops / "audit.jsonl").read_text().splitlines()[-1])["result"], "filed")
+
     def test_modal_idea_and_new_spec(self):
         with mock.patch.object(ops.ideas, "add") as add:
             self.event("1.json", {"type": "modal", "form": "idea", "project": "a", "fields": {"title": "T  x", "text": "more\ndetail"}, "user": "U1", "ts": NOW})

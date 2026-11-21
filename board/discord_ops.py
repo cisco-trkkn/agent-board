@@ -18,6 +18,7 @@ import threading
 import time
 from pathlib import Path
 
+import analytics_post
 import discord_dialogs
 import discord_feed
 import discord_ideas
@@ -763,6 +764,8 @@ def _click(d, user, cid, st, add_line, now, on_merge):
     parts = cid.split(":")
     if parts[:2] == ["ab", "ideas"]:
         return discord_ideas.click(user, cid, add_line, now)
+    if parts[:2] == ["ab", "analytics"]:
+        return analytics_post.click(d, user, cid, now)
     if parts[:2] != ["ab", "ops"] or len(parts) < 3:
         return "ignored"
     act, k = parts[2], ":".join(parts[3:])

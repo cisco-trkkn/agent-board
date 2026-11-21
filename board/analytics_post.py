@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import discord_feed
+import ideas
 import metrics_recommend
 import tc_env
 
@@ -225,3 +226,43 @@ def publish(d, project, stats, rec, stats_path, multi_project):
     for op in ops:
         discord_feed.outbox_write(d, op)
     return len(ops)
+
+
+# ---- the "File as idea" click ----------------------------------------------------------------------------------------
+
+_CID = re.compile(r"^ab:analytics:idea:(\d{4}-W\d{2}):([1-5])$")
+
+
+def click(d, user, cid, now):
+    """File recommendation <n> of week <week> as an idea, once. Returns unknown | already filed | filed | error: <msg>."""
+    m = _CID.match(str(cid))
+    if not m:
+        return "unknown"
+    week, n = m.group(1), int(m.group(2))
+    p = Path(d) / "analytics" / f"post-{week}.json"
+    adir = p.parent
+    adir.mkdir(parents=True, exist_ok=True)
+    with open(adir / ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            doc = json.loads(p.read_text())
+        except (OSError, ValueError):
+            return "unknown"
+        item = next((i for i in doc.get("items") or [] if i.get("n") == n), None)
+        if item is None:
+            return "unknown"
+        if item.get("done"):
+            return "already filed"
+        ev = "; ".join(f"{e['key']}={e['value']}" for e in item["evidence"])
+        try:
+            ideas.add(doc["project"], f"{item['title']}: {item['change']} (evidence: {ev})")
+        except ValueError as e:
+            return f"error: {e}"
+        item["done"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(doc, indent=1) + "\n")
+        os.replace(tmp, p)
+        title = item["title"]
+    discord_feed.outbox_write(d, {"op": "post", "text": f"💡 filed as idea: {escape(title)}", "tier": "progress",
+                                  "mention_user": False, "key": f"analytics-{week}-{n}-filed"})
+    return "filed"

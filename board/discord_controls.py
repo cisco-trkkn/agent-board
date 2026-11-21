@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 
+import analytics_post
 import discord_dialogs
 import discord_feed
 import discord_ideas
@@ -97,6 +98,9 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
             elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:ideas:"):
                 cid = str(ev.get("custom_id"))
                 discord_feed.audit_append(d, user, "click", cid, discord_ideas.click(user, cid, add_line, time.time()) if user in allow else "rejected")
+            elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:analytics:"):
+                cid = str(ev.get("custom_id"))
+                discord_feed.audit_append(d, user, "click", cid, analytics_post.click(d, user, cid, time.time()) if user in allow else "rejected")
             else:
                 discord_feed.audit_append(d, user, "click", str(ev.get("custom_id") or ""), "ignored" if user in allow else "rejected")
         finally:

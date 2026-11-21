@@ -166,6 +166,27 @@ class DreamClickTest(Base):
         self.assertEqual([a["result"] for a in self.audit()], ["ignored", "unknown"])
 
 
+class AnalyticsClickTest(Base):
+    CID = "ab:analytics:idea:2026-W47:1"
+
+    def run_click(self, user):
+        self.event("1-a.json", {"type": "click", "custom_id": self.CID, "user": user, "message_id": "m", "channel_id": "c", "ts": 1})
+        with mock.patch.object(dc.analytics_post, "click", return_value="filed") as c:
+            self.step(Runner())
+        return c
+
+    def test_allowed_click_audits_result(self):   # mutation: no ab:analytics: branch -> audit says "ignored"
+        c = self.run_click("U1")
+        c.assert_called_once()
+        self.assertEqual(c.call_args.args[:3], (self.d, "U1", self.CID))
+        self.assertEqual([(a["action"], a["target"], a["result"]) for a in self.audit()], [("click", self.CID, "filed")])
+
+    def test_other_user_rejected_and_nothing_runs(self):
+        c = self.run_click("X")
+        c.assert_not_called()
+        self.assertEqual(self.audit()[-1]["result"], "rejected")
+
+
 class ProjectBotLeadGauthTest(Base):
     """/lead restart|handoff and /gauth arrive as slash events in a project bot's dir: they reach the same runner and spawn
     seam the ops consumer uses (nothing here restarts a lead or starts gcloud)."""

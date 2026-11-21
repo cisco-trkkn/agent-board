@@ -5,7 +5,7 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-import analytics_post as ap, discord_feed, tc_env  # noqa: E402
+import analytics_post as ap, discord_feed, ideas, tc_env  # noqa: E402
 
 ZW = "​"
 
@@ -161,6 +161,71 @@ class Publish(Base):
         items = json.loads(sp.read_text())["items"]
         self.assertEqual(items[0]["done"], "2026-11-17T10:00:00Z")
         self.assertEqual(items[1]["done"], False)
+
+
+class Click(Base):
+    CID = "ab:analytics:idea:2026-W47:%d"
+
+    def setUp(self):
+        super().setUp()
+        self.d = Path(self.tmp.name) / "dest"
+        ap.publish(self.d, "proj", stats_fixture(), rec_fixture([item(1, "T *1*"), item(2), item(3)]), Path("/x/stats.json"), False)
+        for t in ("add", "_kick"):
+            m = mock.patch.object(ideas, t)
+            setattr(self, t, m.start())
+            self.addCleanup(m.stop)
+        self.outbox = lambda: sorted((self.d / "outbox").glob("*.json"))
+
+    def state(self):
+        return json.loads((self.d / "analytics" / "post-2026-W47.json").read_text())
+
+    def test_files_once_with_raw_text_and_reply(self):
+        before = len(self.outbox())
+        self.assertEqual(ap.click(self.d, "U1", self.CID % 1, 1763640000), "filed")
+        self.add.assert_called_once_with("proj", "T *1*: change 1 (evidence: trends.specs_merged.current=2)")
+        self.assertEqual(self.state()["items"][0]["done"], "2025-11-20T12:00:00Z")
+        ops = [json.loads(f.read_text()) for f in self.outbox()]
+        self.assertEqual(len(ops), before + 1)
+        self.assertEqual(ops[-1], {"op": "post", "text": "💡 filed as idea: T \\*1\\*", "tier": "progress", "mention_user": False,
+                                   "key": "analytics-2026-W47-1-filed"})
+
+    def test_second_click_files_nothing(self):   # mutation: drop the done check -> add called twice
+        ap.click(self.d, "U1", self.CID % 1, 1763640000)
+        n, files = len(self.outbox()), self.state()
+        self.assertEqual(ap.click(self.d, "U1", self.CID % 1, 1763640001), "already filed")
+        self.assertEqual(self.add.call_count, 1)
+        self.assertEqual(len(self.outbox()), n)
+        self.assertEqual(self.state(), files)
+
+    def test_unknown(self):
+        for cid in ("ab:analytics:idea:2026-W47:4", "ab:analytics:idea:2026-W47:9", "ab:analytics:idea:2026-W40:1", "ab:analytics:x", "ab:analytics:idea:2026-W47:1x"):
+            self.assertEqual(ap.click(self.d, "U1", cid, 1), "unknown", cid)
+        self.add.assert_not_called()
+
+    def test_old_week_resolves_while_newer_exists(self):
+        st = stats_fixture()
+        st["window"]["until"] = "2026-11-23T12:00:00Z"
+        ap.publish(self.d, "proj", st, rec_fixture(), Path("/x/stats.json"), False)
+        self.assertEqual(ap.click(self.d, "U1", self.CID % 2, 1763640000), "filed")
+        self.assertEqual(self.state()["items"][1]["done"], "2025-11-20T12:00:00Z")
+        self.assertFalse(json.loads((self.d / "analytics" / "post-2026-W48.json").read_text())["items"][1]["done"])
+
+    def test_value_error_leaves_undone(self):
+        self.add.side_effect = ValueError("empty idea")
+        n = len(self.outbox())
+        self.assertEqual(ap.click(self.d, "U1", self.CID % 1, 1), "error: empty idea")
+        self.assertIs(self.state()["items"][0]["done"], False)
+        self.assertEqual(len(self.outbox()), n)
+
+    def test_reply_lands_in_clicked_dir(self):
+        ops_dir = tc_env.ops_dir()
+        ap.publish(ops_dir, "proj", stats_fixture(), rec_fixture(), Path("/x/stats.json"), False)
+        pd = tc_env.discord_dir("proj")
+        ap.publish(pd, "proj", stats_fixture(), rec_fixture(), Path("/x/stats.json"), False)
+        keys = lambda d: [json.loads(f.read_text()).get("key") for f in sorted((d / "outbox").glob("*.json"))]  # noqa: E731
+        ap.click(pd, "U1", self.CID % 1, 1)
+        self.assertIn("analytics-2026-W47-1-filed", keys(pd))
+        self.assertNotIn("analytics-2026-W47-1-filed", keys(ops_dir))
 
 
 if __name__ == "__main__":
