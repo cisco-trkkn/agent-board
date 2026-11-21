@@ -129,6 +129,18 @@ def _render(header, texts):
     return header[:GROUP_MAX]
 
 
+def _fit(body, second):
+    """body + status line within 2000: the status line stays whole; the body is cut at a line boundary, or by characters + …."""
+    room = 2000 - len(second) - 1
+    if len(body) <= room:
+        return f"{body}\n{second}"
+    lines = body.split("\n")
+    while lines and len("\n".join(lines)) > room:
+        lines.pop()
+    cut = "\n".join(lines) if lines else body[:max(room - 1, 0)] + "…"
+    return f"{cut}\n{second}"
+
+
 def _buttons(req, g):
     return [{"label": label, "style": style, "custom_id": f"ab:ideas:{act}:{req}:{g}"} for act, label, style in BUTTONS]
 
@@ -177,10 +189,11 @@ def post(doc, now, dry_run=False):
         state, ops = [], []
         for n, (g, rows) in enumerate(groups):
             header = f"{g['emoji']} **{g['title']}** · {g['project']} · {len(rows)}"
-            ops.append({"op": "post", "text": _render(header, [x[2] for x in rows]), "tier": TIER, "mention_user": False,
+            body = _render(header, [x[2] for x in rows])
+            ops.append({"op": "post", "text": body, "tier": TIER, "mention_user": False,
                         "key": f"ideas-{req}-{n}", "buttons": _buttons(req, n)})
             state.append({"title": g["title"], "emoji": g["emoji"], "project": g["project"], "ids": [x[0] for x in rows],
-                          "keys": [x[3] for x in rows], "texts": [x[2] for x in rows], "header": header, "done": None})
+                          "keys": [x[3] for x in rows], "texts": [x[2] for x in rows], "header": header, "body": body, "done": None})
         if not groups:
             ops.append({"op": "post", "text": "no open ideas", "tier": TIER, "mention_user": False, "key": f"ideas-{req}-none"})
         if skipped:
@@ -231,26 +244,29 @@ def click(user, cid, add_line, now):
         g = st["groups"][gi]
         if g.get("done"):
             return "unknown"
-        try:
-            discord_feed._check({"op": "edit", "key": f"ideas-{req}-{gi}", "text": g["header"]})   # fail before acting
+        body = g.get("body") if isinstance(g.get("body"), str) and g.get("body") else g["header"]
+        key = f"ideas-{req}-{gi}"
+        try:   # fail before acting: the same shape and size of edit the action will send
+            discord_feed._check({"op": "edit", "key": key, "text": _fit(body, "dropped 99, 99 already changed"), "reply": "parked ✓"})
         except ValueError:
             return "error: edit failed"
         if act == "next":
             add_line(g["project"], f"regroup: {g['title']} — ideas: {', '.join(g['ids'])}")
             second, result = f"→ sent to {g['project']}'s lead to brainstorm", "queued"
+            reply = f"sent to {g['project']} ✓"
         elif act == "park":
-            second, result = "→ parked", "parked"
+            second, result, reply = "→ parked", "parked", "parked ✓"
         else:
             done = changed = 0
-            for key in g["keys"]:
+            for ikey in g["keys"]:
                 try:   # set_status refuses a line that is no longer open (dropped, taken, changed text)
-                    ideas.set_status(g["project"], key, "dropped")
+                    ideas.set_status(g["project"], ikey, "dropped")
                     done += 1
                 except ValueError:
                     changed += 1
             second = f"dropped {done}" + (f", {changed} already changed" if changed else "")
-            result = f"dropped {done}"
-        edit = {"op": "edit", "key": f"ideas-{req}-{gi}", "text": f"{g['header']}\n{second}"}
+            result, reply = f"dropped {done}", f"dropped {done} ✓"
+        edit = {"op": "edit", "key": key, "text": _fit(body, second), "reply": reply}
         g["done"] = act   # the action ran: a re-tap must never repeat it, even if the edit below fails
         _write(d / f"post-{req}.json", st)
         try:

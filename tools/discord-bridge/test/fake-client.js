@@ -48,6 +48,7 @@ class FakeClient extends EventEmitter {
       reactions: { cache: new Map() },
       react: async (e) => { this._record('react', msg.id, e); msg.reactions.cache.set(e, { me: true }); },
       edit: async (p) => { this._record('edit', msg.id, p); this._maybeFail('edit'); this._gone(msg); msg.payload = p; if (p?.content !== undefined) msg.content = p.content; return msg; },
+      reply: async (p) => { this._record('reply', msg.id, p); this._maybeFail('reply'); this._gone(msg); return this._makeMessage(channelId, p); },
       pin: async () => { this._record('pin', msg.id); this._maybeFail('pin'); msg.pinned = true; },
     };
     this.messages.set(msg.id, msg);

@@ -457,6 +457,40 @@ test('edit op: fetches prompts[key], edits text and clears buttons', async () =>
   assert.deepStrictEqual(s.files(), []); assert.deepStrictEqual(s.failed(), []);
 });
 
+test('edit op with reply sends one reply on the edited message', async () => {
+  const s = setup();
+  s.put(prompt(['x']));
+  await s.bridge.tick();
+  s.put({ op: 'edit', key: '%3:abc', text: 'done', reply: 'parked ✓' });
+  await s.bridge.tick();
+  const r = s.client.callsOf('reply');
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(r[0].target, s.st().prompts['%3:abc']);
+  assert.deepStrictEqual(r[0].payload, { content: 'parked ✓', allowedMentions: { parse: [] } });
+  assert.deepStrictEqual(s.failed(), []);
+});
+
+test('edit op without reply sends none', async () => {
+  const s = setup();
+  s.put(prompt(['x']));
+  await s.bridge.tick();
+  s.put({ op: 'edit', key: '%3:abc', text: 'done' });
+  await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('reply').length, 0);
+});
+
+test('edit op whose reply fails still succeeds, with one log line', async () => {
+  const s = setup();
+  s.put(prompt(['x']));
+  await s.bridge.tick();
+  s.client.failNext('reply', { status: 403, message: 'Missing Permissions' });
+  s.put({ op: 'edit', key: '%3:abc', text: 'done', reply: 'parked ✓' });
+  await s.bridge.tick();
+  assert.deepStrictEqual(s.files(), []); assert.deepStrictEqual(s.failed(), []);
+  assert.strictEqual(s.client.callsOf('edit').length, 1);
+  assert.ok(s.logs.some((l) => l.includes('edit reply failed')));
+});
+
 test('edit op with an unknown key is removed with a log line, not failed', async () => {
   const s = setup();
   s.put({ op: 'edit', key: 'nope', text: 't' });

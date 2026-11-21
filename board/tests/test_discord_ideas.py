@@ -272,6 +272,7 @@ class TestClick(Base):
         self.a_ids = self.ids("alpha")
         di.post(self.doc(self.req, [self.grp(self.a_ids, title="Grp")]), 1010.0)
         self.before = len(self.outbox())
+        self.body = self.outbox()[-1]["text"]   # the posted group message: header and idea lines
 
     def cid(self, act, g=0, req=None):
         return f"ab:ideas:{act}:{req or self.req}:{g}"
@@ -281,13 +282,14 @@ class TestClick(Base):
         self.assertEqual(di.click("u1", self.cid("next"), self.add, 1020.0), "queued")
         self.assertEqual(self.lines, [("alpha", f"regroup: Grp — ideas: {', '.join(self.a_ids)}")])
         e = self.outbox()[-1]
-        self.assertEqual(e, {"op": "edit", "key": f"ideas-{self.req}-0", "text": "🔧 **Grp** · alpha · 2\n→ sent to alpha's lead to brainstorm"})
+        self.assertEqual(e, {"op": "edit", "key": f"ideas-{self.req}-0", "text": f"{self.body}\n→ sent to alpha's lead to brainstorm", "reply": "sent to alpha ✓"})
 
     def test_park_leaves_file_identical(self):
         raw = (self.ideas / "alpha.md").read_bytes()
         self.assertEqual(di.click("u1", self.cid("park"), self.add, 1020.0), "parked")
         self.assertEqual((self.ideas / "alpha.md").read_bytes(), raw)
-        self.assertEqual(self.outbox()[-1]["text"], "🔧 **Grp** · alpha · 2\n→ parked")
+        self.assertEqual(self.outbox()[-1]["text"], f"{self.body}\n→ parked")
+        self.assertEqual(self.outbox()[-1]["reply"], "parked ✓")
         self.assertEqual(self.lines[-1][0], "overseer")   # only the request line
 
     def test_drop(self):
@@ -296,13 +298,60 @@ class TestClick(Base):
         text = (self.ideas / "alpha.md").read_text()
         self.assertIn(f"- [-] {TS} · alpha one", text)
         self.assertIn(f"- [x] {TS} · alpha done", text)
-        self.assertEqual(self.outbox()[-1]["text"], "🔧 **Grp** · alpha · 2\ndropped 2")
+        self.assertEqual(self.outbox()[-1]["text"], f"{self.body}\ndropped 2")
+        self.assertEqual(self.outbox()[-1]["reply"], "dropped 2 ✓")
 
     def test_drop_leaves_changed_line(self):
         ideas.set_status("alpha", f"{TS} · alpha one", "dropped")   # changed since the post
         self.assertEqual(di.click("u1", self.cid("drop"), self.add, 1020.0), "dropped 1")
-        self.assertEqual(self.outbox()[-1]["text"], "🔧 **Grp** · alpha · 2\ndropped 1, 1 already changed")
+        self.assertEqual(self.outbox()[-1]["text"], f"{self.body}\ndropped 1, 1 already changed")
+        self.assertEqual(self.outbox()[-1]["reply"], "dropped 1 ✓")
         self.assertEqual(self.ids("alpha"), [])
+
+    def test_edit_keeps_the_idea_list(self):
+        self.assertIn("• alpha one", self.body)
+        di.click("u1", self.cid("park"), self.add, 1020.0)
+        e = self.outbox()[-1]
+        self.assertTrue(e["text"].startswith(self.body))
+        self.assertTrue(e["text"].endswith("\n→ parked"))
+
+    def _set_body(self, body):
+        f = tc_env.ops_dir() / "ideas" / f"post-{self.req}.json"
+        st = json.loads(f.read_text())
+        st["groups"][0]["body"] = body
+        f.write_text(json.dumps(st, ensure_ascii=False))
+
+    def test_long_body_cut_at_line_keeping_status(self):
+        lines = ["head"] + [f"• idea {i:03d} " + "x" * 80 for i in range(40)]
+        self._set_body("\n".join(lines))
+        di.click("u1", self.cid("park"), self.add, 1020.0)
+        t = self.outbox()[-1]["text"]
+        self.assertLessEqual(len(t), 2000)
+        self.assertTrue(t.endswith("\n→ parked"))
+        body = t[:-len("\n→ parked")]
+        self.assertTrue(set(body.split("\n")) <= set(lines))   # only whole lines survive
+
+    def test_single_overlong_line_cut_with_ellipsis(self):
+        self._set_body("y" * 5000)
+        di.click("u1", self.cid("drop"), self.add, 1020.0)
+        t = self.outbox()[-1]["text"]
+        self.assertLessEqual(len(t), 2000)
+        self.assertIn("…\ndropped 2", t)
+
+    def test_legacy_state_without_body_uses_header(self):
+        f = tc_env.ops_dir() / "ideas" / f"post-{self.req}.json"
+        st = json.loads(f.read_text())
+        del st["groups"][0]["body"]
+        f.write_text(json.dumps(st, ensure_ascii=False))
+        di.click("u1", self.cid("park"), self.add, 1020.0)
+        self.assertEqual(self.outbox()[-1]["text"], "🔧 **Grp** · alpha · 2\n→ parked")
+
+    def test_reply_check_in_feed(self):
+        ok = {"op": "edit", "key": "k", "text": "t", "reply": "r"}
+        discord_feed._check(ok)
+        for bad in ("", 5, "x" * 2001, None):
+            with self.assertRaises(ValueError):
+                discord_feed._check(dict(ok, reply=bad))
 
     def test_second_click_unknown(self):
         raw = None

@@ -48,7 +48,7 @@ def _check(op):
               "thread": ({"op", "key", "title"}, set()),
               "archive": ({"op", "key"}, set()),
               "prompt": ({"op", "key", "window", "tool", "lines", "tier", "mention_user"}, set()),
-              "edit": ({"op", "key", "text"}, {"rows"}),
+              "edit": ({"op", "key", "text"}, {"rows", "reply"}),
               "dialog": ({"op", "key", "text", "rows", "mention_user"}, set()),
               "presence": ({"op", "text"}, set()),
               "ireply": ({"op", "iid", "content"}, {"components", "private"}),
@@ -64,6 +64,8 @@ def _check(op):
             raise ValueError(f"{k} must be a string")
     if "private" in op and not isinstance(op["private"], bool):
         raise ValueError("private must be a bool")
+    if "reply" in op and not (isinstance(op["reply"], str) and 0 < len(op["reply"]) <= 2000):
+        raise ValueError("reply must be a non-empty string of at most 2000 chars")
     if kind == "presence" and (not op["text"] or len(op["text"]) > PRESENCE_MAX):
         raise ValueError("presence text must be 1..128 chars")
     if kind == "prompt":

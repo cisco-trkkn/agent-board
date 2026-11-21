@@ -323,6 +323,10 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     try {
       const msg = await ch.messages.fetch(where[0][key]);
       await msg.edit({ content: String(op.text ?? '').slice(0, 2000), components: Array.isArray(op.rows) ? toRows(op.rows) : [] });
+      if (typeof op.reply === 'string' && op.reply) {
+        try { await msg.reply({ content: op.reply.slice(0, 2000), allowedMentions: { parse: [] } }); }
+        catch (e) { say(`edit reply failed: ${snip(e?.message)}`); }
+      }
     } catch (e) {
       if (e?.code !== UNKNOWN_MESSAGE) throw e;
       say(`edit ${snip(key)}: no message`);
