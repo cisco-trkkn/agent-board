@@ -205,6 +205,26 @@ class TestWatchKeys(Base):
         lines = [json.loads(l) for l in j.read_text().splitlines()]
         self.assertEqual([(l["kind"], l["plan"], l["id"]) for l in lines], [("task_done", "2026-11-21-x", "1")])
 
+    def test_failing_key_handler_keeps_the_window_alive(self):
+        import termios
+        master, f = self.pty()
+        os.write(master, b"3")
+        with mock.patch("taskwin_ui.handle_key", side_effect=RuntimeError("boom")):
+            out = self.watch(3, f)
+        self.assertIn("taskwin: boom", taskwin.strip(out))
+        self.assertGreaterEqual(out.count("\x1b[H"), 3, "the remaining frames are still drawn")
+        lflag = termios.tcgetattr(f.fileno())[3]
+        self.assertTrue(lflag & termios.ICANON and lflag & termios.ECHO, "terminal mode restored")
+
+    def test_tcgetattr_failure_means_no_key_mode(self):
+        import termios
+        master, f = self.pty()
+        with mock.patch("termios.tcgetattr", side_effect=termios.error(25, "not a typewriter")), \
+                mock.patch("tty.setcbreak") as cb, mock.patch("time.sleep") as sl:
+            self.watch(2, f)
+        cb.assert_not_called()
+        self.assertEqual(sl.call_count, 1)
+
 
 class TestTierModel(Base):
     def write(self, text):

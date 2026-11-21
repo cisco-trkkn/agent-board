@@ -1021,9 +1021,15 @@ def watch(session, root, home, interval=1.0, frames=None, stdin=None):
     sys.stdout.flush()
     try:
         if tty_fd is not None:
-            saved = termios.tcgetattr(tty_fd)
-            # TCSANOW: TCSAFLUSH would drop a key already pending, and DRAIN/FLUSH block on a pty nobody drains
-            tty.setcbreak(tty_fd, termios.TCSANOW)
+            try:
+                saved = termios.tcgetattr(tty_fd)
+                # TCSANOW: TCSAFLUSH would drop a key already pending, and DRAIN/FLUSH block on a pty nobody drains
+                tty.setcbreak(tty_fd, termios.TCSANOW)
+            except (termios.error, OSError):  # no usable terminal: behave as without a TTY
+                if saved is not None:
+                    termios.tcsetattr(tty_fd, termios.TCSANOW, saved)
+                    saved = None
+                read_fd = None
         while frames is None or n < frames:
             n += 1
             try:
@@ -1053,20 +1059,26 @@ def watch(session, root, home, interval=1.0, frames=None, stdin=None):
             if read_fd is None:
                 time.sleep(interval)
                 continue
-            if not select.select([read_fd], [], [], interval)[0]:
-                continue
-            data = os.read(read_fd, 64)
-            if not data:  # EOF: stop reading, keep the terminal mode to restore
+            try:
+                if not select.select([read_fd], [], [], interval)[0]:
+                    continue
+                data = os.read(read_fd, 64)
+                if not data:  # EOF: stop reading, keep the terminal mode to restore
+                    read_fd = None
+                    continue
+                ui = ui or taskwin_ui.normalize(st.get("ui"), tasks)
+                for k in taskwin_ui.decode(data.decode("utf-8", "replace")):
+                    new = taskwin_ui.handle_key(ui, k, taskwin_views.model(tasks, ui, ctx.get("history") or []))
+                    if new["view"] != ui["view"]:
+                        ctx = _ctx(root, view, new, journal)  # history rows for the next key
+                    ui = new
+                st["ui"] = ui
+                taskwin_state.save(spath, st)
+            except OSError as e:  # select/read failed: stop reading keys, sleep from now on
                 read_fd = None
-                continue
-            ui = ui or taskwin_ui.normalize(st.get("ui"), tasks)
-            for k in taskwin_ui.decode(data.decode("utf-8", "replace")):
-                new = taskwin_ui.handle_key(ui, k, taskwin_views.model(tasks, ui, ctx.get("history") or []))
-                if new["view"] != ui["view"]:
-                    ctx = _ctx(root, view, new, journal)  # history rows for the next key
-                ui = new
-            st["ui"] = ui
-            taskwin_state.save(spath, st)
+                _draw(last, "taskwin: " + str(e)[:200])
+            except Exception as e:  # a key that breaks the handler is dropped, the window lives on
+                _draw(last, "taskwin: " + (str(e).splitlines() or [type(e).__name__])[0][:200])
     except KeyboardInterrupt:
         pass
     finally:
