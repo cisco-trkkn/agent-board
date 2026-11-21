@@ -7,18 +7,23 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dream  # noqa: E402
+import discover_post  # noqa: E402
 import discover_repo  # noqa: E402
 import discover_tests  # noqa: E402
+import discord_feed  # noqa: E402
+import metrics  # noqa: E402
 import tc_env  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 RANK_TIMEOUT = 600
+FAIL_POST_AT = 3
 KEEP_RUNS = 14
 MAX_ITEMS = 5
 VALUES = ("high", "medium", "low")
@@ -208,6 +213,121 @@ def _resolve(project, root_arg):
     return r
 
 
+def _iso_local(ts):
+    return datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+
+
+def _log(now, project, text):
+    """discover.log, one line per night: `<ISO time> <project> failed: <reason>` or `<ISO time> <project> <outcome>`."""
+    p = tc_env.agent_base() / "discover" / "discover.log"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a") as f:
+        f.write(f"{_iso_local(now)} {project} {' '.join(str(text).split())}\n")
+
+
+def _record(root, now, t0, project, outcome, ncand, nrank, nnew, skipped, info):
+    """One kind=discover line in the project's runs.jsonl, only when that file exists."""
+    if not metrics.log_path(root).is_file():
+        return
+    u = (info or {}).get("usage") or {}
+    metrics.append(root, {"kind": "discover", "at": _iso_local(now), "project": project, "outcome": outcome,
+                          "candidates": ncand, "ranked": nrank, "new": nnew, "sources_skipped": skipped,
+                          "cost_usd": (info or {}).get("cost_usd"), "tokens": u, "duration_s": int(time.time() - t0),
+                          "model": "sonnet"})
+
+
+def _fail(project, root, now, t0, night, why, ncand, skipped, info, dry):
+    print(f"discover: {project}: failed: {why}")
+    if dry:
+        return
+    st = discover_post.load_state(project)
+    st["failures"] += 1
+    st["root"] = str(root)
+    discover_post.save_state(project, st)
+    _log(now, project, f"failed: {why}")
+    if st["failures"] == FAIL_POST_AT:
+        text = f"🔎 discover: {project} failed {FAIL_POST_AT} nights running — {discover_post.escape(' '.join(why.split()))}"
+        discord_feed.outbox_write(tc_env.discord_dir(project), {"op": "post", "text": text[:1900], "tier": "critical",
+                                                                 "mention_user": True, "key": f"discover-{project}-fail-{night}"})
+    _record(root, now, t0, project, "failed", ncand, 0, 0, skipped, info)
+
+
+def _night(project, root, now, dry):
+    t0 = time.time()
+    night = time.strftime("%Y%m%d", time.localtime(now))
+    run_dir = Path(tempfile.mkdtemp(prefix="discover-dry-")) if dry else new_run_dir(project, now)
+    try:
+        fail, items, info = rank(project, root, now, run_dir)
+        try:
+            coll = json.loads((run_dir / "collected.json").read_text())
+        except (OSError, ValueError):
+            coll = {"candidates": [], "sources_skipped": []}
+        cands = {c["key"]: c for c in coll["candidates"]}
+        skipped = [s.get("signal") for s in coll["sources_skipped"]]
+        ncand = len(cands)
+        if fail:
+            return _fail(project, root, now, t0, night, fail, ncand, skipped, info, dry)
+        st = discover_post.load_state(project)
+        sel = discover_post.select(items, cands, st, discover_post.memory_dirs(project))
+        new, still, also = sel["new"], sel["still_open"], sel["also_memory"]
+        try:
+            op = discover_post.build_op(project, night, new, still, also, cands) if new else None
+        except ValueError as e:
+            return _fail(project, root, now, t0, night, f"post: {e}", ncand, skipped, info, dry)
+        outcome = "posted" if new else "nothing-new"
+        print(f"discover: {project}: {ncand} candidates, {len(items)} ranked, {len(new)} new, {'posted' if new else 'nothing new'}")
+        if dry:
+            if op:
+                print(op["text"])
+                print("buttons: " + " | ".join(b["label"] for row in op["rows"] for b in row))
+            return
+        if new:
+            try:
+                discover_post.publish(project, night, new, still, also, cands, now)
+            except ValueError as e:
+                return _fail(project, root, now, t0, night, f"post: {e}", ncand, skipped, info, dry)
+        st = discover_post.load_state(project)
+        st["failures"], st["root"] = 0, str(root)
+        discover_post.save_state(project, st)
+        _log(now, project, outcome)
+        _record(root, now, t0, project, outcome, ncand, len(items), len(new), skipped, info)
+    finally:
+        if dry:
+            shutil.rmtree(run_dir, ignore_errors=True)
+        else:
+            prune_runs(project)
+
+
+def nightly(argv, now=None):
+    ap = argparse.ArgumentParser(prog="discover nightly")
+    ap.add_argument("--project")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--force", action="store_true")
+    a = ap.parse_args(argv)
+    now = time.time() if now is None else now
+    if os.environ.get("TC_DISCOVER") == "0" or (tc_env.agent_base() / "discover.off").exists():
+        print("discover: off")
+        return 0
+    if not a.force:
+        pct = dream.weekly_pct(now)
+        if pct is not None and pct >= dream.WEEKLY_MAX:
+            print(f"discover: skipped, weekly {pct:g}%")
+            return 0
+    names = [a.project] if a.project else dream.projects()
+    rc = 0
+    for n in names:
+        try:
+            root = dream.resolve_root(n, _state_root(n), None)
+            if not root:
+                print(f"discover: {n}: no repo")
+                continue
+            _night(n, root, now, a.dry_run)
+        except Exception as e:   # noqa: BLE001 - one project must not stop the others
+            print(f"discover: {n}: error: {type(e).__name__}: {e}", file=sys.stderr)
+            rc = 1
+    return rc
+
+
 def main(argv=None, now=None):
     ap = argparse.ArgumentParser(prog="discover")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -219,10 +339,10 @@ def main(argv=None, now=None):
     r.add_argument("project")
     r.add_argument("--root")
     sub.add_parser("nightly").add_argument("rest", nargs="*")
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "nightly":
+        return nightly(argv[1:], now)
     a, extra = ap.parse_known_args(argv)
-    if a.cmd == "nightly":
-        print("discover: nightly: not yet")
-        return 2
     if extra:
         ap.error(f"unrecognized arguments: {' '.join(extra)}")
     now = now if now is not None else time.time()
