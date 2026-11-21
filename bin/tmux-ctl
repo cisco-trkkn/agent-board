@@ -383,6 +383,13 @@ case "$cmd" in
       print -r -- "$idx  $name  [$state]  cmd=$pcmd${agent:+  (worker agent)}$lanetag  $dir"
     done
     }
+    # a tmux server whose own cwd is gone starts every new pane there and ignores -c (tmux 3.8): say so first
+    IFS='|' read -r srv_pid srv_sock <<< "$(t display -p '#{pid}|#{socket_path}' 2>/dev/null)"
+    lsof_bin=/usr/sbin/lsof; [[ -x "$lsof_bin" ]] || lsof_bin="${commands[lsof]:-}"
+    if [[ "$srv_pid" == <-> && -n "$lsof_bin" ]]; then
+      srv_cwd="$("$lsof_bin" -a -p "$srv_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+      [[ -n "$srv_cwd" && ! -d "$srv_cwd" ]] && print -r -- "tmux server cwd is gone ($srv_cwd): new panes start there; restart the tmux server from ~ (tmux -S $srv_sock kill-server ends every session on it; reopen each project with agent-board dev)"
+    fi
     list_session
     if t has-session -t "=$BG" 2>/dev/null; then
       SESSION="$BG"; list_session | sed 's/$/  (bg)/'; SESSION="$MAIN"
