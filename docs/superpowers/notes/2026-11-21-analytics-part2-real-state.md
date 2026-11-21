@@ -43,4 +43,4 @@ Ledger `docs/superpowers/ledgers/2026-11-16-execution-analytics-part-1/progress.
 | 70 | model strings unescaped for Discord; stats line carries an absolute path | Task 2 (5305391): `analytics_post.escape` on model strings and subjects (post B text shows `mechanical\|sonnet`, `escalation\_rate`); the post text says "more flags in stats.json" and the absolute path appears only in `files` |
 | 78 | flags barely discriminate (costly always 10 rows); underpowered/rec 1 rest on 2 tasks (no min n) | costly: Task 2 (5305391) `_flag_rows` shows `costly_steps[:3]` (3 rows in the real post). No min n: already fixed in part 1 by a4d6f8c: `board/metrics_analyze.py` lines 172 and 174, `if n >= UNDER_MIN_TASKS and ...` (`UNDER_MIN_TASKS = 5`, line 20) guard both the fix-rounds and the escalation branches |
 
-The handoffs flag still lists many specs (5 of 9 shown rows; the real stats hold more): part 1's "handoffs 13/18 specs" half of line 78 is not closed by any part-2 task.
+The handoffs flag still lists many specs (6 of the 9 shown rows; the full stats hold more): part 1's "handoffs 13/18 specs" half of line 78 is not closed by any part-2 task.
