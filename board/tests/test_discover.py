@@ -289,10 +289,10 @@ class CliTest(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn("model exit 1", r.stderr + r.stdout)
 
-    def test_nightly_placeholder(self):
-        r = self.ctl("nightly")
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("discover: nightly: not yet", r.stdout + r.stderr)
+    def test_nightly_reachable_outside_tmux(self):
+        r = self.ctl("nightly", env={"TC_DISCOVER": "0"})
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "discover: off")
 
     def test_tmux_ctl_help_lines(self):
         text = (REPO / "bin" / "tmux-ctl").read_text()
