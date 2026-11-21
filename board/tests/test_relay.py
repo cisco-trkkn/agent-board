@@ -575,10 +575,6 @@ class RestartLeadTest(unittest.TestCase):
         self.assertIn("did not start", str(cm.exception))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FolderGoneRefusalTest(unittest.TestCase):
     """A gone, non-git start path: relay and lead-restart refuse before any respawn (spec restart-recovery §5)."""
     def setUp(self):
@@ -610,3 +606,7 @@ class FolderGoneRefusalTest(unittest.TestCase):
             relay.restart_lead(t, "proj", resume=True, home=str(self.d), state=str(self.d))
         self.assertEqual(str(cm.exception), f"project folder is gone: {self.gone}")
         self.assertNotIn("respawn-pane", t.names())
+
+
+if __name__ == "__main__":
+    unittest.main()

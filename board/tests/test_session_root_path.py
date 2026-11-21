@@ -208,6 +208,30 @@ class LabelTargetsRootTest(RootedBase):
         self.assertEqual(self.targets("")["path"], "")
 
 
+class RootOncePerSessionTest(RootedBase):
+    """A session's root is computed once per build, not once per pane (a gone start path costs a git run per call)."""
+    def gone(self):
+        return str(Path(self.home.name) / "gone")
+
+    def test_build_state_calls_root_for_once_per_session(self):   # mutation: setdefault with the eager default -> 3 calls
+        S = server.SEP
+        rows = "\n".join(S.join(["proj", "1", str(i), "claude", "0", "", "0", f"%{i}", "t", "zsh", "/elsewhere", "1", "1", "", "", self.gone(), str(990 + i)])
+                         for i in (1, 2, 3))
+        with mock.patch.object(server, "INDEXER", None), mock.patch.object(server, "tmux", return_value=rows), \
+             mock.patch.object(server, "pane_text", return_value=[]), mock.patch.object(server, "cached_worktrees", return_value=[]), \
+             mock.patch.object(relay, "root_for", wraps=relay.root_for) as rf:
+            st = server.build_state()["sessions"][0]
+        self.assertEqual(rf.call_count, 1)
+        self.assertEqual(st["path"], self.gone())
+
+    def test_label_targets_calls_root_for_once_per_session(self):   # mutation: same
+        rows = "\n".join(server.SEP.join(["p", "1", "claude", "", "", "", f"%{i}", "/elsewhere", "", self.gone()]) for i in (1, 2, 3))
+        with mock.patch.object(relay, "root_for", wraps=relay.root_for) as rf:
+            st = server.label_targets(run=lambda *a, **k: rows)[0]
+        self.assertEqual(rf.call_count, 1)
+        self.assertEqual(st["path"], self.gone())
+
+
 class LeadRootGoneTest(unittest.TestCase):
     """_lead_root: a gone project folder gives the lead view root "" and keeps the entry (not dropped)."""
 

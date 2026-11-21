@@ -411,7 +411,9 @@ def build_state():
     for f in panes:
         sess, attached, widx, wname, bell, agent, pidx, pid, title, cmd, path, pact, wact, mate = f[:14]
         rows = rows_by[pid]
-        s = sessions.setdefault(sess, {"name": sess, "attached": attached != "0", "windows": {}, "path": relay.root_for(f[15]) or f[15]})
+        if sess not in sessions:
+            sessions[sess] = {"name": sess, "attached": attached != "0", "windows": {}, "path": relay.root_for(f[15]) or f[15]}
+        s = sessions[sess]
         w = s["windows"].setdefault(widx, {
             "index": int(widx), "name": wname, "bell": bell == "1",
             "worker": agent == "1", "teammate": mate == "1", "active": wact == "1", "panes": [],
@@ -691,7 +693,9 @@ def label_targets(run=None):
         if len(f) != 10 or f[0].startswith("_web-") or f[5] == "1":
             continue
         sess, widx, wname, agent, mate, _, pid, path, label, start = f
-        s = sessions.setdefault(sess, {"name": sess, "path": relay.root_for(start) or start, "windows": {}})
+        if sess not in sessions:
+            sessions[sess] = {"name": sess, "path": relay.root_for(start) or start, "windows": {}}
+        s = sessions[sess]
         w = s["windows"].setdefault(widx, {"name": wname, "worker": agent == "1", "teammate": mate == "1",
                                            "label": label, "panes": []})
         w["panes"].append({"id": pid, "path": path})
@@ -809,8 +813,8 @@ def forget_worktrees():
 # ---------------------------------------------------------------- actions
 
 def session_path(sess):
-    """The project's main checkout for sess (relay.session_root): its start path, then $HOME. Not the pane's cwd,
-    which follows the lead's cd into worktrees."""
+    """The project's main checkout for sess (relay.session_root); raises relay.FolderGone when the project
+    folder is gone. Not the pane's cwd, which follows the lead's cd into worktrees."""
     if not tmux("display", "-p", "-t", f"={sess}:", "#{session_name}").strip():
         raise RuntimeError(f"no session '{sess}'")
     return relay.session_root(tmux, sess)
