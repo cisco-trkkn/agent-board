@@ -2,7 +2,7 @@
 # install.sh — set up agent-board from this checkout.
 #
 #   ./install.sh                  link ~/.local/bin/agent-board to this checkout's bin/agent-board (the only thing it installs)
-#   ./install.sh --check          list the dependencies: "ok <path>" or "MISSING <name>"; exit 1 if any is missing (node: "optional: node missing")
+#   ./install.sh --check          list the dependencies: "ok <path>" or "MISSING <name>"; exit 1 if any is missing (node >= 22.13 is required)
 #   ./install.sh --uninstall      remove ~/.local/bin/agent-board, if it links into this checkout
 #   ./install.sh --migrate        install, then retire the old global setup (the author's pre-plugin install):
 #                                   - the 4 hooks in ~/.claude/settings.json, the hook and rules links in ~/.claude
@@ -65,7 +65,12 @@ check_deps() {
     then print -r -- "ok $p"
     else print "MISSING claude (needs >= 2.1.303 with --settings and --plugin-dir; found ${v:-no version})"; miss=1; fi
   else print "MISSING claude"; miss=1; fi
-  if p="$(command -v node)"; then print -r -- "ok $p"; else print "optional: node missing"; fi   # only the Discord bridge needs it
+  if p="$(command -v node)"; then
+    v="$(node --version 2>/dev/null)"; v="${v#v}"
+    local -a nv; nv=("${(@s:.:)v}")
+    if [[ -n "$v" ]] && (( nv[1] * 1000000 + nv[2] * 1000 + ${nv[3]:-0} >= 22013000 )); then print -r -- "ok $p"
+    else print "MISSING node (needs >= 22.13; found ${v:-no version})"; miss=1; fi
+  else print "MISSING node (needs >= 22.13; found none)"; miss=1; fi
   return $miss
 }
 
@@ -76,6 +81,15 @@ bridge_deps() {
   if ! command -v npm >/dev/null 2>&1; then print "skip discord bridge deps (npm missing)"; return 0; fi
   say "npm ci --omit=dev in $d" "installing discord bridge deps"
   (( DRY )) || ( cd "$d" && npm ci --omit=dev >/dev/null 2>&1 ) || { print -u2 "discord bridge deps: npm ci failed (run tmux-ctl discord bridge install to see why)"; return 0 }
+}
+
+# the engine's dependencies (engine/); skipped when the checkout has no engine lock. Missing npm fails the install (rc 1), the rest still runs.
+engine_deps() {
+  local d="$REPO/engine"
+  [[ -f "$d/package-lock.json" ]] || return 0
+  if ! command -v npm >/dev/null 2>&1; then print -u2 "MISSING npm (the engine needs it)"; return 1; fi
+  say "npm ci --omit=dev in $d" "installing engine deps"
+  (( DRY )) || ( cd "$d" && npm ci --omit=dev >/dev/null 2>&1 ) || { print -u2 "engine deps: npm ci failed (run npm ci in engine/ to see why)"; return 1 }
 }
 
 # --- install / uninstall
@@ -196,7 +210,7 @@ do_migrate() {
 
 case "$mode" in
   check)     check_deps; exit $? ;;
-  install)   do_install; rc=$?; bridge_deps; exit $rc ;;
+  install)   do_install; rc=$?; bridge_deps; engine_deps || rc=1; exit $rc ;;
   uninstall) do_uninstall; exit 0 ;;
   migrate)   do_migrate; exit $rc ;;
 esac

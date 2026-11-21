@@ -15,8 +15,9 @@ case "$1" in
   --help) echo "Options:"; [ -z "$STUB_CLAUDE_NOFLAG" ] && echo "  --settings <file>  --plugin-dir <path>" ;;
 esac
 exit 0' > "$STUB/claude"
-# node and npm stubs: install runs `npm ci` in tools/discord-bridge, which must never touch the real checkout's node_modules
+# node and npm stubs: install runs `npm ci` in tools/discord-bridge and engine/, which must never touch the real checkout's node_modules
 print -r -- '#!/bin/sh
+[ "$1" = "--version" ] && echo "${STUB_NODE_VERSION:-v22.13.0}"
 exit 0' > "$STUB/node"
 print -r -- "#!/bin/sh
 echo \"\$PWD \$*\" >> \"$SCR/npm.log\"" > "$STUB/npm"
@@ -25,6 +26,16 @@ chmod +x "$STUB"/*
 SYSBIN="$SCR/sysbin"; mkdir -p "$SYSBIN"
 for f in /usr/bin/*(N) /bin/*(N); do [[ ${f:t} == (fzf|jq|tmux|ttyd|claude) || -e $SYSBIN/${f:t} ]] || ln -s "$f" "$SYSBIN/${f:t}"; done
 BASEPATH="$SYSBIN"; [[ "${commands[python3]:h}" == (/usr/bin|/bin) ]] || BASEPATH="${commands[python3]:h}:$SYSBIN"   # /usr/bin is already in SYSBIN, minus fzf
+# PATHs without node or npm (a copy of the stub and system dirs, minus the named tools): the real node is on this
+# machine's PATH too, so a missing-tool case cannot just leave the stub out
+mkbin() {   # mkbin <dir> <regex of names to leave out>
+  local d="$1" dd f; mkdir -p "$d"
+  for dd in ${(s.:.)BASEPATH} "$STUB"; do for f in "$dd"/*(N); do
+    [[ ${f:t} =~ ^($2)$ || -e "$d/${f:t}" ]] || ln -s "$f" "$d/${f:t}"
+  done; done
+}
+NONODE="$SCR/nonode"; mkbin "$NONODE" 'node|npm|npx'
+NONPM="$SCR/nonpm"; mkbin "$NONPM" 'npm|npx'
 
 rc1_same() { [[ "$1" -eq 1 ]] && cmp -s "$2" "$3" }
 newhome() { H="$SCR/h$RANDOM"; mkdir -p "$H"; }
@@ -56,8 +67,14 @@ STAMP="$(date +%Y%m%d)"
 newhome
 out="$(inst --check 2>&1)"; rc=$?
 check "check: exit 0 with all deps" test $rc -eq 0
-check "check: one ok line per dependency (8 + optional node)" test "$(print -r -- "$out" | grep -c '^ok ')" -eq 9
+check "check: one ok line per dependency (8 + node, required)" test "$(print -r -- "$out" | grep -c '^ok ')" -eq 9
 check "check: ok line carries the path" test -n "$(print -r -- "$out" | grep -F "ok $STUB/tmux")"
+check "check: node 22.13.0 is ok"               test -n "$(print -r -- "$out" | grep -F "ok $STUB/node")"
+check "check: no optional node line"             test -z "$(print -r -- "$out" | grep -F 'optional')"
+out="$(STUB_NODE_VERSION=v22.12.9 inst --check 2>&1)"; rc=$?
+check "check: node 22.12.9 is MISSING node"      test $rc -eq 1 -a -n "$(print -r -- "$out" | grep -F 'MISSING node (needs >= 22.13; found 22.12.9)')"
+out="$(HOME="$H" PATH="$NONODE" zsh "$R/install.sh" --check 2>&1)"; rc=$?
+check "check: no node is MISSING node"           test $rc -eq 1 -a -n "$(print -r -- "$out" | grep -F 'MISSING node (needs >= 22.13; found none)')"
 rm "$STUB/fzf"; mv "$STUB/jq" "$STUB/jq.off"
 out="$(inst --check 2>&1)"; rc=$?
 check "check: exit 1 when fzf is missing" test $rc -eq 1
@@ -75,7 +92,7 @@ check "check writes nothing" test -z "$(ls -A "$H")"
 newhome
 out="$(inst 2>&1)"; rc=$?
 check "install: exit 0" test $rc -eq 0
-check "install: npm ci --omit=dev ran in tools/discord-bridge" test "$(<$SCR/npm.log)" = "$R/tools/discord-bridge ci --omit=dev"
+check "install: npm ci --omit=dev ran in tools/discord-bridge, then engine" test "$(cat $SCR/npm.log)" = "$R/tools/discord-bridge ci --omit=dev"$'\n'"$R/engine ci --omit=dev"
 check "install: link points at this checkout's bin/agent-board" test "$(readlink "$H/.local/bin/agent-board")" = "$R/bin/agent-board"
 check "install: exactly one entry under ~/.local" test "$(find "$H" -mindepth 1 | sort | tr '\n' ' ')" = "$H/.local $H/.local/bin $H/.local/bin/agent-board "
 check "install: nothing under ~/.claude" test ! -e "$H/.claude"
@@ -242,6 +259,19 @@ newhome; seed_global "$FAKE"
 print "older" > "$H/.tmux.conf.bak-$STAMP"; print "older" > "$H/.tmux.conf.bak-$STAMP.1"
 out="$(inst --repo "$FAKE" --migrate --dry-run 2>&1)"
 check "backup dry-run: names the free backup (.2), not an existing one" test -n "$(print -r -- "$out" | grep -F "would back up $H/.tmux.conf to $H/.tmux.conf.bak-$STAMP.2")"
+
+# --- engine deps
+rm -f "$SCR/npm.log"; newhome
+out="$(inst --dry-run 2>&1)"
+check "dry-run install: shows the engine npm line" test -n "$(print -r -- "$out" | grep -F "would npm ci --omit=dev in $R/engine")"
+check "dry-run install: runs no npm" test ! -e "$SCR/npm.log"
+rm -f "$SCR/npm.log"; newhome
+out="$(inst --repo "$FAKE" 2>&1)"; rc=$?
+check "install with no engine lock: exit 0, no npm run" test $rc -eq 0 -a ! -e "$SCR/npm.log"
+newhome
+out="$(HOME="$H" PATH="$NONPM" zsh "$R/install.sh" 2>&1)"; rc=$?
+check "install with no npm: MISSING npm, exit 1"  test $rc -eq 1 -a -n "$(print -r -- "$out" | grep -x 'MISSING npm (the engine needs it)')"
+check "install with no npm: the link is still made" test "$(readlink "$H/.local/bin/agent-board")" = "$R/bin/agent-board"
 
 # no ~/.claude/ idea without a migrate: install/uninstall/check never created it (see install and check cases above)
 tt_done

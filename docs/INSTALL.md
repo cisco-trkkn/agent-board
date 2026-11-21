@@ -38,7 +38,7 @@ Versions are the ones tested. Older versions may work, but only Python 3.9 has b
 | jq | 1.7.1 | `tmux-ctl run` (run records) | on `PATH`; recent macOS ships `/usr/bin/jq` |
 | git | 2.4x | worktrees, board | needs `rev-parse --path-format` (git 2.31+) |
 | Claude Code | 2.1.303 | lead, teammates, workers | `claude` on `PATH`, logged in; needs `--settings`, `--plugin-dir` and agent teams |
-| node + npm | 22+ | the Discord bridge (`tools/discord-bridge`) | optional; only the bridge needs them. `install.sh` runs `npm ci --omit=dev` there when npm exists and prints `skip discord bridge deps (npm missing)` otherwise; `--check` prints `optional: node missing` |
+| node + npm | 22.13+ | the engine (`engine/`) and the Discord bridge (`tools/discord-bridge`) | required: `install.sh` runs `npm ci --omit=dev` in both; the engine uses `node:sqlite`; `--check` prints `MISSING node` below 22.13. With the engine lock present and no npm, the install prints `MISSING npm (the engine needs it)` and exits 1 (the bridge is skipped with `skip discord bridge deps (npm missing)`) |
 | superpowers-extended-cc plugin | 6.5.3 | the skills the rules invoke | optional; without it the lead still runs, but the skill names in its rules point at nothing |
 
 ```zsh
