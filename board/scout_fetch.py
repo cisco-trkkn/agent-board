@@ -537,6 +537,8 @@ def _discord_channel(source, state, installed_version):
     if not isinstance(msgs, list):
         raise FetchError("discord: messages response is not a list")
     msgs.sort(key=lambda m: int(m["id"]), reverse=True)
+    import scout_sources  # lazy: scout_sources imports this module
+    allow = scout_sources._allow()
     items, seen_urls = [], set()
     for m in msgs:
         author = m.get("author") or {}
@@ -548,9 +550,18 @@ def _discord_channel(source, state, installed_version):
             items.append({"request": {"url": req.group(1), "why": req.group(2).strip(), "message_id": str(m["id"]),
                                       "author": author.get("username") or "", "author_id": str(author.get("id") or "")}})
             continue
+        if str(author.get("id") or "") not in allow:
+            continue  # only an allowFrom user's links are fetched, the rule `source:` requests already follow
         for url in _URL.findall(content):
             url = url.rstrip(".,;:!?)")
             if url in seen_urls:
+                continue
+            try:
+                scout_sources._check_request_url(url)
+                if urllib.parse.urlsplit(url).hostname in ("localhost", "127.0.0.1", "::1") \
+                        and urllib.parse.urlsplit(url).hostname not in scout_sources._HTTP_OK_HOSTS:
+                    raise scout_sources.Refusal("loopback")
+            except scout_sources.Refusal:
                 continue
             seen_urls.add(url)
             it = _page_item(url, _iso_date(m.get("timestamp")))

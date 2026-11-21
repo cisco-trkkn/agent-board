@@ -207,6 +207,11 @@ class DiscordTest(Base):
         d = tc_env.discord_dir("agent-board")
         d.mkdir(parents=True)
         (d / ".env").write_text(f"OTHER=1\nDISCORD_BOT_TOKEN={TOKEN}\n")
+        (d / "access.json").write_text(json.dumps({"allowFrom": [7]}))   # msg() authors are id "7"
+        import scout_sources
+        p = mock.patch.object(scout_sources, "_HTTP_OK_HOSTS", ("127.0.0.1",))   # the local fake server is http
+        p.start()
+        self.addCleanup(p.stop)
         self.src = {"name": "scout-channel", "kind": "discord_channel", "url": CHAN}
         Handler.routes["/p/a.html"] = (200, b"<html><head><title> Page  A </title></head><body><nav>menu</nav><main>Main  text of A</main></body></html>", "text/html")
         Handler.routes["/p/b.html"] = (200, b"<html><body>Body B</body></html>", "text/html; charset=utf-8")
@@ -259,6 +264,22 @@ class DiscordTest(Base):
         pages = [i for i in items if "request" not in i]
         self.assertEqual([p["url"] for p in pages], [self.url("/p/b.html")])  # the request URLs were not fetched as pages
         self.assertEqual(state, {"after": "110"})
+        self.assertNotIn("/p/a.html", [s[1] for s in Handler.seen])
+
+    def test_link_from_an_author_outside_allowfrom_is_ignored(self):
+        Handler.messages = [dict(msg(130, f"see {self.url('/p/a.html')}"), author={"id": "99", "username": "mallory", "bot": False}),
+                            msg(129, f"and {self.url('/p/b.html')}")]
+        items, state = sf.fetch(self.src, {})
+        self.assertEqual([i["url"] for i in items], [self.url("/p/b.html")])
+        self.assertNotIn("/p/a.html", [s[1] for s in Handler.seen])
+        self.assertEqual(state, {"after": "130"})
+
+    def test_http_and_loopback_links_are_refused(self):
+        import scout_sources
+        Handler.messages = [msg(140, f"{self.url('/p/a.html')} https://127.0.0.1/p/b.html http://example.com/x")]
+        with mock.patch.object(scout_sources, "_HTTP_OK_HOSTS", ()):
+            items, _ = sf.fetch(self.src, {})
+        self.assertEqual(items, [])
         self.assertNotIn("/p/a.html", [s[1] for s in Handler.seen])
 
     def test_bot_messages_ignored(self):
