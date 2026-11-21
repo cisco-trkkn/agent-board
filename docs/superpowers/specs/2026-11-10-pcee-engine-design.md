@@ -65,7 +65,7 @@ Source: `docs/superpowers/notes/2026-11-20-efficiency-learnings-for-pcee.md`; th
 
 - **E2.** The bounce text is short and measured (section 3, step 3).
 - **E3.** A job's end event carries its final context size and the limits reading (section 1, `jobs`).
-- **E4.** A per-kind tools/mcp column is pending a probe (section 3, step 2).
+- **E4.** Applied (docs/superpowers/notes/2026-11-20-worker-context-probe.md): each job kind has a tools/mcp list, allow-all by default (section 3, step 2).
 
 ## Problem
 
@@ -218,10 +218,10 @@ The steps:
 1. **Stale check** by `tmux-ctl registry stale`; a `refresh` job when stale.
 2. **Per task, in the plan's order:** an `implement` job on the task's tier, its brief built from the task's text
    and the report contract. Consecutive small same-shape tasks are not merged into one job in this stage.
-   Pending (E4, 2026-11-20): a per-kind `tools`/`mcp` column on the job table, allow-all by default, applies only if
-   the worker-context probe returns a go (MCP schemas are at least 5% of a fresh worker's context); the probe writes
-   `docs/superpowers/notes/<run date>-worker-context-probe.md` (`2026-11-20-efficiency-now-design.md` §4). Not built
-   until then.
+   (E4, 2026-11-20) The job table has a per-kind `tools`/`mcp` column, allow-all by default. The probe found MCP tool
+   schemas are 24.3% of one fresh Sonnet teammate's used context (7.9k of 32.5k tokens), above the 5% line; this uses
+   the plan's reading of the denominator (used context), and the 1M-window reading (0.8%) would make it a no-go
+   (`docs/superpowers/notes/2026-11-20-worker-context-probe.md`).
 3. **Green check by the engine, not by an agent:** it runs the task's `verifyCommand` in the worktree (and
    `agent-ci check` where `.agent-ci.yml` exists). Red: the output goes back to the implementer as a bounce, at
    most two; the third red is an escalation. (E2, 2026-11-20) The bounce text is the failing test names, their error

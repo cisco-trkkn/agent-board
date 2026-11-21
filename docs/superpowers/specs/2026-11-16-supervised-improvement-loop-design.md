@@ -81,7 +81,7 @@ Source: `docs/superpowers/notes/2026-11-20-efficiency-learnings-for-pcee.md`. Th
 name and win over the text below where they differ.
 
 - **E1.** A proposal that shrinks what a worker reads is judged on tokens per task, fix rounds and bounces (§4).
-- **E5.** Code Mode as a trial variant is pending a probe (§4).
+- **E5.** Applied (docs/superpowers/notes/2026-11-20-code-mode-hooks-probe.md): Code Mode is a trial variant for mechanical-tier implementers (§4).
 
 ## Design
 
@@ -164,9 +164,10 @@ name and win over the text below where they differ.
   - `skill`: a challenger copy `claude/skills/<skill>@<id>/` is created from the patch in the spec's worktree only
     (git-ignored path `.superpowers/improve/skills/`), and the brief names it instead of the champion.
   - `routing`: the engine's tier-to-model map for that spec's jobs is taken from the patched copy.
-- Pending (E5, 2026-11-20): `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` becomes a trial variant for mechanical-tier
-  implementers only if the Code Mode hooks probe returns a go (our PreToolUse and PostToolUse gates fire under it;
-  `2026-11-20-efficiency-now-design.md` §4). Not built until then.
+- (E5, 2026-11-20) `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` is a trial variant for mechanical-tier implementers: the
+  probe found PreToolUse and PostToolUse fire for every tool call made from Code Mode code (Bash and Read) and a
+  PreToolUse Bash hook that exits 2 blocks the inner call; the JSON permissionDecision form was not tried
+  (`docs/superpowers/notes/2026-11-20-code-mode-hooks-probe.md`; `2026-11-20-efficiency-now-design.md` §4).
 - The champion files on `main` are never touched by a trial.
 - (E1, 2026-11-20) Acceptance rule for a proposal that shrinks what a worker reads (tool output, bounce text,
   context): it is trialled and judged on tokens per task plus fix rounds per task and bounces per task, with failed
