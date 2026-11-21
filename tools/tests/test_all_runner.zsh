@@ -128,7 +128,7 @@ run zsh $ALL --suite zsh
 check "timings: not rewritten after a --suite run" cmp -s $SCR/st/test-timings.tsv $SCR/st/before
 rm -rf $SCR/tc-all.*(N)
 # default path, resolved from TMPDIR when TC_STATE is unset
-: > "$STUB_LOG"; env -u TC_STATE TC_TEST_ROOT="$ROOT" TMPDIR="$SCR" zsh $ALL -j 4 >/dev/null 2>&1
+: > "$STUB_LOG"; env -u TC_STATE HOME="$SCR/home" TC_TEST_ROOT="$ROOT" TMPDIR="$SCR" zsh $ALL -j 4 >/dev/null 2>&1
 check "timings: default path \${TMPDIR}/tmux-ctl-\$UID/test-timings.tsv" [ -s "$SCR/tmux-ctl-$UID/test-timings.tsv" ]
 rm -rf $SCR/tc-all.*(N)
 
@@ -417,6 +417,71 @@ ROOT=$ROOT_SAVE
 # mutation: index the job names with the failed list ("J_name[$failed]") → bad math expression, no verdict
 check "two failures: exit 1" [ $rc -eq 1 ]
 check "two failures: verdict FAIL 2/14 names both" grep -q '^FAIL 2/14: zsh/test_bad.zsh, zsh/test_bad2.zsh$' <<<"$out"
+rm -rf $SCR/tc-all.*(N)
+
+# --- history: one line per finished run in <TC_STATE>/tests/history.jsonl (isolated: TC_STATE and HOME are scratch dirs)
+HROOT="$SCR/hroot"; mkroot $HROOT
+git -C $HROOT init -q && git -C $HROOT add -A && git -C $HROOT -c user.name=t -c user.email=t@t commit -q -m one
+HHEAD="$(git -C $HROOT rev-parse HEAD)"
+HST="$SCR/hst"; HF="$HST/tests/history.jsonl"
+hrun() {   # hrun <root> <args…>: run the runner on <root> against the history state dir; $out, $rc
+  local r=$1; shift; : > "$STUB_LOG"; out=$(env TC_TEST_ROOT="$r" TMPDIR="$SCR" TC_STATE="$HST" HOME="$SCR/home" "$@" 2>&1); rc=$?
+}
+hq() {   # hq <python expr over d = last parsed history line> → prints it
+  python3 -I -c 'import json,sys; L=[json.loads(x) for x in open(sys.argv[1])]; d=L[-1]; print(eval(sys.argv[2]))' "$HF" "$1"
+}
+rm -rf $HST
+hrun $HROOT zsh $ALL -j 4
+# mutation: drop the history write → "history: full run appends one line" fails
+check "history: full run appends one line" [ "$(wc -l < $HF 2>/dev/null | tr -d ' ')" = 1 ]
+check "history: full true" [ "$(hq 'd["full"]')" = True ]
+check "history: all 12 jobs as [rc, secs]" [ "$(hq 'len(d["jobs"]) == 12 and d["jobs"]["zsh/test_z1.zsh"][0] == 0 and isinstance(d["jobs"]["zsh/test_z1.zsh"][1], float)')" = True ]
+check "history: head is the fake root HEAD, dirty false" [ "$(hq 'd["head"]')" = "$HHEAD" -a "$(hq 'd["dirty"]')" = False ]
+check "history: root is the abs root and ts an int" [ "$(hq 'd["root"]')" = "$HROOT" -a "$(hq 'type(d["ts"]) is int')" = True ]
+# mutation: record full as always true → "--suite run appends full false" fails
+hrun $HROOT zsh $ALL --suite board -j 4
+check "history: --suite board run appends full false" [ "$(wc -l < $HF | tr -d ' ')" = 2 -a "$(hq 'd["full"]')" = False ]
+check "history: --suite run lists only board jobs" [ "$(hq 'sorted(d["jobs"]) == ["board/test_mid","board/test_quick","board/test_slow"]')" = True ]
+# dirty: a tracked file edited
+print -r -- "# edit" >> $HROOT/tools/tests/test_z1.zsh
+hrun $HROOT zsh $ALL --suite hooks -j 4
+# mutation: never compute dirty (always false) → fails
+check "history: tracked edit → dirty true" [ "$(hq 'd["dirty"]')" = True ]
+git -C $HROOT checkout -q -- tools/tests/test_z1.zsh
+# failing job on the FAIL exit path
+FROOT="$SCR/hfroot"; mkroot $FROOT; stub $FROOT tools/tests/test_bad.zsh 0.1 3
+hrun $FROOT zsh $ALL -j 4
+# mutation: write the history only on the ALL PASS path → no line, this fails
+check "history: FAIL exit path still writes its line, with the job's rc 3" [ $rc -eq 1 -a "$(hq 'd["jobs"]["zsh/test_bad.zsh"][0]')" = 3 -a "$(hq 'd["jobs"]["zsh/test_z1.zsh"][0]')" = 0 ]
+# non-git root
+hrun $ROOT zsh $ALL --suite hooks -j 4
+# mutation: write the literal string "" or "None" for a missing head → fails
+check "history: non-git root writes head null" [ "$(hq 'd["head"]')" = None ]
+# trimming
+python3 -I -c 'import json, sys
+with open(sys.argv[1], "w") as f:
+    for i in range(2001): f.write(json.dumps({"n": i}) + "\n")' "$HF"
+hrun $HROOT zsh $ALL --suite hooks -j 4
+# mutation: no cut, or keep 1500 including the new one → count is 2002 / 1500
+check "history: 2001 lines cut to 1500 plus the new one" [ "$(wc -l < $HF | tr -d ' ')" = 1501 -a "$(head -1 $HF)" = '{"n": 501}' ]
+python3 -I -c 'import sys; open(sys.argv[1],"w").write("{}\n"*1999)' "$HF"
+hrun $HROOT zsh $ALL --suite hooks -j 4
+check "history: 2000 lines stay (no cut at the limit)" [ "$(wc -l < $HF | tr -d ' ')" = 2000 ]
+# write failure never changes the exit code
+rm -rf $HST; mkdir -p $HST; : > $HST/tests
+hrun $HROOT zsh $ALL --suite hooks -j 4
+# mutation: let a failed history write abort (set -e style / exit 1) → rc is not 0
+check "history: unwritable history dir keeps exit 0 and prints one history: line" [ $rc -eq 0 -a "$(grep -c '^all.zsh: history: ' <<<"$out")" = 1 ]
+check "history: verdict still last line when the write failed" [ "$(tail -1 <<<"$out" | cut -c1-8)" = "ALL PASS" ]
+# interrupted run writes nothing
+rm -rf $HST
+env TC_TEST_ROOT="$ROOT" TMPDIR="$SCR" TC_STATE="$HST" HOME="$SCR/home" zsh $ALL -j 1 > $SCR/hint.out 2>&1 &
+hp=$!; sleep 1; kill -INT $hp 2>/dev/null; kill -TERM $hp 2>/dev/null; wait $hp 2>/dev/null
+# mutation: write the history before the INT trap exits (e.g. in the trap) → file exists
+check "history: interrupted run writes no history" [ ! -e $HF ]
+# default path: TC_STATE unset (the earlier default-path run) → $HOME/.local/state/agent-board/tests/history.jsonl, here a scratch HOME
+# mutation: hard-code another base (e.g. TMPDIR) → the scratch HOME has no file
+check "history: default path is \$HOME/.local/state/agent-board/tests/history.jsonl" [ -s "$SCR/home/.local/state/agent-board/tests/history.jsonl" ]
 rm -rf $SCR/tc-all.*(N)
 
 tt_done

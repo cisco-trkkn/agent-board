@@ -8,6 +8,7 @@ emulate -L zsh
 zmodload zsh/datetime zsh/mathfunc
 root="${TC_TEST_ROOT:-${0:A:h:h:h}}"
 tfile="${TC_STATE:-${TMPDIR:-/tmp}/tmux-ctl-$UID}/test-timings.tsv"   # resolved now: jobs get their own TC_STATE
+hfile="${TC_STATE:-$HOME/.local/state/agent-board}/tests/history.jsonl"   # test history, resolved now like tfile
 budget="${TC_TEST_BUDGET:-300}"
 
 suites=(); serial=0; jn=; list=0
@@ -170,6 +171,41 @@ for r in ${(f)"$(print -rl -- $rows | LC_ALL=C sort -t$'\t' -k1,1gr | head -5)"}
 if (( ${#suites} == 0 )); then   # full run: rewrite the timings
   mkdir -p "${tfile:h}" && { for r in $rows; do print -r -- "${r#*$'\t'}"$'\t'"${r%%$'\t'*}"; done > "$tfile.tmp" && mv "$tfile.tmp" "$tfile" }
 fi
+
+# history: one line per finished run (existing file above 2000 lines is cut to its last 1500 before the append) (FAIL and ALL PASS paths; an interrupt exits in the trap before this). Never changes the exit code.
+write_history() {
+  local hd hdirty=0 hfull=1 hrows=
+  hd="$(git -C "$root" rev-parse HEAD 2>/dev/null)"
+  [[ -n "$(git -C "$root" status --porcelain --untracked-files=no 2>/dev/null)" ]] && hdirty=1
+  (( ${#suites} )) && hfull=0
+  for (( i=1; i<=n; i++ )); do read -r rc secs < "$rundir/$J_name[$i].res"; hrows+="$J_name[$i]"$'\t'"$rc"$'\t'"$secs"$'\n'; done
+  print -rn -- "$hrows" | python3 -I -c '
+import fcntl, json, os, sys
+hfile, ts, root, head, dirty, full = sys.argv[1:7]
+jobs = {}
+for line in sys.stdin.read().splitlines():
+    name, rc, secs = line.rsplit("\t", 2)
+    jobs[name] = [int(rc), float(secs)]
+rec = {"ts": int(ts), "root": root, "head": head or None, "dirty": dirty == "1", "full": full == "1", "jobs": jobs}
+os.makedirs(os.path.dirname(hfile), exist_ok=True)
+with open(hfile + ".lock", "w") as lk:
+    fcntl.flock(lk, fcntl.LOCK_EX)
+    try:
+        with open(hfile) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        lines = []
+    if len(lines) > 2000:
+        tmp = hfile + ".tmp"
+        with open(tmp, "w") as f:
+            f.writelines(lines[-1500:])
+        os.replace(tmp, hfile)
+    with open(hfile, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+' "$hfile" "${EPOCHSECONDS}" "$root" "$hd" "$hdirty" "$hfull" 2>&1 | tail -1 | sed 's/^/all.zsh: history: /' >&2
+  return 0
+}
+write_history
 
 total=$(( EPOCHREALTIME - T0 )); ts=$(( int(total) ))
 fmt="$(( ts / 60 ))m$(( ts % 60 ))s"
