@@ -239,7 +239,7 @@ def _record(root, now, t0, project, outcome, ncand, nrank, nnew, skipped, info):
 def _fail(project, root, now, t0, night, why, ncand, skipped, info, dry):
     print(f"discover: {project}: failed: {why}")
     if dry:
-        return
+        return True
     st = discover_post.load_state(project)
     st["failures"] += 1
     st["root"] = str(root)
@@ -250,14 +250,19 @@ def _fail(project, root, now, t0, night, why, ncand, skipped, info, dry):
         discord_feed.outbox_write(tc_env.discord_dir(project), {"op": "post", "text": text[:1900], "tier": "critical",
                                                                  "mention_user": True, "key": f"discover-{project}-fail-{night}"})
     _record(root, now, t0, project, "failed", ncand, 0, 0, skipped, info)
+    return True
 
 
 def _night(project, root, now, dry):
+    """True when the night failed (model, collect or post)."""
     t0 = time.time()
     night = time.strftime("%Y%m%d", time.localtime(now))
     run_dir = Path(tempfile.mkdtemp(prefix="discover-dry-")) if dry else new_run_dir(project, now)
     try:
-        fail, items, info = rank(project, root, now, run_dir)
+        try:
+            fail, items, info = rank(project, root, now, run_dir)
+        except Exception as e:   # noqa: BLE001 - a collect or rank error is a failed night
+            return _fail(project, root, now, t0, night, f"{type(e).__name__}: {e}", 0, [], {}, dry)
         try:
             coll = json.loads((run_dir / "collected.json").read_text())
         except (OSError, ValueError):
@@ -321,7 +326,8 @@ def nightly(argv, now=None):
             if not root:
                 print(f"discover: {n}: no repo")
                 continue
-            _night(n, root, now, a.dry_run)
+            if _night(n, root, now, a.dry_run):
+                rc = 1
         except Exception as e:   # noqa: BLE001 - one project must not stop the others
             print(f"discover: {n}: error: {type(e).__name__}: {e}", file=sys.stderr)
             rc = 1

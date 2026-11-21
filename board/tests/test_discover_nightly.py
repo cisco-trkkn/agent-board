@@ -204,6 +204,7 @@ class FailureTest(Base):
 
     def test_failure_counts_and_logs(self):
         rc, out, err = self.nightly()
+        self.assertEqual(rc, 1)
         self.assertEqual(self.st()["failures"], 1)
         self.assertEqual(self.outbox(), [])
         self.assertRegex(self.log()[-1], r"^\d{4}-\d\d-\d\dT[\d:]+ p failed: model exit 1$")
@@ -238,10 +239,41 @@ class FailureTest(Base):
     def test_unfittable_post_counts_as_failure(self):
         self.mode = "ok"
         with mock.patch.object(discover_post, "build_op", side_effect=ValueError("does not fit")):
-            self.nightly()
+            rc, _, _ = self.nightly()
+        self.assertEqual(rc, 1)
         self.assertEqual(self.st()["failures"], 1)
         self.assertIn("does not fit", self.log()[-1])
         self.assertEqual(self.outbox(), [])
+
+
+class CollectRaisesTest(Base):
+    def test_collect_exception_is_a_failed_night(self):
+        self.project()
+        self.project("q")
+        calls = []
+        def collect(p, r, n):
+            if p == "p":
+                raise OSError("disk gone")
+            calls.append(p)
+            return dict(self.coll, project=p, root=str(r), at="x", head=None)
+        with mock.patch.object(D, "collect", side_effect=collect):
+            rc, _, _ = self.nightly()
+            self.assertEqual(rc, 1)
+            self.assertEqual(self.st()["failures"], 1)
+            self.assertIn("p failed: OSError: disk gone", self.log()[0])
+            self.assertEqual(len(self.outbox("q")), 1)
+            for _ in range(2):
+                self.nightly("--project", "p")
+        ops = self.outbox("p")
+        self.assertEqual([o["tier"] for o in ops], ["critical"])
+
+    def test_collect_exception_dry_run_touches_nothing(self):
+        self.project()
+        before = tree(self.state)
+        with mock.patch.object(D, "collect", side_effect=OSError("x")):
+            rc, _, _ = self.nightly("--dry-run")
+        self.assertEqual(self.st()["failures"], 0)
+        self.assertEqual(before, tree(self.state))
 
 
 class MetricsTest(Base):
