@@ -5,81 +5,50 @@ spec §3 rule, build_op() renders the post op, publish() writes it and records w
 `ab:discover:(file|dismiss):<project>:<kid>` and rewrites the post with an `edit` op. Differences from analytics_post that change
 behaviour: the state is not in the destination dir, the id carries a project and sha1(key)[:12], and a decision edits the original
 post instead of adding one. Does not import discover.py (it imports this module). Test: tests/test_discover_post.py."""
-import contextlib
-import fcntl
-import hashlib
 import json
-import os
 import re
-import time
-from pathlib import Path
 
-import analytics_post
 import discord_feed
 import dream_paths
+import findings
 import ideas
 import tc_env
 
 LIMIT = 1900
 KEEP_NIGHTS = 14
-REGROWTH = 1.5
-URL_MAX = 150       # a longer url is rendered as plain text
+REGROWTH = findings.REGROWTH
+URL_MAX = findings.URL_MAX
 MARK_ROOM = 40      # kept free per item for "— 💡 filed" / "— ✖ dismissed" (and the longest mark)
-MARKS = {"filed": "💡 filed", "dismissed": "✖ dismissed"}
+MARKS = findings.MARKS
 _CID = re.compile(r"^ab:discover:(file|dismiss):([A-Za-z0-9._-]+):([0-9a-f]{12})$")
 _LEDGER = re.compile(r"ledgers/([^/\s:]+)/progress\.md")
-escape = analytics_post.escape
-
-
-def kid(key):
-    return hashlib.sha1(key.encode()).hexdigest()[:12]
-
-
-def _iso(ts=None):
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+escape = findings.escape
+kid = findings.kid
+_iso = findings.iso
+_cut = findings.cut
 
 
 # ---- state -----------------------------------------------------------------------------------------------------------
 
-def _paths(project):
-    d = tc_env.agent_base() / "discover"
-    return d / f"{project}.json", d / f"{project}.lock"
+def _store(project):
+    """The Store for <agent_base>/discover/<project>.json (lock <project>.lock beside it)."""
+    return findings.Store(tc_env.agent_base() / "discover" / f"{project}.json", keep=KEEP_NIGHTS)
 
 
-@contextlib.contextmanager
 def _locked(project):
-    p, lock = _paths(project)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock, "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        yield
+    return _store(project).locked()
 
 
 def _read(project):
-    try:
-        st = json.loads(_paths(project)[0].read_text())
-        st = st if isinstance(st, dict) else {}
-    except (OSError, ValueError):
-        st = {}
-    out = {"root": "", "failures": 0, "reported": {}, "dismissed": {}, "filed": {}, "posts": {}}
-    for k, dflt in out.items():
-        v = st.get(k)
-        if isinstance(v, type(dflt)):
-            out[k] = v
-    return out
+    return _store(project).read()
 
 
 def _write(project, st):
-    st = dict(st)
-    st["posts"] = {n: st["posts"][n] for n in sorted(st["posts"])[-KEEP_NIGHTS:]}
-    p = _paths(project)[0]
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, indent=1) + "\n")
-    os.replace(tmp, p)
+    _store(project).write(st)
 
 
 def load_state(project):
-    return _read(project)
+    return _store(project).load()
 
 
 def save_state(project, st):
@@ -124,7 +93,7 @@ def select(items, cands, st, memory):
         count = c["count"]
         if key in st["filed"]:
             continue
-        if key in st["dismissed"] and count < REGROWTH * st["dismissed"][key]["evidence_count"]:
+        if findings.dismissed_blocks(st, key, count):
             continue
         if c.get("signal") == "repeated_ruling" and any(len(_ledger_dirs(c) & m) >= 3 for m in memory):
             also.append(it)
@@ -158,21 +127,7 @@ def _parts(c, it):
 
 
 def _line(it, parts, cap, links=True):
-    """The value line. A link whose text had to be cut is dropped (plain cut text), so a link is never cut in half."""
-    ev = []
-    for text, url in parts:
-        if links and url and len(text) <= cap and len(str(url)) <= URL_MAX:
-            ev.append(f"[{escape(text)}]({str(url).replace(')', '%29')})")
-        else:
-            ev.append(escape(_cut(text, cap)))
-    c = max(cap // 4, 10)
-    return (f"value {escape(_cut(it['expected_value'], c))} · effort {escape(_cut(it['effort'], c))} · "
-            f"risk {escape(_cut(it['risk'], c))} · evidence: " + "; ".join(ev))
-
-
-def _cut(s, n):
-    s = " ".join(str(s).split())
-    return s if len(s) <= n else s[:max(n - 1, 0)] + "…"
+    return findings.value_line(it["expected_value"], it["effort"], it["risk"], parts, cap, links)
 
 
 def _render(project, night, items, footer):
@@ -292,20 +247,10 @@ def click(project, user, cid, now):
             if not hit:
                 return "unknown"
             night, it = hit
-            key = it["key"]
-            done = "filed" if act == "file" else "dismissed"
-            if key in st["filed"]:
-                return "already filed"
-            if key in st["dismissed"] and st["dismissed"][key]["evidence_count"] == it["count"]:
-                return "already dismissed"
-            if it.get("decision"):
-                return "already " + it["decision"]
-            if act == "file":
-                line = f"{it['title']}: {it['why']} (evidence: {it['summary']})"
-                st["filed"][key] = {"at": _iso(now), "idea_line": ideas.add(project, line)}
-            else:
-                st["dismissed"][key] = {"at": _iso(now), "evidence_count": it["count"]}
-            it["decision"] = done
+            done = findings.decide(st, it, act, now,
+                                   lambda it: ideas.add(project, f"{it['title']}: {it['why']} (evidence: {it['summary']})"))
+            if done.startswith("already"):
+                return done
             _write(project, st)
             _edit(project, st["posts"][night])
             return done
