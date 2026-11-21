@@ -115,8 +115,22 @@ For an audit or measurement plan whose tasks compute and report metrics:
 
 Example: one task counted re-reads with the Read tool only, while another task's read set included Bash reads. The report called re-exploration after handoff "refuted" from the narrow count; the main agent's pre-edit calls were 34 Read against 158 Bash reads. The per-task review logged the caveat as a minor, and only the final review caught that the verdict rested on it.
 
+## 14. Every plan carries a manifest
+
+After the plan's header, add one fenced block tagged `json:manifest`:
+
+    {"spec": "<spec path>", "base": "<commit of main the plan was written against>",
+     "depends_on": [{"spec": "<spec path>", "kind": "hard" | "soft", "interface": "<soft only>"}],
+     "writes": [{"path": "<file>", "mode": "create" | "modify" | "append"}],
+     "reads": ["<file>"], "produces": ["<name>"], "consumes": ["<name>"], "tests": ["<test file>"]}
+
+- Every path in any task's `files` is in `writes` or `reads`.
+- Fixtures and docs the tasks create are `create`.
+- `append` means the plan only adds lines or entries and changes none (a registry, a test list, a rules file); when unsure between `modify` and `append`, write `modify`.
+- `tmux-ctl registry validate <plan>` passes before the plan is committed.
+
 ## Before you finish
 
-Re-read the plan's tasks: every shared metric is defined once and every verdict states its scope, every security gate is stated as an accepted shape with its tried bypasses, every repeat-count task sizes its cap from a timed iteration and records each iteration, every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, every plan-authored guard test names its mutation, every snippet and external-tool value was run once, and the plan ends by invoking subagent-driven-development (or, with context nearly exhausted, a printed prompt), never a question.
+Re-read the plan's tasks: every shared metric is defined once and every verdict states its scope, every security gate is stated as an accepted shape with its tried bypasses, every repeat-count task sizes its cap from a timed iteration and records each iteration, every `frontier` task has no Steps block, every e2e task names a real-state or aged-fixture check, no commit step hardcodes a model attribution line, every "copy X" step names its differences, every consumer task answers the three delivery questions, every plan-authored guard test names its mutation, every snippet and external-tool value was run once, the plan carries a `json:manifest` that `registry validate` accepts, and the plan ends by invoking subagent-driven-development (or, with context nearly exhausted, a printed prompt), never a question.
 
 Then check that each task's `**Verify:**` command is byte-identical to its json:metadata `verifyCommand`, or that the Verify line says "see verifyCommand". Two different commands give the executor two acceptance numbers. Mechanical check: extract both per task and diff them.

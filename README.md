@@ -50,6 +50,7 @@ Coming from the author's earlier global setup? `./install.sh --migrate` (see [do
 | `install.sh` | installs the one link; `--check`, `--uninstall`, `--migrate` |
 | `bin/` | the commands; `bin/agent-board` is the single entry point |
 | `board/` | the Agent Board server and page |
+| `engine/` | Node: the PCEE plan registry (`tmux-ctl registry`) |
 | `board/scout.py`, `board/scout_sources.py`, `board/scout_fetch.py`, `board/scout_pack.py`, `board/scout_eval.py`, `board/scout_draft.py`, `board/scout_post.py`, `board/scout_decisions.py`, `board/scout_schedule.py` | the trend scout: the CLI, its source list, fetching, context packs, evaluation, spec drafts, the digest post, approval decisions, and its LaunchAgents |
 | `claude/orchestrator.md`, `claude/worker.md`, `claude/session-settings.json`, `claude/overseer.md`, `claude/overseer-settings.json` | lead and worker rules, settings for agent teams, and the read-only overseer's rules and permissions |
 | `claude/plugin/` | the session plugin: hooks, `tmux-orchestrator` and `handoff` skills, `effort-*` agents |
