@@ -389,6 +389,30 @@ class SelectCheckTest(unittest.TestCase):
                 df._check(op)
 
 
+class PostRowsCheckTest(unittest.TestCase):
+    BTN = {"label": "File as idea 1", "style": 1, "custom_id": "ab:discover:file:proj:abc"}
+
+    def post(self, **kw):
+        op = {"op": "post", "text": "t", "tier": "progress", "mention_user": False}
+        op.update(kw)
+        return op
+
+    def test_valid(self):
+        df._check(self.post(rows=[[self.BTN, {**self.BTN, "label": "Dismiss 1", "style": 2}]]))
+        df._check(self.post(rows=[[self.BTN] * 5] * 5))
+        df._check(self.post(buttons=[self.BTN]))
+
+    def test_malformed_rows_rejected(self):
+        for rows in ([[self.BTN] * 6], [[self.BTN]] * 6, [[{"label": "x"}]], [[{**self.BTN, "style": "1"}]],
+                     [[{**self.BTN, "custom_id": "c" * 101}]], "no", [self.BTN]):
+            with self.assertRaisesRegex(ValueError, "rows must be", msg=str(rows)[:80]):
+                df._check(self.post(rows=rows))
+
+    def test_buttons_and_rows_together_rejected(self):
+        with self.assertRaisesRegex(ValueError, "buttons or rows, not both"):
+            df._check(self.post(buttons=[self.BTN], rows=[[self.BTN]]))
+
+
 class IreplyCheckTest(unittest.TestCase):
     ROW = [[{"label": "Enter code", "style": 1, "custom_id": "ab:gauth:code:alpha"}]]
 

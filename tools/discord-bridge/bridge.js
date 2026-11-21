@@ -195,7 +195,9 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (notes.length) text += '\n' + notes.join('\n');
     payload.content = text.slice(0, 2000);
     if (ok.length) payload.files = ok;
-    if (Array.isArray(op.buttons) && op.buttons.length) {
+    if (Array.isArray(op.rows) && op.rows.length) {
+      payload.components = toRows(op.rows);
+    } else if (Array.isArray(op.buttons) && op.buttons.length) {
       payload.components = [{ type: 1, components: op.buttons.slice(0, 5).map((b) => ({ type: 2, style: Number(b.style) || 2, label: String(b.label).slice(0, 80), custom_id: String(b.custom_id) })) }];
     }
     if (op.select !== undefined) {

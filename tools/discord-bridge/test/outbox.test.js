@@ -45,3 +45,53 @@ test('state.write is atomic (tmp + rename) and state.read defaults when absent',
   assert.strictEqual(s.card_message_id, 'm1'); assert.strictEqual(s.ts, 123);
   assert.ok(!fs.existsSync(path.join(d, 'bridge-state.json.tmp')));
 });
+
+// Post ops through the real bridge tick, on the fake client (a plain home-channel bridge, as in bridge.test.js).
+const { createBridge } = require('../bridge');
+const { FakeClient } = require('./fake-client');
+
+function postSetup() {
+  const dir = tmp();
+  fs.mkdirSync(path.join(dir, 'outbox'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'bridge.json'), JSON.stringify({ channel: 'C1', user: 'U1' }));
+  fs.writeFileSync(path.join(dir, '.env'), 'DISCORD_BOT_TOKEN=TESTTOKEN.abc123.SECRETSECRETSECRET\n');
+  const client = new FakeClient({ guildId: 'G1' });
+  const bridge = createBridge({ dir, client, ops: false, log: () => {}, now: () => 1700000000000, sleep: async () => {} });
+  const put = (name, op) => fs.writeFileSync(path.join(dir, 'outbox', name), JSON.stringify(op));
+  return { dir, client, bridge, put };
+}
+const postOp = (extra) => ({ op: 'post', text: 'group', tier: 'progress', mention_user: false, ...extra });
+const btn = (n, style = 1) => ({ label: `Item ${n}`, style, custom_id: `ab:discover:file:proj:k${n}` });
+
+test('post with rows sends toRows(rows): one action row per row, a button per entry', async () => {
+  const s = postSetup();
+  const rows = [[btn(1), btn(2, 2)], [btn(3)]];
+  s.put('1700000000001-00000001.json', postOp({ rows }));
+  await s.bridge.tick();
+  const [c] = s.client.callsOf('send');
+  assert.deepStrictEqual(c.payload.components, [
+    { type: 1, components: [{ type: 2, style: 1, label: 'Item 1', custom_id: 'ab:discover:file:proj:k1' }, { type: 2, style: 2, label: 'Item 2', custom_id: 'ab:discover:file:proj:k2' }] },
+    { type: 1, components: [{ type: 2, style: 1, label: 'Item 3', custom_id: 'ab:discover:file:proj:k3' }] },
+  ]);
+});
+
+test('post with buttons still sends one action row', async () => {
+  const s = postSetup();
+  s.put('1700000000002-00000002.json', postOp({ buttons: [btn(1), btn(2, 2)] }));
+  await s.bridge.tick();
+  const [c] = s.client.callsOf('send');
+  assert.deepStrictEqual(c.payload.components, [{ type: 1, components: [
+    { type: 2, style: 1, label: 'Item 1', custom_id: 'ab:discover:file:proj:k1' },
+    { type: 2, style: 2, label: 'Item 2', custom_id: 'ab:discover:file:proj:k2' }] }]);
+});
+
+test('post with rows and a select: the select row comes after the button rows', async () => {
+  const s = postSetup();
+  const select = { custom_id: 'ab:ops:spec:alpha', placeholder: 'Pick', options: [{ label: 'three', value: '3' }] };
+  s.put('1700000000003-00000003.json', postOp({ rows: [[btn(1)], [btn(2)]], select }));
+  await s.bridge.tick();
+  const [c] = s.client.callsOf('send');
+  assert.strictEqual(c.payload.components.length, 3);
+  assert.deepStrictEqual(c.payload.components[2], { type: 1, components: [{ type: 3, custom_id: 'ab:ops:spec:alpha', placeholder: 'Pick', options: select.options }] });
+  assert.deepStrictEqual(c.payload.components.slice(0, 2).map((r) => r.components[0].custom_id), ['ab:discover:file:proj:k1', 'ab:discover:file:proj:k2']);
+});

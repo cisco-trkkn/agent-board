@@ -24,7 +24,7 @@ PRESENCE_EVERY = 60
 TIERS = ("critical", "decision", "progress")
 EVENT_KEYS = ("ts", "project", "spec", "kind", "tier", "text", "refs")
 APPROVAL_KINDS = ("perm", "question", "merge", "other")
-_POST_OPT = {"select": dict, "key": str, "thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool, "buttons": list}
+_POST_OPT = {"select": dict, "key": str, "thread_key": str, "link_thread_key": str, "files": list, "delete_files": bool, "buttons": list, "rows": list}
 _last_ms = 0
 _ms_lock = threading.Lock()   # the overview thread and the notifier sink both write
 
@@ -114,6 +114,10 @@ def _check(op):
                     isinstance(x, dict) and set(x) == {"label", "style", "custom_id"} and isinstance(x["label"], str)
                     and isinstance(x["custom_id"], str) and type(x["style"]) is int for x in b)):
                 raise ValueError("buttons must be a list of at most 5 {label, style, custom_id}")
+        if "rows" in op:
+            _check_rows(op["rows"])
+        if "buttons" in op and "rows" in op:
+            raise ValueError("post takes buttons or rows, not both")
 
 
 def _next_ms():
