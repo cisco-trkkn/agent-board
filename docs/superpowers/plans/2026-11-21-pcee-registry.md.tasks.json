@@ -4,21 +4,21 @@
     {
       "id": 1,
       "subject": "PR Task 1: Python: locked append, metrics append|has|runs",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [],
       "description": "**Goal:** `board/metrics.py` takes an exclusive lock around every append and gains `append`, `has` and `runs` subcommands, so Node can write and read the run log without opening it.\n\n**Files:**\n- Modify: `board/metrics.py` (`_append_to` ~line 103, `SUBS` ~line 33, `_parser` ~line 1160, `main` dispatch ~line 1950, report pair loop ~lines 1066-1101, module docstring)\n- Create: `board/tests/test_metrics_append.py`\n\n**Acceptance Criteria:**\n- [ ] `_append_to` holds `fcntl.flock(LOCK_EX)` on `<log>.lock` (sibling file) while writing; two processes appending 200 lines each give 400 parseable lines.\n- [ ] `metrics append analysis --json '{\"batch\":\"b\",\"specs\":2}'` appends one line with `\"kind\":\"analysis\"`; exit 0, prints nothing.\n- [ ] `metrics append` refuses (exit 1, one line) kinds `batch`, `start`, `run`, `defect`, a non-object JSON, invalid JSON. `--batch X` sets `batch`.\n- [ ] `metrics has <kind> [--spec S] [--batch B]` exits 0 when a line of that kind (and spec/batch when given) exists, else 1, and prints nothing.\n- [ ] `metrics runs <batch> --json` prints `{\"batch\",\"base\",\"at\",\"specs\":[\u2026],\"runs\":{spec: last run line or null},\"pairs\":[{\"a\",\"b\",\"clean\":true|false,\"paths\":[\u2026]}] or null}`; unknown batch exits 1.\n- [ ] `metrics report` output is byte-identical before and after the pair-loop refactor (existing `test_metrics_report.py` passes unchanged).\n- [ ] All three new subcommands accept `--log PATH` (read/write that file instead of the repo log), as `backfill --log` does.\n- [ ] Docstring: `analysis` is listed as a kind, no longer \"reserved\".\n\n**Verify:** `python3 -m unittest board.tests.test_metrics_append board.tests.test_metrics_report board.tests.test_metrics_log -v` \u2192 `OK`\n\nPlan: docs/superpowers/plans/2026-11-21-pcee-registry.md (Task 1). Spec: docs/superpowers/specs/2026-11-10-pcee-registry-design.md\n\n```json:metadata\n{\"files\": [\"board/metrics.py\", \"board/tests/test_metrics_append.py\"], \"verifyCommand\": \"python3 -m unittest board.tests.test_metrics_append board.tests.test_metrics_report board.tests.test_metrics_log -v\", \"acceptanceCriteria\": [\"flock on <log>.lock around each append; 2x200 concurrent appends give 400 parseable lines\", \"metrics append sets kind/batch; refuses batch/start/run/defect, non-object and invalid JSON with exit 1\", \"metrics has exit 0/1 by kind, spec, batch\", \"metrics runs <batch> --json shape; unknown batch exit 1\", \"metrics report output unchanged after pair_results refactor\", \"--log on append/has/runs\", \"docstring lists analysis as a kind\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 2,
       "subject": "PR Task 2: engine/ package, registry.js entry, tmux-ctl registry, all.zsh job",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [],
       "description": "**Goal:** An empty-but-working `engine/` package whose CLI dispatches subcommands with the error-line convention, wrapped by `tmux-ctl registry`, and run by `tools/tests/all.zsh` as suite `engine`.\n\n**Files:**\n- Create: `engine/package.json`, `engine/package-lock.json`, `engine/bin/registry.js`, `engine/test/helpers.js`, `engine/test/cli.test.js`, `tools/tests/test_ctl_registry.zsh`\n- Modify: `bin/tmux-ctl` (help block ~line 83, TMUX check line ~121, case near `metrics)` ~line 766), `tools/tests/all.zsh` (suite list and `add` lines)\n\n**Acceptance Criteria:**\n- [ ] `engine/package.json` is exactly the content below; `cd engine && npm test` passes.\n- [ ] `node engine/bin/registry.js` with no args or an unknown sub prints `registry: usage: registry <validate|analyse|stale|report|facts> ...` on stderr and exits 2.\n- [ ] A subcommand that throws prints exactly one stderr line `registry: <sub>: <message>` and exits 1. In this task no sub module exists yet, so every known sub resolves to the stub `() => { throw new Error(\"not built\") }`, and the test is `facts x` \u2192 `registry: facts: not built`, exit 1.\n- [ ] `tmux-ctl registry facts x` run outside tmux (`env -u TMUX`) reaches node (prints `registry: facts: not built` until Task 7).\n- [ ] `zsh tools/tests/all.zsh --list --suite engine` prints one job `engine` with command `cd engine && node --test test/*.test.js`.\n- [ ] `tmux-ctl --help` lists `tmux-ctl registry <validate|analyse|stale|report|facts> \u2026`.\n\n**Verify:** `(cd engine && npm test) && zsh tools/tests/test_ctl_registry.zsh && zsh tools/tests/all.zsh --list --suite engine`  \u2192 node `# fail 0`, zsh `ok` lines and no `FAIL`, one `engine` line\n\nPlan: docs/superpowers/plans/2026-11-21-pcee-registry.md (Task 2). Spec: docs/superpowers/specs/2026-11-10-pcee-registry-design.md\n\n```json:metadata\n{\"files\": [\"engine/package.json\", \"engine/package-lock.json\", \"engine/bin/registry.js\", \"engine/test/helpers.js\", \"engine/test/cli.test.js\", \"bin/tmux-ctl\", \"tools/tests/all.zsh\", \"tools/tests/test_ctl_registry.zsh\"], \"verifyCommand\": \"(cd engine && npm test) && zsh tools/tests/test_ctl_registry.zsh && zsh tools/tests/all.zsh --list --suite engine\", \"acceptanceCriteria\": [\"engine/package.json as given; npm test passes\", \"no/unknown sub: usage line, exit 2\", \"thrown error: one stderr line registry: <sub>: <msg>, exit 1\", \"tmux-ctl registry works outside tmux\", \"all.zsh --list --suite engine shows the engine job\", \"tmux-ctl --help lists registry\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 3,
       "subject": "PR Task 3: Install: npm ci for engine, node required, INSTALL.md row",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2
       ],
@@ -27,7 +27,7 @@
     {
       "id": 4,
       "subject": "PR Task 4: Manifest parsing and registry validate",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2
       ],
@@ -36,7 +36,7 @@
     {
       "id": 5,
       "subject": "PR Task 5: Graphs, clusters and waves",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2
       ],
@@ -45,7 +45,7 @@
     {
       "id": 6,
       "subject": "PR Task 6: Batch reader and registry analyse",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         4,
@@ -56,7 +56,7 @@
     {
       "id": 7,
       "subject": "PR Task 7: registry stale and registry facts",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         4
       ],
@@ -65,7 +65,7 @@
     {
       "id": 8,
       "subject": "PR Task 8: metrics record gains the manifest fields",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         7
@@ -75,7 +75,7 @@
     {
       "id": 9,
       "subject": "PR Task 9: registry report: prediction against outcome",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         6,
         7
@@ -85,7 +85,7 @@
     {
       "id": 10,
       "subject": "PR Task 10: Gate K1 and the upfront-seq configuration",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2,
         8
@@ -95,14 +95,14 @@
     {
       "id": 11,
       "subject": "PR Task 11: Lead rules and the manifest rule for plan writers",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [],
       "description": "**Goal:** `claude/orchestrator.md` Queue mode carries up-front planning, the stale check, entry gates and the analysis path in the morning report; `writing-plans-extras` gains the manifest rule; README mentions `engine/`.\n\n**Files:**\n- Modify: `claude/orchestrator.md` (Queue mode steps 2 and 5, a new step for up-front planning), `claude/skills/writing-plans-extras/SKILL.md` (new `## 14.` before `## Before you finish`, and one clause in that checklist), `README.md` (layout list)\n\n**Acceptance Criteria:**\n- [ ] orchestrator.md Queue mode, wording taken from the spec (quote, do not paraphrase the rule sentence):\n  - the boundary rule of spec \u00a72 verbatim (`> Before running the next spec, if any pending \u2026`), with the 5-step up-front procedure (batch `--config upfront-seq`, planners `plan-<slug>` on Opus with `Reason: up-front planner`, at most four at a time, no native tasks, `registry validate` until it passes; `registry analyse`; `crossplan-<batch>` frontier agent writing `relations.json` from manifests + titles + Decisions; analyse again with `--relations`; shut planners down) and the failure rule (planner fails or never validates after one retry \u2192 just in time).\n  - step 2 gains the stale check of spec \u00a73 (rebase the plan-only branch onto `main`; `registry stale`; `fresh` runs as written; `stale` \u2192 one `refresh-<slug>` agent on Opus with `git diff <base> main -- <paths>`, which patches plan, `.tasks.json` and manifest, sets the new `base` and adds `\"refreshed_from\": {\"base\": <old>, \"stale_paths\": [...]}`, re-validates and commits; `writing-plans` is not run again for an up-front plan; a failed refresh \u2192 plan just in time).\n  - entry gates of spec \u00a76 (`Entry gate: <id>` header line; `registry report <batch>` then `metrics gate <id>`; non-zero \u2192 `failed \u2014 gate <id>: <line>` and `metrics record \u2026 --outcome failed`).\n  - morning report: `tmux-ctl registry report <batch>` before the Metrics section, and the analysis document path after it.\n  - error handling: a failing `registry` command never blocks the queue (plan just in time, no stale check).\n- [ ] SKILL.md `## 14. Every plan carries a manifest`: the block's fields (spec \u00a71 example), every path in any task's `files` is in `writes` or `reads`, fixtures and docs the tasks create are `create`, unsure between `modify` and `append` \u2192 `modify`, `tmux-ctl registry validate <plan>` passes before the plan is committed. The \"Before you finish\" paragraph gains \"the plan carries a `json:manifest` that `registry validate` accepts\".\n- [ ] README layout lists `engine/` (Node: the PCEE plan registry; `tmux-ctl registry`).\n- [ ] `grep -c 'registry stale' claude/orchestrator.md` >= 1, `grep -c 'Entry gate:' claude/orchestrator.md` >= 1, `grep -c '^## 14\\.' claude/skills/writing-plans-extras/SKILL.md` == 1.\n- [ ] Existing rules tests pass: `tools/tests/test_plugin.zsh`, `tools/tests/test_queue_ask_rule.zsh` (they grep orchestrator.md) and `tools/tests/test_install.zsh`.\n\n**Verify:** `grep -c 'registry stale' claude/orchestrator.md && grep -c 'Entry gate:' claude/orchestrator.md && grep -c '^## 14\\.' claude/skills/writing-plans-extras/SKILL.md && { for f in tools/tests/test_plugin.zsh tools/tests/test_queue_ask_rule.zsh tools/tests/test_install.zsh; do zsh $f; done 2>&1 | grep -c '^FAIL' || true; }` \u2192 `>=1`, `>=1`, `1`, then `0`\n\nPlan: docs/superpowers/plans/2026-11-21-pcee-registry.md (Task 11). Spec: docs/superpowers/specs/2026-11-10-pcee-registry-design.md\n\n```json:metadata\n{\"files\": [\"claude/orchestrator.md\", \"claude/skills/writing-plans-extras/SKILL.md\", \"README.md\"], \"verifyCommand\": \"grep -c 'registry stale' claude/orchestrator.md && grep -c 'Entry gate:' claude/orchestrator.md && grep -c '^## 14\\\\.' claude/skills/writing-plans-extras/SKILL.md && { for f in tools/tests/test_plugin.zsh tools/tests/test_queue_ask_rule.zsh tools/tests/test_install.zsh; do zsh $f; done 2>&1 | grep -c '^FAIL' || true; }\", \"acceptanceCriteria\": [\"orchestrator.md: boundary rule verbatim + up-front procedure + failure rule\", \"stale check with refresh agent and refreshed_from\", \"entry gates\", \"morning report runs registry report and names the analysis path\", \"registry failure never blocks the queue\", \"SKILL.md section 14 manifest rule + checklist clause\", \"README lists engine/\", \"rules suites: 0 FAIL\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 12,
       "subject": "PR Task 12: Full suite and read-only real-state checks",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         2,
@@ -128,5 +128,5 @@
       "description": "**Goal:** On the specs after this one, four plans with valid manifests are committed before the first of them runs, the analysis document carries Prediction against outcome, and the `PCEE:` status line shows K1's values.\n\n> **USER-ORDERED GATE \u2014 NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n> **USER-ORDERED GATE \u2014 NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Test only\n\n**Acceptance Criteria:**\n- [ ] `git log --diff-filter=A --format=%ci -- <plan>` for four up-front plans is earlier than the first of those specs' `start` lines (`tmux-ctl metrics has start --spec <first> --batch <upfront batch>` and the start line's `at`).\n- [ ] `node engine/bin/registry.js validate <plan>` exits 0 for each of the four.\n- [ ] `docs/superpowers/metrics/analysis/<upfront batch>.md` contains `## Prediction against outcome`.\n- [ ] `tmux-ctl metrics status` prints a `PCEE:` line naming gate K1 with its three values.\n\n**Verify:** `tmux-ctl metrics gate K1; echo rc=$?` \u2192 prints each K1 condition with its value; rc 0, 1 or 3 recorded as evidence\n\n**Lead step after this branch merges (spec \u00a77):** the running lead keeps the rules it started with, so after the merge\nthe lead hands off to a fresh lead (`agent-board:handoff`; in Queue mode it relays without asking). The new lead\nstarts with the new rules and applies the boundary rule (up-front planning) before the next spec.\n\nPlan: docs/superpowers/plans/2026-11-21-pcee-registry.md (Task 13). Spec: docs/superpowers/specs/2026-11-10-pcee-registry-design.md\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"tmux-ctl metrics gate K1; echo rc=$?\", \"acceptanceCriteria\": [\"four up-front plans committed before the first of them started\", \"registry validate exit 0 for each\", \"analysis document has Prediction against outcome\", \"metrics status PCEE line shows K1 values\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-21T18:44:19Z"
+  "lastUpdated": "2026-11-21T19:50:59.903654+00:00"
 }
