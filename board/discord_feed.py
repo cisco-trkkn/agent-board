@@ -377,9 +377,11 @@ LOG_LINES = 200
 ATTACH_KEEP = 20
 
 
-def _failed_run_log(project, now):
+def _failed_run_log(project, now, worktree=None, root=None):
     """The newest failing run record (exit not null/0, cwd in a worktree, ts within 24 h before now, log file present);
     its last LOG_LINES lines go to <discord dir>/attachments/<id>.log (newest ATTACH_KEEP files kept).
+    With `worktree` and `root`, only runs under <root>/<worktree> are candidates; none of them -> None (another
+    worktree's log is never posted).
     {"log_file", "log_cmd", "log_exit"} or None."""
     import tc_env
     recs = {}
@@ -399,6 +401,9 @@ def _failed_run_log(project, now):
           if r.get("exit") not in (None, 0) and "/.claude/worktrees/" in str(r.get("cwd", ""))
           and isinstance(r.get("ts"), (int, float)) and now - 86400 <= r["ts"] <= now
           and os.path.isfile(str(r.get("log", "")))]
+    if worktree and root:
+        base = os.path.join(str(root), str(worktree)).rstrip("/")
+        ok = [r for r in ok if str(r.get("cwd", "")) == base or str(r.get("cwd", "")).startswith(base + "/")]
     if not ok:
         return None
     r = max(ok, key=lambda r: r["ts"])
@@ -495,7 +500,8 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
             rid = tk(t["id"])
             extra = {}
             if outcome.startswith("failed") and f"outcome:{rid}" not in have and not first:
-                extra = _failed_run_log(project, now) or {"no_run_log": True}
+                wt = meta.get("worktree") if isinstance(meta.get("worktree"), str) and meta.get("worktree") else None
+                extra = _failed_run_log(project, now, wt, root) or {"no_run_log": True}
             emit(f"outcome:{rid}", _ev(project, _spec_name(t["subject"]), "spec_outcome", tier, outcome, now, thread_key=rid, **extra), history=True)
     for p in sorted(glob.glob(os.path.join(glob.escape(str(root)), "docs", "superpowers", "reports", "*-queue.md"))):
         name = os.path.basename(p)
