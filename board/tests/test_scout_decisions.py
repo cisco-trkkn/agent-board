@@ -203,6 +203,43 @@ class RetryTest(Base):
         self.assertEqual(self.state()["pending_copies"], [])
 
 
+class FailedCommitTest(Base):
+    """A real git index.lock makes the add fail once; the live checkout must be as before, so the retry can commit."""
+    def setUp(self):
+        super().setUp()
+        self.week_branch()
+        self.d = self.draft()
+        self.store(self.d)
+        self.lock = self.root / ".git" / "index.lock"
+
+    def status(self):
+        return git(self.root, "status", "--porcelain", "--", ".", ":!.claude")   # the week worktree lives under .claude/
+
+    def test_untracked_copy_is_removed_and_the_retry_commits(self):
+        self.lock.write_text("")
+        before = self.commits()
+        self.assertEqual(sd.approve(self.d, self.root, NOW, self.add_line), sd.WAITING)
+        self.assertEqual(self.status(), "")
+        self.assertFalse((self.root / SPEC).exists())
+        self.assertEqual(self.state()["pending_copies"], [self.d["id"]])
+        self.lock.unlink()
+        sd.retry_copies(self.root, NOW + 60, self.add_line)
+        self.assertEqual(self.commits(), before + 1)
+        self.assertEqual(self.status(), "")
+        self.assertEqual(self.state()["pending_copies"], [])
+        self.assertTrue(self.state()["drafts"][self.d["id"]]["copied_at"])
+
+    def test_tracked_path_is_restored_to_head(self):
+        (self.root / SPEC).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / SPEC).write_text("# Old\n")
+        git(self.root, "add", "--", SPEC)
+        git(self.root, "commit", "-q", "-m", "old spec")
+        self.lock.write_text("")
+        self.assertEqual(sd.approve(self.d, self.root, NOW, self.add_line), sd.WAITING)
+        self.assertEqual(self.status(), "")
+        self.assertEqual((self.root / SPEC).read_text(), "# Old\n")
+
+
 class ThrottleTest(Base):
     def test_step_calls_retry_at_most_every_600s(self):
         import discord_controls as dc

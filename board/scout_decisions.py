@@ -70,11 +70,22 @@ def _copy(root, rec):
     if rc:
         return False
     dst = root / path
+    tracked = _git(root, "ls-files", "--error-unmatch", "--", path)[0] == 0
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(text, encoding="utf-8")
     if _git(root, "add", "--", path)[0] or _git(root, "commit", "-q", "-m", f"docs(spec): {rec['title']} (scout)",
                                                 "-m", f"Scout-Item: {rec['key']}", "--", path)[0]:
-        _git(root, "reset", "-q", "HEAD", "--", path)   # leave nothing of ours staged
+        # leave the checkout as it was: a leftover file would make the path dirty and pin every retry in _busy
+        _git(root, "reset", "-q", "HEAD", "--", path)
+        try:
+            if tracked:   # rewrite HEAD's bytes by hand: `git checkout` needs the index lock whose absence just failed us
+                rc, old = _git(root, "show", f"HEAD:{path}")
+                if rc == 0:
+                    dst.write_text(old, encoding="utf-8")
+            else:
+                dst.unlink()
+        except OSError:
+            pass
         return False
     return True
 
