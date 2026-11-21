@@ -208,5 +208,22 @@ class LabelTargetsRootTest(RootedBase):
         self.assertEqual(self.targets("")["path"], "")
 
 
+class LeadRootGoneTest(unittest.TestCase):
+    """_lead_root: a gone project folder gives the lead view root "" and keeps the entry (not dropped)."""
+
+    def test_gone_folder_keeps_lead_entry_with_empty_root(self):   # mutation: delete the try/except in _lead_root -> entry dropped
+        def gone(t, p):
+            raise relay.FolderGone("project folder is gone: /x")
+        with mock.patch.object(server, "tmux", lambda *a, **k: "%7\t4242\tclaude\t0\n"), \
+                mock.patch.object(server, "capture_panes", lambda ids: {i: ["row"] for i in ids}), \
+                mock.patch.object(server, "classify", lambda cmd, rows, bell, mod: ("claude", "idle")), \
+                mock.patch.object(server, "mod_states", lambda: {}), \
+                mock.patch.object(server.relay, "session_root", gone):
+            info = server.lead_infos(["p"], {"p": "sid-1"}, {"p": 99})
+        self.assertIn("p", info)
+        self.assertEqual(info["p"]["root"], "")
+        self.assertEqual(info["p"]["pane"], "%7")
+
+
 if __name__ == "__main__":
     unittest.main()
