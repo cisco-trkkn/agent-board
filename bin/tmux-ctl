@@ -81,6 +81,7 @@
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
+#   tmux-ctl registry <validate|analyse|stale|report|facts> …  plan manifests, graphs, waves (engine/, node)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
@@ -118,7 +119,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, discover, scout, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly, discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -762,6 +763,9 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     done
     popt=(); [[ -n "$proj" ]] && popt=(--project "$proj")
     exec python3 -I "${0:A:h:h}/board/overview.py" "${popt[@]}" "${jflag[@]}" ;;
+
+  registry)
+    exec node "${0:A:h:h}/engine/bin/registry.js" "$@" ;;
 
   metrics)
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;

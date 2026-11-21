@@ -1,0 +1,10 @@
+{
+  "name": "agent-board-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PCEE engine: plan registry (stage 2)",
+  "type": "commonjs",
+  "engines": {"node": ">=22.13"},
+  "scripts": {"test": "node --test test/*.test.js"},
+  "license": "ISC"
+}

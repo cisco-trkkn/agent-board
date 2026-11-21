@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
 # all.zsh — run every test suite of the repo in parallel and print one verdict line.
-#   zsh tools/tests/all.zsh [--suite board|zsh|tools|skills|statusline|hooks]… [--serial] [-j N] [--list]
-# One job per test file (board, zsh, tools, hooks) or per suite dir (3 docs skills, statusline). A file whose first 5
-# lines contain "# serial" runs alone after the parallel phase. Timings: <TC_STATE>/test-timings.tsv.
+#   zsh tools/tests/all.zsh [--suite board|zsh|tools|skills|statusline|hooks|engine]… [--serial] [-j N] [--list]
+# One job per test file (board, zsh, tools, hooks), one for engine/ (node), or per suite dir (3 docs skills, statusline).
+# A file whose first 5 lines contain "# serial" runs alone after the parallel phase. Timings: <TC_STATE>/test-timings.tsv.
 # Exit: 0 all pass, 1 any failure, 4 all pass but over TC_TEST_BUDGET seconds (default 300).
 emulate -L zsh
 zmodload zsh/datetime zsh/mathfunc
@@ -20,12 +20,12 @@ while (( $# )); do
     -j)        [[ -n $2 ]] || { print -u2 "all.zsh: -j needs a positive number"; exit 2 }; jn="$2"; shift 2 ;;
     -j*)       jn="${1#-j}"; shift ;;
     --list)    list=1; shift ;;
-    *) print -u2 "usage: all.zsh [--suite board|zsh|tools|skills|statusline|hooks]… [--serial] [-j N] [--list]"; exit 2 ;;
+    *) print -u2 "usage: all.zsh [--suite board|zsh|tools|skills|statusline|hooks|engine]… [--serial] [-j N] [--list]"; exit 2 ;;
   esac
 done
 [[ -z $jn || $jn == <1-> ]] || { print -u2 "all.zsh: -j needs a positive number, got '$jn'"; exit 2 }
 for s in $suites; do
-  [[ $s == (board|zsh|tools|skills|statusline|hooks) ]] || { print -u2 "all.zsh: unknown suite '$s'"; exit 2 }
+  [[ $s == (board|zsh|tools|skills|statusline|hooks|engine) ]] || { print -u2 "all.zsh: unknown suite '$s'"; exit 2 }
 done
 want() { (( ${#suites} == 0 || ${suites[(Ie)$1]} )) }
 
@@ -41,6 +41,7 @@ if want skills; then for d in docs-architecture docs-compose docs-report; do
 done; fi
 if want statusline && [[ -d claude/statusline/tests ]]; then add statusline "python3 -m unittest discover -s claude/statusline/tests"; fi
 if want hooks;  then for f in claude/hooks/tests/test-*.sh(N); do add "hooks/${f:t}" "bash $f" $f; done; fi
+if want engine && [[ -f engine/package.json ]]; then add engine "cd engine && node --test test/*.test.js"; fi
 n=${#J_name}
 
 if (( list )); then
