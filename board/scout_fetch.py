@@ -11,6 +11,7 @@ import html
 import json
 import re
 import os
+import ssl
 import subprocess
 import urllib.error
 import urllib.parse
@@ -35,8 +36,22 @@ class FetchError(Exception):
     pass
 
 
+FALLBACK_CA = "/etc/ssl/cert.pem"
+
+
+def _ssl_context():
+    """The default verifying context. A Python with no CA bundle of its own (python.org builds before "Install Certificates")
+    falls back to the system bundle, unless SSL_CERT_FILE names one. Verification is never turned off."""
+    ctx = ssl.create_default_context()
+    vp = ssl.get_default_verify_paths()
+    have = any(p and os.path.exists(p) for p in (vp.cafile, vp.capath, vp.openssl_cafile, vp.openssl_capath))
+    if not have and not os.environ.get("SSL_CERT_FILE") and os.path.isfile(FALLBACK_CA):
+        ctx.load_verify_locations(FALLBACK_CA)
+    return ctx
+
+
 # no HTTPCookieProcessor: no cookies are stored or replayed
-_OPENER = urllib.request.build_opener()
+_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_context()))
 
 
 def _open(req):

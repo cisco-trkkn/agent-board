@@ -469,5 +469,38 @@ class IsolationTest(Base):
         self.assertEqual(before, after)
 
 
+class SslContextTest(unittest.TestCase):
+    """_ssl_context: a Python with no CA bundle falls back to the system file; verification stays on."""
+    MISSING = mock.Mock(cafile=None, capath=None, openssl_cafile="/nonexistent/cert.pem", openssl_capath="/nonexistent/certs")
+
+    def ctx(self, env=None, fallback_exists=True, paths=None):
+        fake = mock.Mock()
+        e = {k: v for k, v in os.environ.items() if k != "SSL_CERT_FILE"}
+        e.update(env or {})
+        with mock.patch.dict(os.environ, e, clear=True), \
+                mock.patch.object(sf.ssl, "create_default_context", return_value=fake), \
+                mock.patch.object(sf.ssl, "get_default_verify_paths", return_value=paths or self.MISSING), \
+                mock.patch.object(sf.os.path, "isfile", return_value=fallback_exists):
+            sf._ssl_context()
+        return fake
+
+    def test_missing_bundle_loads_the_system_file(self):
+        self.ctx().load_verify_locations.assert_called_once_with("/etc/ssl/cert.pem")
+
+    def test_ssl_cert_file_set_is_not_overridden(self):
+        self.ctx(env={"SSL_CERT_FILE": "/some/ca.pem"}).load_verify_locations.assert_not_called()
+
+    def test_an_existing_default_bundle_is_not_overridden(self):
+        here = mock.Mock(cafile=None, capath=None, openssl_cafile=__file__, openssl_capath="/nonexistent")
+        self.ctx(paths=here).load_verify_locations.assert_not_called()
+
+    def test_no_system_file_loads_nothing(self):
+        self.ctx(fallback_exists=False).load_verify_locations.assert_not_called()
+
+    def test_real_context_verifies(self):
+        c = sf._ssl_context()                      # unpatched: the host's real ssl module
+        self.assertEqual((c.verify_mode, c.check_hostname), (sf.ssl.CERT_REQUIRED, True))
+
+
 if __name__ == "__main__":
     unittest.main()
