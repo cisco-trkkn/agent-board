@@ -90,7 +90,7 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
             elif kind in ("slash", "modal", "read", "rejected") and _cross_denied(project, ev, user):
                 discord_feed.audit_append(d, user, kind, f"{ev.get('project')}:{ev.get('command') or ev.get('form') or ev.get('what') or ''}", "rejected")
             elif kind in ("slash", "modal", "read", "rejected"):
-                _ops("handle_event", project, d, ev, add_line, allow, lead_run or run, spawn)
+                _ops("handle_event_locked", project, d, ev, add_line, allow, lead_run or run, spawn)
             elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:dream:"):
                 cid = str(ev.get("custom_id"))
                 discord_feed.audit_append(d, user, "click", cid, dream_discord.click(project, user, cid, time.time()) if user in allow else "rejected")

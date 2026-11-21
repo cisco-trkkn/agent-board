@@ -563,6 +563,23 @@ class Events(Base):
         self.assertEqual([r["result"] for r in self.audit()[-2:]], ["queued 2", "queued 0"])
         self.assertEqual(json.loads((self.ops / "ops-state.json").read_text())["paused_by_ops"], {})
 
+    def test_slash_pause_then_resume_all_resumes_it_when_queue_reads_running(self):
+        # mutation: remove the st["paused_by_ops"][project] = ... line in handle_event -> resume-all sends nothing
+        self.seed_queues(a="queue: running x (1/2)")
+        self.event("1.json", {"type": "slash", "command": "pause", "project": "a", "user": "U1", "ts": NOW})
+        self.event("2.json", ok("ab:ops:resume-all"))
+        self.consume()
+        self.assertEqual(self.lines, [("a", PAUSE), ("a", RESUME)])
+        self.assertEqual(self.state()["paused_by_ops"], {})
+
+    def test_slash_resume_clears_paused_by_ops(self):
+        self.seed_queues(a="queue: running x (1/2)")
+        self.event("1.json", {"type": "slash", "command": "pause", "project": "a", "user": "U1", "ts": NOW})
+        self.event("2.json", {"type": "slash", "command": "resume", "project": "a", "user": "U1", "ts": NOW})
+        self.consume()
+        self.assertEqual(self.state()["paused_by_ops"], {})
+        self.assertEqual(self.lines, [("a", PAUSE), ("a", RESUME)])
+
     def test_resume_all_does_not_double_send_when_paused_by_ops_and_reads_paused(self):
         self.seed_queues(a="queue: paused")
         st = json.loads((self.ops / "ops-state.json").read_text())
@@ -1088,6 +1105,15 @@ class ControlsHooks(Base):
         au = [json.loads(l) for l in (self.pd / "audit.jsonl").read_text().splitlines()]
         self.assertEqual([a["result"] for a in au], ["queued", "answered", "rejected", "idea added"])
         self.assertEqual(self.lines, [("a", PAUSE)])
+
+    def test_controls_pause_sets_and_resume_clears_paused_by_ops(self):
+        # mutation: controls call handle_event instead of handle_event_locked -> paused_by_ops stays empty
+        self.event("0.json", {"type": "slash", "command": "pause", "project": "a", "user": "U1", "ts": NOW}, d=self.pd)
+        self.step(needs=())
+        self.assertEqual(list(self.state()["paused_by_ops"]), ["a"])
+        self.event("1.json", {"type": "slash", "command": "resume", "project": "a", "user": "U1", "ts": NOW}, d=self.pd)
+        self.step(needs=())
+        self.assertEqual(self.state()["paused_by_ops"], {})
 
 
 class FeedChanges(Base):

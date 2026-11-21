@@ -548,7 +548,7 @@ def gauth_sweep(d, now):
             discord_feed.audit_append(d, str(rec.get("user") or ""), "gauth", f"{project}:gauth", "timed out")
 
 
-def handle_event(project, d, ev, add_line, allow, run=None, spawn=None):
+def handle_event(project, d, ev, add_line, allow, run=None, spawn=None, st=None):
     """slash / modal / read / rejected: act, audit in <d>/audit.jsonl, return the audit result. `project` is the default
     when the event names none (events forwarded from a project's controls)."""
     user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
@@ -583,6 +583,12 @@ def handle_event(project, d, ev, add_line, allow, run=None, spawn=None):
     elif kind == "slash":
         line = {"pause": PAUSE_LINE, "resume": RESUME_LINE}.get(ev.get("command"))
         if line:
+            if st is not None:   # remember who paused: the lead line leaves the task list reading running
+                pb = st.setdefault("paused_by_ops", {})
+                if ev.get("command") == "pause":
+                    pb[project] = time.time()
+                else:
+                    pb.pop(project, None)
             add_line(project, line)
         result = "queued" if line else "ignored"
     elif kind == "modal":
@@ -677,6 +683,15 @@ def _click(d, user, cid, st, add_line, now, on_merge):
     return "ignored"
 
 
+def handle_event_locked(project, d, ev, add_line, allow, run=None, spawn=None):
+    """handle_event for events a project's controls forward: under the ops state lock (the one consume holds), so
+    /pause and /resume reach paused_by_ops. Not configured: no state, as before."""
+    if not configured():
+        return handle_event(project, d, ev, add_line, allow, run=run, spawn=spawn)
+    with _state(True) as st:
+        return handle_event(project, d, ev, add_line, allow, run=run, spawn=spawn, st=st)
+
+
 def consume(add_line, run, now, on_merge=None, lead_run=None, spawn=None):
     """Process <_ops>/events in filename order; each file once, audited in <_ops>/audit.jsonl. None when not configured."""
     if not configured():
@@ -707,7 +722,7 @@ def consume(add_line, run, now, on_merge=None, lead_run=None, spawn=None):
                     result = _click(d, user, cid, st, add_line, now, on_merge) if user in allow else "rejected"
                     discord_feed.audit_append(d, user, "click", cid, result)
                 else:
-                    handle_event(None, d, ev, add_line, allow, run=lead_run or run, spawn=spawn)
+                    handle_event(None, d, ev, add_line, allow, run=lead_run or run, spawn=spawn, st=st)
                 done += 1
             except Exception as e:   # noqa: BLE001 -- one bad event never blocks the rest
                 print(f"discord_ops: event {f.name} failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
