@@ -203,14 +203,6 @@ class FlowTest(Base):
         self.assertFalse(self.argv.exists(), "the model was called")
         self.assertFalse((self.t / "state" / "analytics" / "recommend.json").exists())
 
-    def test_without_dry_run_refuses(self):
-        self.rich()
-        self.answer()
-        rc, out, err = self.cli()
-        self.assertEqual((rc, out), (1, ""))
-        self.assertEqual(err.strip(), "metrics: weekly: posting needs part 2 (discord bridge); use --dry-run")
-        self.assertFalse(self.argv.exists())
-
     def test_recommend_json_is_written_beside_stats(self):
         self.rich()
         self.answer([item("good", ("trends.specs_run.current", 2))])
@@ -219,8 +211,174 @@ class FlowTest(Base):
         self.assertEqual((r["passed"], r["asked"]), (1, 3))
 
 
+class PostTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.ops = self.t / "state" / "discord" / "_ops"
+        self.runs = self.repo / "docs/superpowers/metrics/runs.jsonl"
+        self.runs.write_text("")                      # the record needs an existing run log
+        p = mock.patch("ideas._kick")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def configure_ops(self):
+        self.ops.mkdir(parents=True)
+        (self.ops / "bridge.json").write_text(json.dumps({"command_center": "1", "approvals": "2"}))
+
+    def lines(self):
+        return [r for r in (json.loads(l) for l in self.runs.read_text().splitlines() if l.strip()) if r["kind"] == "analytics"]
+
+    def outbox(self, d):
+        return sorted((d / "outbox").glob("*")) if (d / "outbox").is_dir() else []
+
+    def project(self, name, channel=True, runs=True):
+        root = self.t / name
+        (root / "docs/superpowers/metrics").mkdir(parents=True)
+        (root / "docs/superpowers/metrics/runs.jsonl").write_text(
+            json.dumps(run(f"docs/superpowers/specs/{name}.md", cur())) + "\n" if runs else "")
+        (root / "docs/superpowers/metrics/tasks.jsonl").write_text("")
+        if channel:
+            d = self.t / "state" / "discord" / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "bridge.json").write_text(json.dumps({"channel": "123"}))
+        return root
+
+    def test_off_env_and_file_write_nothing(self):
+        self.rich()
+        self.configure_ops()
+        self.answer([item("x", ("trends.specs_run.current", 2))])
+        before = self.runs.read_text()
+        with mock.patch.dict(os.environ, {"TC_ANALYTICS": "0"}):
+            self.assertEqual(self.cli(), (0, "analytics: off\n", ""))
+        (self.t / "state" / "analytics.off").write_text("")
+        self.assertEqual(self.cli(), (0, "analytics: off\n", ""))
+        self.assertEqual(self.outbox(self.ops), [])
+        self.assertFalse(self.argv.exists(), "the model was called")
+        self.assertEqual(self.runs.read_text(), before)
+
+    def test_dry_run_ignores_the_off_switch(self):
+        self.rich()
+        self.answer()
+        with mock.patch.dict(os.environ, {"TC_ANALYTICS": "0"}):
+            self.assertIn("Execution analytics", self.cli("--dry-run")[1])
+
+    def test_ops_configured_posts_to_ops_dir_only(self):
+        self.rich()
+        self.configure_ops()
+        self.project("pa")
+        metrics_analyze.overview_projects.side_effect = None
+        metrics_analyze.overview_projects.return_value = [str(self.repo), str(self.t / "pa")]
+        self.answer([item("Cut opus", ("trends.specs_run.current", 2))])
+        rc, out, err = self.cli()
+        self.assertEqual((rc, err), (0, ""), err)
+        self.assertEqual(len(self.outbox(self.ops)), 2)
+        self.assertEqual(self.outbox(self.t / "state" / "discord" / "pa"), [])
+        self.assertEqual(len(list((self.ops / "analytics").glob("post-*.json"))), 1)
+        (rec,) = self.lines()
+        self.assertEqual((rec["kind"], rec["outcome"], rec["posts"], rec["destinations"]), ("analytics", "posted", 2, ["_ops"]))
+        self.assertEqual(json.loads(next(iter((self.ops / "analytics").glob("post-*.json"))).read_text())["project"], "repo")
+
+    def test_per_project_destinations(self):
+        a, b = self.project("pa"), self.project("pb", runs=False)
+        metrics_analyze.overview_projects.side_effect = None
+        metrics_analyze.overview_projects.return_value = [str(a), str(b)]
+        self.answer([item("x", ("trends.specs_run.current", 1))])
+        rc, out, err = self.cli()
+        self.assertEqual((rc, err), (0, ""), err)
+        da, db = (self.t / "state" / "discord" / n for n in ("pa", "pb"))
+        self.assertEqual(len(self.outbox(da)), 2)
+        self.assertEqual(self.outbox(db), [])
+        stats = json.loads((self.t / "state" / "analytics" / "pa" / "stats.json").read_text())
+        self.assertEqual(stats["projects"], ["pa"])
+        self.assertEqual(stats["trends"]["specs_run"]["current"], 1)
+        self.assertEqual(json.loads(next(iter((da / "analytics").glob("post-*.json"))).read_text())["project"], "pa")
+
+    def test_project_without_channel_gets_nothing(self):
+        a = self.project("pa", channel=False)
+        metrics_analyze.overview_projects.side_effect = None
+        metrics_analyze.overview_projects.return_value = [str(a)]
+        self.answer()
+        rc, out, err = self.cli()
+        self.assertEqual((rc, out), (0, "no runs in the window; nothing to post\n"))
+        self.assertEqual(self.outbox(self.t / "state" / "discord" / "pa"), [])
+
+    def test_no_runs_anywhere_records_no_runs(self):
+        a = self.project("pa", runs=False)
+        metrics_analyze.overview_projects.side_effect = None
+        metrics_analyze.overview_projects.return_value = [str(a)]
+        self.answer()
+        rc, out, err = self.cli()
+        self.assertEqual((rc, out, err), (0, "no runs in the window; nothing to post\n", ""))
+        self.assertFalse(self.argv.exists())
+        (rec,) = self.lines()
+        self.assertEqual((rec["outcome"], rec["posts"], rec["destinations"], rec["cost_usd"], rec["tokens"]), ("no-runs", 0, [], None, None))
+
+    def test_unavailable_still_posts_and_is_partial(self):
+        self.rich()
+        self.configure_ops()
+        self.answer(rc=1)
+        rc, out, err = self.cli()
+        self.assertEqual((rc, err), (0, ""), err)
+        ops = [json.loads(f.read_text()) for f in self.outbox(self.ops)]
+        b = next(o for o in ops if o["key"].endswith("-b"))
+        self.assertIn("recommendations unavailable: claude exited 1", b["text"])
+        self.assertNotIn("buttons", b)
+        self.assertEqual(self.lines()[0]["outcome"], "partial")
+
+    def test_record_fields_and_usage_sum(self):
+        self.rich()
+        self.configure_ops()
+        self.answer([item("x", ("trends.specs_run.current", 2))])
+        use = {"cost_usd": 0.12345, "tokens": {"input": 1, "output": 2, "cache_read": 3, "cache_write": 4}}
+        real = metrics_recommend.recommend
+        with mock.patch.object(metrics_recommend, "recommend", side_effect=lambda p: {**real(p), "usage": use}):
+            self.assertEqual(self.cli()[0], 0)
+        (rec,) = self.lines()
+        self.assertEqual(set(rec), {"kind", "at", "week", "outcome", "posts", "destinations", "cost_usd", "tokens", "duration_s", "model"})
+        self.assertEqual((rec["cost_usd"], rec["tokens"], rec["model"], rec["week"]), (0.1235, use["tokens"], "sonnet", "2026-W47"))
+        self.assertIsInstance(rec["duration_s"], int)
+
+    def test_sum_usage_none_and_partial(self):
+        self.assertEqual(metrics._sum_usage([{"cost_usd": None, "tokens": None}]), (None, None))
+        t = {"input": 1, "output": 1, "cache_read": 1, "cache_write": 1}
+        self.assertEqual(metrics._sum_usage([{"cost_usd": 1.0, "tokens": t}, {"cost_usd": None, "tokens": None}, {"cost_usd": 0.5, "tokens": t}]),
+                         (1.5, {"input": 2, "output": 2, "cache_read": 2, "cache_write": 2}))
+
+    def test_no_record_without_runs_jsonl(self):
+        self.rich()
+        self.configure_ops()
+        self.answer()
+        self.runs.unlink()
+        self.assertEqual(self.cli()[0], 0)
+        self.assertFalse(self.runs.exists())
+
+    def test_weekly_failure_logs_no_error_line(self):
+        self.rich()
+        self.configure_ops()
+        self.answer()
+        before = self.runs.read_text()
+        with mock.patch.object(metrics, "write_stats", side_effect=metrics.MetricsError("boom")):
+            rc, out, err = self.cli()
+        self.assertEqual((rc, out, err), (1, "", "metrics: weekly: boom\n"))
+        self.assertEqual(self.runs.read_text(), before)
+
+    def test_dry_run_json_prints_ops_and_writes_nothing(self):
+        self.rich()
+        self.configure_ops()
+        self.answer([item("x", ("trends.specs_run.current", 2))])
+        before = self.runs.read_text()
+        rc, out, err = self.cli("--dry-run", "--json")
+        self.assertEqual((rc, err), (0, ""), err)
+        ops = [json.loads(l) for l in out.splitlines()]
+        self.assertEqual([o["key"] for o in ops], ["analytics-2026-W47-a", "analytics-2026-W47-b"])
+        self.assertEqual(out, "".join(json.dumps(o, sort_keys=True) + "\n" for o in ops))
+        self.assertEqual(self.outbox(self.ops), [])
+        self.assertEqual(list((self.ops / "analytics").glob("post-*.json")) if (self.ops / "analytics").is_dir() else [], [])
+        self.assertEqual(self.runs.read_text(), before)
+
+
 class HelpTest(unittest.TestCase):
-    NEW = ("backfill-tasks", "analyze", "recommend", "weekly --dry-run")
+    NEW = ("backfill-tasks", "analyze", "recommend", "weekly [--dry-run [--json]]", "schedule install|status|uninstall")
 
     def test_help_lists_subs(self):
         text = (CHECKOUT / "bin/tmux-ctl").read_text()

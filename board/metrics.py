@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """metrics: the queue run log (docs/superpowers/metrics/runs.jsonl) and its commands.
 
-Run log: one JSON object per line, kind in batch|start|run|defect (analysis is reserved; readers ignore unknown
+Run log: one JSON object per line, kind in batch|start|run|defect|error|dream|analytics (analysis is reserved; readers ignore unknown
 kinds). Append-only; readers take the last `run` per (batch, spec); a malformed line is skipped and counted.
 Nothing private goes in a line: no session ids, prompts, agent names, absolute paths.
 
@@ -1194,6 +1194,7 @@ def _parser():
     rm.add_argument("--stats")
     wk = sp.add_parser("weekly", parents=[common])
     wk.add_argument("--dry-run", action="store_true")
+    wk.add_argument("--json", action="store_true")
     wk.add_argument("--since", default="7d")
     wk.add_argument("--tasks-log")
     bf = sp.add_parser("backfill", parents=[common])
@@ -1751,16 +1752,77 @@ def _recommend_to_file(stats_path):
     return res
 
 
+def _analytics_off():
+    return os.environ.get("TC_ANALYTICS") == "0" or (tc_env.agent_base() / "analytics.off").exists()
+
+
+def _destinations(repo):
+    """[(dir, idea project, projects or None, stats out or None, multi_project)]: the ops dir when the ops bot is
+    configured, else each project with a Discord home channel."""
+    import discord_feed, discord_ops, metrics_analyze
+    if discord_ops.configured():
+        return [(tc_env.ops_dir(), Path(main_root(repo)).name, None, None, True)]
+    try:
+        paths = metrics_analyze.overview_projects()
+    except Exception:
+        paths = [main_root(repo)]
+    out = []
+    for p in paths:
+        name = Path(p).name
+        if discord_feed.channel_of(name):
+            out.append((tc_env.discord_dir(name), name, [p], tc_env.state_dir() / "analytics" / name / "stats.json", False))
+    return out
+
+
+def _sum_usage(usages):
+    """(cost_usd or None, tokens dict or None): per-field sums over the non-None values."""
+    costs = [u["cost_usd"] for u in usages if u.get("cost_usd") is not None]
+    toks = [u["tokens"] for u in usages if u.get("tokens")]
+    tokens = {k: sum(t.get(k) or 0 for t in toks) for k in ("input", "output", "cache_read", "cache_write")} if toks else None
+    return (round(sum(costs), 4) if costs else None), tokens
+
+
 def cmd_weekly(repo, args):
-    """`weekly --dry-run`: analyze, recommend and print the weekly report. Posting is part 2 (the Discord bridge)."""
-    if not args.dry_run:
-        raise MetricsError("posting needs part 2 (discord bridge); use --dry-run")
-    import metrics_recommend
-    stats, path = write_stats(repo, args.since, tasks_log=args.tasks_log)
-    if stats["trends"]["specs_run"]["current"] == 0:
-        print("no runs in the window; nothing to post")
+    """`weekly`: analyze, recommend and post to Discord per destination, then record one kind:analytics line.
+    `--dry-run` prints the report text (or, with --json, the ops) and writes nothing."""
+    import metrics_recommend, analytics_post
+    if args.dry_run and not args.json:
+        stats, path = write_stats(repo, args.since, tasks_log=args.tasks_log)
+        if stats["trends"]["specs_run"]["current"] == 0:
+            print("no runs in the window; nothing to post")
+            return
+        print(metrics_recommend.weekly_text(stats, _recommend_to_file(path), path), end="")
         return
-    print(metrics_recommend.weekly_text(stats, _recommend_to_file(path), path), end="")
+    if not args.dry_run and _analytics_off():
+        print("analytics: off")
+        return
+    t0 = time.time()
+    posts, dests, usages, week, partial = 0, [], [], None, False
+    for d, name, projects, out, multi in _destinations(repo):
+        stats, path = write_stats(repo, args.since, projects, args.tasks_log, out)
+        week = week or analytics_post.week_id(stats["window"]["until"])
+        if stats["trends"]["specs_run"]["current"] == 0:
+            continue
+        rec = _recommend_to_file(path)
+        usages.append(rec.get("usage") or {})
+        partial = partial or "unavailable" in rec
+        if args.dry_run:
+            week = analytics_post.week_id(stats["window"]["until"])
+            for op in analytics_post.build_ops(stats, rec, week, path, multi):
+                print(json.dumps(op, sort_keys=True))
+            continue
+        posts += analytics_post.publish(d, name, stats, rec, path, multi)
+        dests.append(Path(d).name)
+    if args.dry_run:
+        return
+    if not posts:
+        print("no runs in the window; nothing to post")
+    cost, tokens = _sum_usage(usages)
+    if log_path(repo).is_file():
+        append(repo, {"kind": "analytics", "at": utc(), "week": week or analytics_post.week_id(utc()),
+                      "outcome": "no-runs" if not posts else "partial" if partial else "posted",
+                      "posts": posts, "destinations": dests, "cost_usd": cost, "tokens": tokens,
+                      "duration_s": int(time.time() - t0), "model": "sonnet"})
 
 
 def cmd_recommend(repo, args):
@@ -1852,7 +1914,8 @@ def main(argv=None):
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
-        _log_error(repo, sub, e, getattr(args, "log", None) or getattr(args, "tasks_log", None))
+        if sub != "weekly":   # the weekly job reports to stderr (the launchd log) only
+            _log_error(repo, sub, e, getattr(args, "log", None) or getattr(args, "tasks_log", None))
         return 1
 
 

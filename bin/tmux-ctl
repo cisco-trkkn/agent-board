@@ -71,7 +71,8 @@
 #   tmux-ctl metrics backfill-tasks [--log P]  task lines (tasks.jsonl) for past runs that have none
 #   tmux-ctl metrics analyze [--since 7d|30d|ISO] [--json]  trends, flags, coverage over every project -> stats.json
 #   tmux-ctl metrics recommend [--since] [--stats P]  three recommendations over stats.json, evidence-checked
-#   tmux-ctl metrics weekly --dry-run [--since] [--tasks-log P]  analyze + recommend, the weekly report on stdout
+#   tmux-ctl metrics weekly [--dry-run [--json]] [--since] [--tasks-log P]  analyze + recommend; post to Discord (or print)
+#   tmux-ctl metrics schedule install|status|uninstall  the Monday 09:00 weekly post (launchd)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
@@ -733,7 +734,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,76p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,77p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
