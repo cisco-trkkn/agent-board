@@ -10,6 +10,7 @@ import hashlib
 import html
 import json
 import re
+import os
 import subprocess
 import urllib.error
 import urllib.parse
@@ -18,6 +19,9 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from pathlib import Path
+
+import tc_env
 
 UA = "agent-board-scout"
 TIMEOUT = 20
@@ -35,21 +39,25 @@ class FetchError(Exception):
 _OPENER = urllib.request.build_opener()
 
 
+def _open(req):
+    """Open a Request -> (status, body (at most MAX_BYTES), content type). FetchError text never carries request headers."""
+    try:
+        with _OPENER.open(req, timeout=TIMEOUT) as r:
+            return r.status, r.read(MAX_BYTES), r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        e.close()
+        raise FetchError(f"HTTP {e.code} for {req.full_url}") from None
+    except Exception as e:  # URLError, timeout, ssl, bad url, connection reset
+        raise FetchError(f"{type(e).__name__}: {e}") from None
+
+
 def get(url, accept=None, headers=None):
     """GET url -> (status, body bytes (at most MAX_BYTES), content type). FetchError on a network error or status >= 400."""
     h = {"User-Agent": UA}
     if accept:
         h["Accept"] = accept
     h.update(headers or {})
-    req = urllib.request.Request(url, headers=h)
-    try:
-        with _OPENER.open(req, timeout=TIMEOUT) as r:
-            return r.status, r.read(MAX_BYTES), r.headers.get("Content-Type", "")
-    except urllib.error.HTTPError as e:
-        e.close()
-        raise FetchError(f"HTTP {e.code} for {url}") from None
-    except Exception as e:  # URLError, timeout, ssl, bad url, connection reset
-        raise FetchError(f"{type(e).__name__}: {e}") from None
+    return _open(urllib.request.Request(url, headers=h))
 
 
 def _cut(text, limit=EXCERPT_MAX):
@@ -311,11 +319,16 @@ class _Page(HTMLParser):
             self.body.append(data)
 
 
-def _html_diff(source, state, installed_version):
+def _page_text(markup):
+    """The collapsed text of <main>, else of <body> minus nav/header/footer."""
     p = _Page()
-    p.feed(_text(_body(source["url"])))
+    p.feed(markup)
     p.close()
-    text = " ".join(" ".join(p.main if p.has_main else p.body).split())
+    return " ".join(" ".join(p.main if p.has_main else p.body).split())
+
+
+def _html_diff(source, state, installed_version):
+    text = _page_text(_text(_body(source["url"])))
     if not text:
         raise FetchError("no page text")
     h = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -346,8 +359,195 @@ def _npm(source, state, installed_version):
     return [_item(f"{pkg} {latest}", "https://www.npmjs.com/package/" + pkg, version=latest)], new_state
 
 
+# ---- plugin -------------------------------------------------------------------------------
+
+_VER = re.compile(r"\d+(\.\d+)+(-[0-9A-Za-z.]+)?$")
+
+
+def version_key(v):
+    """Sort key for 'N.N.N' with an optional '-suffix' (a suffix sorts before the plain release); None when v is not such a version."""
+    if not isinstance(v, str) or not _VER.match(v):
+        return None
+    core, _, suffix = v.partition("-")
+    nums = [int(x) for x in core.split(".")]
+    while len(nums) > 1 and nums[-1] == 0:
+        nums.pop()
+    return (tuple(nums), 0 if suffix else 1)
+
+
+def _load_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise FetchError(f"{Path(path).name}: {type(e).__name__}") from None
+
+
+def _plugin(source, state, installed_version):
+    """Installed plugins with a newer version in their marketplace's remote marketplace.json.
+    new_state = {"skipped_no_version": n}: plugins that could not be compared."""
+    pdir = Path(os.environ.get("HOME", "")) / ".claude" / "plugins"
+    installed = _load_json(pdir / "installed_plugins.json").get("plugins") or {}
+    kp = pdir / "known_marketplaces.json"
+    known = _load_json(kp) if kp.exists() else {}
+    base = (os.environ.get("TC_SCOUT_RAW_BASE") or "https://raw.githubusercontent.com").rstrip("/")
+    remotes, errors, items, skipped = {}, 0, [], 0   # remotes: marketplace -> {plugin name: entry} | None (failed)
+    for key, entries in installed.items():
+        name, _, market = key.rpartition("@")
+        cur = (entries or [{}])[0].get("version")
+        src = (known.get(market) or {}).get("source") or {}
+        if not name or src.get("source") != "github" or not src.get("repo") or version_key(cur) is None:
+            skipped += 1
+            continue
+        if market not in remotes:
+            try:
+                data = json.loads(_text(_body(f"{base}/{src['repo']}/main/.claude-plugin/marketplace.json")))
+                remotes[market] = {p["name"]: p for p in data["plugins"]}
+            except (FetchError, ValueError, KeyError, TypeError):
+                remotes[market] = None
+                errors += 1
+        if remotes[market] is None:
+            continue
+        entry = remotes[market].get(name) or {}
+        new = entry.get("version")
+        if version_key(new) is None:
+            skipped += 1
+            continue
+        if version_key(new) > version_key(cur):
+            items.append(_item(f"{name} {cur} \u2192 {new}", f"https://github.com/{src['repo']}", version=new,
+                               excerpt=entry.get("description") or ""))
+    if errors and not any(v is not None for v in remotes.values()):
+        raise FetchError("every marketplace fetch failed")
+    return items, {"skipped_no_version": skipped}
+
+
+# ---- discord_channel ----------------------------------------------------------------------
+
+_SOURCE_REQ = re.compile(r"^source:\s+(\S+)\s+(.+)$")
+_URL = re.compile(r"https?://[^\s<>]+")
+
+
+def _discord_token():
+    try:
+        text = (tc_env.discord_dir("agent-board") / ".env").read_text(encoding="utf-8")
+    except OSError:
+        raise FetchError("no token") from None
+    for line in text.splitlines():
+        k, _, v = line.partition("=")
+        if k.strip() == "DISCORD_BOT_TOKEN" and v.strip().strip("'\""):
+            return v.strip().strip("'\"")
+    raise FetchError("no token")
+
+
+def _discord_api():
+    return (os.environ.get("TC_SCOUT_DISCORD_API") or "https://discord.com/api/v10").rstrip("/")
+
+
+def _discord(method, path, body=None):
+    """One authenticated Discord REST call -> parsed JSON. The token only ever sits in the request header."""
+    headers = {"User-Agent": UA, "Authorization": "Bot " + _discord_token(), "Accept": "application/json"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    _, raw, _ = _open(urllib.request.Request(_discord_api() + path, data=data, headers=headers, method=method))
+    try:
+        return json.loads(raw.decode("utf-8")) if raw.strip() else None
+    except ValueError:
+        raise FetchError("discord: invalid JSON") from None
+
+
+def _channel(channel_id):
+    cid = str(channel_id or "").strip()
+    if not cid.isdigit():
+        raise FetchError("no channel")
+    return cid
+
+
+def post_message(channel_id, text, reply_to=None):
+    """Post text to a channel (no mentions allowed); returns the new message id."""
+    body = {"content": text, "allowed_mentions": {"parse": []}}
+    if reply_to:
+        body["message_reference"] = {"message_id": str(reply_to)}
+    r = _discord("POST", f"/channels/{_channel(channel_id)}/messages", body)
+    return str((r or {}).get("id") or "")
+
+
+def reactions(channel_id, message_id, emoji):
+    """User ids that reacted to a message with emoji."""
+    r = _discord("GET", f"/channels/{_channel(channel_id)}/messages/{message_id}/reactions/"
+                 f"{urllib.parse.quote(emoji, safe='')}?limit=100")
+    return [str(u["id"]) for u in r or []]
+
+
+class _Title(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self._in = [], False
+
+    def handle_starttag(self, tag, attrs):
+        self._in = self._in or tag == "title"
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in = False
+
+    def handle_data(self, data):
+        if self._in:
+            self.parts.append(data)
+
+
+def _page_item(url, published):
+    """A page item for a URL posted in the channel; None when the page cannot be read (that URL is skipped)."""
+    try:
+        _, body, ctype = get(url)
+    except FetchError:
+        return None
+    if ctype and "html" not in ctype.lower() and "text" not in ctype.lower():
+        return None
+    markup = _text(body)
+    t = _Title()
+    t.feed(markup)
+    t.close()
+    text = _page_text(markup)
+    title = " ".join(" ".join(t.parts).split()) or url
+    return _item(title, url, published=published, excerpt=text,
+                 content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest())
+
+
+def _discord_channel(source, state, installed_version):
+    cid = _channel(source.get("url"))
+    _discord_token()  # "no token" before any request
+    after = (state or {}).get("after")
+    msgs = _discord("GET", f"/channels/{cid}/messages?limit=50" + (f"&after={after}" if after else ""))
+    if not isinstance(msgs, list):
+        raise FetchError("discord: messages response is not a list")
+    msgs.sort(key=lambda m: int(m["id"]), reverse=True)
+    items, seen_urls = [], set()
+    for m in msgs:
+        author = m.get("author") or {}
+        if author.get("bot"):
+            continue  # the poll's own replies carry URLs; they are not input
+        content = (m.get("content") or "").strip()
+        req = _SOURCE_REQ.match(content)
+        if req:
+            items.append({"request": {"url": req.group(1), "why": req.group(2).strip(), "message_id": str(m["id"]),
+                                      "author": author.get("username") or ""}})
+            continue
+        for url in _URL.findall(content):
+            url = url.rstrip(".,;:!?)")
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            it = _page_item(url, _iso_date(m.get("timestamp")))
+            if it:
+                items.append(it)
+    newest = str(max((int(m["id"]) for m in msgs), default=after or ""))
+    return items, ({"after": newest} if newest else {})
+
+
 KINDS = {"changelog_md": _changelog_md, "github_releases": _github_releases, "rss": _rss,
-         "html_links": _html_links, "html_diff": _html_diff, "npm": _npm}
+         "html_links": _html_links, "html_diff": _html_diff, "npm": _npm,
+         "plugin": _plugin, "discord_channel": _discord_channel}
 
 
 def fetch(source, state, installed_version=None):

@@ -131,7 +131,7 @@ class GetTest(Base):
 
 class DispatchTest(Base):
     def test_unknown_kind(self):
-        for k in ("plugin", "discord_channel", "nope"):
+        for k in ("nope", None, ""):
             with self.assertRaises(sf.FetchError) as cm:
                 sf.fetch(self.src(k, "/x"), {})
             self.assertEqual(str(cm.exception), "unknown kind")
