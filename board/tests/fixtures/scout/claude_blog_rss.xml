@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Claude articles</title>
+    <link>https://claude.com/resources/articles</link>
+    <description>News, announcements, and stories about Claude from Anthropic.</description>
+    <language>en</language>
+    <lastBuildDate>Tue, 17 Nov 2026 00:00:00 GMT</lastBuildDate>
+    <atom:link href="https://claude.com/resources/articles/rss.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Linked billing on the Claude Platform</title>
+      <link>https://claude.com/resources/articles/linked-billing-on-claude-platform</link>
+      <guid>https://claude.com/resources/articles/linked-billing-on-claude-platform</guid>
+      <pubDate>Tue, 17 Nov 2026 00:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>The Claude Tag guide for startups</title>
+      <link>https://claude.com/resources/articles/claude-tag-guide-for-startups</link>
+      <guid>https://claude.com/resources/articles/claude-tag-guide-for-startups</guid>
+      <pubDate>Fri, 13 Nov 2026 19:33:47 GMT</pubDate>
+    </item>
+    <item>
+      <title>Building always-on agents</title>
+      <link>https://claude.com/resources/articles/building-always-on-agents</link>
+      <guid>https://claude.com/resources/articles/building-always-on-agents</guid>
+      <pubDate>Fri, 13 Nov 2026 00:00:00 GMT</pubDate>
+    </item>
+    </channel></rss>

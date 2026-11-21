@@ -1,0 +1,12 @@
+{
+ "name": "@anthropic-ai/claude-code",
+ "dist-tags": {
+  "stable": "2.1.323",
+  "latest": "2.1.330",
+  "next": "2.1.330"
+ },
+ "time": {
+  "modified": "2026-11-20T22:34:39.628Z",
+  "2.1.330": "2026-11-20T19:16:01.070Z"
+ }
+}

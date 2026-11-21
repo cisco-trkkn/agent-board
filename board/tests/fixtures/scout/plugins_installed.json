@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "plugins": {
+    "superpowers-extended-cc@superpowers-extended-cc-marketplace": [
+      {
+        "scope": "user",
+        "installPath": "/home/user/.claude/plugins/cache/superpowers-extended-cc-marketplace/superpowers-extended-cc/6.5.3-dev",
+        "version": "6.5.3-dev",
+        "installedAt": "2026-10-15T05:08:30.149Z",
+        "lastUpdated": "2026-10-15T05:08:30.149Z",
+        "gitCommitSha": "cb12f4fdfcd31e2c76b06cc2b39dc21986b97b0a"
+      }
+    ],
+    "gitlab@anthropic-plugin-directory": [
+      {
+        "scope": "user",
+        "installPath": "/home/user/.claude/plugins/cache/anthropic-plugin-directory/gitlab/73c8cf3ea7e2-4d8728a6",
+        "version": "73c8cf3ea7e2-4d8728a6",
+        "installedAt": "2026-10-16T04:44:37.060Z",
+        "lastUpdated": "2026-11-21T04:10:13.028Z",
+        "gitCommitSha": "73c8cf3ea7e296057b467990f2f5d61b4c922260",
+        "directoryRepositoryKey": "github.com/anthropics/claude-plugins-official#external_plugins/gitlab"
+      }
+    ]
+  }
+}
