@@ -74,7 +74,7 @@
 #   tmux-ctl metrics weekly [--dry-run [--json]] [--since] [--tasks-log P]  analyze + recommend; post to Discord (or print)
 #   tmux-ctl metrics schedule install|status|uninstall  the Monday 09:00 weekly post (launchd)
 #   tmux-ctl discover collect|rank <project> [--root <dir>] [--json]  opportunity discovery: candidates; model-ranked items
-#   tmux-ctl discover nightly [--project <p>] [--dry-run] [--force]  the nightly run (placeholder until it lands)
+#   tmux-ctl discover nightly [--project <p>] [--dry-run] [--force]  the nightly run: rank, post to Discord (--dry-run prints)
 #   tmux-ctl discover schedule install|status|uninstall  the 07:00 nightly job (launchd)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
@@ -751,7 +751,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,77p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
