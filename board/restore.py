@@ -34,6 +34,30 @@ def _run(cmd):
         return 1, ""
 
 
+LSOF = "/usr/sbin/lsof"   # not on the LaunchAgent PATH either
+CWD_GONE = ("tmux server cwd is gone ({cwd}): new panes start there; restart the tmux server from ~ "
+            "(tmux -S {sock} kill-server ends every session on it; reopen each project with agent-board dev)")
+
+
+def tmux_server_cwd(run=_run, tmux=None):
+    """The warning line when the tmux server's own cwd is gone, else None (spec restart-recovery §4): tmux 3.8 starts
+    new panes there and ignores -c. tmux is the server's command words (default paneclass.tmux_cmd()). No server,
+    lsof missing or failing, or any error -> None."""
+    try:
+        words = list(tmux) if tmux is not None else paneclass.tmux_cmd()
+        rc, out = run(words + ["display", "-p", "#{pid}|#{socket_path}"])
+        pid, _, sock = (out or "").strip().partition("|")
+        if rc != 0 or not pid.isdigit():
+            return None
+        rc, out = run([LSOF if os.path.exists(LSOF) else "lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"])
+        if rc != 0:
+            return None
+        cwd = next((l[1:] for l in (out or "").splitlines() if l.startswith("n")), "")
+        return CWD_GONE.format(cwd=cwd, sock=sock) if cwd and not os.path.isdir(cwd) else None
+    except Exception:   # noqa: BLE001 -- detection only: a failure is no warning
+        return None
+
+
 def restore_dir():
     """Where snapshot.json lives: tc_env.agent_base()/restore (survives a reboot, unlike tc_env.state_dir())."""
     return tc_env.agent_base() / "restore"
