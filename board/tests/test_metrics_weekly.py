@@ -113,7 +113,7 @@ class TextTest(Base):
         block = out.split("```")[1].strip().splitlines()
         self.assertEqual(re.sub(r"\s+", " ", block[0]), "metric | last week | this week | change")
         rows = {r.split("|")[0].strip(): [c.strip() for c in r.split("|")[1:]] for r in block[1:]}
-        self.assertEqual(len(rows), 11)
+        self.assertEqual(len(rows), 12)
         self.assertEqual(rows["specs_run"], ["1", "2", "+1"])
         self.assertEqual(rows["median_usd_per_spec"], ["3.0", "4.0", "+1.0"])
         self.assertEqual(rows["median_fix_rounds_per_spec"], ["0.0", "0.0", "0"])

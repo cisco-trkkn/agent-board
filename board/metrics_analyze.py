@@ -130,14 +130,18 @@ def analyze(projects, since_ts, now, tasks_log=None, source="args"):
     def count(rs, outcome):
         return sum(1 for _, r in rs if r.get("outcome") == outcome)
 
+    def count_prefix(rs, prefix):
+        return sum(1 for _, r in rs if str(r.get("outcome")).startswith(prefix))
+
     trends = {"specs_run": _trend(len(cur_runs), len(prev_runs), 0),
               "specs_merged": _trend(count(cur_runs, "merged"), count(prev_runs, "merged"), 0),
+              "specs_mr": _trend(count_prefix(cur_runs, "mr"), count_prefix(prev_runs, "mr"), 0),
               "specs_failed": _trend(count(cur_runs, "failed"), count(prev_runs, "failed"), 0)}
     for key, f, d in MEDIANS:
         trends[key] = _trend(median(field(cur_runs, f)), median(field(prev_runs, f)), d)
         if key == "median_usd_per_spec":
             trends["p90_usd_per_spec"] = _trend(p90(field(cur_runs, "usd")), p90(field(prev_runs, "usd")), 2)
-    trends = {k: trends[k] for k in ("specs_run", "specs_merged", "specs_failed", "median_usd_per_spec", "p90_usd_per_spec",
+    trends = {k: trends[k] for k in ("specs_run", "specs_merged", "specs_mr", "specs_failed", "median_usd_per_spec", "p90_usd_per_spec",
                                      "median_lead_share", "median_fix_rounds_per_spec", "median_elapsed_s", "median_active_min",
                                      "questions_per_spec", "rulings_per_spec")}
 

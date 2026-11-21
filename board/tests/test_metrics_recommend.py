@@ -26,6 +26,8 @@ GOOD = [item("one", ("trends.median_usd_per_spec.current", 3.46)),
         item("two", ("trends.specs_run.current", 4), ("by_tier_model.standard|sonnet.tasks", 5)),
         item("three", ("flags.overpowered.0.model_used", "claude-opus-5-5"))]
 
+NO_USAGE = {"cost_usd": None, "tokens": None}
+
 
 class Base(unittest.TestCase):
     def setUp(self):
@@ -277,7 +279,7 @@ class ParsingTest(Base):
         rc, out, err = self.run_stats()
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "recommendations unavailable: no JSON result")
-        self.assertEqual(self.result(), {"items": [], "unavailable": "no JSON result"})
+        self.assertEqual(self.result(), {"items": [], "unavailable": "no JSON result", "usage": NO_USAGE})
 
     def test_stdout_that_is_not_json_is_unavailable(self):
         out = self.t / "raw.txt"
@@ -294,7 +296,33 @@ class RunTest(Base):
         rc, out, err = self.run_stats()
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "recommendations unavailable: claude exited 1")
-        self.assertEqual(self.result(), {"items": [], "unavailable": "claude exited 1"})
+        self.assertEqual(self.result(), {"items": [], "unavailable": "claude exited 1", "usage": {"cost_usd": None, "tokens": None}})
+
+    def fake_doc(self, **extra):
+        out = self.t / "out.json"
+        out.write_text(json.dumps(dict({"type": "result", "result": json.dumps(GOOD)}, **extra)))
+        os.environ["FAKE_RECOMMEND_OUT"] = str(out)
+        os.environ["FAKE_RECOMMEND_RC"] = "0"
+        self.addCleanup(os.environ.pop, "FAKE_RECOMMEND_OUT", None)
+        self.addCleanup(os.environ.pop, "FAKE_RECOMMEND_RC", None)
+
+    def test_usage_parsed_from_the_claude_json(self):
+        self.fake_doc(total_cost_usd=0.12, usage={"input_tokens": 10, "output_tokens": 20,
+                                                  "cache_read_input_tokens": 30, "cache_creation_input_tokens": 40})
+        self.assertEqual(metrics_recommend.recommend(self.stats)["usage"],
+                         {"cost_usd": 0.12, "tokens": {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}})
+
+    def test_usage_is_none_when_the_json_has_none(self):
+        # mutation: index doc["usage"] / u["input_tokens"] without .get -> KeyError
+        self.fake_doc()
+        self.assertEqual(metrics_recommend.recommend(self.stats)["usage"], {"cost_usd": None, "tokens": None})
+        self.fake_doc(usage={"input_tokens": 1})
+        self.assertEqual(metrics_recommend.recommend(self.stats)["usage"],
+                         {"cost_usd": None, "tokens": {"input": 1, "output": None, "cache_read": None, "cache_write": None}})
+
+    def test_usage_in_the_unavailable_shape(self):
+        self.answer(GOOD, rc=1)
+        self.assertEqual(metrics_recommend.recommend(self.stats)["usage"], {"cost_usd": None, "tokens": None})
 
     def test_timeout_is_unavailable(self):
         os.environ["FAKE_SLEEP"] = "30"
@@ -302,13 +330,13 @@ class RunTest(Base):
         with mock.patch.object(metrics_recommend, "TIMEOUT_S", 1):
             rc, out, err = self.run_stats()
         self.assertEqual(rc, 0)
-        self.assertEqual(self.result(), {"items": [], "unavailable": "timeout after 1 s"})
+        self.assertEqual(self.result(), {"items": [], "unavailable": "timeout after 1 s", "usage": NO_USAGE})
 
     def test_missing_claude_binary_is_unavailable(self):
         os.environ["TC_CLAUDE_BIN"] = str(self.t / "no-such-claude")
         rc, out, err = self.run_stats()
         self.assertEqual(rc, 0)
-        self.assertEqual(self.result(), {"items": [], "unavailable": "claude not found"})
+        self.assertEqual(self.result(), {"items": [], "unavailable": "claude not found", "usage": NO_USAGE})
 
     def test_argv_flags(self):
         # mutation: drop any one flag (e.g. --strict-mcp-config) and its pair below fails

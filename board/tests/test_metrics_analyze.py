@@ -11,7 +11,7 @@ NOW = metrics._epoch("2026-11-16T12:00:00Z")
 DAY = 86400
 SINCE = NOW - 7 * DAY
 PREV = SINCE - 7 * DAY
-TREND_KEYS = ("specs_run", "specs_merged", "specs_failed", "median_usd_per_spec", "p90_usd_per_spec", "median_lead_share",
+TREND_KEYS = ("specs_run", "specs_merged", "specs_mr", "specs_failed", "median_usd_per_spec", "p90_usd_per_spec", "median_lead_share",
               "median_fix_rounds_per_spec", "median_elapsed_s", "median_active_min", "questions_per_spec", "rulings_per_spec")
 
 
@@ -118,6 +118,12 @@ class TrendsTest(Base):
         self.check("specs_run", 4, 2, 2)
         self.check("specs_merged", 2, 1, 1)         # c3 is `kept`: run, not merged, not failed
         self.check("specs_failed", 1, 1, 0)
+
+    def test_specs_mr_counts_mr_outcomes_not_merged(self):
+        s = self.one([run("m1", cur(1), outcome="mr https://x/1"), run("m2", cur(2), outcome="merged abc"),
+                      run("m3", prv(1), outcome="mr https://x/2"), run("m4", prv(2), outcome="mr https://x/3")])["trends"]
+        self.assertEqual(s["specs_mr"], {"current": 1, "previous": 2, "change": -1})
+        self.assertEqual(s["specs_merged"]["current"], 0)      # "merged abc" is not the exact outcome "merged"
 
     def test_usd_median_and_p90_nearest_rank(self):
         self.check("median_usd_per_spec", 3.0, 4.0, -1.0)          # (2,4)/(3,5) medians

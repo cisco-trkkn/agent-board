@@ -27,8 +27,18 @@ class Unavailable(Exception):
     pass
 
 
+def _usage(doc):
+    u = doc.get("usage") if isinstance(doc, dict) else None
+    tokens = None
+    if isinstance(u, dict):
+        tokens = {"input": u.get("input_tokens"), "output": u.get("output_tokens"),
+                  "cache_read": u.get("cache_read_input_tokens"), "cache_write": u.get("cache_creation_input_tokens")}
+    cost = doc.get("total_cost_usd") if isinstance(doc, dict) else None
+    return {"cost_usd": cost if isinstance(cost, (int, float)) else None, "tokens": tokens}
+
+
 def run_claude(stats_path):
-    """The model's `result` text. Raises Unavailable(reason) on a timeout, a non-zero exit or an unreadable answer."""
+    """(the model's `result` text, usage {cost_usd, tokens}). Raises Unavailable(reason) on a timeout, a non-zero exit or an unreadable answer."""
     stats_path = Path(stats_path).resolve()
     prompt = PROMPT.read_text().rstrip("\n") + f"\n\nStats file: {stats_path}\n"
     try:
@@ -41,12 +51,13 @@ def run_claude(stats_path):
     if p.returncode != 0:
         raise Unavailable(f"claude exited {p.returncode}")
     try:
-        text = json.loads(p.stdout)["result"]
+        doc = json.loads(p.stdout)
+        text = doc["result"]
     except (ValueError, KeyError, TypeError):
         raise Unavailable("no JSON result")
     if not isinstance(text, str):
         raise Unavailable("no JSON result")
-    return text
+    return text, _usage(doc)
 
 
 def _items_of(v):
@@ -161,13 +172,15 @@ def check_item(item, stats):
 
 
 def recommend(stats_path):
-    """The recommend.json content: {items, dropped, passed, asked}, or {items: [], unavailable}."""
+    """The recommend.json content: {items, dropped, passed, asked, usage}, or {items: [], unavailable, usage}."""
     stats_path = Path(stats_path).resolve()
     stats = json.loads(stats_path.read_text())
+    usage = {"cost_usd": None, "tokens": None}
     try:
-        parsed = parse_items(run_claude(stats_path))
+        text, usage = run_claude(stats_path)
+        parsed = parse_items(text)
     except Unavailable as e:
-        return {"items": [], "unavailable": str(e)}
+        return {"items": [], "unavailable": str(e), "usage": usage}
     kept, dropped = [], []
     for n, it in enumerate(parsed):
         title = it.get("title") if isinstance(it, dict) and isinstance(it.get("title"), str) else f"item {n + 1}"
@@ -176,7 +189,7 @@ def recommend(stats_path):
             dropped.append({"title": title, "reason": reason, "item": it})
         else:
             kept.append(it)
-    return {"items": kept, "dropped": dropped, "passed": len(kept), "asked": ASKED}
+    return {"items": kept, "dropped": dropped, "passed": len(kept), "asked": ASKED, "usage": usage}
 
 
 # ---- the weekly report text ------------------------------------------------------------------------------------------
