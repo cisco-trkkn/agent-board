@@ -976,3 +976,54 @@ test('a reply is disarmed only after its event is written', async () => {
   assert.strictEqual(events(s).length, 1);
   assert.deepStrictEqual(s.st().reply_armed, {});
 });
+
+test('card: pin 403 on create keeps the card, logs once, and the next card op pins it', async () => {
+  const s = setup();
+  s.client.failNext('pin', { status: 403, message: 'Missing Permissions' });
+  s.put({ op: 'card', text: 'v1' }); await s.bridge.tick();
+  assert.ok(s.st().card_message_id);
+  assert.strictEqual(s.st().card_pinned, false);
+  assert.deepStrictEqual(s.files(), []);
+  assert.strictEqual(s.failed().length, 0);
+  assert.strictEqual(s.logs.filter((l) => l.startsWith('pin failed: grant Pin Messages (')).length, 1, s.logs.join('|'));
+  s.clock.t += 31000; s.put({ op: 'card', text: 'v2' }); await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('pin').length, 2);
+  assert.strictEqual(s.st().card_pinned, true);
+  s.clock.t += 31000; s.put({ op: 'card', text: 'v3' }); await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('pin').length, 2); // pinned: no third call
+});
+
+test('card: a pinned card (card_pinned true) gets no pin call on edit', async () => {
+  // Mutation: drop the card_pinned === false check in doCard -> pin called on every edit.
+  const s = setup();
+  s.put({ op: 'card', text: 'v1' }); await s.bridge.tick();
+  assert.strictEqual(s.st().card_pinned, true);
+  s.clock.t += 31000; s.put({ op: 'card', text: 'v2' }); await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('edit').length, 1);
+  assert.strictEqual(s.client.callsOf('pin').length, 1);
+});
+
+test('card: legacy state without card_pinned gets no pin call on edit', async () => {
+  // Mutation: drop the card_pinned === false check in doCard -> pin called when the key is absent.
+  const s = setup();
+  s.put({ op: 'card', text: 'v1' }); await s.bridge.tick();
+  const f = path.join(s.dir, 'bridge-state.json');
+  const old = JSON.parse(fs.readFileSync(f, 'utf8')); delete old.card_pinned;
+  fs.writeFileSync(f, JSON.stringify(old));
+  const b2 = createBridge({ dir: s.dir, client: s.client, log: () => {}, now: () => s.clock.t, sleep: async () => {} });
+  s.clock.t += 31000; s.put({ op: 'card', text: 'v2' }); await b2.tick();
+  assert.strictEqual(s.client.callsOf('edit').length, 1);
+  assert.strictEqual(s.client.callsOf('pin').length, 1);
+});
+
+test('card: two failed pin retries log one pin failed line', async () => {
+  const s = setup();
+  s.client.failNext('pin', { status: 403, message: 'Missing Permissions' }, 3);
+  s.put({ op: 'card', text: 'v1' }); await s.bridge.tick();
+  s.clock.t += 31000; s.put({ op: 'card', text: 'v2' }); await s.bridge.tick();
+  s.clock.t += 31000; s.put({ op: 'card', text: 'v3' }); await s.bridge.tick();
+  assert.strictEqual(s.client.callsOf('pin').length, 3);
+  assert.strictEqual(s.logs.filter((l) => l.startsWith('pin failed')).length, 1, s.logs.join('|'));
+  assert.deepStrictEqual(s.files(), []);
+  assert.strictEqual(s.failed().length, 0);
+});

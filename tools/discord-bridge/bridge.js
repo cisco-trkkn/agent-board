@@ -87,12 +87,18 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   ] }];
   const cardPayload = (text) => ({ content: text, allowedMentions: { parse: [] }, ...(ops ? { components: CARD_ROW } : {}) });
 
+  let pinWarned = false; // one `pin failed` line per process, create and retry paths alike
+  const pinFailed = (e) => {
+    if (!pinWarned) { pinWarned = true; say(`pin failed: grant Pin Messages (${snip(e?.message)})`); }
+  };
+
   async function createCard(text) {
     const ch = await home();
     const msg = await ch.send(cardPayload(text));
     st.card_message_id = msg.id; save();
     lastCardAt = now();
-    await msg.pin();
+    try { await msg.pin(); st.card_pinned = true; } catch (e) { st.card_pinned = false; pinFailed(e); }
+    save();
   }
 
   async function doCard(text) {
@@ -102,6 +108,9 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       const msg = await ch.messages.fetch(st.card_message_id);
       await msg.edit(cardPayload(text));
       lastCardAt = now();
+      if (st.card_pinned === false) { // a missing key is a legacy, already pinned card
+        try { await msg.pin(); st.card_pinned = true; save(); } catch (e) { pinFailed(e); }
+      }
     } catch (e) {
       if (e?.code !== UNKNOWN_MESSAGE) throw e;
       st.card_message_id = null;
