@@ -82,5 +82,82 @@ class UpdateTest(unittest.TestCase):
             ts.save(f / "sub" / "s.json", {"a": 1})   # parent is a file: must not raise
 
 
+def Q(i, s, subject="Plan & run: docs/superpowers/specs/a-design.md", outcome="", plan=""):
+    return {"id": str(i), "status": s, "subject": subject, "outcome": outcome, "planPath": plan, "owner": "", "tier": ""}
+
+
+def P(i, s, subject="Task 1: x", owner="ann", tier="mechanical"):
+    return {"id": str(i), "status": s, "subject": subject, "owner": owner, "tier": tier}
+
+
+class UiKeptTest(unittest.TestCase):
+    def test_ui_kept_across_lead_change(self):
+        st = ts.update({}, "L1", [T(1, "pending")], 100.0)
+        st["ui"] = {"view": "history", "filter": "active"}
+        st = ts.update(st, "L2", [T(1, "pending")], 101.0)
+        self.assertEqual(st["lead"], "L2")
+        self.assertEqual(st["ui"], {"view": "history", "filter": "active"})
+        self.assertEqual(list(st["tasks"]), ["1"])     # the rest was reset: task 1 seen fresh at 101
+        self.assertEqual(st["tasks"]["1"]["since"], 101.0)
+
+
+class JournalTest(unittest.TestCase):
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.state = Path(td.name)
+        self.j = ts.journal_path(self.state, "grp")
+
+    def lines(self):
+        return [json.loads(l) for l in self.j.read_text().splitlines()] if self.j.exists() else []
+
+    def test_journal_path_uses_project_key(self):
+        self.assertEqual(ts.journal_path("/s", "agent board"), Path("/s/taskwin/agent_board.history.jsonl"))
+
+    def test_task_done_on_transition_only(self):
+        st = ts.update({}, "L", [P(1, "in_progress"), P(2, "completed")], 100.0, journal=self.j, plan="2026-11-21-x")
+        self.assertEqual(self.lines(), [])              # 2 was already completed at first sight: no back-fill
+        ts.update(st, "L", [P(1, "completed"), P(2, "completed")], 160.0, journal=self.j, plan="2026-11-21-x")
+        self.assertEqual(self.lines(), [{"kind": "task_done", "at": 160.0, "plan": "2026-11-21-x", "id": "1",
+                                         "subject": "Task 1: x", "owner": "ann", "tier": "mechanical"}])
+
+    def test_queue_outcome_line(self):
+        st = ts.update({}, "L", [Q(1, "in_progress")], 100.0, journal=self.j)
+        ts.update(st, "L", [Q(1, "completed", subject="Plan & run: docs/superpowers/specs/a-design.md#part-1 (x)",
+                              outcome="merged abc1234", plan="docs/superpowers/plans/2026-11-21-a.md")],
+                  160.0, journal=self.j)
+        self.assertEqual(self.lines(), [{"kind": "queue_outcome", "at": 160.0,
+                                         "spec": "docs/superpowers/specs/a-design.md#part-1",
+                                         "outcome": "merged abc1234", "plan": "2026-11-21-a"}])
+
+    def test_dedupe_against_recent_lines(self):
+        # a relay re-reads the same list under a new lead: the same completion is journaled once
+        for lead in ("L1", "L2"):
+            st = ts.update({}, lead, [P(1, "in_progress")], 100.0, journal=self.j, plan="p")
+            ts.update(st, lead, [P(1, "completed")], 160.0, journal=self.j, plan="p")
+        self.assertEqual(len(self.lines()), 1)
+
+    def test_cap_keeps_newest_lines(self):
+        self.j.parent.mkdir(parents=True)
+        self.j.write_text("".join(json.dumps({"kind": "task_done", "plan": "old", "id": str(i), "subject": "s"}) + "\n"
+                                  for i in range(ts.JOURNAL_CAP)))
+        ts.append_journal(self.j, [{"kind": "task_done", "plan": "new", "id": "1", "subject": "s"}])
+        got = self.lines()
+        self.assertEqual(len(got), ts.JOURNAL_CAP)
+        self.assertEqual((got[0]["id"], got[-1]["plan"]), ("1", "new"))   # line 0 of the old file dropped
+        self.assertFalse(self.j.with_name(self.j.name + ".tmp").exists())
+
+    def test_io_error_is_ignored(self):
+        bad = self.state / "file"
+        bad.write_text("x")
+        ts.append_journal(bad / "sub" / "j.jsonl", [{"kind": "task_done", "id": "1"}])   # parent is a file: no raise
+
+    def test_malformed_lines_skipped(self):
+        self.j.parent.mkdir(parents=True)
+        self.j.write_text("{not json\n[1]\n")
+        ts.append_journal(self.j, [{"kind": "task_done", "plan": "p", "id": "1", "subject": "s"}])
+        self.assertEqual(len(self.j.read_text().splitlines()), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
