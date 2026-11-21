@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -240,7 +241,7 @@ def cmd_defect(repo, args):
 
 EXCLUDED = "docs/superpowers/"
 OUTCOMES = ("merged", "mr", "kept", "failed")
-RESERVED = ("manifest_tokens", "lock_wait_s", "lock_wait_cause", "repair_runs", "integration_s", "integration_tokens")
+RESERVED = ("lock_wait_s", "lock_wait_cause", "repair_runs", "integration_s", "integration_tokens")
 LEDGER_KEYS = ("bounces", "fix_rounds", "final_findings", "fix_wave", "rulings", "parked")
 
 
@@ -398,6 +399,33 @@ def stale_base(repo, base, batch_base, head):
     return None
 
 
+def _registry_facts_cmd():
+    env = os.environ.get("TC_REGISTRY_FACTS_CMD")
+    if env:
+        return shlex.split(env)
+    return ["zsh", str(Path(__file__).resolve().parent.parent / "bin/tmux-ctl"), "registry"]
+
+
+def _registry_facts(repo, spec, base, head):
+    """(facts dict | None, error line | None). None with no error: the plan has no manifest (facts exit 3)."""
+    try:
+        p = subprocess.run([*_registry_facts_cmd(), "facts", spec, "--base", base, "--head", head], cwd=str(repo),
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, str(e).splitlines()[0] if str(e) else type(e).__name__
+    if p.returncode == 3:
+        return None, None
+    if p.returncode != 0:
+        return None, ((p.stderr or p.stdout).strip().splitlines() or [f"exit {p.returncode}"])[0]
+    try:
+        facts = json.loads(p.stdout.strip().splitlines()[-1])
+        if not isinstance(facts, dict):
+            raise ValueError
+    except (ValueError, IndexError):
+        return None, "unreadable output"
+    return facts, None
+
+
 def build_record_static(repo, spec, batch, outcome, now, branch=None, plan=None, merge=None, batch_base=None):
     """The `run` line fields that come from git, the plan and the ledger. Missing sources are null and named in `missing`."""
     repo = Path(repo)
@@ -487,11 +515,26 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None, plan=None,
     else:
         touched = None
         null("touched_files", "diff_lines", "touched_list")
-    if info and touched is not None:
+    facts = None
+    if plan and base and head and _fence(plan[1], "json:manifest"):
+        facts, ferr = _registry_facts(repo, spec, base, head)
+        if ferr:
+            print(f"metrics: record: registry facts failed: {ferr}", file=sys.stderr)
+            missing.append("manifest_facts")
+    if facts:
+        both, nt = facts.get("both"), facts.get("touched")
+        r4 = lambda v: round(v, 4) if isinstance(v, (int, float)) else None
+        rec["manifest"] = {"declared": facts.get("declared"), "touched": nt, "both": both,
+                           "precision": r4(facts.get("precision")),
+                           "recall": round(both / nt, 4) if nt and both is not None else None,
+                           "recall_existing": r4(facts.get("recall_existing")), "recall_created": r4(facts.get("recall_created")),
+                           "append_violations": facts.get("append_violations") or [], "source": "manifest"}
+        rec["refreshes"], rec["stale_paths"] = facts.get("refreshes", 0), facts.get("stale_paths", 0)
+    elif info and touched is not None:
         both = len(info["declared"] & touched)
         rec["manifest"] = {"declared": len(info["declared"]), "touched": len(touched), "both": both,
                            "precision": round(both / len(info["declared"]), 4) if info["declared"] else None,
-                           "recall": round(both / len(touched), 4) if touched else None}
+                           "recall": round(both / len(touched), 4) if touched else None, "source": "tasks"}
     else:
         null("manifest")
 
@@ -511,6 +554,7 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None, plan=None,
         missing.append("stale_base")
     for k in RESERVED:
         rec[k] = None
+    rec["manifest_tokens"] = None   # build_record fills it from the usage index
     rec["missing"] = missing
     return rec
 
@@ -713,6 +757,26 @@ def _lead_part(lines, batch, spec, root, project, lo, hi, missing):
     return out
 
 
+def _spec_slug(spec):
+    name = Path(spec.split("#")[0]).name
+    name = name[:-3] if name.endswith(".md") else name
+    name = re.sub(r"^\d{4}-\d\d-\d\d-", "", name)
+    return name[:-len("-design")] if name.endswith("-design") else name
+
+
+def manifest_tokens(conn, spec, batch, batch_line, lo, hi):
+    """Tokens of the `refresh-<slug>` rows in the run window plus this spec's share of the `crossplan-<batch>` rows
+    (batch line `at` to the run's end); None without a batch line."""
+    if not batch_line:
+        return None
+    cols = "+".join(f"coalesce({c},0)" for c in LEAD_KEYS)
+    q = f"select coalesce(sum({cols}),0) from calls where agent_name=? and ts>=? and ts<=?"
+    refresh = conn.execute(q, ("refresh-" + _spec_slug(spec), lo, hi)).fetchone()[0]
+    cross = conn.execute(q, ("crossplan-" + batch, _epoch(batch_line["at"]), hi)).fetchone()[0]
+    n = len(batch_line.get("assignment") or batch_line.get("specs") or [])
+    return refresh + (cross / n if n else 0)
+
+
 def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, project=None, window=None, plan=None, merge=None,
                  batch_base=None, backfilled=False):
     """The whole `run` line: build_record_static plus the usage half. `window` = (start_ts, end_ts, kind) overrides
@@ -735,6 +799,9 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
         if batch_line:
             rec["started_at"] = batch_line["at"]
     rec["window"], rec["backfilled"] = kind, bool(backfilled)
+    rec["manifest_tokens"] = manifest_tokens(conn, spec, batch, batch_line, lo, hi)
+    if rec["manifest_tokens"] is None:
+        missing.append("manifest_tokens")
     assign_cfg = (batch_line or {}).get("assignment") or {}
     rec["config"] = "seq-sdd" if batch == "backfill" else assign_cfg.get(spec)
     if rec["config"] is None and batch != "backfill":
