@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """taskwin: the tasks window renderer (the `tasks` window of a dev session).
 
-render(view, timing, width, height, now, frame, color, session="") -> str
+render(view, timing, width, height, now, frame, color, session="", tier_model=None, ui=None, ctx=None) -> str
   view    planview.view() output: {"name", "active", "tasks": [{"id","subject","status","owner","state","tier","blockedBy"}]}
   timing  taskwin_state state ({} when unknown): {"tasks": {id: {"since","started",…}}, "events": [...]}
   color   "truecolor" | "256" | "none" (color_mode(env) picks one from NO_COLOR / COLORTERM)
+  ui      taskwin_ui state ({"view", "cursor", "filter", "collapsed", "help"}); None keeps the plain plan screen.
+          With it, line 0 is the tab header `[1 queue] 2 plan 3 history  <name>` and one of three views is drawn:
+          queue (one row per `Plan & run:` item), plan (today's graph or list) and history; ui["help"] adds
+          HELP as the last of `height` lines. The cursor is clamped here, so a stale one is safe.
+  ctx     {"titles": {spec: title}, "report": path, "history": [entry]} for the queue and history views
 Pure: no I/O, no clock, no tmux. Lines joined by "\\n", at most `height` of them, each at most `width` display cells.
 
 Width ≥ 80: cards in columns by dependency depth, box-drawing connectors from blocker to dependent, the critical
@@ -24,6 +29,10 @@ import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
+
+import taskwin_hist  # noqa: E402
+import taskwin_ui  # noqa: E402
+import taskwin_views  # noqa: E402
 
 HEADER_ROWS = 3
 CARD_H, GAP, GUTTER = 4, 1, 4
@@ -324,19 +333,20 @@ def _summary(tasks):
 
 # ---------------------------------------------------------------- header
 
-def _header(cv, view, tasks, timing, width, now, frame):
-    name = view.get("name") or "Tasks"
+def _header(cv, view, tasks, timing, width, now, frame, tabs=None, name=None):
+    name = name if name is not None else (view.get("name") or "Tasks")
+    x0 = cv.put_segs(0, 0, tabs, width) + 2 if tabs else 0
     done, total = sum(t["status"] == "completed" for t in tasks), len(tasks)
     starts = [k.get("started") for k in ((timing or {}).get("tasks") or {}).values()
               if isinstance(k, dict) and isinstance(k.get("started"), (int, float))]
     elapsed = fmt_dur(now - min(starts)) if starts else "—"
     right = f"{done}/{total} done   elapsed {elapsed}"
-    room = width - cells(right) - 2
+    room = width - cells(right) - 2 - x0
     if room >= 6:
-        cv.put(0, 0, truncate(name, room), ("bold",))
+        cv.put(x0, 0, truncate(name, room), ("bold",))
         cv.put(width - cells(right), 0, right, ("grey",))
     else:
-        cv.put(0, 0, truncate(name, width), ("bold",))
+        cv.put(x0, 0, truncate(name, width - x0), ("bold",))
     filled = round(width * done / total) if total else 0
     cv.put(0, 1, "━" * filled, ("green",))
     cv.put(filled, 1, "─" * (width - filled), ("grey",))
@@ -696,13 +706,9 @@ def _trim(lines, height):
 
 # ---------------------------------------------------------------- entry point
 
-def render(view, timing, width, height, now, frame, color, session="", tier_model=None):
-    width, height = max(1, int(width)), max(1, int(height))
-    tasks = list((view or {}).get("tasks") or [])
-    if not tasks:
-        return "\n".join(_idle(view or {}, width, height, color, session))
+def _plan_lines(view, tasks, timing, width, height, now, frame, color, tier_model, tabs=None):
     cv = Canvas(width, HEADER_ROWS)
-    done_ev = _header(cv, view, tasks, timing, width, now, frame)
+    _header(cv, view, tasks, timing, width, now, frame, tabs)
     flash_ids = _young_ids(timing, now)
     crit = set(critical_path(tasks))
     avail = max(0, height - HEADER_ROWS)
@@ -711,7 +717,146 @@ def render(view, timing, width, height, now, frame, color, session="", tier_mode
         body = _graph_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model, crit)
     if body is None:
         body = _list_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_model, crit)
-    return "\n".join(_trim(cv.lines(color) + body, height))
+    return cv.lines(color) + body
+
+
+def render(view, timing, width, height, now, frame, color, session="", tier_model=None, ui=None, ctx=None):
+    width, height = max(1, int(width)), max(1, int(height))
+    if ui is not None:
+        return "\n".join(_render_ui(view or {}, timing, width, height, now, frame, color, session, tier_model,
+                                    ui, ctx or {}))
+    tasks = list((view or {}).get("tasks") or [])
+    if not tasks:
+        return "\n".join(_idle(view or {}, width, height, color, session))
+    return "\n".join(_trim(_plan_lines(view, tasks, timing, width, height, now, frame, color, tier_model), height))
+
+
+# ---------------------------------------------------------------- ui screens
+
+HELP = "Tab/1 2 3 view · j/k move · Enter open/fold · f filter · c fold done · ? help · q queue"
+FILTER_NOTE = {"hide_done": "filter: hide done", "active": "filter: active"}
+
+
+def _tabs(active):
+    segs = []
+    for i, v in enumerate(taskwin_ui.VIEWS, 1):
+        if segs:
+            segs.append((" ", ()))
+        segs.append((f"[{i} {v}]", ("bold",)) if v == active else (f"{i} {v}", ("grey",)))
+    return segs
+
+
+def _scroll(lines, at, avail):
+    """The `avail` lines of `lines` that keep line `at` visible (top-anchored until it would fall off)."""
+    if avail <= 0:
+        return []
+    start = 0 if at < avail else min(at - avail + 1, max(0, len(lines) - avail))
+    return lines[start:start + avail]
+
+
+def _render_ui(view, timing, width, height, now, frame, color, session, tier_model, ui, ctx):
+    tasks = list(view.get("tasks") or [])
+    ui = taskwin_ui.normalize(ui, tasks)
+    model = taskwin_views.model(tasks, ui, ctx.get("history") or [])
+    ui = taskwin_ui.clamp(ui, model)
+    body_h = height - 1 if ui["help"] and height > 1 else height
+    v = ui["view"]
+    if v == "queue":
+        lines = _queue_screen(tasks, timing, width, body_h, now, frame, color, ui, ctx)
+    elif v == "plan":
+        lines = _plan_screen(view, tasks, timing, width, body_h, now, frame, color, session, tier_model, ui, model)
+    else:
+        lines = _history_screen(tasks, timing, width, body_h, now, frame, color, ui, ctx)
+    lines = _trim(lines, body_h)
+    if body_h < height:
+        lines += [""] * (body_h - len(lines)) + [truncate(HELP, width)]
+    return lines
+
+
+def _plan_screen(view, tasks, timing, width, height, now, frame, color, session, tier_model, ui, model):
+    # Task 6 replaces this with the cursor, filter and collapse; until then today's body under the tab header.
+    if not tasks:
+        cv = Canvas(width, HEADER_ROWS)
+        _header(cv, view, tasks, timing, width, now, frame, _tabs("plan"))
+        return cv.lines(color)
+    return _plan_lines(view, tasks, timing, width, height, now, frame, color, tier_model, _tabs("plan"))
+
+
+def _history_screen(tasks, timing, width, height, now, frame, color, ui, ctx):
+    # Task 7 draws the entries; until then the header with an empty body.
+    cv = Canvas(width, HEADER_ROWS)
+    _header(cv, {}, tasks, timing, width, now, frame, _tabs("history"), "History")
+    return cv.lines(color)
+
+
+def _line(width, color, draw):
+    cv = Canvas(width, 1)
+    draw(cv)
+    return cv.lines(color)[0]
+
+
+def _queue_row(t, timing, width, color, ctx, cursor, frame):
+    k = ((timing or {}).get("tasks") or {}).get(t["id"]) or {}
+    started, done = k.get("started"), k.get("done")
+    if not isinstance(started, (int, float)):
+        times = "—"
+    else:
+        times = f"{taskwin_hist.hm(started)} → " + (taskwin_hist.hm(done) if isinstance(done, (int, float)) else "…")
+    outcome = str(t.get("outcome") or "")
+    right = [(times, ("grey",))]
+    if outcome:
+        right += [("  ", ()), (outcome, ("red",) if outcome.startswith("failed") else ())]
+    glyph = _status_glyph(t, frame)
+    label = taskwin_views.queue_label(t["subject"], ctx.get("titles") or {})
+    x = 2 + cells(glyph) + 1
+    room = max(min(cells(label), 12), width - x - sum(cells(s) for s, _ in right) - 2)
+    label = truncate(label, room)
+
+    def draw(cv):
+        cv.put(0, 0, "▸ " if cursor else "  ", ("inverse",) if cursor else ())
+        cv.put(2, 0, glyph, (STATUS_STYLE.get(t["status"], "grey"),))
+        end = cv.put(x, 0, label, ("bold",) if t["status"] == "in_progress" else ())
+        cv.put_segs(end + 2, 0, right, max(0, width - end - 2))
+    return _line(width, color, draw)
+
+
+def _queue_detail(tasks, timing, width, color, now):
+    """The summary line and one line per running task of the plan, under the running queue item."""
+    plan = taskwin_views.split(tasks)[1]
+    if not plan:
+        return []
+    running = [t for t in plan if t["status"] == "in_progress"]
+    blocked = sum(t["status"] == "blocked" for t in plan)
+    done = sum(t["status"] == "completed" for t in plan)
+    out = [f"{done}/{len(plan)} · {len(running)} running · {blocked} blocked"]
+    for t in running:
+        started = (((timing or {}).get("tasks") or {}).get(t["id"]) or {}).get("started")
+        parts = [f"#{t['id']} {t['subject']}"]
+        if t.get("owner"):
+            parts.append(t["owner"])
+        if isinstance(started, (int, float)):
+            parts.append(fmt_dur(now - started))
+        out.append(" · ".join(parts))
+    return [_line(width, color, lambda cv, s=s: cv.put(4, 0, truncate(s, width - 4), ("grey",))) for s in out]
+
+
+def _queue_screen(tasks, timing, width, height, now, frame, color, ui, ctx):
+    queue = taskwin_views.split(tasks)[0]
+    report = ctx.get("report")
+    cv = Canvas(width, HEADER_ROWS)
+    _header(cv, {}, queue, timing, width, now, frame, _tabs("queue"), "Queue" + (f" · {report}" if report else ""))
+    body, at = [], 0
+    if not queue:
+        body = [_line(width, color, lambda c: c.put(0, 0, "no queue", ("grey",))),
+                _line(width, color, lambda c: c.put(0, 0, "2: plan", ("grey",)))]
+    cursor = ui["cursor"]["queue"]
+    for i, t in enumerate(queue):
+        if i == cursor:
+            at = len(body)
+        body.append(_queue_row(t, timing, width, color, ctx, i == cursor, frame))
+        if t["status"] == "in_progress" and not taskwin_ui.is_collapsed(ui, "q:" + t["id"]):
+            body += _queue_detail(tasks, timing, width, color, now)
+    return cv.lines(color) + _scroll(body, at, height - HEADER_ROWS)
 
 
 # ---------------------------------------------------------------- watch loop and CLI
