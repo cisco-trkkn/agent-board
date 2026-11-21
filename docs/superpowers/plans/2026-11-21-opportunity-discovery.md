@@ -333,7 +333,7 @@
 - [ ] The user reads the printed post and says whether the items are worth having; their answer is recorded on the task.
 - [ ] Only after that, if the user wants it: `~/.local/bin/tmux-ctl discover schedule install` and `tmux-ctl discover schedule status` shows `loaded`.
 
-**Verify:** `env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run; echo rc=$?` → `rc=0` and ≤ 5 numbered items
+**Verify:** `env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run; echo rc=$?` (add `--force` while weekly ≥ 85 %) → `rc=0` and ≤ 5 numbered items
 
 ```json:metadata
 {"files": [], "verifyCommand": "env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run; echo rc=$?", "acceptanceCriteria": ["real dry-run rc 0, <=5 items, keys in collected.json", "user's verdict recorded", "schedule installed only if the user wants it"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"]}
