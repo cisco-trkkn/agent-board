@@ -158,7 +158,8 @@ def is_protected(text, protected=None):
 def _title(text):
     for line in text.splitlines():
         if line.startswith("# "):
-            return re.sub(r"(?i)\s*(—|–|-|:)?\s*design\s*$", "", " ".join(line[2:].split())).strip()
+            # only a dashed suffix (" — design", " - design") goes: "Hook redesign" and "By design" are whole titles
+            return re.sub(r"(?i)^(.*\S)\s+[—–-]\s+design$", r"\1", " ".join(line[2:].split()))
     return ""
 
 

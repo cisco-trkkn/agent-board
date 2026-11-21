@@ -187,6 +187,14 @@ class KeptDraftTest(Base):
             self.assertIn(s, prompt)
         self.assertNotIn("Revision", prompt)
 
+    def test_title_strips_only_a_dashed_design_suffix(self):
+        for heading, want in (("Hook replay — design", "Hook replay"), ("Hook replay - design", "Hook replay"),
+                              ("Hook replay – Design", "Hook replay"), ("Hook redesign", "Hook redesign"),
+                              ("By design", "By design"), ("Hook replay design", "Hook replay design"),
+                              ("— design", "— design"), ("Self-design", "Self-design")):
+            with self.subTest(heading=heading):
+                self.assertEqual(sd._title(f"intro\n#  {heading} \n# Second\n"), want)
+
     def test_frontier_model_comes_from_the_roots_routing_file(self):
         self.assertEqual(sd.frontier_model(self.root), "fable")
         self.assertEqual(sd.frontier_model(self.t / "nowhere"), "opus")
