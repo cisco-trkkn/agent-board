@@ -20,7 +20,7 @@ import tc_env
 LIMIT = 1900
 FLAG_ROOM = 60          # kept free in post A for the "… and k more" line
 ZWSP = "​"
-_SPECIAL = re.compile(r"([\\*_~|>#`])")
+_SPECIAL = re.compile(r"([\\*_~|>#`\[\]()])")
 
 
 def escape(s):
@@ -214,14 +214,21 @@ def _write_state(d, week, project, items):
     os.replace(tmp, p)
 
 
-def publish(d, project, stats, rec, stats_path, multi_project):
-    """Write the state file, then the two ops into <d>/outbox. Returns the number of ops written."""
+def already_posted(d, week):
+    return (Path(d) / "analytics" / f"post-{week}.json").exists()
+
+
+def publish(d, project, stats, rec, stats_path, multi_project, force=False):
+    """Write the state file, then the two ops into <d>/outbox. Returns the number of ops written: 0 and nothing
+    written when this week was already posted to d (a re-post would remap the old buttons) unless `force`."""
     week = week_id(stats["window"]["until"])
     ops = build_ops(stats, rec, week, stats_path, multi_project)
     adir = Path(d) / "analytics"
     adir.mkdir(parents=True, exist_ok=True)
     with open(adir / ".lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if not force and already_posted(d, week):
+            return 0
         _write_state(d, week, project, rec.get("items") or [])
     for op in ops:
         discord_feed.outbox_write(d, op)
@@ -256,13 +263,13 @@ def click(d, user, cid, now):
         ev = "; ".join(f"{e['key']}={e['value']}" for e in item["evidence"])
         try:
             ideas.add(doc["project"], f"{item['title']}: {item['change']} (evidence: {ev})")
-        except ValueError as e:
-            return f"error: {e}"
-        item["done"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(doc, indent=1) + "\n")
-        os.replace(tmp, p)
+            item["done"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(doc, indent=1) + "\n")
+            os.replace(tmp, p)
+        except Exception as e:   # never escapes the consumer loop; done stays false unless the state write happened
+            return "error: " + (str(e).splitlines() or [type(e).__name__])[0]
         title = item["title"]
-    discord_feed.outbox_write(d, {"op": "post", "text": f"💡 filed as idea: {escape(title)}", "tier": "progress",
+    discord_feed.outbox_write(d, {"op": "post", "text": f"💡 filed as idea: {escape(_cap(title, 900))}", "tier": "progress",
                                   "mention_user": False, "key": f"analytics-{week}-{n}-filed"})
     return "filed"

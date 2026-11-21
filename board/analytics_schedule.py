@@ -86,11 +86,14 @@ def plist_text(cli_path, home, log):
         env["TC_STATE"] = os.environ["TC_STATE"]
     elif os.environ.get("TMPDIR"):
         env["TMPDIR"] = os.environ["TMPDIR"]
+    # launchd starts in HOME, which may itself be a git repo: pin the repo to this checkout (`weekly` stays $2 for the
+    # no-tmux guard in bin/tmux-ctl).
+    root = str(Path(__file__).resolve().parent.parent)
     return plistlib.dumps({
         "Label": LABEL,
-        "ProgramArguments": [str(cli_path), "metrics", "weekly"],
+        "ProgramArguments": [str(cli_path), "metrics", "weekly", "--repo", root],
         "StartCalendarInterval": {"Weekday": 1, "Hour": 9, "Minute": 0},
-        "WorkingDirectory": str(home),
+        "WorkingDirectory": root,
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
         "EnvironmentVariables": env,

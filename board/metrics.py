@@ -1195,6 +1195,7 @@ def _parser():
     wk = sp.add_parser("weekly", parents=[common])
     wk.add_argument("--dry-run", action="store_true")
     wk.add_argument("--json", action="store_true")
+    wk.add_argument("--force", action="store_true")   # re-post a week already posted to a destination
     wk.add_argument("--since", default="7d")
     wk.add_argument("--tasks-log")
     bf = sp.add_parser("backfill", parents=[common])
@@ -1797,32 +1798,49 @@ def cmd_weekly(repo, args):
         print("analytics: off")
         return
     t0 = time.time()
-    posts, dests, usages, week, partial = 0, [], [], None, False
-    for d, name, projects, out, multi in _destinations(repo):
-        stats, path = write_stats(repo, args.since, projects, args.tasks_log, out)
-        week = week or analytics_post.week_id(stats["window"]["until"])
-        if stats["trends"]["specs_run"]["current"] == 0:
-            continue
-        rec = _recommend_to_file(path)
-        usages.append(rec.get("usage") or {})
-        partial = partial or "unavailable" in rec
-        if args.dry_run:
-            week = analytics_post.week_id(stats["window"]["until"])
-            for op in analytics_post.build_ops(stats, rec, week, path, multi):
-                print(json.dumps(op, sort_keys=True))
-            continue
-        posts += analytics_post.publish(d, name, stats, rec, path, multi)
-        dests.append(Path(d).name)
-    if args.dry_run:
-        return
-    if not posts:
-        print("no runs in the window; nothing to post")
+    posts, dests, usages, week, partial, err, skipped = 0, [], [], None, False, None, 0
+    try:
+        for d, name, projects, out, multi in _destinations(repo):
+            stats, path = write_stats(repo, args.since, projects, args.tasks_log, out)
+            week = week or analytics_post.week_id(stats["window"]["until"])
+            if stats["trends"]["specs_run"]["current"] == 0:
+                continue
+            rec = _recommend_to_file(path)
+            usages.append(rec.get("usage") or {})
+            partial = partial or "unavailable" in rec
+            if args.dry_run:
+                week = analytics_post.week_id(stats["window"]["until"])
+                for op in analytics_post.build_ops(stats, rec, week, path, multi):
+                    print(json.dumps(op, sort_keys=True))
+                continue
+            n = analytics_post.publish(d, name, stats, rec, path, multi, force=args.force)
+            if not n:
+                skipped += 1
+                print(f"already posted {analytics_post.week_id(stats['window']['until'])} to {Path(d).name}")
+                continue
+            posts += n
+            dests.append(Path(d).name)
+        if not args.dry_run and not posts and not skipped:
+            print("no runs in the window; nothing to post")
+    except Exception as e:
+        err = (str(e).splitlines() or [type(e).__name__])[0]
+        raise
+    finally:
+        if not args.dry_run and (err is None or dests):   # a failure before anything posted leaves no record
+            _weekly_record(repo, posts, dests, usages, week, partial, err, skipped, t0)
+
+
+def _weekly_record(repo, posts, dests, usages, week, partial, err, skipped, t0):
+    import analytics_post
     cost, tokens = _sum_usage(usages)
     if log_path(repo).is_file():
-        append(repo, {"kind": "analytics", "at": utc(), "week": week or analytics_post.week_id(utc()),
-                      "outcome": "no-runs" if not posts else "partial" if partial else "posted",
-                      "posts": posts, "destinations": dests, "cost_usd": cost, "tokens": tokens,
-                      "duration_s": int(time.time() - t0), "model": "sonnet"})
+        rec = {"kind": "analytics", "at": utc(), "week": week or analytics_post.week_id(utc()),
+               "outcome": "partial" if err else ("already-posted" if skipped else "no-runs") if not posts else "partial" if partial else "posted",
+               "posts": posts, "destinations": dests, "cost_usd": cost, "tokens": tokens,
+               "duration_s": int(time.time() - t0), "model": "sonnet"}
+        if err:
+            rec["error"] = err
+        append(repo, rec)
 
 
 def cmd_recommend(repo, args):

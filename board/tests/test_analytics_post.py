@@ -55,6 +55,7 @@ class Pure(Base):
     def test_escape(self):
         self.assertEqual(ap.escape("@everyone *x*"), f"@{ZW}everyone \\*x\\*")
         self.assertEqual(ap.escape("a`b\\c_d~e|f>g#h"), "a\\`b\\\\c\\_d\\~e\\|f\\>g\\#h")
+        self.assertEqual(ap.escape("[docs](https://x)"), "\\[docs\\]\\(https://x\\)")   # masked link defused
 
     def test_week_id(self):
         self.assertRegex(ap.week_id("2026-11-16T12:00:00Z"), r"^\d{4}-W\d{2}$")
@@ -157,10 +158,23 @@ class Publish(Base):
         self.assertEqual(doc["items"][0]["done"], False)
         doc["items"][0]["done"] = "2026-11-17T10:00:00Z"
         sp.write_text(json.dumps(doc))
-        ap.publish(d, "proj", st, rec_fixture([item(1), item(2, "New"), item(3)]), Path("/x/stats.json"), False)
+        ap.publish(d, "proj", st, rec_fixture([item(1), item(2, "New"), item(3)]), Path("/x/stats.json"), False, force=True)
         items = json.loads(sp.read_text())["items"]
         self.assertEqual(items[0]["done"], "2026-11-17T10:00:00Z")
         self.assertEqual(items[1]["done"], False)
+
+    def test_same_week_rerun_writes_nothing_without_force(self):
+        # mutation: drop the already_posted check -> the second publish returns 2 and rewrites the state
+        d = Path(self.tmp.name) / "dest"
+        st = stats_fixture()
+        sp = d / "analytics" / "post-2026-W47.json"
+        self.assertEqual(ap.publish(d, "proj", st, rec_fixture(), Path("/x/stats.json"), False), 2)
+        before, n = sp.read_text(), len(list((d / "outbox").glob("*.json")))
+        self.assertEqual(ap.publish(d, "proj", st, rec_fixture([item(1, "Other")]), Path("/x/stats.json"), False), 0)
+        self.assertEqual(sp.read_text(), before)
+        self.assertEqual(len(list((d / "outbox").glob("*.json"))), n)
+        self.assertEqual(ap.publish(d, "proj", st, rec_fixture([item(1, "Other")]), Path("/x/stats.json"), False, force=True), 2)
+        self.assertEqual(len(list((d / "outbox").glob("*.json"))), n + 2)
 
 
 class Click(Base):
@@ -216,6 +230,28 @@ class Click(Base):
         self.assertEqual(ap.click(self.d, "U1", self.CID % 1, 1), "error: empty idea")
         self.assertIs(self.state()["items"][0]["done"], False)
         self.assertEqual(len(self.outbox()), n)
+
+    def test_os_error_from_add_is_an_error_line_and_leaves_undone(self):
+        # mutation: catch only ValueError again -> the OSError escapes click
+        self.add.side_effect = OSError("disk full\nsecond line")
+        n = len(self.outbox())
+        self.assertEqual(ap.click(self.d, "U1", self.CID % 1, 1), "error: disk full")
+        self.assertIs(self.state()["items"][0]["done"], False)
+        self.assertEqual(len(self.outbox()), n)
+
+    def test_state_write_failure_leaves_undone(self):
+        with mock.patch.object(ap.os, "replace", side_effect=OSError("ro fs")):
+            self.assertEqual(ap.click(self.d, "U1", self.CID % 1, 1), "error: ro fs")
+        self.assertIs(self.state()["items"][0]["done"], False)
+
+    def test_reply_text_is_capped(self):
+        # mutation: drop the _cap -> a 1500-char title escapes to 3000 chars
+        doc = self.state()
+        doc["items"][0]["title"] = "*" * 1500
+        (self.d / "analytics" / "post-2026-W47.json").write_text(json.dumps(doc))
+        self.assertEqual(ap.click(self.d, "U1", self.CID % 1, 1), "filed")
+        text = json.loads(self.outbox()[-1].read_text())["text"]
+        self.assertLessEqual(len(text), ap.LIMIT)
 
     def test_reply_lands_in_clicked_dir(self):
         ops_dir = tc_env.ops_dir()

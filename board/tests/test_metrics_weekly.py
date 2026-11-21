@@ -362,6 +362,73 @@ class PostTest(Base):
         self.assertEqual((rc, out, err), (1, "", "metrics: weekly: boom\n"))
         self.assertEqual(self.runs.read_text(), before)
 
+    def test_same_week_rerun_posts_nothing_without_force(self):
+        # mutation: drop already_posted in publish -> the second run writes 2 more ops and no "already posted" line
+        self.rich()
+        self.configure_ops()
+        self.answer([item("x", ("trends.specs_run.current", 2))])
+        self.assertEqual(self.cli()[0], 0)
+        n = len(self.outbox(self.ops))
+        rc, out, err = self.cli()
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(out, "already posted 2026-W47 to _ops\n")
+        self.assertEqual(len(self.outbox(self.ops)), n)
+        self.assertEqual(self.lines()[-1]["outcome"], "already-posted")
+        rc, out, err = self.cli("--force")
+        self.assertEqual((rc, out, err), (0, "", ""))
+        self.assertEqual(len(self.outbox(self.ops)), n + 2)
+
+    def test_failure_after_a_post_records_partial_and_reraises(self):
+        # mutation: write the record only on success -> no analytics line after the second destination fails
+        a, b = self.project("pa"), self.project("pb")
+        metrics_analyze.overview_projects.side_effect = None
+        metrics_analyze.overview_projects.return_value = [str(a), str(b)]
+        self.answer([item("x", ("trends.specs_run.current", 1))])
+        import analytics_post
+        real, calls = analytics_post.publish, []
+
+        def flaky(*a, **kw):
+            calls.append(1)
+            if len(calls) == 2:
+                raise OSError("disk full\nsecond line")
+            return real(*a, **kw)
+        with mock.patch.object(analytics_post, "publish", side_effect=flaky):
+            rc, out, err = self.cli()
+        self.assertEqual((rc, out, err), (1, "", "metrics: weekly: disk full\nsecond line\n"))
+        (rec,) = self.lines()
+        self.assertEqual((rec["outcome"], rec["posts"], rec["destinations"], rec["error"]), ("partial", 2, ["pa"], "disk full"))
+
+    def test_failure_before_any_post_records_nothing(self):
+        self.rich()
+        self.configure_ops()
+        self.answer()
+        before = self.runs.read_text()
+        with mock.patch.object(metrics, "write_stats", side_effect=metrics.MetricsError("boom")):
+            self.assertEqual(self.cli()[0], 1)
+        self.assertEqual(self.runs.read_text(), before)
+
+    def test_launchd_args_resolve_the_repo_from_any_cwd(self):
+        # the LaunchAgent runs `weekly --repo <checkout>` from the checkout, but HOME-like cwds must not matter:
+        # mutation: ignore --repo (repo_root(None)) -> the cwd repo's empty log gives "no runs", not the fixture's report
+        self.rich()
+        self.answer()
+        other_git = self.t / "other"
+        other_git.mkdir()
+        os.system(f"git -C {other_git} init -q -b main")
+        plain = self.t / "plain"
+        plain.mkdir()
+        for cwd in (other_git, plain):
+            old = os.getcwd()
+            os.chdir(cwd)
+            try:
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = metrics.main(["weekly", "--dry-run", "--repo", str(self.repo)])
+            finally:
+                os.chdir(old)
+            self.assertEqual((rc, err.getvalue()), (0, ""), cwd)
+            self.assertIn("Execution analytics", out.getvalue(), cwd)
+
     def test_dry_run_json_prints_ops_and_writes_nothing(self):
         self.rich()
         self.configure_ops()

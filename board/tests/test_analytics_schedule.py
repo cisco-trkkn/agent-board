@@ -55,9 +55,10 @@ class Plist(Base):
         h = str(self.home)
         log = f"{h}/.local/state/agent-board/analytics.launchd.log"
         self.assertEqual(d["Label"], LABEL)
-        self.assertEqual(d["ProgramArguments"], [str(self.cli), "metrics", "weekly"])
+        root = str(Path(ds.__file__).resolve().parent.parent)
+        self.assertEqual(d["ProgramArguments"], [str(self.cli), "metrics", "weekly", "--repo", root])
         self.assertEqual(d["StartCalendarInterval"], {"Weekday": 1, "Hour": 9, "Minute": 0})
-        self.assertEqual(d["WorkingDirectory"], h)
+        self.assertEqual(d["WorkingDirectory"], root)
         self.assertEqual(d["StandardOutPath"], log)
         self.assertEqual(d["StandardErrorPath"], log)
         self.assertEqual(d["EnvironmentVariables"]["PATH"], f"{h}/.local/bin:/opt/homebrew/bin:{h}/.bun/bin:/usr/bin:/bin")
