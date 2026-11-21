@@ -1289,6 +1289,7 @@ def _parser():
     cp.add_argument("config")
     gp = sp.add_parser("gate", parents=[common])
     gp.add_argument("id")
+    gp.add_argument("--log")
     sp.add_parser("status", parents=[common])
     bt = sp.add_parser("backfill-tasks", parents=[common])
     bt.add_argument("--log", dest="tasks_log")
@@ -1565,14 +1566,15 @@ def gate_eval(repo, gate_id):
     verdicts, text, summ = [], [], []
     for c in gate.get("conditions") or []:
         m, agg = c["metric"], c.get("agg", "median")
-        val, early = None, False
+        val, early, waves = None, False, None
         if agg == "last":
             last = analyses[-1] if analyses else None
             if last is None or not _where_ok(last, c.get("where")):
                 early = True
             else:
-                val = _dig(last, m)
+                val = _dig(last, m[len("analysis."):] if m.startswith("analysis.") else m)
                 early = val is None
+                waves = _dig(last, "waves.append") if m.startswith("analysis.") else None
         elif agg == "ratio_of_sums" or "/" in m:
             num, _, den = m.partition("/")
             if agg == "ratio_of_sums":
@@ -1595,7 +1597,8 @@ def gate_eval(repo, gate_id):
             res = "pass" if ok else "fail"
         verdicts.append(res)
         summ.append(f"{m} {_fmt(val)} {_thr(c)}")
-        text.append(f"{m} {_fmt(val)} {_thr(c)} {res}")
+        suffix = f" (append waves {waves})" if waves is not None and val is not None else ""
+        text.append(f"{m} {_fmt(val)} {_thr(c)}{suffix} {res}")
     if len(runs) < int(gate.get("min_specs") or 0) or "too early" in verdicts:
         result = "too early"
     elif all(v == "pass" for v in verdicts):
@@ -1609,11 +1612,13 @@ GATE_RC = {"pass": 0, "fail": 1, "too early": 3}
 
 
 def cmd_gate(repo, args):
-    result, _, lines = gate_eval(repo, args.id)
-    print(f"gate {args.id}: {result}")
-    for l in lines:
-        print(l)
-    return GATE_RC[result]
+    def go():
+        result, _, lines = gate_eval(repo, args.id)
+        print(f"gate {args.id}: {result}")
+        for l in lines:
+            print(l)
+        return GATE_RC[result]
+    return _with_log(args, go)
 
 
 # ---- status ----
