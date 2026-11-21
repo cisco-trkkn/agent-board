@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, restore, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -367,6 +367,22 @@ def _lead_root(p):
         return ""
 
 
+CWD_EVERY = 60   # seconds between checks of the tmux server's own cwd (spec restart-recovery §4)
+_cwd_check = {"at": None, "msg": ""}
+
+
+def server_warning(now=None):
+    """restore.tmux_server_cwd's warning, "" when none; re-checked at most every CWD_EVERY seconds. Never raises."""
+    now = time.monotonic() if now is None else now
+    if _cwd_check["at"] is None or now - _cwd_check["at"] >= CWD_EVERY:
+        try:
+            msg = restore.tmux_server_cwd(tmux=TMUX) or ""
+        except Exception:   # noqa: BLE001 -- a failed check is no warning; it never breaks the state poll
+            msg = ""
+        _cwd_check.update(at=now, msg=msg)
+    return _cwd_check["msg"]
+
+
 def build_state():
     fmt = SEP.join([
         "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}",
@@ -426,7 +442,8 @@ def build_state():
     snap = INDEXER.snapshot() if INDEXER else []
     usage.card_alerts(out, snap)
     usage.card_labels(out, snap)
-    return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}, "last_sweep": last_sweep()}
+    return {"sessions": out, "ttyd": {"port": TTYD_PORT, "base": f"/{TOKEN}-tty"}, "last_sweep": last_sweep(),
+            "server_warning": server_warning()}
 
 
 

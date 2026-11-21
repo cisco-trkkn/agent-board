@@ -74,6 +74,8 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; back
 .live.off i { background: var(--red); }
 .offline-banner { background: var(--red-soft); color: var(--red); border: 1px solid var(--red); border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
 .offline-banner[hidden] { display: none; }
+.server-warn { background: var(--red-soft); color: var(--red); border: 1px solid var(--red); border-radius: 6px; padding: 2px 10px; font-size: 12px; }
+.server-warn[hidden] { display: none; }
 
 .attention { display: none; margin: 14px 20px 0; padding: 10px 14px; border-radius: 10px;
   background: var(--amber-soft); color: var(--amber); font-weight: 600; align-items: center; gap: 10px; }
@@ -347,6 +349,7 @@ table.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
     <nav class="tabs" id="tabs"></nav>
     <div class="live" id="live"><i></i><span>live</span></div>
     <div class="offline-banner" id="offline-banner" role="status" hidden>Board server unreachable — retrying</div>
+    <div class="server-warn" id="server-warn" role="alert" hidden></div>
     <div class="hdr-actions">
       <button class="primary" id="btn-agent">+ New agent</button>
       <div class="menu-wrap">
@@ -723,7 +726,8 @@ for (const g of document.querySelectorAll(".grip")) g.addEventListener("pointerd
 });
 
 function render() { const home = homeView(); $("#btn-agent").hidden = home; $("#btn-close").hidden = home; $("#proj-menu hr").hidden = home;
-  $("#home").hidden = !homeView(); $(".layout").hidden = homeView(); renderTabs(); renderAttention(); renderCards(); renderWorktrees(); }
+  $("#home").hidden = !homeView(); $(".layout").hidden = homeView(); renderTabs(); renderAttention(); renderCards(); renderWorktrees(); renderServerWarn(); }
+function renderServerWarn() { const w = (data && data.server_warning) || "", b = $("#server-warn"); b.textContent = w; b.hidden = !w; }
 
 function setOffline(off) {
   $("#live").classList.toggle("off", off); $("#live span").textContent = off ? "offline" : "live";
