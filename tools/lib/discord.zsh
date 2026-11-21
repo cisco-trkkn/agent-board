@@ -97,7 +97,7 @@ _dc_token() {
   ( umask 077; mkdir -p -m 700 "$dir" && print -r -- "DISCORD_BOT_TOKEN=$tok" > "$dir/.env.next" && mv -f "$dir/.env.next" "$dir/.env" ) \
     || { rm -f "$dir/.env.next"; print -u2 "discord: could not write the token"; return 1 }
   chmod 700 "$dir"; chmod 600 "$dir/.env"
-  _dc_write "$dir" 'if has("ackReaction") then . else .ackReaction = "👀" end' || return 1
+  _dc_write "$dir" 'if (.ackReaction // null) == null then .ackReaction = "👀" else . end' || return 1
   print -r -- "discord: token saved for $project (restart its lead: agent-board lead --continue, or Restart orchestrator on the board)"
 }
 

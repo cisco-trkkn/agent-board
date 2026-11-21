@@ -37,6 +37,15 @@ check "token: access.json mode 600"       test "$(mode $A)" = 600
 jq '.ackReaction = ""' $A > $A.x && mv $A.x $A
 run "$TOK" $C discord token
 check "token: existing empty ackReaction kept" test "$(jq -c .ackReaction $A)" = '""'
+print -r -- '{"ackReaction":null}' > $A
+run "$TOK" $C discord token
+check "token: null ackReaction becomes 👀" test "$(jq -r .ackReaction $A)" = "👀"
+print -r -- '{"ackReaction":"✅"}' > $A
+run "$TOK" $C discord token
+check "token: existing non-empty ackReaction kept" test "$(jq -r .ackReaction $A)" = "✅"
+print -r -- '{}' > $A
+run "$TOK" $C discord token
+check "token: missing ackReaction gets 👀" test "$(jq -r .ackReaction $A)" = "👀"
 tt new-session -d -s tt2 -t tt -c "$TT_DIR"
 (( N++ )); print -r -- "$TOK" | TC_SESSION=tt2 $C discord token > "$S/out.$N" 2>&1
 check "grouped: key is the group, not tt2"  test ! -e "$D/tt2" -a -f "$D/tt/.env"
