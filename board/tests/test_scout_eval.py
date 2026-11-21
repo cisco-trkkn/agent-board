@@ -157,6 +157,24 @@ class ValidateTest(Base):
         v, _ = self.run_v([ent(quotes=3)], st)
         self.assertEqual(len(v), 1)
 
+    def test_missing_or_non_string_fields_dropped(self):
+        bad = [ent(what_it_enables=None), ent(what_it_enables=" "), ent(risk=3), ent(comp=""), ent(comp=None)]
+        no_wie = ent()
+        del no_wie["what_it_enables"]
+        v, info = self.run_v(bad + [no_wie])
+        self.assertEqual((v, info["dropped"]), ([], {"malformed": 6}))
+
+    def test_overlaps_coerced_to_strings(self):
+        v, _ = self.run_v([ent(overlaps=["s.md", 3, None]), ent(comp="b", overlaps="s.md")])
+        self.assertEqual([e["overlaps"] for e in v], [["s.md"], []])
+        se.pick(v, [], ["s.md"])
+
+    def test_item_without_url_never_matches_missing_evidence_url(self):
+        its = [{"key": "i1", "url": None, "published": None}]
+        for ev in ([{"quote": "q"}], [{"url": None, "quote": "q"}]):
+            v, info = self.run_v([ent(evidence=ev)], its=its)
+            self.assertEqual((v, info["dropped"]), ([], {"url not an item url": 1}))
+
     def test_non_dict_entries_ignored(self):
         v, info = self.run_v(["x", None, ent()])
         self.assertEqual((len(v), info["dropped"]), (1, {"malformed": 2}))

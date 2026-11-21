@@ -89,7 +89,7 @@ def validate(entries, items, st, info=None):
     info = info if info is not None else {}
     dropped = info.setdefault("dropped", {})
     by_key = {i["key"]: i for i in items if isinstance(i, dict) and "key" in i}
-    urls = {i.get("url") for i in by_key.values()}
+    urls = {i["url"] for i in by_key.values() if isinstance(i.get("url"), str) and i["url"]}
 
     def drop(why):
         dropped[why] = dropped.get(why, 0) + 1
@@ -110,13 +110,15 @@ def validate(entries, items, st, info=None):
         if e.get("value") not in VALUES or e.get("effort") not in EFFORTS:
             drop("bad value or effort")
             continue
-        if not all(x.get("url") in urls for x in ev):
+        if not all(isinstance(x.get("url"), str) and x["url"] in urls for x in ev):
             drop("url not an item url")
             continue
         comp = e.get("component")
-        if not isinstance(comp, str) or not comp.strip():
+        if not all(isinstance(e.get(k), str) and e[k].strip() for k in ("component", "what_it_enables", "risk")):
             drop("malformed")
             continue
+        ov = e.get("overlaps")
+        e = dict(e, overlaps=[o for o in ov if isinstance(o, str)] if isinstance(ov, list) else [])
         key = finding_key(e["item"], comp)
         count = len(ev)
         if key in st["filed"]:
