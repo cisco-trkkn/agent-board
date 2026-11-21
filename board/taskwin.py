@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
 
 import taskwin_hist  # noqa: E402
+import taskwin_state  # noqa: E402
 import taskwin_ui  # noqa: E402
 import taskwin_views  # noqa: E402
 
@@ -969,13 +970,25 @@ HIDE, SHOW, HOME_, EOL, EOS = "\x1b[?25l", "\x1b[?25h", "\x1b[H", "\x1b[K", "\x1
 
 
 def _fetch(session, root, home):
-    """One tick's data: (view, lead id)."""
+    """One tick's data: (view, lead id, project key)."""
     import paneclass
     import planview
     import tc_env
     tmux = paneclass.tmux_runner()
     view = planview.view(session, root, home, tc_env.state_dir(), tmux)
-    return view, planview.lead_session(session, home, tmux)
+    return view, planview.lead_session(session, home, tmux), planview.project_of(session, tmux)
+
+
+def _ctx(root, view, ui, journal):
+    queue, _ = taskwin_views.split(view.get("tasks") or [])
+    titles = {}
+    for t in queue:
+        spec = taskwin_state.spec_of(t["subject"])
+        title = taskwin_hist.spec_title(root, spec)
+        if title:
+            titles[spec] = title
+    return {"titles": titles, "report": taskwin_hist.queue_report(root, queue),
+            "history": taskwin_hist.entries(root, journal) if ui["view"] == "history" else []}
 
 
 def _draw(text, err=""):
@@ -986,9 +999,18 @@ def _draw(text, err=""):
     sys.stdout.flush()
 
 
-def watch(session, root, home, interval=1.0, frames=None):
+def watch(session, root, home, interval=1.0, frames=None, stdin=None):
+    import select
+    import termios
+    import tty
     import tc_env
-    import taskwin_state
+    stdin = sys.stdin if stdin is None else stdin
+    try:
+        tty_fd = stdin.fileno() if stdin.isatty() else None
+    except (AttributeError, ValueError, OSError):
+        tty_fd = None
+    read_fd, saved = tty_fd, None
+    view, tasks, ctx, ui, journal = {}, [], {"titles": {}, "report": "", "history": []}, None, None
     spath = taskwin_state.path_for(tc_env.state_dir(), session)
     st = taskwin_state.load(spath)
     last, n, tick = "", 0, 0
@@ -998,28 +1020,58 @@ def watch(session, root, home, interval=1.0, frames=None):
     sys.stdout.write(HIDE)
     sys.stdout.flush()
     try:
+        if tty_fd is not None:
+            saved = termios.tcgetattr(tty_fd)
+            # TCSANOW: TCSAFLUSH would drop a key already pending, and DRAIN/FLUSH block on a pty nobody drains
+            tty.setcbreak(tty_fd, termios.TCSANOW)
         while frames is None or n < frames:
             n += 1
             try:
-                view, lead = _fetch(session, root, home)
+                view, lead, project = _fetch(session, root, home)
+                tasks = view.get("tasks") or []
+                journal = taskwin_state.journal_path(tc_env.state_dir(), project)
                 if view.get("name") != tm_for:
                     tm, tm_for = load_tier_model(root), view.get("name")
                 now = time.time()
                 before = json.dumps(st, sort_keys=True)
-                taskwin_state.update(st, lead, view.get("tasks") or [], now)
+                taskwin_state.update(st, lead, tasks, now, journal=journal, plan=view.get("name") or "")
+                ui = taskwin_ui.normalize(st.get("ui"), tasks)
+                if tasks or "ui" in st:
+                    st["ui"] = ui
                 if json.dumps(st, sort_keys=True) != before:
                     taskwin_state.save(spath, st)
+                ctx = _ctx(root, view, ui, journal)
                 cols, rows = shutil.get_terminal_size()
-                last = render(view, st, cols, rows - 1 if rows > 1 else rows, now, tick, color_mode(os.environ), session, tm)
+                last = render(view, st, cols, rows - 1 if rows > 1 else rows, now, tick, color_mode(os.environ),
+                              session, tm, ui=ui, ctx=ctx)
                 tick += 1
                 _draw(last)
             except Exception as e:  # one bad tick must not kill the window
                 _draw(last, "taskwin: " + (str(e).splitlines() or [type(e).__name__])[0][:200])
-            if frames is None or n < frames:
+            if frames is not None and n >= frames:
+                break
+            if read_fd is None:
                 time.sleep(interval)
+                continue
+            if not select.select([read_fd], [], [], interval)[0]:
+                continue
+            data = os.read(read_fd, 64)
+            if not data:  # EOF: stop reading, keep the terminal mode to restore
+                read_fd = None
+                continue
+            ui = ui or taskwin_ui.normalize(st.get("ui"), tasks)
+            for k in taskwin_ui.decode(data.decode("utf-8", "replace")):
+                new = taskwin_ui.handle_key(ui, k, taskwin_views.model(tasks, ui, ctx.get("history") or []))
+                if new["view"] != ui["view"]:
+                    ctx = _ctx(root, view, new, journal)  # history rows for the next key
+                ui = new
+            st["ui"] = ui
+            taskwin_state.save(spath, st)
     except KeyboardInterrupt:
         pass
     finally:
+        if saved is not None:
+            termios.tcsetattr(tty_fd, termios.TCSANOW, saved)
         sys.stdout.write(SHOW)
         sys.stdout.flush()
         for s, h in old.items():
@@ -1051,7 +1103,7 @@ def main(argv=None):
     if a.cmd == "watch":
         watch(a.session, a.root, a.home, a.interval)
         return 0
-    view, lead = _fetch(a.session, a.root, a.home)
+    view, lead, _ = _fetch(a.session, a.root, a.home)
     cols, rows = shutil.get_terminal_size()
     print(render(view, {}, a.width or cols, a.height or rows, time.time(), 0, color_mode(os.environ), a.session,
                  load_tier_model(a.root)))

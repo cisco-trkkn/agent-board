@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import os
@@ -5,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -68,9 +70,9 @@ class TestWatch(Base):
         with redirect_stdout(out), mock.patch("time.sleep"), mock.patch("paneclass.tmux_runner", return_value=tmux):
             if view:
                 with mock.patch("planview.view", side_effect=view):
-                    taskwin.watch("proj", self.repo, self.home, interval=0, frames=frames)
+                    taskwin.watch("proj", self.repo, self.home, interval=0, frames=frames, stdin=io.StringIO())
             else:
-                taskwin.watch("proj", self.repo, self.home, interval=0, frames=frames)
+                taskwin.watch("proj", self.repo, self.home, interval=0, frames=frames, stdin=io.StringIO())
         return out.getvalue()
 
     def test_watch_writes_state_and_brackets_cursor(self):
@@ -121,8 +123,87 @@ class TestWatch(Base):
         with redirect_stdout(out), mock.patch("time.sleep"), mock.patch("planview.view", side_effect=SystemExit(0)), \
                 mock.patch("paneclass.tmux_runner", return_value=fake_tmux()):
             with self.assertRaises(SystemExit):
-                taskwin.watch("proj", self.repo, self.home, interval=0, frames=5)
+                taskwin.watch("proj", self.repo, self.home, interval=0, frames=5, stdin=io.StringIO())
         self.assertTrue(out.getvalue().endswith("\x1b[?25h"))
+
+
+class TestWatchKeys(Base):
+    """watch reads keys from a TTY in cbreak mode, redraws at once, keeps `ui` in the state file and restores the
+    terminal on exit."""
+
+    def pty(self):
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        f = os.fdopen(slave, "r")
+        self.addCleanup(f.close)
+        return master, f
+
+    def watch(self, frames, stdin, interval=0.05, view=None):
+        out = io.StringIO()
+        with contextlib.ExitStack() as es:
+            es.enter_context(redirect_stdout(out))
+            es.enter_context(mock.patch("paneclass.tmux_runner", return_value=fake_tmux()))
+            if view:
+                es.enter_context(mock.patch("planview.view", side_effect=view))
+            taskwin.watch("proj", self.repo, self.home, interval=interval, frames=frames, stdin=stdin)
+        return out.getvalue()
+
+    def saved(self):
+        return taskwin_state.load(taskwin_state.path_for(self.state, "proj"))
+
+    def test_key_switches_view_and_is_kept(self):
+        import termios
+        master, f = self.pty()
+        os.write(master, b"3")
+        out = self.watch(3, f)
+        self.assertEqual(self.saved()["ui"]["view"], "history")
+        self.assertIn("[3 history]", taskwin.strip(out))
+        lflag = termios.tcgetattr(f.fileno())[3]
+        self.assertTrue(lflag & termios.ICANON and lflag & termios.ECHO, "terminal mode restored")
+
+    def test_key_redraws_at_once(self):
+        # remove the select wake-up (sleep the whole interval) -> this takes 30 s and fails
+        master, f = self.pty()
+        os.write(master, b"3")
+        t0 = time.monotonic()
+        self.watch(2, f, interval=30)
+        self.assertLess(time.monotonic() - t0, 5)
+        self.assertEqual(self.saved()["ui"]["view"], "history")
+
+    def test_arrow_moves_cursor(self):
+        master, f = self.pty()
+        os.write(master, b"2\x1b[B")
+        self.watch(3, f)
+        self.assertEqual(self.saved()["ui"]["cursor"]["plan"], 1)
+
+    def test_eof_on_stdin_does_not_spin(self):
+        r, w = os.pipe()
+        os.close(w)                                  # a closed pipe: select says readable, read returns b""
+        rf = os.fdopen(r, "r")
+        self.addCleanup(rf.close)
+        with mock.patch.object(rf, "isatty", return_value=True), mock.patch("termios.tcgetattr", return_value=[0] * 7), \
+                mock.patch("termios.tcsetattr"), mock.patch("tty.setcbreak"), mock.patch("time.sleep") as sl:
+            self.watch(4, rf)
+        self.assertGreaterEqual(sl.call_count, 2, "after EOF the loop sleeps instead of selecting on stdin")
+
+    def test_not_a_tty_sleeps_and_reads_no_keys(self):
+        with mock.patch("time.sleep") as sl, mock.patch("tty.setcbreak") as cb:
+            self.watch(2, io.StringIO())
+        self.assertEqual(sl.call_count, 1)
+        cb.assert_not_called()
+
+    def test_journal_written_under_project_key(self):
+        seq = iter(["in_progress", "completed"])
+
+        def view(*a, **k):
+            return {"name": "2026-11-21-x", "active": True, "tasks": [
+                {"id": "1", "subject": "Task 1: x", "status": next(seq), "owner": "ann", "state": "", "tier": "mechanical",
+                 "blockedBy": [], "outcome": "", "answeredAt": "", "planPath": ""}]}
+        with mock.patch("time.sleep"):
+            self.watch(2, io.StringIO(), view=view)
+        j = taskwin_state.journal_path(self.state, "proj")
+        lines = [json.loads(l) for l in j.read_text().splitlines()]
+        self.assertEqual([(l["kind"], l["plan"], l["id"]) for l in lines], [("task_done", "2026-11-21-x", "1")])
 
 
 class TestTierModel(Base):
