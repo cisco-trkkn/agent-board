@@ -67,7 +67,7 @@ function runReport(repo, batchId, relationsPath, opts) {
   const batch = readBatch(repo, batchId, extra);
   const docPath = path.join(mainRoot(repo), "docs/superpowers/metrics/analysis", `${batchId}.md`);
   if (!fs.existsSync(docPath)) runAnalyse(repo, batchId, relationsPath, { extra });
-  const { plans, relations } = loadPlans(repo, batch, relationsPath);
+  const { plans, relations } = loadPlans(repo, batch, relationsPath, batchId);
   const rows = factsRows(repo, batch);
   const body = section(rows, pairTable(batch.pairs, plans, relations));
   let doc = fs.readFileSync(docPath, "utf8");

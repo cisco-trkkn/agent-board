@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { scratchRepo, cleanup, run } = require("./helpers.js");
 const { runReport } = require("../lib/registry/report.js");
+const { runAnalyse } = require("../lib/registry/analyse.js");
 
 const spec = (n) => `docs/superpowers/specs/2026-11-21-${n}-design.md`;
 const PRED = "## Prediction against outcome";
@@ -124,4 +125,41 @@ test("registry report CLI: unknown batch is one registry: report: line, exit 1",
   const res = run(["report", "ZZ"], { cwd: r.dir, env: { ...process.env, REGISTRY_METRICS_CMD: `${process.execPath} ${bad}` } });
   assert.strictEqual(res.code, 1);
   assert.strictEqual(res.stderr.trim(), "registry: report: unknown batch ZZ");
+});
+
+// I1: relations given to analyse are saved beside its document, and report reuses them.
+test("report without --relations reuses the relations analyse saved for the batch", (t) => {
+  const { r, tmp, calls } = setup(t);
+  const rel = path.join(tmp, "rel.json");
+  fs.writeFileSync(rel, JSON.stringify([{ a: spec("a"), b: spec("b"), kind: "order", why: "b first" }]));
+  const { docPath } = runAnalyse(r.dir, "B1", rel);
+  const saved = docPath.replace(/\.md$/, ".relations.json");
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(saved, "utf8")).map((x) => x.kind), ["order"]);
+  runReport(r.dir, "B1"); // no --relations
+  const [, withSaved] = calls();
+  assert.strictEqual(withSaved.relations, 1);
+  assert.strictEqual(withSaved.appends_verified, true);
+  // the same report with the relations given explicitly gives the same line
+  runReport(r.dir, "B1", rel);
+  assert.deepStrictEqual(calls()[2], withSaved);
+  // and a report with none saved sees no relation
+  fs.rmSync(saved);
+  runReport(r.dir, "B1");
+  assert.strictEqual(calls()[3].relations, 0);
+  // (both specs write `log`, so the waves are 2 with or without the edge; the relation count is what differs)
+});
+
+test("an explicit --relations wins over the saved file and re-saves", (t) => {
+  const { r, tmp, calls } = setup(t);
+  const rel1 = path.join(tmp, "r1.json");
+  const rel2 = path.join(tmp, "r2.json");
+  fs.writeFileSync(rel1, JSON.stringify([{ a: spec("a"), b: spec("b"), kind: "order", why: "x" }]));
+  fs.writeFileSync(rel2, JSON.stringify([]));
+  const { docPath } = runAnalyse(r.dir, "B1", rel1);
+  const saved = docPath.replace(/\.md$/, ".relations.json");
+  runReport(r.dir, "B1", rel2);
+  assert.strictEqual(calls()[1].relations, 0);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(saved, "utf8")), []);
+  runReport(r.dir, "B1");
+  assert.strictEqual(calls()[2].relations, 0);
 });

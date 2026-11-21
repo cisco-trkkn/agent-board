@@ -20,6 +20,10 @@ function loadRelations(file) {
   return { list: raw, note: null };
 }
 
+// relationsFile(repo, batchId) -> the batch's saved relations, beside its analysis document.
+const relationsFile = (repo, batchId) =>
+  path.join(mainRoot(repo), "docs/superpowers/metrics/analysis", `${batchId}.relations.json`);
+
 const list = (a) => (a.length ? a.join(", ") : "-");
 
 function build(batchId, plans, missing, relations, relNote) {
@@ -75,8 +79,9 @@ function build(batchId, plans, missing, relations, relNote) {
   return o.join("\n") + "\n";
 }
 
-// loadPlans(repo, batch, relationsPath) -> {plans, missing, relations, note}: the inputs of every analysis of a batch.
-function loadPlans(repo, batch, relationsPath) {
+// loadPlans(repo, batch, relationsPath, batchId) -> {plans, missing, relations, note}: the inputs of every analysis of a batch.
+// An explicit relationsPath wins and is saved as the batch's relations (when it parses); without one, the saved file is used.
+function loadPlans(repo, batch, relationsPath, batchId) {
   const plans = [];
   const missing = [];
   for (const spec of batch.specs || []) {
@@ -86,7 +91,13 @@ function loadPlans(repo, batch, relationsPath) {
     if (r.error) missing.push({ spec, reason: r.error });
     else plans.push({ spec, manifest: r.manifest });
   }
-  const { list: rawRel, note } = loadRelations(relationsPath);
+  const saved = batchId ? relationsFile(repo, batchId) : null;
+  const useSaved = !relationsPath && saved && fs.existsSync(saved);
+  const { list: rawRel, note } = loadRelations(relationsPath || (useSaved ? saved : null));
+  if (relationsPath && !note && saved) {
+    fs.mkdirSync(path.dirname(saved), { recursive: true });
+    fs.writeFileSync(saved, JSON.stringify(rawRel, null, 2) + "\n");
+  }
   const planned = new Set(plans.map((p) => p.spec));
   const relations = rawRel.filter((r) => r && r.a !== r.b && planned.has(r.a) && planned.has(r.b) && REL_KINDS.includes(r.kind));
   return { plans, missing, relations, note };
@@ -106,7 +117,7 @@ function analysisLine(batchId, plans, relations, verified) {
 function runAnalyse(repo, batchId, relationsPath, opts) {
   const extra = (opts && opts.extra) || [];
   const batch = readBatch(repo, batchId, extra);
-  const { plans, missing, relations, note } = loadPlans(repo, batch, relationsPath);
+  const { plans, missing, relations, note } = loadPlans(repo, batch, relationsPath, batchId);
   let doc = build(batchId, plans, missing, relations, note);
   const root = mainRoot(repo);
   const docPath = path.join(root, "docs/superpowers/metrics/analysis", `${batchId}.md`);
