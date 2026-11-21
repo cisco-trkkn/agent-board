@@ -92,16 +92,16 @@ tt kill-session -t '=tt-bg'
 
 # --- the second-lead guard, with real fake-holder process trees (node: ps -E hides a platform binary's environment)
 if (( $+commands[node] )); then
-  FB="$TT_DIR/fb"; mkdir -p "$FB"; ln -sf "${commands[node]:A}" "$FB/claude"
+  FB="$TT_DIR/fb"; mkdir -p "$FB"; FP="$TT_DIR/fake/discord/0.0.4"; mkdir -p "$FP"; ln -sf "${commands[node]:A}" "$FB/claude"
   cat > "$FB/fc.js" <<'FC'
 const { spawn } = require('child_process')
 require('fs').writeFileSync(process.argv[3], String(process.pid))
-spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start', process.argv[4]],
+spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'bun', 'run', '--cwd', process.argv[5], 'start', process.argv[4]],
   { env: { ...process.env, DISCORD_STATE_DIR: process.argv[2] }, stdio: 'ignore' }).on('exit', () => process.exit(0))
 FC
   typeset -a HPIDS=()
   hold() {   # hold <pane>: a live fake lead holding $DC, its TMUX_PANE being <pane>; sets HP
-    local f="$FB/pid.$RANDOM"; env TMUX_PANE="$1" "$FB/claude" "$FB/fc.js" "$DC" "$f" "$FB" >/dev/null 2>&1 &
+    local f="$FB/pid.$RANDOM"; env TMUX_PANE="$1" "$FB/claude" "$FB/fc.js" "$DC" "$f" "$FB" "$FP" >/dev/null 2>&1 &
     local i; for i in {1..50}; do [[ -s "$f" ]] && break; sleep 0.1; done
     HP="$(<$f)"; HPIDS+=($HP); sleep 0.5; HPIDS+=($(ps -A -o pid=,ppid= | awk -v p=$HP '$2==p{print $1}'))
   }
@@ -215,9 +215,15 @@ discord: tt's bot is held by the lead in tt:claude-next (pid $HP); this lead sta
   check "old lead dying mid-wait (pid seen without a pane): the wait goes on, channel added" test "$(nch)" = 1 -a "$(<$S/dsd)" = "$DC"
   check "old lead dying mid-wait: one waiting line, no held line" test "$(<$S/err)" = "discord: waiting up to 30s for the lead in tt:claude-next to release tt's bot"
   release; tt kill-window -t "$NEXTP"
-  for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F "start $FB" | grep -v grep)" ]] && break; sleep 0.1; done
-  # scoped to this run's own holders ($FB is unique): test_discord_holder.zsh runs fakes with the same --cwd in parallel
-  check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F "start $FB" | grep -v grep)"
+  for i in {1..30}; do [[ -z "$(ps -A -o args= | grep -F -- "$FP" | grep -v grep)" ]] && break; sleep 0.1; done
+  # a decoy with the old constant path (another suite's holder) must not count as ours
+  env -u DISCORD_STATE_DIR node -e 'setTimeout(()=>{},30000)' bun run --cwd /fake/discord/0.0.4 start decoy >/dev/null 2>&1 &
+  DECOY=$!; sleep 0.3
+  check "leak: decoy with the old constant path is running" kill -0 $DECOY
+  # scoped to this run's own path ($FP is under $TT_DIR): other suites run fakes with other paths in parallel
+  check "leak: no fake holder left"        test -z "$(ps -A -o args= | grep -F -- "$FP" | grep -v grep)"
+  kill $DECOY 2>/dev/null; wait $DECOY 2>/dev/null
+  check "leak: decoy gone"                 test -z "$(ps -A -o pid= | awk -v p=$DECOY '$1==p')"
 else
   print "skip - no node (guard cases)"
 fi
