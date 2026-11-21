@@ -112,6 +112,13 @@ Nothing under `~/.claude` was written by `./install.sh`. In a plain `claude` ses
 
 - **The session `PATH`.** `claude-orchestrator` puts the clone's `bin/` first on `PATH` and also sets it as the `PATH` of the agent-board tmux session (`tmux set-environment`). Workers started by `tmux-ctl agent` get the same `PATH` on their command line. Every window opened in that session afterwards, yours included, finds `tmux-ctl` and the other agent-board commands without a path, and sees the clone's `bin/` ahead of the rest of your `PATH` there. It reaches no other session or server.
 - **Teammates.** They get the lead's `--settings` and `--plugin-dir` flags from Claude Code. The tmux session environment carries only `PATH` and `AGENT_BOARD_REPO`, which is why they are set on the session.
+- **Opening agent-board in every new terminal (optional).** Add this to `~/.zshrc` (use your clone's path for the config). The `cd ~` matters: a tmux server keeps the folder it was started in for life, and once that folder is deleted (a merged worktree), tmux starts every new pane there and ignores `-c`.
+
+  ```zsh
+  if [[ -o interactive && -z "$TMUX" && -t 1 ]] && command -v tmux >/dev/null; then
+    (cd ~ && tmux -L agent-board -f ~/agent-board/config/tmux.conf new-session -A -s main)
+  fi
+  ```
 
 ### Daily worktree cleanup (optional)
 
@@ -357,6 +364,7 @@ Kill switches: `TC_DISCORD_BRIDGE=0` starts no bridge (`bridge start` prints `br
 | `agent-board dash` says `failed to start — see ~/.local/state/tmux-dash/*.log` | `ttyd` is missing (on `PATH`, or `TTYD_BIN`), or port 7700/7701 is taken. Read `ttyd.log` / `server.log`; change ports with `TMUX_DASH_PORT` / `TMUX_DASH_TTYD_PORT`. |
 | Board loads but terminals are blank | ttyd not running (`agent-board dash status`), or the board and ttyd look at different tmux servers. `TMUX_DASH_TMUX_ARGS` must be the same for both; `agent-board dash` passes it to both. |
 | `tmux-ctl: not inside tmux` | `tmux-ctl` only works from a pane inside tmux. |
+| `tmux-ctl list` (or a red banner on the board) says `tmux server cwd is gone (…)` | the tmux server was started from a folder that was later deleted, and new panes start there whatever `-c` says. Close your projects, run the `tmux -S <socket> kill-server` the line names, then reopen each project with `agent-board dev`, which starts the server from `~`. Use the `(cd ~ && …)` form in `~/.zshrc` (Things to know). |
 | `tmux-ctl run` fails with `jq: command not found` | install jq. |
 | Teammates open as split panes, not `✦ name` windows | the `after-split-window` hook is not loaded: you are on a server that doesn't load the config in `config/` (for instance your own default server, see [Migrating](#migrating-from-the-global-setup)). `tmux -L agent-board show-hooks -g` lists it on the right server. |
 | A teammate window dies right after it spawns | the folder isn't trusted yet. Run `claude` there once and accept the trust prompt. |
