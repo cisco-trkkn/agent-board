@@ -121,6 +121,16 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(self.lines(), [{"kind": "task_done", "at": 160.0, "plan": "2026-11-21-x", "id": "1",
                                          "subject": "Task 1: x", "owner": "ann", "tier": "mechanical"}])
 
+    def test_malformed_journal_lines_are_skipped(self):
+        self.j.parent.mkdir(parents=True, exist_ok=True)
+        self.j.write_text(json.dumps({"kind": "task_done", "plan": ["x"], "id": "1"}) + "\n"
+                          + json.dumps({"kind": "task_done", "plan": "p", "id": {}, "subject": "s"}) + "\n")
+        st = ts.update({}, "L", [P(1, "in_progress")], 100.0, journal=self.j, plan="p")
+        ts.update(st, "L", [P(1, "completed")], 160.0, journal=self.j, plan="p")   # must not raise
+        last = self.lines()[-1]
+        self.assertEqual((last["kind"], last["plan"], last["id"]), ("task_done", "p", "1"))
+        self.assertEqual(len(self.lines()), 3)
+
     def test_queue_outcome_line(self):
         st = ts.update({}, "L", [Q(1, "in_progress")], 100.0, journal=self.j)
         ts.update(st, "L", [Q(1, "completed", subject="Plan & run: docs/superpowers/specs/a-design.md#part-1 (x)",

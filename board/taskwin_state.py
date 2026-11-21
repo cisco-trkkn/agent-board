@@ -74,7 +74,7 @@ def append_journal(path, entries):
         for l in lines[-DEDUPE_WINDOW:]:
             try:
                 seen.add(_dedupe_key(json.loads(l)))
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 continue
         new = []
         for e in entries:

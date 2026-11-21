@@ -274,3 +274,39 @@ class HistoryScreenTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BASE_TIMING = {"lead": "L", "events": [], "all_done": False, "tasks": {
+    "1": {"status": "x", "since": NOW - 60, "started": NOW - 600, "done": None}}}
+
+
+class BaseCompatTest(unittest.TestCase):
+    """render(ui=None) returns exactly what the base (403f675) returned: the base module is loaded from git."""
+
+    def test_render_without_ui_matches_base(self):
+        import importlib.util
+        import subprocess
+        import tempfile
+        src = subprocess.run(["git", "show", "403f675:board/taskwin.py"], capture_output=True, text=True,
+                             cwd=Path(__file__).resolve().parent)
+        if src.returncode:
+            self.skipTest("base commit 403f675 not available")
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "taskwin_base.py"
+            f.write_text(src.stdout)
+            spec = importlib.util.spec_from_file_location("taskwin_base", f)
+            base = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(base)
+        bad = []
+        for n in (0, 2, 3, 5, 12, 30):
+            tasks = [task(i, f"step {i}", "completed" if i <= n // 3 else "pending", [i - 1] if i > 1 else [])
+                     for i in range(1, n + 1)]
+            view = {"name": "plan", "active": True, "tasks": tasks}
+            for width in (40, 70, 120):
+                for height in range(1, 13):
+                    for color in ("none", "256"):
+                        a = taskwin.render(view, BASE_TIMING, width, height, NOW, 0, color, ui=None)
+                        b = base.render(view, BASE_TIMING, width, height, NOW, 0, color)
+                        if a != b:
+                            bad.append((n, width, height, color))
+        self.assertEqual(bad, [])

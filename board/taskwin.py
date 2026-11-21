@@ -700,14 +700,17 @@ def _list_lines(tasks, timing, width, avail, now, frame, color, flash_ids, tier_
     room = n - y
     show, first = rows, 0
     if len(rows) > room:
-        at = next((i for i, t in enumerate(rows) if t["id"] == sel), 0)
         cap = max(0, room - 1)  # the last line is `+N more` while rows follow
-        first = 0 if at < cap else at - cap + 1
-        if len(rows) - first <= room:  # the tail fits: no `+N more`, show it all
-            first = max(0, len(rows) - room)
-            show = rows[first:]
+        if sel is None:  # no cursor: the base's top-anchored list
+            show = rows[:cap]
         else:
-            show = rows[first:first + cap]
+            at = next((i for i, t in enumerate(rows) if t["id"] == sel), 0)
+            first = 0 if at < cap else at - cap + 1
+            if len(rows) - first <= room:  # the tail fits: no `+N more`, show it all
+                first = max(0, len(rows) - room)
+                show = rows[first:]
+            else:
+                show = rows[first:first + cap]
     for t in show:
         _list_line(cv, y, width, t, timing, now, frame, t["id"] in flash_ids, tier_model,
                    color == "none" and t["id"] in crit, t["id"] == sel, color == "none" and t["id"] == sel)
