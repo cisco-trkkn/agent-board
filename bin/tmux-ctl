@@ -78,6 +78,7 @@
 #   tmux-ctl discover schedule install|status|uninstall  the 07:00 nightly job (launchd)
 #   tmux-ctl scout poll | source add <name> --kind <k> --url <u> [--why <t>] | source list|remove|test [<name>]  trend scout: daily poll, sources
 #   tmux-ctl scout weekly [--dry-run] [--force] [--retry]  the Sunday pass: evaluate, draft specs, post the digest (--dry-run prints, writes nothing)
+#   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
@@ -328,6 +329,10 @@ if [[ "$cmd" == discover ]]; then   # no tmux needed (launchd runs it)
   exec python3 -I "${0:A:h:h}/board/discover.py" "$@"
 fi
 if [[ "$cmd" == scout ]]; then   # no tmux needed (launchd runs it)
+  if [[ "$1" == schedule ]]; then
+    [[ "$2" == (install|status|uninstall) ]] || die 'usage: tmux-ctl scout schedule install|status|uninstall'
+    exec python3 -I "${0:A:h:h}/board/scout_schedule.py" "$2"
+  fi
   exec python3 -I "${0:A:h:h}/board/scout.py" "$@"
 fi
 if [[ "$cmd" == metrics && ( "$1" == schedule || "$1" == weekly ) ]]; then   # no tmux needed (launchd runs it)
