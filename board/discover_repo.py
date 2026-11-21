@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """discover_repo: repo-side signal collectors for opportunity discovery.
 
+todos() counts a TODO/FIXME/XXX marker only when it sits in a comment (#, //, /*, <!--, a
+leading *, or -- before it) and skips paths with a `test` or `tests` directory segment, so
+string literals, test fixtures and this module's own docstrings are not findings.
+
 Each collector returns candidates {signal, key, title, evidence[], first_seen, count}
 (see the opportunity-discovery design). Every git/gh/npm/pip-audit call goes through the
 injectable `run` (default subprocess.run); stdlib only.
@@ -20,7 +24,8 @@ import ideas  # noqa: E402
 PATH_RE = re.compile(r"[\w./-]+\.(?:py|zsh|js|md|sh|json)")
 DEFERRED_RE = re.compile(r"(?i)\b(deferred|parked)\b")
 FIX_RE = re.compile(r"(?i)\bfix(?:ed)?\b")
-TODO_RE = re.compile(r"\b(TODO|FIXME|XXX)\b")
+# a marker counts only inside a comment: #, //, /*, <!--, a leading *, or -- before it
+TODO_RE = re.compile(r"(?:#|//|/\*|<!--|^\s*\*|--).*\b(?:TODO|FIXME|XXX)\b")
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 MAX_EVIDENCE = 20
 WINDOW_DAYS = 30
@@ -188,6 +193,10 @@ def deferred_minors(root, run=subprocess.run):
     return cands
 
 
+def _in_tests(path):
+    return any(seg in ("test", "tests") for seg in path.split("/")[:-1])
+
+
 def todos(root, now, run=subprocess.run):
     root = Path(root)
     since = (_naive(now) - timedelta(days=WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
@@ -202,7 +211,8 @@ def todos(root, now, run=subprocess.run):
             cur_date, cur_path = line[4:14], None
         elif line.startswith("+++ "):
             cur_path = line[6:] if line.startswith("+++ b/") else None
-        elif line.startswith("+") and cur_path and not cur_path.endswith(".md") and TODO_RE.search(line):
+        elif (line.startswith("+") and cur_path and not cur_path.endswith(".md") and not _in_tests(cur_path)
+              and TODO_RE.search(line[1:])):
             found[(cur_path, line[1:].strip())] = cur_date   # log is newest first: the last write is the oldest
     show = {}
     cands = []

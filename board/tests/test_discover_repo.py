@@ -109,6 +109,16 @@ class RepeatedRulingsTest(unittest.TestCase):
     def test_missing_ledgers_dir(self):
         self.assertEqual(discover_repo.repeated_rulings(self.root), [])
 
+    def test_url_with_github_origin_and_none_without(self):
+        git(self.root, "init", "-q", "-b", "main") if not (self.root / ".git").exists() else None
+        for n in ["2026-10-01-a", "2026-10-05-b", "2026-10-09-c"]:
+            ledger(self.root, n, "Ruling: one two three four five six seven\n")
+        head = commit(self.root, {"f": "x\n"}, "c")
+        self.assertTrue(all(e["url"] is None for e in discover_repo.repeated_rulings(self.root)[0]["evidence"]))
+        git(self.root, "remote", "add", "origin", "https://github.com/o/r.git")
+        ev = discover_repo.repeated_rulings(self.root)[0]["evidence"]
+        self.assertEqual(ev[0]["url"], f"https://github.com/o/r/blob/{head}/docs/superpowers/ledgers/2026-10-01-a/progress.md#L1")
+
 
 class LinkTest(unittest.TestCase):
     def remote(self, url):
@@ -196,6 +206,14 @@ class DeferredMinorsTest(unittest.TestCase):
     def test_missing_ledgers_dir(self):
         self.assertEqual(discover_repo.deferred_minors(self.root), [])
 
+    def test_url_with_github_origin_and_none_without(self):
+        ledger(self.root, "2026-11-01-p", "Task 2: minor (deferred): board/x.py uses a bare except\n")
+        head = self.touch_later()
+        self.assertIsNone(discover_repo.deferred_minors(self.root)[0]["evidence"][0]["url"])
+        git(self.root, "remote", "add", "origin", "git@github.com:o/r.git")
+        self.assertEqual(discover_repo.deferred_minors(self.root)[0]["evidence"][0]["url"],
+                         f"https://github.com/o/r/blob/{head}/docs/superpowers/ledgers/2026-11-01-p/progress.md#L1")
+
 
 class TodosTest(unittest.TestCase):
     def setUp(self):
@@ -238,6 +256,29 @@ class TodosTest(unittest.TestCase):
         self.assertEqual(len(c), 1)
         self.assertEqual(c[0]["key"], k1)
         self.assertEqual(c[0]["evidence"][0]["line"], 4)
+
+    def test_marker_in_string_literal_none(self):
+        commit(self.root, {"a.py": 'msg = "TODO: later"\nx = "FIXME"\n'}, "str", days_ago=2)
+        self.assertEqual(discover_repo.todos(self.root, NOW), [])
+
+    def test_marker_in_tests_dir_none(self):
+        commit(self.root, {"board/tests/x.py": "# TODO: fixture\n", "test/y.js": "// FIXME fixture\n"}, "t", days_ago=2)
+        self.assertEqual(discover_repo.todos(self.root, NOW), [])
+
+    def test_comment_forms_count(self):
+        commit(self.root, {"a.py": "x = 1  # TODO: inline\n", "b.js": "f()  // FIXME later\n",
+                           "c.css": "/* XXX hack */\n", "d.js": "/**\n * TODO: doc\n */\n",
+                           "e.html": "<!-- TODO: markup -->\n", "f.sql": "select 1 -- TODO: cte\n",
+                           "g.py": "# plain\n", "tests_helper.py": "# TODO: file name only\n"}, "c", days_ago=2)
+        paths = sorted(c["evidence"][0]["path"] for c in discover_repo.todos(self.root, NOW))
+        self.assertEqual(paths, ["a.py", "b.js", "c.css", "d.js", "e.html", "f.sql", "tests_helper.py"])
+
+    def test_url_with_github_origin_and_none_without(self):
+        head = commit(self.root, {"a.py": "x = 1\n# TODO: tighten\n"}, "todo", days_ago=2)
+        self.assertIsNone(discover_repo.todos(self.root, NOW)[0]["evidence"][0]["url"])
+        git(self.root, "remote", "add", "origin", "https://github.com/o/r.git")
+        self.assertEqual(discover_repo.todos(self.root, NOW)[0]["evidence"][0]["url"],
+                         f"https://github.com/o/r/blob/{head}/a.py#L2")
 
     def test_goes_through_run(self):
         commit(self.root, {"a.py": "# TODO: q\n"}, "todo", days_ago=1)
