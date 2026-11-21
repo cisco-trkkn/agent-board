@@ -104,3 +104,11 @@ drwxr-xr-x@  6 francisco.ruiz  staff  192 Nov 18 19:53 failed
 ## Full suite
 
 `zsh tools/tests/all.zsh; echo rc=$?` (through `tmux-ctl run -t 1500 tests`): `FAIL 9/187: board/test_metrics_backfill_privacy, board/test_metrics_weekly, zsh/test_ctl_approve_show.zsh, zsh/test_ctl_awake.zsh, zsh/test_ctl_context.zsh, zsh/test_ctl_discord_ops.zsh, zsh/test_ctl_discord.zsh, zsh/test_ctl_dream.zsh, zsh/test_ctl_wait_gone.zsh`, `rc=1`. All nine fail on the `bin/tmux-ctl` help range: line 754 prints `sed -n '2,77p'`, but the header's closing bare `#` line is now line 80, because `652d848` and `1e38741` added three `discover` usage lines (76-78 hold `discover collect|rank`, `discover nightly`, `discover schedule`) without raising the range. The range must become `2,80p`. The `discover nightly` line also still says "placeholder until it lands". Not fixed here (a fix round).
+
+### After the fix (`80b4062`, help range `2,80p`)
+
+The nine jobs passed alone, then the full suite: `ALL PASS 187 jobs in 8m28s`, `SLOW: 8m28s over the 5 min budget`, `rc=4` (accepted on this machine). The history file got a second `full: true` line from this run.
+
+### Dry-run and the outbox (read from `board/discover.py`)
+
+With `--dry-run` the run dir is a `tempfile.mkdtemp` (removed at the end), which is why no `discover/runs/` dir appeared. `_night` returns after printing, before `discover_post.publish`; `_fail` returns before `discord_feed.outbox_write`; `load_state` only reads. So the dry-run path reaches no outbox or state write. The outbox directory's mtime change therefore did not come from this code; the running bridge consuming its own files is the likely cause, but this was not observed.
