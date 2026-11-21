@@ -157,6 +157,8 @@ one spec queued last; first outcome O1 as written in spec §1; low changes kept 
 prompts and routing promoted only by the user, permissions and protected files never trialled; evidence from real work
 only; protected set as §6; start quiet; Claude Code stays the runtime.
 
+**Assumptions / known risk:** as queued, this plan will stop at Task 1 unless stage 7 (engine §13 approval holds and §14 schedules) lands first: the engine spec's 2026-11-19 revision, decision 5, moved both to stage 7. Lead ruling 2026-11-21: keep the stop, no fallbacks.
+
 **Rulings made while planning (planner, for the lead to confirm):**
 - Ruling: engine §13 (approval holds) and §14 (schedules) are marked "moved to stage 7" in the engine spec's 2026-11-19
   revision, so parts 1 and 2 may not provide them. Task 1 treats them as required interfaces like the others: missing →
