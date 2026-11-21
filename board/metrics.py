@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """metrics: the queue run log (docs/superpowers/metrics/runs.jsonl) and its commands.
 
-Run log: one JSON object per line, kind in batch|start|run|defect|error|dream|analytics|discover|scout (analysis is reserved; readers ignore unknown
+Run log: one JSON object per line, kind in batch|start|run|defect|error|dream|analytics|discover|scout|analysis (readers ignore unknown
 kinds). Append-only; readers take the last `run` per (batch, spec); a malformed line is skipped and counted.
 Nothing private goes in a line: no session ids, prompts, agent names, absolute paths.
 
 Task log (docs/superpowers/metrics/tasks.jsonl, same rules): one line per plan task, written by `record` and by
 `backfill-tasks`; readers take the last line per (batch, spec, task_id).
 
-CLI: metrics.py [--repo DIR] <batch start|start|record|defect|report|compare|backfill|backfill-tasks|analyze|recommend|weekly|gate|status> ...
+CLI: metrics.py [--repo DIR] <batch start|start|record|defect|append|has|runs|report|compare|backfill|backfill-tasks|analyze|recommend|weekly|gate|status> ...
 A failing command prints one line `metrics: <sub>: <reason>` to stderr and exits 1. `tmux-ctl metrics` calls this.
 """
 import argparse
 import calendar
+import fcntl
 import hashlib
 import json
 import os
@@ -29,7 +30,8 @@ import tc_env  # noqa: E402
 import usage  # noqa: E402
 
 METRICS_DIR = Path("docs/superpowers/metrics")
-SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "recommend", "weekly", "gate", "status")
+SUBS = ("batch start", "start", "record", "defect", "report", "compare", "backfill", "backfill-tasks", "analyze", "recommend", "weekly", "gate", "status", "append", "has", "runs")
+STAGE1_KINDS = ("batch", "start", "run", "defect")   # written by their own commands, never by `append`
 
 
 class MetricsError(Exception):
@@ -102,8 +104,13 @@ def read_tasks(repo):
 
 def _append_to(p, obj):
     p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "a") as f:
-        f.write(json.dumps(obj, sort_keys=True) + "\n")
+    with open(str(p) + ".lock", "a") as lk:   # one writer at a time: a long line is not atomic under O_APPEND alone
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            with open(p, "a") as f:
+                f.write(json.dumps(obj, sort_keys=True) + "\n")
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
 
 
 def append(repo, obj):
@@ -978,6 +985,34 @@ def _union_active(repo, runs, usage_db):
         conn.close()
 
 
+def pair_results(repo, batch, runs):
+    """[(a, b, clean, paths)] for every usable pair, or None when git merge-tree failed. Pair order and the usable
+    rule are those of the report's parallel-buildable pairs: stale_base conflict or (clean with base and head)."""
+    by = {r["spec"]: r for r in runs}
+    cand = sorted(by)
+
+    def ok(r):
+        res = (r.get("stale_base") or {}).get("result")
+        return res == "conflict" or (res == "clean" and bool(r.get("base")) and bool(r.get("head")))
+    usable = [(a, b) for i, a in enumerate(cand) for b in cand[i + 1:] if ok(by[a]) and ok(by[b])]
+    out, trees = [], {}
+    for a, b in usable:
+        sa, sb = by[a]["stale_base"], by[b]["stale_base"]
+        if sa["result"] == "conflict" or sb["result"] == "conflict":
+            out.append((a, b, False, sorted(set(sa.get("paths") or []) | set(sb.get("paths") or []))))
+            continue
+        for s in (a, b):
+            if s not in trees:
+                trees[s] = _spec_tree(repo, by[s], batch["base"])
+        if trees[a] is None or trees[b] is None:
+            return None
+        r = _merge_trees(repo, batch["base"], trees[a], trees[b])
+        if r is None:
+            return None
+        out.append((a, b, True, []) if r[1] else (a, b, False, r[2]))
+    return out
+
+
 def report_text(repo, batch_id, usage_db=None):
     repo = Path(repo)
     lines, malformed = read_log(repo)
@@ -1071,28 +1106,10 @@ def report_text(repo, batch_id, usage_db=None):
         res = (r.get("stale_base") or {}).get("result")
         return res == "conflict" or (res == "clean" and bool(r.get("base")) and bool(r.get("head")))
     usable = [(a, b) for a, b in cpairs if ok(by[a]) and ok(by[b])]
-    clean, bad, failed = 0, [], False
-    trees = {}
-    for a, b in usable:
-        sa, sb = by[a]["stale_base"], by[b]["stale_base"]
-        if sa["result"] == "conflict" or sb["result"] == "conflict":
-            paths = sorted(set(sa.get("paths") or []) | set(sb.get("paths") or []))
-            bad.append((a, b, paths))
-            continue
-        for s in (a, b):
-            if s not in trees:
-                trees[s] = _spec_tree(repo, by[s], batch["base"])
-        if trees[a] is None or trees[b] is None:
-            failed = True
-            break
-        r = _merge_trees(repo, batch["base"], trees[a], trees[b])
-        if r is None:
-            failed = True
-            break
-        if r[1]:
-            clean += 1
-        else:
-            bad.append((a, b, r[2]))
+    res = pair_results(repo, batch, runs)
+    failed = res is None
+    clean = sum(1 for r in res if r[2]) if res else 0
+    bad = [(a, b, paths) for a, b, c, paths in res if not c] if res else []
     if failed:
         out.append("Parallel-buildable pairs: unavailable (git merge-tree failed)")
         missing.append("parallel_pairs")
@@ -1167,6 +1184,20 @@ def _parser():
     bs.add_argument("--config", action="append", required=True)
     bs.add_argument("--group", action="append", default=[])
     bs.add_argument("specs", nargs="+")
+    ap_ = sp.add_parser("append", parents=[common])
+    ap_.add_argument("kind")
+    ap_.add_argument("--json", required=True)
+    ap_.add_argument("--batch")
+    ap_.add_argument("--log")
+    hs = sp.add_parser("has", parents=[common])
+    hs.add_argument("kind")
+    hs.add_argument("--spec")
+    hs.add_argument("--batch")
+    hs.add_argument("--log")
+    rn = sp.add_parser("runs", parents=[common])
+    rn.add_argument("batch")
+    rn.add_argument("--json", action="store_true")
+    rn.add_argument("--log")
     st = sp.add_parser("start", parents=[common])
     st.add_argument("spec")
     st.add_argument("--batch", required=True)
@@ -1687,6 +1718,62 @@ def cmd_backfill(repo, args):
         LOG_OVERRIDE = None
 
 
+def _with_log(args, fn):
+    """Run fn with `--log PATH` (when given) as the run log; LOG_OVERRIDE is restored afterwards."""
+    global LOG_OVERRIDE
+    saved = LOG_OVERRIDE
+    if getattr(args, "log", None):
+        LOG_OVERRIDE = args.log
+    try:
+        return fn()
+    finally:
+        LOG_OVERRIDE = saved
+
+
+def cmd_append(repo, args):
+    def go():
+        if args.kind in STAGE1_KINDS:
+            raise MetricsError(f"kind {args.kind} has its own command")
+        try:
+            obj = json.loads(args.json)
+        except ValueError:
+            raise MetricsError("--json is not valid JSON")
+        if not isinstance(obj, dict):
+            raise MetricsError("--json must be a JSON object")
+        obj["kind"] = args.kind
+        if args.batch:
+            obj["batch"] = args.batch
+        append(repo, obj)
+    _with_log(args, go)
+
+
+def cmd_has(repo, args):
+    def go():
+        for d in read_log(repo)[0]:
+            if d.get("kind") == args.kind and (not args.spec or d.get("spec") == args.spec) \
+                    and (not args.batch or d.get("batch") == args.batch):
+                return 0
+        return 1
+    return _with_log(args, go)
+
+
+def cmd_runs(repo, args):
+    def go():
+        lines = read_log(repo)[0]
+        batch = next((d for d in reversed(lines) if d.get("kind") == "batch" and d.get("batch") == args.batch), None)
+        if batch is None:
+            raise MetricsError(f"unknown batch {args.batch}")
+        by = last_runs(lines)
+        specs = list(batch.get("specs") or [])
+        specs += sorted({k[1] for k in by if k[0] == args.batch and k[1] not in specs})
+        runs = {s: by.get((args.batch, s)) for s in specs}
+        res = pair_results(repo, batch, [r for r in runs.values() if r])
+        pairs = None if res is None else [{"a": a, "b": b, "clean": c, "paths": p} for a, b, c, p in res]
+        print(json.dumps({"batch": args.batch, "base": batch.get("base"), "at": batch.get("at"), "specs": specs,
+                          "runs": runs, "pairs": pairs}, sort_keys=True))
+    _with_log(args, go)
+
+
 def cmd_backfill_tasks(repo, args):
     """Task lines for every run line whose (batch, spec) has none yet. A run whose lines cannot be built is named on stderr."""
     global TASKS_OVERRIDE
@@ -1949,11 +2036,11 @@ def main(argv=None):
         if args.sub == "batch":
             args.specs = [rel_spec(repo, s) for s in args.specs]
             args.group = [",".join(rel_spec(repo, x.strip()) for x in g.split(",") if x.strip()) for g in args.group]
-        elif hasattr(args, "spec"):
+        elif getattr(args, "spec", None) is not None:
             args.spec = rel_spec(repo, args.spec)
         rc = {"batch": cmd_batch_start, "start": cmd_start, "defect": cmd_defect, "record": cmd_record, "report": cmd_report,
               "compare": cmd_compare, "gate": cmd_gate, "status": cmd_status, "backfill": cmd_backfill,
-              "backfill-tasks": cmd_backfill_tasks, "analyze": cmd_analyze, "recommend": cmd_recommend, "weekly": cmd_weekly}[args.sub](repo, args)
+              "backfill-tasks": cmd_backfill_tasks, "append": cmd_append, "has": cmd_has, "runs": cmd_runs, "analyze": cmd_analyze, "recommend": cmd_recommend, "weekly": cmd_weekly}[args.sub](repo, args)
         return rc or 0
     except Exception as e:  # MetricsError or anything else: one line, never a traceback
         print(f"metrics: {sub}: {e}", file=sys.stderr)
