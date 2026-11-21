@@ -318,6 +318,10 @@ if [[ "$cmd" == gauth ]]; then   # config needs no tmux; the others reach tmux t
   python3 -I "${0:A:h:h}/board/gauth.py" "$@"; exit $?
 fi
 if [[ "$cmd" == discover ]]; then   # no tmux needed (launchd runs it)
+  if [[ "$1" == schedule ]]; then
+    [[ "$2" == (install|status|uninstall) ]] || die 'usage: tmux-ctl discover schedule install|status|uninstall'
+    exec python3 -I "${0:A:h:h}/board/discover_schedule.py" "$2"
+  fi
   exec python3 -I "${0:A:h:h}/board/discover.py" "$@"
 fi
 if [[ "$cmd" == metrics && ( "$1" == schedule || "$1" == weekly ) ]]; then   # no tmux needed (launchd runs it)

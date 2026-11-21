@@ -174,6 +174,22 @@ tmux-ctl metrics schedule uninstall
 - **Switches.** `TC_ANALYTICS=0` in the job's environment, or an empty file `~/.local/state/agent-board/analytics.off`, makes every run print `analytics: off` and do nothing; remove either to resume. `tmux-ctl metrics weekly --dry-run` ignores both and prints instead of posting.
 - **It runs whatever branch the main checkout holds.** The job executes the code of the checkout `tmux-ctl` links into, so keep `main` checked out there while the job is installed.
 
+### Nightly opportunity discovery (optional)
+
+A LaunchAgent runs `tmux-ctl discover nightly` every day at 07:00 local time. For each project it collects candidates (flaky and slow tests, failed runs on main, repeated rulings, deferred minor items, TODO and FIXME lines, dependency alerts, stale ideas), has a model rank them and posts the top items to the project's Discord channel, each with "File as idea" and "Dismiss" buttons. The job only reports: it never files an idea, drafts a spec or starts work by itself. It does not run at load, so a Mac that is asleep at 07:00 runs it at the next wake.
+
+```zsh
+tmux-ctl discover schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-discover.plist and loads it
+tmux-ctl discover schedule status       # first line loaded or not loaded, then any off switch set, then last night: <the last line of discover.log> (or none)
+tmux-ctl discover schedule uninstall
+```
+
+`install` backs up an existing plist as `.bak-YYYYMMDD` and points the job at `~/.local/bin/tmux-ctl`, else the `tmux-ctl` beside this checkout. Its output goes to `~/.local/state/agent-board/discover.launchd.log` (`$TC_STATE/` when set). Each night's outcome, one line per project (`posted`, `nothing-new` or `failed: <reason>`), is appended to `~/.local/state/agent-board/discover/discover.log`. macOS only: elsewhere the command prints `macOS only` and exits 2.
+
+- **Switches.** `TC_DISCOVER=0` in the job's environment, or an empty file `~/.local/state/agent-board/discover.off`, makes every run print `discover: off` and do nothing; remove either to resume.
+- **Weekly usage guard.** When the weekly plan usage is at 85 % or more, a run prints `discover: skipped, weekly <n>%` and does nothing. `tmux-ctl discover nightly --force` runs it anyway, and `--dry-run` prints without posting.
+- **It runs whatever branch the main checkout holds.** The job executes the code of the checkout `tmux-ctl` links into, so keep `main` checked out there while the job is installed.
+
 ### Usage tab statusLine (optional)
 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):
