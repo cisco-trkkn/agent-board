@@ -180,7 +180,6 @@ A LaunchAgent runs `tmux-ctl discover nightly` every day at 07:00 local time. Fo
 
 ```zsh
 tmux-ctl discover schedule install      # writes ~/Library/LaunchAgents/com.user.agent-board-discover.plist and loads it
-tmux-ctl scout schedule install         # writes the two scout LaunchAgents (poll, weekly) and loads them
 tmux-ctl discover schedule status       # first line loaded or not loaded, then any off switch set, then last night: <the last line of discover.log> (or none)
 tmux-ctl discover schedule uninstall
 ```
@@ -190,6 +189,20 @@ tmux-ctl discover schedule uninstall
 - **Switches.** `TC_DISCOVER=0` in the job's environment, or an empty file `~/.local/state/agent-board/discover.off`, makes every run print `discover: off` and do nothing; remove either to resume.
 - **Weekly usage guard.** When the weekly plan usage is at 85 % or more, a run prints `discover: skipped, weekly <n>%` and does nothing. `tmux-ctl discover nightly --force` runs it anyway, and `--dry-run` prints without posting.
 - **It runs whatever branch the main checkout holds.** The job executes the code of the checkout `tmux-ctl` links into, so keep `main` checked out there while the job is installed.
+
+### Trend scout (optional)
+
+Two LaunchAgents run the trend scout: a daily poll of its sources and a weekly pass on Sunday that evaluates the new items, drafts specs and posts a digest with Approve, Reject and Revise buttons. An approval copies one spec onto `main` of the checkout as its own commit; nothing is pushed.
+
+```zsh
+tmux-ctl scout schedule install         # writes the two scout LaunchAgents (poll, weekly) and loads them
+tmux-ctl scout schedule status          # loaded or not loaded per job, any off switch set, then the last line of poll.log and weekly.log
+tmux-ctl scout schedule uninstall
+```
+
+- **The #scout channel.** To let people hand the scout links and source requests, add the channel as a source: `tmux-ctl scout source add scout --kind discord_channel --url <channel id>`. The poll reads it with the project bot's token, the `DISCORD_BOT_TOKEN` line in `~/.local/state/agent-board/discord/agent-board/.env` (`$TC_STATE`-based when set). Only links and `source:` requests from users in that project's `access.json` `allowFrom` are used, and only `https://` links.
+- **Switches.** `TC_SCOUT=0` in the job's environment, or an empty file `~/.local/state/agent-board/scout/off`, makes every run print `scout: off` and do nothing; remove either to resume. `scout schedule status` prints an `off:` line while one is set.
+- **It runs whatever branch the main checkout holds.** Keep `main` checked out there while the jobs are installed.
 
 ### Usage tab statusLine (optional)
 
