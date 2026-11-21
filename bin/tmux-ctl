@@ -80,8 +80,8 @@
 #   tmux-ctl scout weekly [--dry-run] [--force] [--retry]  the Sunday pass: evaluate, draft specs, post the digest (--dry-run prints, writes nothing)
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
-#   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #   tmux-ctl registry <validate|analyse|stale|report|facts> …  plan manifests, graphs, waves (engine/, node)
+#   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
 # prompt. Targets this pane's session (override: TC_SESSION=<name>).
@@ -772,7 +772,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,84p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,85p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
