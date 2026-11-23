@@ -138,13 +138,18 @@ function commitLedger(ctx, spec, outcome = "") {
   });
 }
 
-// commit_ledger, metrics_record, worktree_remove (the last only when `removeWorktree`).
+// commit_ledger, metrics_record (only with a batch; its failure is recorded, never thrown), worktree_remove (only when `removeWorktree`).
 function finalize(ctx, spec, outcome, { removeWorktree = false } = {}) {
   commitLedger(ctx, spec, outcome);
-  run(ctx, spec, "metrics_record", `metrics_record:${spec.id}`, { spec: spec.id, batch: spec.batch }, () => {
-    must(spawn(ctx, tmuxCtl(ctx), ["metrics", "record", spec.id, "--batch", String(spec.batch), "--outcome", outcome], { cwd: ctx.repo }), "metrics record");
-    return { spec: spec.id, batch: spec.batch, outcome };
-  });
+  // Measurement never blocks a spec: no batch -> no step at all; a failing record stays a failed step and finalize goes on.
+  if (spec.batch != null && spec.batch !== "") {
+    try {
+      run(ctx, spec, "metrics_record", `metrics_record:${spec.id}`, { spec: spec.id, batch: spec.batch }, () => {
+        must(spawn(ctx, tmuxCtl(ctx), ["metrics", "record", spec.id, "--batch", String(spec.batch), "--outcome", outcome], { cwd: ctx.repo }), "metrics record");
+        return { spec: spec.id, batch: spec.batch, outcome };
+      });
+    } catch (_) { /* steps.run already wrote the failed row and its step_failed event */ }
+  }
   if (removeWorktree) {
     const wt = spec.worktree || ctx.worktree;
     run(ctx, spec, "worktree_remove", `worktree_remove:${spec.id}`, { path: wt }, () => {

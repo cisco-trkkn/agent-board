@@ -267,3 +267,34 @@ for (const outcome of ["failed — implement1: gone", "failed", "denied"]) {
     assert.equal(s.g.git("rev-parse", "feat-a").trim(), branchHead, "no second ledger commit");
   });
 }
+
+// Measurement never blocks a spec: no batch -> no `metrics record`; a failing record leaves its step failed.
+for (const integration of ["keep", "mr", "merge"]) {
+  test(`${integration} with no batch: metrics record is not run, the outcome is reached`, () => {
+    const s = setup({ integration, remoteUrl: null });
+    if (integration === "mr") {
+      s.g.git("remote", "set-url", "--push", "origin", s.bare);
+      s.g.git("config", "url." + s.bare + ".insteadOf", "https://github.com/o/r.git");
+      s.g.git("remote", "set-url", "origin", "https://github.com/o/r.git");
+    }
+    s.spec.batch = null;
+    const r = integrate.run(s.ctx, s.spec);
+    assert.match(r.outcome, integration === "keep" ? /^kept / : integration === "mr" ? /^mr / : /^merged$/);
+    assert.ok(!s.calls().some((c) => c.startsWith("tmux-ctl")), s.calls().join("|"));
+    assert.ok(!s.keys().some((k) => k.key.startsWith("metrics_record")));
+  });
+}
+
+test("merge with a batch and a failing metrics record: step failed, outcome reached, worktree still removed", () => {
+  const s = setup();
+  fs.writeFileSync(s.ctx.tmuxCtl, `#!/bin/sh\necho "tmux-ctl $@" >> "${path.join(s.e.root, "calls.log")}"\necho "metrics: record: unknown batch b1" >&2\nexit 1\n`, { mode: 0o755 });
+  const r = integrate.run(s.ctx, s.spec);
+  assert.equal(r.outcome, "merged");
+  assert.equal(s.keys().find((k) => k.key === "metrics_record:s1").state, "failed");
+  assert.equal(s.keys().find((k) => k.key === "worktree_remove:s1").state, "done");
+  assert.ok(!fs.existsSync(s.wt));
+  const ev = s.db.prepare("SELECT detail FROM events WHERE spec='s1' AND kind='step_failed'").all();
+  assert.equal(ev.length, 1);
+  assert.match(ev[0].detail, /metrics record failed/);
+  assert.equal(s.calls().length, 1); // no retry
+});
