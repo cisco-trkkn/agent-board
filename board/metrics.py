@@ -367,6 +367,33 @@ def find_merge(repo, plan_commit, since_ts, slug):
     return None
 
 
+def _worktree_branch(start):
+    """The branch name a run's worktree stands for: the basename of the `start` record's worktree path."""
+    wt = (start or {}).get("worktree")
+    return Path(wt).name if wt else None
+
+
+def _fast_forward_range(repo, plan_path, plan_commit, start):
+    """(head, base, True) of a run that was fast-forwarded onto main, else None. Such a run leaves no merge commit and
+    no branch, so the range comes from what remains on main: head is the last commit that touched the plan's ledger
+    directory (the ledger is the last thing a run commits), base is the main tip the run started from when the plan
+    already existed then, else the parent of the plan's first commit."""
+    ldir = "docs/superpowers/ledgers/" + Path(plan_path).name[:-3]
+    rc, out = _git_try(repo, "log", "-1", "--format=%H", "main", "--", ldir)
+    head = out.strip() if rc == 0 else ""
+    if not head or _git_try(repo, "merge-base", "--is-ancestor", plan_commit, head)[0] != 0:
+        return None
+    rc, fp = _git_try(repo, "rev-list", "--first-parent", "main")   # a fast-forwarded run sits on main's own line; a merged branch does not
+    if rc != 0 or not {plan_commit, head} <= set(fp.split()):
+        return None
+    smain = (start or {}).get("main")
+    if smain and _git_try(repo, "merge-base", "--is-ancestor", plan_commit, smain)[0] == 0 \
+            and _git_try(repo, "merge-base", "--is-ancestor", smain, head)[0] == 0:
+        return head, smain, True
+    rc, par = _git_try(repo, "rev-parse", "--verify", "-q", plan_commit + "^")
+    return (head, par.strip(), True) if rc == 0 and par.strip() else None
+
+
 def _numstat(repo, base, head):
     rc, out = _git_try(repo, "diff", "--numstat", "--no-renames", f"{base}..{head}")
     if rc != 0:
@@ -478,6 +505,12 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None, plan=None,
             if head:
                 rc, mb = _git_try(repo, "merge-base", "main", head)
                 base = mb.strip() if rc == 0 and mb.strip() else None
+    ff = False
+    if not merge and not head and plan_commit:
+        ffr = _fast_forward_range(repo, plan_path, plan_commit, start)
+        if ffr:
+            head, base, ff = ffr
+            branch = branch or _worktree_branch(start)
     rec["branch"], rec["head"], rec["base"] = branch, head, base
     for k in ("branch", "head", "base"):
         if rec[k] is None:
@@ -486,12 +519,12 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None, plan=None,
 
     word = (outcome or "").split()[0].lower() if (outcome or "").strip() else None
     if word is None:
-        rec["outcome"] = "merged" if rec["merge"] else "kept"
+        rec["outcome"] = "merged" if rec["merge"] or ff else "kept"
     else:
         rec["outcome"] = word
         if word not in OUTCOMES:
             missing.append("outcome")
-    if rec["merge"] is None and rec["outcome"] in ("merged", "mr"):
+    if rec["merge"] is None and not ff and rec["outcome"] in ("merged", "mr"):
         missing.append("merge")
 
     info = None

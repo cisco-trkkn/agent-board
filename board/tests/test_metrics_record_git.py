@@ -299,5 +299,69 @@ class PlanAlreadyOnMainTest(unittest.TestCase):
         self.assertIn("merge", r["missing"])
 
 
+class FastForwardTest(unittest.TestCase):
+    """finishing-a-development-branch fast-forwards main: no merge commit, the branch is deleted. The run is resolved
+    from the plan's first commit (base = its parent) and the last commit that touched the plan's ledger (head)."""
+    SPEC = "docs/superpowers/specs/ff.md"
+    PLAN = "docs/superpowers/plans/2026-01-04-ff.md"
+
+    def setUp(self):
+        cache_main_root(self)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        t = Path(self.tmp.name)
+        p = mock.patch.dict(os.environ, {"TC_STATE": str(t / "state"), "USAGE_ROOT": str(t / "proj")})
+        p.start()
+        self.addCleanup(p.stop)
+        self.repo = r = t / "repo"
+        r.mkdir()
+        git(r, "init", "-q", "-b", "main")
+        write(r, "f.txt", "1\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "base")
+        self.base = git(r, "rev-parse", "HEAD")
+        write(r, "other.txt", "o\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "other work before the plan")
+        self.plan_parent = git(r, "rev-parse", "HEAD")
+        write(r, self.PLAN, f"# P\n\n**Spec:** `{self.SPEC}`\n")
+        write(r, self.PLAN + ".tasks.json", tasks_json(self.PLAN, [("standard", ["src/a.py", "src/b.py"])]))
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "docs(plan): ff")
+        write(r, "src/a.py", "1\n2\n")
+        write(r, "src/c.py", "c\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "feat: work")
+        write(r, "docs/superpowers/ledgers/2026-01-04-ff/progress.md", "# progress\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "docs(ledger): ff")
+        self.head = git(r, "rev-parse", "HEAD")
+        write(r, "later.txt", "l\n")   # a later, unrelated commit on main (the metrics line, the next run)
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "docs(metrics): ff")
+        self.now = time.time()
+        metrics.append(r, {"kind": "batch", "batch": "B", "base": self.base, "configs": ["c"], "assignment": {},
+                           "groups": [], "at": metrics.utc(self.now - 3600)})
+        metrics.append(r, {"kind": "start", "batch": "B", "spec": self.SPEC, "at": metrics.utc(self.now - 1800),
+                           "main": self.base, "worktree": ".claude/worktrees/ff"})
+
+    def rec(self, outcome=None):
+        return metrics.build_record_static(self.repo, self.SPEC, "B", outcome, self.now)
+
+    def test_range_comes_from_plan_and_ledger_commits(self):
+        r = self.rec()
+        self.assertIsNone(r["merge"])
+        self.assertEqual((r["head"], r["base"]), (self.head, self.plan_parent))
+        self.assertEqual(r["touched_list"], ["src/a.py", "src/c.py"])   # docs/superpowers/ is excluded
+        self.assertEqual(r["outcome"], "merged")
+        for k in ("head", "base", "merge", "touched_files", "diff_lines", "touched_list", "manifest"):
+            self.assertNotIn(k, r["missing"], k)
+        self.assertEqual(r["manifest"]["source"], "tasks")
+        self.assertEqual(r["manifest"]["both"], 1)
+
+    def test_branch_comes_from_the_start_worktree(self):
+        self.assertEqual(self.rec()["branch"], "ff")
+
+    def test_plan_on_main_before_start_uses_the_start_main(self):
+        plan_commit = git(self.repo, "log", "--format=%H", "-1", "--", self.PLAN)
+        metrics.append(self.repo, {"kind": "start", "batch": "B", "spec": self.SPEC, "at": metrics.utc(self.now - 900),
+                                   "main": plan_commit, "worktree": ".claude/worktrees/ff"})
+        self.assertEqual(self.rec()["base"], plan_commit)   # the plan is an ancestor of start.main: the range starts there
+
+
 if __name__ == "__main__":
     unittest.main()
