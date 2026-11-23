@@ -109,3 +109,4 @@ Final re-review final-rev: 6/6 ADDRESSED, no new Critical/Important — ready to
 Final: minor (deferred): dry runs push real run dirs out of the newest 14; a dry run in the same minute as a real run overwrites that dir's collected.json/rank.json
 Final: minor (deferred): a dismissed stale_idea never comes back (follows the ruling: stale_idea never counts as changed)
 Final: complete (final review clean after one fix wave 54cffe0..53a3457; suite ALL PASS 187 rc=4)
+User gate #104 (Task 10), 2026-11-23: real `env -u TMUX ~/.local/bin/tmux-ctl discover nightly --project agent-board --dry-run` rc=0 from main, no --force (weekly 14%); 11 candidates, 5 ranked, all 5 keys in run dir 20261123-1401 collected.json. Items 1-2 are the same all.zsh rc=4 (over-budget, accepted). The user asked to install the schedule: `tmux-ctl discover schedule install` → discover nightly daily at 07:00; status `loaded`. Gate closed.

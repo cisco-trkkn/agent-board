@@ -67,3 +67,4 @@ Final: minor (deferred): N1 same-week re-run still pays the model call before pu
 Final: minor (deferred): N2 state written + outbox write failed → retry needs --force (documented)
 Final: minor (deferred): N3 plist pins the checkout analytics_schedule.py runs from; install via ~/.local/bin (main)
 Final: minor (deferred): N4 click reply outbox_write and evidence join outside the try
+User gate #94 (Task 7), 2026-11-23: the user ran `tmux-ctl metrics schedule install` (agent Bash was denied by the auto-mode classifier) → metrics weekly Mondays 09:00; status `loaded`. `tmux-ctl metrics weekly` rc=0: one `kind: analytics` record (2026-W48, 2 posts to `_ops`, $0.0793; commit d92ff3c). Taps on File as idea 1: audit `filed` 19:04:30Z, `already filed` 19:04:41Z and 19:05:12Z; the ideas file gained exactly one line. Gate closed.
