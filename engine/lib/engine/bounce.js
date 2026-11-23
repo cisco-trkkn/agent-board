@@ -1,7 +1,7 @@
 "use strict";
 
-// Task 3 moves this constant to strategy/spec_driven.js and re-exports it here.
-const BOUNCE_MAX_LINES = 60;
+// The cap is a strategy constant (spec section 3, step 3); it is re-exported here.
+const { BOUNCE_MAX_LINES } = require("./strategy/spec_driven");
 
 const FAIL_LINE = /^(not ok|FAIL|ERROR|✗|AssertionError|Error:)/;
 const DETAIL_LINE = /^\s+(at |expected|actual)/;
