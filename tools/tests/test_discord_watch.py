@@ -85,6 +85,15 @@ class Finding(unittest.TestCase):
         t = table((1, 0, 9, "claude " + CH), (2, 1, 9, "node --experimental-strip-types /h/other/server.ts"))   # not under /discord/
         self.assertFalse(dw.has_server(1, t))
 
+    def test_node_server_ts_must_be_a_path_component(self):
+        for a in ("node --experimental-strip-types /h/.claude/plugins/cache/x/discord/0.0.7/dev-server.ts",
+                  "node /h/repo/tools/discord-bridge/bridge.js /h/.local/state/agent-board/discord/agent-board",
+                  "node /h/discord/dev-server.ts"):
+            t = table((1, 0, 9, "claude " + CH), (2, 1, 9, a))
+            self.assertFalse(dw.has_server(1, t), a)
+        t = table((1, 0, 9, "claude " + CH), (2, 1, 9, "node server.ts /h/discord/x"))
+        self.assertTrue(dw.has_server(1, t))
+
     def test_pane_of_walks_ancestors(self):
         t = table((100, 1, 9, "-zsh"), (101, 100, 9, "claude " + CH))
         self.assertEqual(dw.pane_of(101, t, {100: "%3"}), "%3")

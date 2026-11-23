@@ -38,7 +38,7 @@ cp "$STUBJS" "$ROOT/"; cp "$LAUNCH" "$ROOT/"; chmod +x "$ROOT/discord-mcp-launch
 FB="$D/fakebin"; mkdir -p "$FB"
 print -r -- '#!/bin/sh
 echo "bun $1" >> "'"$D"'/calls.log"
-if [ "$1" = install ]; then { echo "BUN"; for a in "$@"; do echo "$a"; done; pwd; } > "'"$D"'/bun-install.argv"; echo INSTALL-STDOUT; exit 0; fi
+if [ "$1" = install ]; then { echo "BUN"; for a in "$@"; do echo "$a"; done; pwd; } > "'"$D"'/bun-install.argv"; echo INSTALL-STDOUT; exit ${FAKE_BUN_RC:-0}; fi
 { echo "BUN"; for a in "$@"; do echo "$a"; done; } > "'"$D"'/bun.argv"
 if [ -n "$DISCORD_BOT_TOKEN" ]; then echo "REAL-SERVER token"; else echo "REAL-SERVER notoken"; fi' > "$FB/bun"; chmod +x "$FB/bun"
 # a fake node (first on PATH only in the token cases): version from FAKE_NODE_VER, records argv and cwd
@@ -86,7 +86,21 @@ for v in v22.5.9 v20.11.0 v8.0.0; do
   check "launcher: node $v: bun argv is the stock start command" test "$(tr '\n' ' ' < "$D/bun.argv")" = "BUN run --cwd $ROOT --shell=bun --silent start "
   check "launcher: node $v: node never ran the server" not test -e "$D/node.argv"
 done
+# a version without a minor, or garbage, is not trusted: stock bun
+for v in v22 garbage; do
+  rm -f "$D/bun.argv" "$D/node.argv"
+  FAKE_NODE_VER=$v; R="$(print -r -- "$INIT" | launchn DISCORD_STATE_DIR="$SD" CLAUDE_CONFIG_DIR="$CFG" 2>/dev/null)"
+  check "launcher: node version '$v' is not trusted, runs stock bun" test "$R" = "REAL-SERVER notoken"
+  check "launcher: node version '$v': node never ran the server" not test -e "$D/node.argv"
+done
 unset FAKE_NODE_VER
+# a failed bun install is not fatal: one stderr line, then node starts (node_modules may exist)
+rm -f "$D/node.argv"
+R="$(print -r -- "$INIT" | launchn FAKE_BUN_RC=7 DISCORD_STATE_DIR="$SD" CLAUDE_CONFIG_DIR="$CFG" 2>"$D/err")"
+check "launcher: failed install still starts node" test "$R" = "NODE-SERVER notoken"
+check "launcher: failed install says so on stderr" grep -qxF 'discord-mcp-launch: bun install failed (rc=7); starting with existing node_modules' "$D/err"
+R="$(print -r -- "$INIT" | launchn DISCORD_STATE_DIR="$SD" CLAUDE_CONFIG_DIR="$CFG" 2>"$D/err")"
+check "launcher: a good install prints no failure line" not grep -q 'install failed' "$D/err"
 # the escape hatch
 rm -f "$D/bun.argv" "$D/node.argv"
 R="$(print -r -- "$INIT" | launchn TC_DISCORD_RUNTIME=bun DISCORD_STATE_DIR="$SD" CLAUDE_CONFIG_DIR="$CFG" 2>/dev/null)"

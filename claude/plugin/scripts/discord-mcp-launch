@@ -18,10 +18,11 @@ if [ -n "$DISCORD_BOT_TOKEN" ] || has_token "$dir"; then
   # its output goes to stderr so stdout stays clean for MCP stdio, and a failed install is not fatal (node_modules may exist).
   if [ "$TC_DISCORD_RUNTIME" != bun ] && command -v node >/dev/null 2>&1; then
     nv="$(node --version 2>/dev/null)"; nv="${nv#v}"; nmaj="${nv%%.*}"; nmin="${nv#*.}"; nmin="${nmin%%.*}"
+    case "$nv" in *.*) ;; *) nmaj=0 ;; esac   # a version without a minor is not trusted
     case "$nmaj$nmin" in *[!0-9]*|"") nmaj=0; nmin=0 ;; esac
     if [ "$nmaj" -gt 22 ] || { [ "$nmaj" -eq 22 ] && [ "$nmin" -ge 6 ]; }; then
       cd "$root" || exit 1
-      bun install --no-summary >&2 || true
+      bun install --no-summary >&2 || echo "discord-mcp-launch: bun install failed (rc=$?); starting with existing node_modules" >&2
       exec node --experimental-strip-types "$PWD/server.ts"
     fi
   fi

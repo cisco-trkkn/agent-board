@@ -201,7 +201,7 @@ dc_holder() {
   while read -r pid ppid args; do
     par[$pid]=$ppid; nm[$pid]="$args"
     [[ "$args" == *discord-mcp-stub.js* ]] && continue
-    if [[ "$args" == *discord-mcp-launch* ]] || [[ "$args" == */discord/* && ( "$args" =~ 'bun run .*start' || "$args" =~ '(bun|node) .*server\.ts' ) ]]; then cands+=($pid); fi
+    if [[ "$args" == *discord-mcp-launch* ]] || [[ "$args" == */discord/* && ( "$args" =~ 'bun run .*start' || "$args" =~ 'bun .*server\.ts' || "$args" =~ 'node .*(^| |/)server\.ts( |$)' ) ]]; then cands+=($pid); fi
   done < <(ps -A -o pid=,ppid=,args= 2>/dev/null)
   for pid in $cands; do
     e="$(ps -Eww -o command= -p $pid 2>/dev/null) "

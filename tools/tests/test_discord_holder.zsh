@@ -12,7 +12,7 @@ ln -sf "${commands[node]:A}" "$S/bin/claude"   # a process whose argv[0] is .../
 cat > "$S/fc.js" <<'FC'
 const { spawn } = require('child_process')
 require('fs').writeFileSync(process.argv[3], String(process.pid))
-const kargs = process.env.FC_MODE === 'node' ? ['--experimental-strip-types', '/fake/discord/0.0.4/server.ts'] : ['bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start']
+const kargs = process.env.FC_MODE === 'node' ? ['--experimental-strip-types', '/fake/discord/0.0.4/server.ts'] : process.env.FC_MODE === 'dev' ? ['--experimental-strip-types', '/fake/discord/0.0.4/dev-server.ts'] : process.env.FC_MODE === 'bridge' ? ['/fake/tools/discord-bridge/bridge.js', '/fake/state/discord/agent-board'] : ['bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start']
 const k = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', ...kargs],
   { env: { ...process.env, DISCORD_STATE_DIR: process.argv[2] }, stdio: 'ignore' })
 k.on('exit', () => process.exit(0))
@@ -51,6 +51,11 @@ check "p2 is held by its own claude"      test "$(dc_holder "$SD2")" = "$CP2 %99
 FC_MODE=node spawn "$S/state/nd"; CPN=$CP
 check "node fake: child args show the strip-types server.ts" test -n "$(ps -o args= -p $KID | grep -F -- '--experimental-strip-types /fake/discord/0.0.4/server.ts')"
 check "node server.ts is a live holder"   test "$(dc_holder "$S/state/nd")" = "$CPN %99"
+# other node processes under /discord/ are not the server: dev-server.ts, and a discord bridge's bridge.js
+FC_MODE=dev spawn "$S/state/dv"; CPD=$CP
+check "node dev-server.ts is not a holder"  test -z "$(dc_holder "$S/state/dv")"
+FC_MODE=bridge spawn "$S/state/br"; CPB=$CP
+check "node bridge.js is not a holder"      test -z "$(dc_holder "$S/state/br")"
 # orphan: claude killed, the child is re-parented to 1
 kill $CP1
 for i in {1..50}; do [[ "$(ps -o ppid= -p $KID1 2>/dev/null | tr -d ' ')" == 1 ]] && break; sleep 0.1; done
