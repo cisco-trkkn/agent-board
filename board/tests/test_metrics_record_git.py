@@ -1,4 +1,4 @@
-import json, os, re, shutil, subprocess, sys, tempfile, time, unittest
+import contextlib, io, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -361,6 +361,59 @@ class FastForwardTest(unittest.TestCase):
         metrics.append(self.repo, {"kind": "start", "batch": "B", "spec": self.SPEC, "at": metrics.utc(self.now - 900),
                                    "main": plan_commit, "worktree": ".claude/worktrees/ff"})
         self.assertEqual(self.rec()["base"], plan_commit)   # the plan is an ancestor of start.main: the range starts there
+
+class BackfillFastForwardTest(FastForwardTest):
+    """`metrics backfill <spec>|--all-null [--apply]`: re-resolve null run records, touching nothing else."""
+    ODD = '{"kind":"start",  "batch": "B", "zz": 1,"a":2}'   # not in json.dumps(sort_keys) form: must survive byte for byte
+
+    def setUp(self):
+        super().setUp()
+        self.log = metrics.log_path(self.repo)
+        old = {"kind": "run", "batch": "B", "spec": self.SPEC, "at": "2026-01-01T00:00:00Z", "branch": None, "head": None,
+               "base": None, "merge": None, "touched_files": None, "diff_lines": None, "touched_list": None, "manifest": None,
+               "stale_base": None, "tokens": {"total": 5}, "outcome": "merged",
+               "missing": ["branch", "head", "base", "merge", "touched_files", "diff_lines", "touched_list", "manifest",
+                           "stale_base", "limits"]}
+        other = {"kind": "run", "batch": "B", "spec": "docs/superpowers/specs/done.md", "branch": "b", "head": "h", "base": "x"}
+        with open(self.log, "a") as f:
+            f.write(self.ODD + "\n" + json.dumps(old, sort_keys=True) + "\n" + json.dumps(other, sort_keys=True) + "\n")
+        self.before = self.log.read_text()
+
+    def run_cli(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            metrics.main(["backfill", "--repo", str(self.repo), *argv])
+        return out.getvalue()
+
+    def test_dry_run_prints_old_and_new_and_writes_nothing(self):
+        out = self.run_cli("--all-null")
+        self.assertIn(self.SPEC, out)
+        self.assertIn(f"head None -> {self.head}", out)
+        self.assertIn("manifest.recall_existing None -> ", out)
+        self.assertEqual(self.log.read_text(), self.before)
+        self.assertEqual(list(self.log.parent.glob("runs.jsonl.bak-*")), [])
+
+    def test_apply_rewrites_only_the_null_run_and_keeps_a_backup(self):
+        self.run_cli(self.SPEC, "--apply")
+        a, b = self.before.splitlines(), self.log.read_text().splitlines()
+        self.assertEqual(len(a), len(b))
+        changed = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+        self.assertEqual(len(changed), 1)
+        new = json.loads(b[changed[0]])
+        self.assertEqual((new["head"], new["base"], new["branch"]), (self.head, self.plan_parent, "ff"))
+        self.assertEqual(new["tokens"], {"total": 5})            # fields outside the resolved set stay
+        self.assertEqual(new["missing"], ["limits"])
+        self.assertEqual(new["manifest"]["source"], "tasks")
+        baks = list(self.log.parent.glob("runs.jsonl.bak-*"))
+        self.assertEqual(len(baks), 1)
+        self.assertEqual(baks[0].read_text(), self.before)
+        self.assertIn(self.ODD, b)                               # byte-identical odd line
+
+    def test_second_apply_is_a_no_op_and_unresolved_spec_is_skipped(self):
+        self.run_cli("--all-null", "--apply")
+        mid = self.log.read_text()
+        self.assertEqual(self.run_cli("--all-null", "--apply").strip(), "0 records to backfill")
+        self.assertEqual(self.log.read_text(), mid)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -1344,6 +1345,9 @@ def _parser():
     wk.add_argument("--since", default="7d")
     wk.add_argument("--tasks-log")
     bf = sp.add_parser("backfill", parents=[common])
+    bf.add_argument("spec", nargs="?")
+    bf.add_argument("--all-null", action="store_true")
+    bf.add_argument("--apply", action="store_true")
     bf.add_argument("--since")
     bf.add_argument("--until")
     bf.add_argument("--log")
@@ -1809,7 +1813,83 @@ def backfill_runs(repo, since, until, conn, project=None, now=None):
     return written
 
 
+FF_FIELDS = ("branch", "head", "base", "merge", "touched_files", "diff_lines", "touched_list", "manifest", "refreshes",
+             "stale_paths", "stale_base")
+
+
+def _show(v):
+    return "None" if v is None else str(v)
+
+
+def backfill_null_runs(repo, spec=None, apply=False, now=None):
+    """Re-resolve `run` lines whose head is null (a fast-forwarded run recorded before the fast-forward logic existed).
+    Only FF_FIELDS change, and only on the last run line of each (batch, spec) that now resolves; every other line is
+    kept byte for byte. Dry run unless apply. Returns [(record, {field: (old, new)})]."""
+    p = log_path(repo)
+    raw = p.read_text().splitlines() if p.exists() else []
+    parsed = []
+    for l in raw:
+        try:
+            d = json.loads(l)
+        except ValueError:
+            d = None
+        parsed.append(d if isinstance(d, dict) else None)
+    last = {}
+    for i, d in enumerate(parsed):
+        if d and d.get("kind") == "run":
+            last[(d.get("batch"), d.get("spec"))] = i
+    changes, out = [], list(raw)
+    for (batch, sp), i in sorted(last.items(), key=lambda kv: kv[1]):
+        d = parsed[i]
+        if d.get("head") is not None or d.get("batch") == "backfill" or (spec and sp != spec):
+            continue
+        new = build_record_static(repo, sp, batch, d.get("outcome"), now or time.time())
+        if new.get("head") is None:
+            continue
+        upd = {k: new.get(k) for k in FF_FIELDS if k in new}
+        diff = {k: (d.get(k), v) for k, v in upd.items() if d.get(k) != v}
+        diff["manifest.recall_existing"] = ((d.get("manifest") or {}).get("recall_existing"),
+                                            (new.get("manifest") or {}).get("recall_existing"))
+        merged = dict(d)
+        merged.update(upd)
+        gone = {k for k in FF_FIELDS if k not in new["missing"]}   # a fresh record would not list these as gaps
+        merged["missing"] = [m for m in d.get("missing") or [] if m not in gone]
+        changes.append((merged, diff))
+        out[i] = json.dumps(merged, sort_keys=True)
+    if apply and changes:
+        with open(str(p) + ".lock", "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                day = time.strftime("%Y%m%d", time.gmtime(now or time.time()))
+                bak, n = Path(f"{p}.bak-{day}"), 1
+                while bak.exists():
+                    n += 1
+                    bak = Path(f"{p}.bak-{day}-{n}")
+                shutil.copy2(p, bak)
+                tmp = Path(f"{p}.tmp")
+                tmp.write_text("\n".join(out) + "\n")
+                os.replace(tmp, p)
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+    return changes
+
+
+def cmd_backfill_null(repo, args):
+    def go():
+        changes = backfill_null_runs(repo, args.spec, args.apply)
+        for rec, diff in changes:
+            print(rec["spec"] + (" (batch " + str(rec.get("batch")) + ")"))
+            for k, (o, n) in diff.items():
+                if k in ("touched_list", "stale_base", "refreshes", "stale_paths"):
+                    continue
+                print(f"  {k} {_show(o)} -> {_show(n)}")
+        print(f"{len(changes)} records to backfill" if not args.apply or not changes else f"{len(changes)} records backfilled")
+    _with_log(args, go)
+
+
 def cmd_backfill(repo, args):
+    if args.spec or args.all_null:
+        return cmd_backfill_null(repo, args)
     global LOG_OVERRIDE
     LOG_OVERRIDE = args.log
     try:
