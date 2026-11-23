@@ -53,8 +53,8 @@ taskwin_state timing), outcome (`metadata.outcome` verbatim: `merged <sha>`, `mr
 The `in_progress` item is expanded by default: one summary line for the non-`Plan & run:` tasks of the list
 (`<done>/<total> · <n> running · <n> blocked`) and one line per running task (`#id subject · owner · duration`).
 When the list has no `Plan & run:` tasks the view shows `no queue` and a hint `2: plan`. The morning report, when
-`docs/superpowers/reports/<date>-queue.md` exists for the run's start date (the earliest `start` line of a queued spec in
-`docs/superpowers/metrics/runs.jsonl`, else the earliest `answeredAt` date), is named in the header.
+`docs/superpowers/reports/<date>-queue.md` exists for the run's start date (the earliest UTC `start` line of a queued spec in
+`docs/superpowers/metrics/runs.jsonl`, restricted to the queue's batch (`metadata.queue.batch`) when the tasks carry one, else the earliest `answeredAt` date), is named in the header.
 
 ### 3. Plan view
 

@@ -82,7 +82,7 @@ def _norm(t):
     return {"id": str(t.get("id", "")), "subject": str(t.get("subject", "")), "status": str(t.get("status", "pending")),
             "owner": str(t.get("owner") or ""), "blockedBy": [str(b) for b in (t.get("blockedBy") or [])],
             "tier": _tier(t), "outcome": _str(meta, "outcome"), "answeredAt": _str(meta.get("queue"), "answeredAt"),
-            "planPath": _str(meta, "plan")}
+            "batch": _str(meta.get("queue"), "batch"), "planPath": _str(meta, "plan")}
 
 
 def _finish(tasks):
@@ -95,7 +95,8 @@ def _finish(tasks):
             st = "blocked"
         out.append({"id": t["id"], "subject": t["subject"], "status": st, "owner": t["owner"], "state": "",
                     "tier": t["tier"], "blockedBy": t["blockedBy"], "outcome": t.get("outcome", ""),
-                    "answeredAt": t.get("answeredAt", ""), "planPath": t.get("planPath", "")})
+                    "answeredAt": t.get("answeredAt", ""), "batch": t.get("batch", ""),
+                    "planPath": t.get("planPath", "")})
     return out
 
 

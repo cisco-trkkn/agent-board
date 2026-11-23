@@ -126,6 +126,23 @@ class FakeRootTest(unittest.TestCase):
         self.assertEqual(th.queue_report(self.root, q), "docs/superpowers/reports/2026-11-20-queue.md")
         self.assertEqual(th.queue_report(self.root, [dict(q[0], subject="Plan & run: docs/superpowers/specs/none.md")]), "")
 
+    def test_queue_report_uses_only_the_starts_of_the_queues_batch(self):
+        """A spec rerun in a later queue has starts in two batches: the report is named by the queue's own batch."""
+        m = self.root / "docs/superpowers/metrics"
+        m.mkdir(parents=True)
+        (m / "runs.jsonl").write_text("\n".join(json.dumps(d) for d in (
+            {"kind": "start", "spec": "docs/superpowers/specs/x.md", "at": "2026-11-19T08:00:00Z", "batch": "old"},
+            {"kind": "start", "spec": "docs/superpowers/specs/x.md", "at": "2026-11-20T08:00:00Z", "batch": "new"})) + "\n")
+        subj = "Plan & run: docs/superpowers/specs/x.md"
+        self.assertEqual(th.queue_report(self.root, [{"subject": subj, "batch": "new"}]),
+                         "docs/superpowers/reports/2026-11-20-queue.md")
+        # a task without a batch id keeps the old behaviour: the earliest start of the spec
+        (self.root / "docs/superpowers/reports/2026-11-19-queue.md").write_text("r")
+        self.assertEqual(th.queue_report(self.root, [{"subject": subj}]), "docs/superpowers/reports/2026-11-19-queue.md")
+        # a batch with no start line falls back too
+        self.assertEqual(th.queue_report(self.root, [{"subject": subj, "batch": "ghost"}]),
+                         "docs/superpowers/reports/2026-11-19-queue.md")
+
 
 class FixRound1Test(unittest.TestCase):
     """Review fixes: wrong-typed journal fields, shared-spec ledgers, #part spec matching."""

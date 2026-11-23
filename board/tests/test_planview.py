@@ -432,9 +432,10 @@ class QueueFieldsTest(unittest.TestCase):
         t = planview._finish([planview._norm(d)])[0]
         self.assertEqual((t["outcome"], t["answeredAt"], t["planPath"]),
                          ("merged abc1234", "2026-11-12T06:27:47Z", "docs/superpowers/plans/x.md"))
+        self.assertEqual(t["batch"], "b")
 
     def test_missing_or_malformed_metadata_gives_empty_strings(self):
         for meta in (None, 3, {}, {"outcome": 5, "queue": "x", "plan": ["p"]}, {"queue": {"answeredAt": 1}}):
             d = {"id": "1", "subject": "s", "status": "pending", "metadata": meta}
             t = planview._finish([planview._norm(d)])[0]
-            self.assertEqual((t["outcome"], t["answeredAt"], t["planPath"]), ("", "", ""), meta)
+            self.assertEqual((t["outcome"], t["answeredAt"], t["planPath"], t["batch"]), ("", "", "", ""), meta)
