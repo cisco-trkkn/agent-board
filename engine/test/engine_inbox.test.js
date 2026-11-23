@@ -177,3 +177,21 @@ test("signal returns rc 2 unless the spec is awaiting_you with an open wait; wri
     assert.deepEqual(JSON.parse(r[0].payload), { answer: "deny", note: "no thanks" });
   } finally { f.done(); }
 });
+
+test("a non-JSON string payload (via insert, and a timer row with raw text) drains to done", () => {
+  const f = fresh();
+  try {
+    inbox.insert(f.db, { source: "user", source_id: "raw", spec: "s", kind: "signal", payload: "hello" }, 1);
+    dbm.put(f.db, "timers", { id: "tr", spec: "s", job: null, kind: "retry", due_at: 5, payload: "not json", fired_at: null });
+    assert.equal(inbox.moveDueTimers(f.db, 10), 1);
+    const seen = [];
+    assert.equal(inbox.drain(f.db, (r) => { seen.push(r.source); }, 20), 2);
+    assert.deepEqual(states(f.db), ["done", "done"]);
+    const ev = f.db.prepare("SELECT detail FROM events WHERE kind LIKE 'inbox_%' ORDER BY seq").all().map((e) => JSON.parse(e.detail).payload);
+    assert.deepEqual(ev, ["hello", "not json"]);
+    // an existing bad row written raw (older code) must not block the inbox either
+    f.db.prepare("INSERT INTO inbox (source, source_id, spec, kind, payload, received_at, state) VALUES ('user','legacy','s','signal','plain text',30,'new')").run();
+    assert.equal(inbox.drain(f.db, () => {}, 40), 1);
+    assert.deepEqual(states(f.db), ["done", "done", "done"]);
+  } finally { f.done(); }
+});

@@ -4,7 +4,12 @@ const crypto = require("node:crypto");
 const { tx, put, event } = require("./db");
 
 const nowS = (now) => (now !== undefined ? now : Date.now() / 1000);
-const json = (v) => (v === undefined || v === null ? null : typeof v === "string" ? v : JSON.stringify(v));
+// Payloads are always stored as JSON text. `parse` never throws: a non-JSON text (an old or hand-written row) comes back raw.
+const json = (v) => JSON.stringify(v ?? null);
+const parse = (s) => {
+  if (s === null || s === undefined) return null;
+  try { return JSON.parse(s); } catch { return s; }
+};
 
 // The one writer that appends no event: it writes only `inbox`. Its row reaches `events` when drained.
 function insert(db, { source, source_id, spec = null, job = null, kind = null, payload = null }, now) {
@@ -26,7 +31,7 @@ function moveDueTimers(db, now) {
       if (!cur || cur.fired_at !== null) return;
       const fired = put(db, "timers", { ...cur, fired_at: t });
       const source_id = `${cur.id}@${cur.due_at}`;
-      insert(db, { source: "timer", source_id, spec: cur.spec, job: cur.job, kind: cur.kind, payload: cur.payload }, t);
+      insert(db, { source: "timer", source_id, spec: cur.spec, job: cur.job, kind: cur.kind, payload: parse(cur.payload) }, t);
       const irow = inboxRow(db, "timer", source_id);
       event(db, { spec: cur.spec, job: cur.job, kind: "timer_fired", ts: t,
         rows: [{ table: "timers", row: fired }, { table: "inbox", row: irow }] });
@@ -72,7 +77,7 @@ function drain(db, handle, now) {
       db.prepare("UPDATE inbox SET state=?, handled_at=?, reason=? WHERE id=?").run(drop ? "dropped" : "done", t, drop, r.id);
       const done = db.prepare("SELECT * FROM inbox WHERE id=?").get(r.id);
       event(db, { spec: r.spec, job: r.job, kind: `inbox_${r.source}`, ts: t,
-        rows: [{ table: "inbox", row: done }], payload: r.payload === null ? null : JSON.parse(r.payload), source_id: r.source_id });
+        rows: [{ table: "inbox", row: done }], payload: parse(r.payload), source_id: r.source_id });
     });
     n++;
   }
