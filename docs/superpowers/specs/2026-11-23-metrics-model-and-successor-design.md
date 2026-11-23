@@ -38,9 +38,8 @@ Changes:
    `nomodel`, not `unknown`, and the weekly analytics text says "no model recorded" for it.
 5. `backfill-tasks` re-derives existing records with the new resolution (append-only, as today), so the 56 records
    are re-checked.
-6. `~/.claude/skills/subagent-driven-development-extras` (the user's skill, a symlink into this repo if it is one;
-   check with `ls -l` first and edit the real file): one line in its ledger guidance: every dispatch line names the
-   tier and the model, `dispatched <name> (<tier>, <model>)`.
+6. `claude/skills/subagent-driven-development-extras/SKILL.md` (in this repo; `~/.claude/skills/` links to it): one
+   line in its ledger guidance: every dispatch line names the tier and the model, `dispatched <name> (<tier>, <model>)`.
 
 ## b. A fast `successor()`
 
