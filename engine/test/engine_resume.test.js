@@ -198,7 +198,13 @@ test("kill at each distinct event kind of a run, then resume: same final state a
         }));
         assert.deepEqual(final.spec, refFinal.spec, "same final spec state and outcome");
         assert.deepEqual(final.jobs.map((j) => ({ id: j.id, state: j.state })), refFinal.jobs, "same jobs, same states");
-        assert.deepEqual(sequence(p.kinds()), sequence(refKinds), "same event-kind sequence, resume-only kinds excluded");
+        // The metrics start (step_intent, step_done right after spec_added) is run by `engine run` itself, outside the
+        // core, and `engine resume` does not redo it: measurement never blocks a spec. A kill that lands between
+        // spec_added and that step, which a loaded machine makes likely, leaves the run without the pair.
+        const lostStart = kind === "spec_added" && !p.kinds().slice(0, 3).includes("step_done");
+        const want = sequence(refKinds);
+        if (lostStart) want.splice(1, 2);
+        assert.deepEqual(sequence(p.kinds()), want, "same event-kind sequence, resume-only kinds excluded");
 
         // no job with a valid report runs twice: one `dispatched` event per job id, and no later attempt of a job
         // that was done (or whose valid report was on disk) when the engine died
