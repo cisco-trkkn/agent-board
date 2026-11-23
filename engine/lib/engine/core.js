@@ -1028,7 +1028,13 @@ function start(opts) {
           if (typeof backend.adopt === "function") {
             try { ok = !!(await backend.adopt({ ...job, worktree: spec.worktree || repo }, handleOf(job))); } catch (_) { ok = false; }
           }
-          if (ok) { watched++; continue; }
+          if (ok) { // its heartbeat and no-progress clocks restart now: a status that went stale while the engine was down is not a hang
+            watched++;
+            const t = now();
+            const d = { ...detailOf(job), resumed_at: t, nudged_at: null };
+            emit("adopted", { spec: job.spec, job: job.id, rows: deadlineRows(job, d, nextDue(job, d, t)).rows });
+            continue;
+          }
           // its window is gone for this engine: finished from its report when valid, else a new attempt (the drain decides)
           inbox.insert(db, { source: "worker", source_id: `${job.id}:${job.pane}:gone:resume:${now()}`, spec: job.spec, job: job.id, kind: "gone",
             payload: { pane: job.pane, window: job.window } }, now());

@@ -970,3 +970,32 @@ test("fix_stats: measured with git over the review's head to HEAD", (t) => {
   assert.deepEqual(core.fixStats(g.dir, base), { lines: 5, files: 3, added: 1, tests_removed: 1 });
   assert.equal(core.fixStats(g.dir, null), null);
 });
+
+// ---- task 8b: adopted jobs get a fresh heartbeat window on resume ---------------------------------------------
+// Mutation run for this guard: the `resumed_at` / re-arm rows removed from the adopted branch of resume() ->
+// this test fails (the job is failed heartbeat_timeout on the first tick after resume).
+test("resume: an adopted job's heartbeat and no-progress deadlines are re-armed from the resume time", async (t) => {
+  const h = mk(t, { script: { implement1: [{ status: "busy", at: 1 }] } });
+  h.add();
+  await h.until(() => h.job("demo:implement1:1") && h.job("demo:implement1:1").state === "running");
+  const j = h.job("demo:implement1:1");
+  h.eng.stop();
+  const clock = h.clock;
+  clock.t += 600; // the engine was down for 10 minutes: the last status is that old
+  const backend = wrap(fake.createBackend({ script: {}, now: () => clock.t }), clock);
+  backend.adopt = async () => true;
+  const e2 = core.start({ project: "demo", repo: h.wt, now: () => clock.t, tmuxCtl: path.join(h.env.root, "tmux-ctl"), backend,
+    integrate: async () => ({ outcome: "merged" }), finalize: async () => {}, tell: () => {}, notify: () => {}, transcriptRoot: h.env.root });
+  t.after(() => e2.stop());
+  const state = () => e2.db.prepare("SELECT state FROM jobs WHERE id=?").get(j.id).state;
+  const reason = () => e2.db.prepare("SELECT detail FROM events WHERE kind='job_failed'").all().map((e) => JSON.parse(e.detail).reason);
+  await e2.resume();
+  assert.equal(e2.db.prepare("SELECT detail FROM events WHERE kind='resumed'").all().map((e) => JSON.parse(e.detail).watched)[0], 1);
+  clock.t += 5; await e2.tick();
+  assert.equal(state(), "running", "stale status from before the restart does not fail the job");
+  for (let i = 0; i < 20; i++) { clock.t += 5; await e2.tick(); } // 105 s after resume
+  assert.equal(state(), "running");
+  for (let i = 0; i < 4; i++) { clock.t += 5; await e2.tick(); } // past 120 s after resume plus a tick
+  assert.deepEqual(reason(), ["heartbeat_timeout"]);
+  assert.deepEqual(rebuild.check("demo").diffs, []);
+});

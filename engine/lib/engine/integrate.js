@@ -121,10 +121,11 @@ function doMr(ctx, spec) {
 
 // The ledger commit: `merge` -> the target branch in the main checkout (after the merge); `mr` and `keep` -> the
 // spec branch in the spec worktree, so the main checkout never moves (for `mr` it runs before the push).
-function commitLedger(ctx, spec) {
+function commitLedger(ctx, spec, outcome = "") {
   const rel = path.join("docs/superpowers/ledgers", path.basename(spec.plan || spec.id).replace(/\.md$/, ""));
   const file = path.join(rel, "progress.md");
-  const onSpecBranch = spec.integration === "mr" || spec.integration === "keep";
+  // A failed or denied spec never merged: its ledger goes on the spec branch whatever the stored answer.
+  const onSpecBranch = spec.integration === "mr" || spec.integration === "keep" || String(outcome).startsWith("failed") || outcome === "denied";
   const dir = onSpecBranch ? (spec.worktree || ctx.worktree) : ctx.repo;
   const branch = onSpecBranch ? spec.branch : target(ctx);
   run(ctx, spec, "commit_ledger", `commit_ledger:${spec.id}`, { branch, dir }, () => {
@@ -139,7 +140,7 @@ function commitLedger(ctx, spec) {
 
 // commit_ledger, metrics_record, worktree_remove (the last only when `removeWorktree`).
 function finalize(ctx, spec, outcome, { removeWorktree = false } = {}) {
-  commitLedger(ctx, spec);
+  commitLedger(ctx, spec, outcome);
   run(ctx, spec, "metrics_record", `metrics_record:${spec.id}`, { spec: spec.id, batch: spec.batch }, () => {
     must(spawn(ctx, tmuxCtl(ctx), ["metrics", "record", spec.id, "--batch", String(spec.batch), "--outcome", outcome], { cwd: ctx.repo }), "metrics record");
     return { spec: spec.id, batch: spec.batch, outcome };

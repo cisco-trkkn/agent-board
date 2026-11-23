@@ -248,3 +248,22 @@ test("ledger.render lines are counted by metrics.py ledger_fields", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), { bounces: 2, fix_rounds: 2, fix_wave: true, rulings: 2, parked: 1, final_findings: 0 });
 });
+
+// ---- task 8b: a failed spec's ledger goes on the spec branch ---------------------------------------------------
+// Mutation run for this guard: `outcome.startsWith("failed")` dropped from the onSpecBranch test in commitLedger ->
+// the merge-integration case fails (the ledger lands on main, and main's HEAD moves).
+for (const outcome of ["failed — implement1: gone", "failed", "denied"]) {
+  test(`finalize(${outcome}) on a merge spec: ledger on the spec branch, main untouched, resume does not commit again`, () => {
+    const s = setup({ integration: "merge" });
+    const mainHead = s.g.git("rev-parse", "main").trim();
+    integrate.finalize(s.ctx, s.spec, outcome);
+    assert.ok(hasLedger(s.g, "feat-a"), "ledger on the spec branch");
+    assert.ok(!hasLedger(s.g, "main"));
+    assert.equal(s.g.git("rev-parse", "main").trim(), mainHead, "main's HEAD unchanged");
+    assert.ok(!fs.existsSync(path.join(s.g.dir, "docs/superpowers/ledgers")), "main checkout untouched");
+    assert.ok(fs.existsSync(s.wt), "worktree kept");
+    const branchHead = s.g.git("rev-parse", "feat-a").trim();
+    integrate.finalize(s.ctx, s.spec, outcome); // resume after a done commit_ledger
+    assert.equal(s.g.git("rev-parse", "feat-a").trim(), branchHead, "no second ledger commit");
+  });
+}
