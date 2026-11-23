@@ -80,16 +80,19 @@ function mk(t, o = {}) {
   const tells = [];
   const notes = [];
   const integrations = [];
+  const finals = [];
+  const reverts = [];
   const eng = core.start({
     project: o.project || "demo", repo: wt, backend, now: () => clock.t, tmuxCtl: ctl,
     integrate: o.integrate || (async (spec) => { integrations.push(spec.id); return { outcome: "merged" }; }),
-    revert: o.revert, finalize: o.finalize, strategy: o.strategy,
+    revert: o.revert || (async (spec) => { reverts.push(spec.id); }),
+    finalize: o.finalize || (async (spec, outcome) => { finals.push(outcome); }), strategy: o.strategy,
     tell: (handle, text) => tells.push({ window: handle.window, text }),
     notify: (text) => notes.push(text),
     transcriptRoot: path.join(env.root, "transcripts"), sleep: async () => { clock.t += 5; },
   });
   const h = {
-    env, wt, clock, script, backend, tells, notes, integrations, eng, db: eng.db,
+    env, wt, clock, script, backend, tells, notes, integrations, finals, reverts, eng, db: eng.db,
     add: (extra = {}) => eng.addSpec({ id: SPEC, plan: PLAN, worktree: wt, branch: "spec-demo", integration: "keep", push: 0, batch: "b1", ...extra }),
     async step(n = 1, dt = 5) { for (let i = 0; i < n; i++) { clock.t += dt; await eng.tick(); } },
     async until(pred, max = 400) {
@@ -808,7 +811,7 @@ test("resume: a running job whose window is gone is finished from its valid repo
   const clock = h.clock;
   const mkEngine = () => core.start({ project: "demo", repo: h.wt, now: () => clock.t, tmuxCtl: path.join(h.env.root, "tmux-ctl"),
     backend: wrap(fake.createBackend({ script: { implement1: worker(DONE) }, now: () => clock.t }), clock),
-    integrate: async () => ({ outcome: "merged" }), tell: () => {}, notify: () => {}, transcriptRoot: h.env.root });
+    integrate: async () => ({ outcome: "merged" }), finalize: async () => {}, tell: () => {}, notify: () => {}, transcriptRoot: h.env.root });
   const e2 = mkEngine();
   await e2.resume();
   clock.t += 5; await e2.tick();
@@ -830,6 +833,111 @@ test("resume: a running job whose window is gone is finished from its valid repo
   assert.equal(e3.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE kind='implement'").get().n, 2); // not run twice
   assert.deepEqual(rebuild.check("demo").diffs, []);
   e3.stop();
+});
+
+// ---- fix round 1 (findings I1, I2, I4, I5) ---------------------------------------------------------------------
+// Mutations run for these guards (each made the named test fail; see the fix report):
+//   finalize called only after tests_red            fails "finalize: every terminal outcome"
+//   revert called for every failed outcome          fails "finalize: every terminal outcome"
+//   endNeedsYou rows dropped in failAttempt         fails "a job that fails while its permission-prompt wait is open"
+//   endNeedsYou rows dropped in finishJob           fails "a job that finishes while its permission-prompt wait is open"
+//   the ready exemption from the heartbeat removed  fails "a ready worker that stops refreshing its status"
+//   the catch around backend.close removed          fails "a window that cannot be closed"
+
+test("finalize: every terminal outcome is finalized once (merged, failed, denied); revert only after tests red", async (t) => {
+  const a = mk(t, { script: { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) } });
+  a.add();
+  await a.until(a.done);
+  await a.step(3);
+  assert.deepEqual(a.finals, ["merged"]);
+  assert.deepEqual(a.reverts, []);
+  const b = mk(t, { project: "demo2", script: { implement1: [{ gone: true, at: 1 }] },
+    config: { retry: { implement: { max_attempts: 1, on_exhausted: "fail_spec" } } } });
+  b.add();
+  await b.until(b.done);
+  await b.step(3);
+  assert.deepEqual(b.finals, ["failed — implement1: gone"]);
+  assert.deepEqual(b.reverts, []);
+  const c = mk(t, { project: "demo3", tasks: GATED() });
+  c.add();
+  await c.until(() => c.spec().state === "awaiting_you");
+  c.signal("deny");
+  await c.step(3);
+  assert.deepEqual(c.finals, ["denied: user gate: task 1 T1"]);
+  assert.deepEqual(c.reverts, []);
+});
+
+async function parkedPrompt(t, o = {}) {
+  const h = mk(t, { script: { implement1: [] }, config: { retry: { implement: { backoff_s: [0] } } }, ...o });
+  h.add();
+  const id = "demo:implement1:1";
+  await h.until(() => h.job(id) && h.job(id).state === "running");
+  h.backend.push(status(handleOf(h, id), "needs-you", h.clock));
+  await h.step();
+  await h.until(() => h.spec().state === "awaiting_you");
+  assert.equal(h.wait().step, `core:needs_you:${id}`);
+  return { h, id };
+}
+
+test("a job that fails while its permission-prompt wait is open closes the wait and un-parks the spec", async (t) => {
+  const { h, id } = await parkedPrompt(t);
+  h.script.implement1 = worker(DONE);
+  h.backend.push({ handle: handleOf(h, id), type: "gone" });
+  await h.step();
+  assert.equal(firstFail(h).detail.reason, "gone");
+  assert.equal(h.wait(), null);
+  assert.equal(h.spec().state, "running");
+  assert.equal(h.db.prepare("SELECT answer FROM waits WHERE step=?").get(`core:needs_you:${id}`).answer, "job_ended");
+  const j = h.job(id);
+  assert.equal(j.needs_you_since, null);
+  assert.ok(j.needs_you_total >= 600);
+  // the retry is not stuck behind a question about a dead window
+  await h.until(() => h.of("job_done").length === 1);
+  assert.equal(h.of("job_done")[0].job, "demo:implement1:2");
+  assert.equal(h.of("signal").length, 0);
+  assert.deepEqual(rebuild.check("demo").diffs, []);
+});
+
+test("a job that finishes while its permission-prompt wait is open closes the wait and un-parks the spec", async (t) => {
+  const { h, id } = await parkedPrompt(t, { project: "demo2" });
+  fs.mkdirSync(path.dirname(h.job(id).report), { recursive: true });
+  fs.writeFileSync(h.job(id).report, DONE);
+  h.backend.push({ handle: handleOf(h, id), type: "gone" });
+  await h.step();
+  assert.equal(h.job(id).state, "done");
+  assert.equal(h.job(id).needs_you_since, null);
+  assert.equal(h.wait(), null);
+  assert.notEqual(h.spec().state, "awaiting_you");
+  assert.equal(h.of("check_requested").filter((e) => e.detail.check === "verify").length, 1); // the run went on
+});
+
+test("a ready worker that stops refreshing its status ends no_report at the report grace, not heartbeat_timeout", async (t) => {
+  const h = mk(t, { script: { implement1: [{ status: "busy", at: 1 }, { status: "ready", at: 2 }] } });
+  h.add();
+  await h.until(() => h.tells.length === 1);
+  const told = h.of("report_nudge")[0].ts;
+  await h.until(() => h.clock.t >= told + 290); // silent for far more than the 120 s heartbeat
+  assert.equal(h.of("job_failed").length, 0);
+  await h.step(3);
+  assert.equal(firstFail(h).detail.reason, "no_report");
+  assert.ok(firstFail(h).ts >= told + 300 && firstFail(h).ts <= told + 305);
+});
+
+test("a window that cannot be closed is recorded as a failed step and does not stop the engine", async (t) => {
+  const h = mk(t, { script: { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) } });
+  let tried = 0;
+  h.backend.close = async () => { tried++; throw new Error("no such pane"); };
+  h.add();
+  await h.until(h.done);
+  await h.step(3);
+  assert.equal(h.eng.halted, null);
+  assert.equal(h.of("engine_error").length, 0);
+  assert.equal(tried, 3); // once per job, not again every tick
+  const failed = h.of("step_failed").filter((e) => e.detail.step_kind === "close_window");
+  assert.equal(failed.length, 3);
+  assert.equal(failed[0].detail.error, "no such pane");
+  assert.equal(h.db.prepare("SELECT state FROM steps WHERE key='close_window:demo:implement1:1'").get().state, "failed");
+  assert.deepEqual(rebuild.check("demo").diffs, []);
 });
 
 // ---- real runs of the platform calls the core's decisions rest on ----------------------------------------------

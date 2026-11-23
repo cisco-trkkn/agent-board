@@ -67,7 +67,7 @@ test("workerRows maps status and gone events to rows", () => {
       { handle: h, type: "gone" },
     ];
     const rows = inbox.workerRows(f.db, evs, 5);
-    assert.deepEqual(rows.map((r) => r.source_id), ["%3:needs-you:42", "%3:gone"]);
+    assert.deepEqual(rows.map((r) => r.source_id), ["s:implement1:1:%3:needs-you:42", "s:implement1:1:%3:gone"]);
     inbox.workerRows(f.db, evs, 6);
     const all = f.db.prepare("SELECT * FROM inbox ORDER BY id").all();
     assert.equal(all.length, 2);
@@ -76,6 +76,23 @@ test("workerRows maps status and gone events to rows", () => {
     assert.equal(all[0].job, "s:implement1:1");
     assert.equal(all[0].kind, "status");
     assert.equal(all[1].kind, "gone");
+  } finally { f.done(); }
+});
+
+// tmux reuses pane ids after a server restart: the job id is part of the source id
+test("workerRows: two jobs that reuse one pane id each get their gone row", () => {
+  const f = fresh();
+  try {
+    dbm.put(f.db, "jobs", { id: "s:implement1:1", spec: "s", kind: "implement" });
+    dbm.put(f.db, "jobs", { id: "s:implement1:2", spec: "s", kind: "implement" });
+    for (const job of ["s:implement1:1", "s:implement1:2"]) {
+      inbox.workerRows(f.db, [{ handle: { job, window: "w", pane: "%3" }, type: "status", state: "busy", updatedAt: 7 },
+        { handle: { job, window: "w", pane: "%3" }, type: "gone" }], 5);
+    }
+    const gone = f.db.prepare("SELECT job, source_id FROM inbox WHERE kind='gone' ORDER BY id").all();
+    assert.deepEqual(gone.map((r) => r.job), ["s:implement1:1", "s:implement1:2"]);
+    assert.deepEqual(gone.map((r) => r.source_id), ["s:implement1:1:%3:gone", "s:implement1:2:%3:gone"]);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE kind='status'").get().n, 2);
   } finally { f.done(); }
 });
 

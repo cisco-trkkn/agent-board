@@ -265,7 +265,8 @@ function start(opts) {
   function nextDue(job, d, t) {
     const st = status.get(job.id);
     const ref0 = Math.max(job.started_at || 0, d.resumed_at || 0);
-    const cands = [Math.max(st ? st.updatedAt || 0 : 0, ref0) + HEARTBEAT_S];
+    const idle = !!st && st.state === "ready"; // an idle worker refreshes nothing: the report grace governs it, not the heartbeat
+    const cands = idle ? [] : [Math.max(st ? st.updatedAt || 0 : 0, ref0) + HEARTBEAT_S];
     const pol = retryRow(job.kind);
     if (pol.timeout_min) cands.push(job.started_at + (job.needs_you_total || 0) + pol.timeout_min * 60);
     if (st && st.tool) cands.push(Math.max(st.lastToolAt || 0, ref0) + (TOOL_LIMIT_S[st.tool] || TOOL_LIMIT_DEFAULT_S));
@@ -296,7 +297,8 @@ function start(opts) {
     const st = status.get(job.id);
     const ref0 = Math.max(job.started_at || 0, d.resumed_at || 0);
     const pol = retryRow(job.kind);
-    if (t - Math.max(st ? st.updatedAt || 0 : 0, ref0) >= HEARTBEAT_S) return failAttempt(job, "heartbeat_timeout");
+    const idle = !!st && st.state === "ready";
+    if (!idle && t - Math.max(st ? st.updatedAt || 0 : 0, ref0) >= HEARTBEAT_S) return failAttempt(job, "heartbeat_timeout");
     if (pol.timeout_min && t - job.started_at - (job.needs_you_total || 0) >= pol.timeout_min * 60) return failAttempt(job, "job_timeout");
     if (st && st.tool && t - Math.max(st.lastToolAt || 0, ref0) >= (TOOL_LIMIT_S[st.tool] || TOOL_LIMIT_DEFAULT_S)) return failAttempt(job, "tool_timeout");
     if (d.told_at && st && st.state === "ready" && t - d.told_at >= REPORT_GRACE_S) return failAttempt(job, "no_report");
@@ -315,6 +317,23 @@ function start(opts) {
     emit(nd.nudged_at && !d.nudged_at ? "nudged" : "deadline", { spec: job.spec, job: job.id, rows: r.rows });
   }
 
+  // A job that ends while it sat at a permission prompt: its needs-you clock stops, and a park that asked about its
+  // window is closed with the spec back in the state it was parked from (as `needs_you_end` does). Returns the job
+  // fields to merge and the rows to write with the job's end.
+  function endNeedsYou(job, t) {
+    if (job.needs_you_since === null) return { fields: {}, rows: [] };
+    const fields = { needs_you_since: null, needs_you_total: (job.needs_you_total || 0) + (t - job.needs_you_since) };
+    const rows = [];
+    const wait = inbox.openWaitFor(db, job.spec);
+    if (wait && wait.step === `core:needs_you:${job.id}`) {
+      const spec = get("specs", job.spec);
+      const prev = (lastEvent(spec.id, "awaiting_you") || { detail: {} }).detail.prev_state || "running";
+      rows.push(["waits", { ...wait, answered_at: t, answer: "job_ended", note: null }]);
+      if (spec.state === "awaiting_you") rows.push(["specs", { ...spec, state: prev, updated_at: t }]);
+    }
+    return { fields, rows };
+  }
+
   // A failed attempt (spec 10.2): the job ends, and its retry policy decides what follows. The retry row is written
   // with the failure, so a crash cannot lose it.
   function failAttempt(job, reason0) {
@@ -324,7 +343,8 @@ function start(opts) {
     const reason = reason0 === "model_limit" && d.model_fallback ? "model_limit_after_fallback" : reason0;
     const tryN = d.try || 1;
     const spec = get("specs", job.spec);
-    const rows = [...cancelTimers(job.id), ["jobs", { ...job, state: "failed", ended_at: t, head: gitHead(spec.worktree || repo) }]];
+    const ny = endNeedsYou(job, t);
+    const rows = [...cancelTimers(job.id), ["jobs", { ...job, ...ny.fields, state: "failed", ended_at: t, head: gitHead(spec.worktree || repo) }], ...ny.rows];
     const proto = { kind: job.kind, task: job.task === null ? undefined : job.task, tier: job.tier, model: job.model };
     const carry = { ...d, deadline: undefined, dl: undefined, nudged_at: undefined, told_at: undefined, parked: undefined, resumed_at: undefined };
     let next = null;
@@ -375,8 +395,9 @@ function start(opts) {
       // blocked is a failure unless the policy sends it straight to the architect, which the strategy does on job_done
       if (!(pol.no_retry_on || []).includes("blocked") || pol.on_exhausted !== "architect") return failAttempt(job, "blocked");
     }
-    const done = { ...job, state: "done", ended_at: t, head: gitHead(wt) };
-    const rows = [...cancelTimers(job.id), ["jobs", done]];
+    const ny = endNeedsYou(job, t);
+    const done = { ...job, ...ny.fields, state: "done", ended_at: t, head: gitHead(wt) };
+    const rows = [...cancelTimers(job.id), ["jobs", done], ...ny.rows];
     const ctx = contextTokens(job, opts.transcriptRoot);
     status.delete(job.id);
     if (job.kind === "architect") {
@@ -601,10 +622,11 @@ function start(opts) {
       emit("ruling", { ...base, text: c.text, cost_if_wrong: c.cost_if_wrong, by: c.by });
     } else if (c.type === "set_state" && c.state === "done") {
       const merged = lastEvent(spec.id, "integrated");
-      if (merged && merged.detail.outcome === "tests_red") { // section 4: a failed spec reverts its own merge; both are recorded
-        if (/^failed/.test(String(c.outcome))) await revertFn(spec);
-        await finalizeFn(spec, c.outcome);
-      }
+      // section 4: a spec that fails after tests red after its merge reverts that merge
+      if (merged && merged.detail.outcome === "tests_red" && /^failed/.test(String(c.outcome))) await revertFn(spec);
+      // every terminal outcome, failed and denied included, gets its ledger archive and metrics record. This runs before
+      // the event commits; finalize's steps are keyed per spec, so a replay after a crash runs none of them twice.
+      await finalizeFn(spec, c.outcome);
       const rows = [["specs", { ...spec, state: "done", outcome: c.outcome === undefined ? null : c.outcome, updated_at: t }]];
       const wait = inbox.openWaitFor(db, spec.id);
       if (wait) rows.push(["waits", { ...wait, answered_at: t, answer: "closed", note: "the spec ended" }]);
@@ -746,8 +768,16 @@ function start(opts) {
       const have = steps.getRow(db, desc.key);
       if (!(have && have.state === "done")) {
         steps.begin(db, desc, { now });
-        await backend.close(handleOf(j));
-        steps.finish(db, desc, { pane: j.pane }, { now });
+        let error = null;
+        // a window this engine cannot close (a handle from an earlier process, a dead tmux server) is a failed step,
+        // not an engine error: the run goes on and the window is left for the user
+        try { await backend.close(handleOf(j)); } catch (e) { error = String((e && e.message) || e); }
+        if (error === null) {
+          steps.finish(db, desc, { pane: j.pane }, { now });
+        } else {
+          emit("step_failed", { spec: j.spec, job: j.id, rows: [["steps", { ...get("steps", desc.key), state: "failed", result: JSON.stringify({ error }), updated_at: now() }]],
+            key: desc.key, step_kind: "close_window", error, text: `could not close ${j.window}: ${error}` });
+        }
       }
       closed.add(j.id);
     }
@@ -1000,7 +1030,7 @@ function start(opts) {
           }
           if (ok) { watched++; continue; }
           // its window is gone for this engine: finished from its report when valid, else a new attempt (the drain decides)
-          inbox.insert(db, { source: "worker", source_id: `${job.pane}:gone:resume:${now()}`, spec: job.spec, job: job.id, kind: "gone",
+          inbox.insert(db, { source: "worker", source_id: `${job.id}:${job.pane}:gone:resume:${now()}`, spec: job.spec, job: job.id, kind: "gone",
             payload: { pane: job.pane, window: job.window } }, now());
         }
         emit("resumed", { rerun: rec.rerun.map((r) => r.key), parked: rec.park.map((p) => p.key), watched });

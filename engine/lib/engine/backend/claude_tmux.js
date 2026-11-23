@@ -76,6 +76,24 @@ function createBackend(opts) {
 
   const entryOf = (handle) => entries.find((e) => e.handle.pane === handle.pane);
 
+  // After an engine restart: watch a window an earlier process started. `job` is the jobs row plus `worktree`,
+  // `handle` its window, pane and session id. True when that pane is still open under that window name (tmux reuses
+  // pane ids after a server restart, so the pane id alone is not enough); the job is then polled and closed like one
+  // this process started, without a second `started` event. False when it is gone.
+  async function adopt(job, handle) {
+    if (!handle || !handle.pane) return false;
+    const lp = tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}"]);
+    if (lp.status !== 0) return false;
+    const row = lp.stdout.split("\n").map((l) => l.split("\t")).find((x) => x[0] === handle.pane);
+    if (!row || (handle.window && row[1] !== handle.window)) return false;
+    const have = entries.find((e) => e.handle.pane === handle.pane && !e.gone);
+    if (have) return true;
+    const h = register(job, row[1], handle.pane);
+    if (handle.session_id) h.session_id = handle.session_id;
+    entryOf(h).started = true;
+    return true;
+  }
+
   function latestRecord(pane) {
     const { records } = readStatusFiles(statusDir);
     let best = null;
@@ -154,7 +172,7 @@ function createBackend(opts) {
     return out;
   }
 
-  return { start, close, resume, poll };
+  return { start, close, resume, poll, adopt };
 }
 
 module.exports = { createBackend, readStatusFiles };

@@ -47,7 +47,9 @@ function workerRows(db, events, now) {
   for (const ev of events) {
     if (ev.type !== "status" && ev.type !== "gone") continue;
     const h = ev.handle || {};
-    const source_id = ev.type === "gone" ? `${h.pane}:gone` : `${h.pane}:${ev.state}:${ev.updatedAt}`;
+    // the job id comes first: tmux reuses pane ids after a server restart, and a later job's row must not be a duplicate
+    const who = h.job ? `${h.job}:${h.pane}` : `${h.pane}`;
+    const source_id = ev.type === "gone" ? `${who}:gone` : `${who}:${ev.state}:${ev.updatedAt}`;
     let spec = h.spec || null;
     if (!spec && h.job) {
       const j = db.prepare("SELECT spec FROM jobs WHERE id=?").get(h.job);

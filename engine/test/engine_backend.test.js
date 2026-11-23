@@ -249,12 +249,14 @@ fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(
       TMUX_TMPDIR: path.dirname(path.dirname(sock)),
       TC_AGENT_CMD: agentCmd || `FAKE_PANE=$TMUX_PANE ${process.execPath} ${wrapper} ${WORKER} ${report} ${path.join(statusDir, "fake.json")}`,
     };
-    const backend = claudeTmux.createBackend({
+    // a second call is a second engine process: a backend that started no window
+    const make = () => claudeTmux.createBackend({
       session: sess, tmuxCtl: ctl, statusDir,
       tmuxArgs: ["-L", tmux.socket, "-f", "/dev/null"], env,
     });
+    const backend = make();
     return {
-      backend, argvLog, worktree, report,
+      backend, make, tmux, argvLog, worktree, report,
       job: (x) => ({ id: "myspec-p1:implement1:1", spec: "myspec-p1", kind: "implement", task: 1, attempt: 1, tier: "standard",
         model: "sonnet", effort: "low", brief, report, worktree, ...x }),
       cleanup() { tmux.kill(); repo.cleanup(); },
@@ -320,6 +322,37 @@ fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(
     fs.writeFileSync(path.join(paths.statusDir(), "other.json"), JSON.stringify({ pane: "%9999", state: "needs-you", updatedAt: 500 }));
     await sleep(100);
     assert.deepEqual(ctx.backend.poll(), []);
+  });
+
+  // Mutations run for adopt (see the Task 8 fix report): the pane-exists check removed, and the window-name check
+  // removed, each fail this test.
+  test("claude-tmux: a second backend adopts a running job's pane, watches it and closes it", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root, "sleep 60"); t.after(() => ctx.cleanup());
+    const job = ctx.job({});
+    const h = await ctx.backend.start(job);
+    const row = { job: h.job, window: h.window, pane: h.pane, session_id: undefined }; // what the core rebuilds from the jobs row
+    const b2 = ctx.make();
+    assert.deepEqual(b2.poll(), []);
+    assert.equal(await b2.adopt(job, { ...row, pane: "%9999" }), false, "no such pane");
+    assert.equal(await b2.adopt(job, { ...row, window: "another-window" }), false, "a reused pane id under another window");
+    assert.deepEqual(b2.poll(), []);
+    assert.equal(await b2.adopt(job, row), true);
+    assert.equal(await b2.adopt(job, row), true, "adopting twice watches once");
+    fs.mkdirSync(paths.statusDir(), { recursive: true });
+    fs.writeFileSync(path.join(paths.statusDir(), "fake.json"), JSON.stringify({ pane: h.pane, session_id: "s9", state: "ready", updatedAt: 100, tool: null }));
+    fs.mkdirSync(path.dirname(ctx.report), { recursive: true });
+    fs.writeFileSync(ctx.report, VALID);
+    let ev = await collect(b2, (e) => e.some((x) => x.type === "report") && e.some((x) => x.type === "status"));
+    assert.deepEqual(ev.filter((x) => x.type === "status").map((x) => [x.state, x.handle.job, x.handle.pane, x.handle.session_id]),
+      [["ready", job.id, h.pane, "s9"]]);
+    assert.equal(ev.filter((x) => x.type === "report").length, 1);
+    assert.equal(ev.filter((x) => x.type === "started").length, 0);
+    await b2.close(row);
+    assert.ok(fs.existsSync(path.join(paths.workspace(ctx.worktree), "logs", "myspec-p1_implement1-1.log")));
+    ev = await collect(b2, (e) => e.some((x) => x.type === "gone"));
+    assert.equal(ev.filter((x) => x.type === "gone").length, 1);
+    assert.ok(!ctx.tmux.run(["list-panes", "-a", "-F", "#{pane_id}"]).stdout.split("\n").includes(h.pane));
   });
 
   test("claude-tmux: a report that does not parse for the job kind emits no report event", async (t) => {
