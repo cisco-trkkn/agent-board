@@ -12,6 +12,19 @@ if [ "$1" = "--has-token" ]; then has_token "$2"; exit $?; fi
 root="${1:-${CLAUDE_PLUGIN_ROOT:-.}}"
 dir="${DISCORD_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/channels/discord}"
 if [ -n "$DISCORD_BOT_TOKEN" ] || has_token "$dir"; then
+  # The plugin server runs under node, not bun: this Mac's proxy tunnels bun's Discord gateway connection and keeps
+  # dropping its session, while node's is steady. Needs node >= 22.6 (--experimental-strip-types); otherwise, or with
+  # TC_DISCORD_RUNTIME=bun, the stock bun start. The dependency install is not a gateway connection and keeps bun;
+  # its output goes to stderr so stdout stays clean for MCP stdio, and a failed install is not fatal (node_modules may exist).
+  if [ "$TC_DISCORD_RUNTIME" != bun ] && command -v node >/dev/null 2>&1; then
+    nv="$(node --version 2>/dev/null)"; nv="${nv#v}"; nmaj="${nv%%.*}"; nmin="${nv#*.}"; nmin="${nmin%%.*}"
+    case "$nmaj$nmin" in *[!0-9]*|"") nmaj=0; nmin=0 ;; esac
+    if [ "$nmaj" -gt 22 ] || { [ "$nmaj" -eq 22 ] && [ "$nmin" -ge 6 ]; }; then
+      cd "$root" || exit 1
+      bun install --no-summary >&2 || true
+      exec node --experimental-strip-types "$PWD/server.ts"
+    fi
+  fi
   exec bun run --cwd "$root" --shell=bun --silent start
 fi
 if command -v node >/dev/null 2>&1; then exec node "$root/discord-mcp-stub.js"; fi

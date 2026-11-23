@@ -27,7 +27,7 @@ import paneclass  # noqa: E402
 CHANNEL = "plugin:discord@claude-plugins-official"
 NOTIFY_EVERY = 900      # seconds between two banners for one lead
 GRACE = 45              # a lead younger than this may still be starting its servers
-DC_BUN = re.compile(r"\bbun run\b.*\bstart\b|\bbun\b.*\bserver\.ts\b")   # the plugin's launchers: bun run --cwd <plugin> start, bun <path>/server.ts
+DC_BUN = re.compile(r"\bbun run\b.*\bstart\b|\b(?:bun|node)\b.*\bserver\.ts\b")   # the plugin's launchers: bun run --cwd <plugin> start, bun <path>/server.ts, node --experimental-strip-types <path>/server.ts
 VERSION_ARG0 = re.compile(r"^\d+\.\d+\.\d+$")
 
 Proc = namedtuple("Proc", "pid ppid age args")

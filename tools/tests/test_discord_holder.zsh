@@ -12,7 +12,8 @@ ln -sf "${commands[node]:A}" "$S/bin/claude"   # a process whose argv[0] is .../
 cat > "$S/fc.js" <<'FC'
 const { spawn } = require('child_process')
 require('fs').writeFileSync(process.argv[3], String(process.pid))
-const k = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start'],
+const kargs = process.env.FC_MODE === 'node' ? ['--experimental-strip-types', '/fake/discord/0.0.4/server.ts'] : ['bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start']
+const k = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', ...kargs],
   { env: { ...process.env, DISCORD_STATE_DIR: process.argv[2] }, stdio: 'ignore' })
 k.on('exit', () => process.exit(0))
 FC
@@ -46,6 +47,10 @@ check "prefix dir is not held (p vs p2)"  test -z "$(dc_holder "$SD2")" -a -z "$
 spawn "$SD2"; CP2=$CP
 check "p2 holder does not change p's answer"  test "$(dc_holder "$SD")" = "$CP1 %99"
 check "p2 is held by its own claude"      test "$(dc_holder "$SD2")" = "$CP2 %99"
+# the node server the launcher execs (node --experimental-strip-types <plugin>/server.ts) is a holder too
+FC_MODE=node spawn "$S/state/nd"; CPN=$CP
+check "node fake: child args show the strip-types server.ts" test -n "$(ps -o args= -p $KID | grep -F -- '--experimental-strip-types /fake/discord/0.0.4/server.ts')"
+check "node server.ts is a live holder"   test "$(dc_holder "$S/state/nd")" = "$CPN %99"
 # orphan: claude killed, the child is re-parented to 1
 kill $CP1
 for i in {1..50}; do [[ "$(ps -o ppid= -p $KID1 2>/dev/null | tr -d ' ')" == 1 ]] && break; sleep 0.1; done

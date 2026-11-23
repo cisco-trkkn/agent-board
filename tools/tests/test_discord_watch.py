@@ -79,6 +79,12 @@ class Finding(unittest.TestCase):
         t = table((1, 0, 9, "claude " + CH), (2, 1, 9, "node /h/.claude/plugins/discord/scripts/discord-mcp-stub.js"))   # a stub is not a live channel
         self.assertFalse(dw.has_server(1, t))
 
+    def test_node_server_ts_matches(self):   # the launcher execs node --experimental-strip-types <plugin>/server.ts
+        t = table((1, 0, 9, "claude " + CH), (2, 1, 9, "node --experimental-strip-types /h/.claude/plugins/cache/claude-plugins-official/discord/0.0.7/server.ts"))
+        self.assertTrue(dw.has_server(1, t))
+        t = table((1, 0, 9, "claude " + CH), (2, 1, 9, "node --experimental-strip-types /h/other/server.ts"))   # not under /discord/
+        self.assertFalse(dw.has_server(1, t))
+
     def test_pane_of_walks_ancestors(self):
         t = table((100, 1, 9, "-zsh"), (101, 100, 9, "claude " + CH))
         self.assertEqual(dw.pane_of(101, t, {100: "%3"}), "%3")
