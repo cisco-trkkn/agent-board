@@ -190,6 +190,35 @@ test("keep: kept <branch>, no merge, no push", () => {
   assert.deepEqual(s.keys().map((k) => k.key.split(":")[0]).sort(), ["commit_ledger", "metrics_record"]);
 });
 
+const hasLedger = (g, ref) => g.git("log", "--format=%B%x00", ref).split("\0").some((m) => m.split("\n").includes("Engine-Step: commit_ledger:s1"));
+
+test("mr: ledger commit is on the spec branch before the push, main gets none, resume does not commit again", () => {
+  const s = setup({ integration: "mr" });
+  const mainHead = s.g.git("rev-parse", "main").trim();
+  assert.match(integrate.run(s.ctx, s.spec).outcome, /^mr https:/);
+  assert.ok(hasLedger(s.g, "feat-a"), "ledger on the spec branch");
+  assert.ok(hasLedger(s.g, "refs/heads/feat-a") && s.g.git("--git-dir", s.bare, "log", "--format=%B", "feat-a").includes("Engine-Step: commit_ledger:s1"), "the push carried the ledger commit");
+  assert.equal(s.g.git("rev-parse", "main").trim(), mainHead, "main has no new commit");
+  assert.ok(fs.existsSync(path.join(s.wt, "docs/superpowers/ledgers/2026-11-23-demo/progress.md")));
+  assert.ok(!fs.existsSync(path.join(s.g.dir, "docs/superpowers/ledgers")));
+  // resume: a done commit_ledger row is put back to intent (killed after the commit); the CHECK reads the spec branch and finds it
+  const branchHead = s.g.git("rev-parse", "feat-a").trim();
+  s.db.prepare("UPDATE steps SET state='intent' WHERE key='commit_ledger:s1'").run();
+  const rec = require("../lib/engine/steps").reconcile(s.db, { repo: s.g.dir, mainRepo: s.g.dir, target: "main", tmuxCtl: s.ctx.tmuxCtl });
+  assert.deepEqual(rec.rerun, []);
+  assert.equal(s.db.prepare("SELECT state FROM steps WHERE key=?").get("commit_ledger:s1").state, "done");
+  assert.equal(s.g.git("rev-parse", "feat-a").trim(), branchHead);
+});
+
+test("keep: ledger commit is on the spec branch, main unchanged", () => {
+  const s = setup({ integration: "keep" });
+  const mainHead = s.g.git("rev-parse", "main").trim();
+  assert.equal(integrate.run(s.ctx, s.spec).outcome, "kept feat-a");
+  assert.ok(hasLedger(s.g, "feat-a"));
+  assert.ok(!hasLedger(s.g, "main"));
+  assert.equal(s.g.git("rev-parse", "main").trim(), mainHead);
+});
+
 // ---- ledger ----------------------------------------------------------------------------------------------
 
 test("ledger.render lines are counted by metrics.py ledger_fields", () => {

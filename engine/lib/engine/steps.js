@@ -68,8 +68,8 @@ function tmuxList(ctx, args) {
   return { lines: r.stdout.split("\n").filter(Boolean) };
 }
 
-function engineStepCommit(ctx, key) {
-  const r = git(mainRepo(ctx), ["log", target(ctx), "--format=%B%x00"]);
+function engineStepCommit(ctx, key, facts = {}) {
+  const r = git(facts.dir || mainRepo(ctx), ["log", facts.branch || target(ctx), "--format=%B%x00"]);
   if (r.error || r.status !== 0) return "unknown";
   const want = `Engine-Step: ${key}`;
   const hit = r.stdout.split("\0").some((msg) => msg.split("\n").some((l) => l.trim() === want));
@@ -118,7 +118,7 @@ const CHECKS = {
   },
   revert: (ctx, row) => engineStepCommit(ctx, row.key),
   commit_report: (ctx, row) => engineStepCommit(ctx, row.key),
-  commit_ledger: (ctx, row) => engineStepCommit(ctx, row.key),
+  commit_ledger: (ctx, row) => engineStepCommit(ctx, row.key, row.result || {}),
   metrics_start: metricsHas("start"),
   metrics_record: metricsHas("run"),
   push(ctx, row) {

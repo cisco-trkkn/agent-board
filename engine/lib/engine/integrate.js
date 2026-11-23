@@ -91,9 +91,16 @@ function doMerge(ctx, spec) {
   }
 }
 
-function doMr(ctx, spec) {
+function mrGuard(spec) {
   if (!spec.push) return parked("push not permitted: no stored consent");
   if (PROTECTED.has(spec.branch)) return parked(`push not permitted: ${spec.branch} is a protected branch`);
+  return null;
+}
+
+function doMr(ctx, spec) {
+  const g = mrGuard(spec);
+  if (g) return g;
+  commitLedger(ctx, spec); // before the push, so the PR carries it
   const sha = must(git(ctx, ctx.repo, ["rev-parse", spec.branch]), "rev-parse");
   const url = must(git(ctx, ctx.repo, ["config", "--get", "remote.origin.url"]), "remote url");
   run(ctx, spec, "push", `push:${spec.id}:${spec.branch}`, { remote: "origin", ref: `refs/heads/${spec.branch}`, sha }, () => {
@@ -112,18 +119,27 @@ function doMr(ctx, spec) {
   return { url: r.result.url };
 }
 
+// The ledger commit: `merge` -> the target branch in the main checkout (after the merge); `mr` and `keep` -> the
+// spec branch in the spec worktree, so the main checkout never moves (for `mr` it runs before the push).
+function commitLedger(ctx, spec) {
+  const rel = path.join("docs/superpowers/ledgers", path.basename(spec.plan || spec.id).replace(/\.md$/, ""));
+  const file = path.join(rel, "progress.md");
+  const onSpecBranch = spec.integration === "mr" || spec.integration === "keep";
+  const dir = onSpecBranch ? (spec.worktree || ctx.worktree) : ctx.repo;
+  const branch = onSpecBranch ? spec.branch : target(ctx);
+  run(ctx, spec, "commit_ledger", `commit_ledger:${spec.id}`, { branch, dir }, () => {
+    const events = ctx.db.prepare("SELECT kind, detail FROM events WHERE spec=? ORDER BY seq").all(spec.id);
+    fs.mkdirSync(path.join(dir, rel), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), ledger.render(events));
+    must(git(ctx, dir, ["add", "--", file]), "git add");
+    must(git(ctx, dir, ["commit", "-q", "-m", `docs(ledger): ${spec.id} progress\n\nEngine-Step: commit_ledger:${spec.id}`, "--", file]), "git commit");
+    return { file, branch, dir };
+  });
+}
+
 // commit_ledger, metrics_record, worktree_remove (the last only when `removeWorktree`).
 function finalize(ctx, spec, outcome, { removeWorktree = false } = {}) {
-  const dir = path.join("docs/superpowers/ledgers", path.basename(spec.plan || spec.id).replace(/\.md$/, ""));
-  const file = path.join(dir, "progress.md");
-  run(ctx, spec, "commit_ledger", `commit_ledger:${spec.id}`, {}, () => {
-    const events = ctx.db.prepare("SELECT kind, detail FROM events WHERE spec=? ORDER BY seq").all(spec.id);
-    fs.mkdirSync(path.join(ctx.repo, dir), { recursive: true });
-    fs.writeFileSync(path.join(ctx.repo, file), ledger.render(events));
-    must(git(ctx, ctx.repo, ["add", "--", file]), "git add");
-    must(git(ctx, ctx.repo, ["commit", "-q", "-m", `docs(ledger): ${spec.id} progress\n\nEngine-Step: commit_ledger:${spec.id}`, "--", file]), "git commit");
-    return { file };
-  });
+  commitLedger(ctx, spec);
   run(ctx, spec, "metrics_record", `metrics_record:${spec.id}`, { spec: spec.id, batch: spec.batch }, () => {
     must(spawn(ctx, tmuxCtl(ctx), ["metrics", "record", spec.id, "--batch", String(spec.batch), "--outcome", outcome], { cwd: ctx.repo }), "metrics record");
     return { spec: spec.id, batch: spec.batch, outcome };
