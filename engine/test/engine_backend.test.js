@@ -213,3 +213,131 @@ if (require.main === module) {
     assert.equal(fs.readdirSync(env.root).filter((f) => f.endsWith(".tmp")).length, 0);
   });
 }
+
+// ---- claude-tmux: real tmux windows on a scratch server, fake-worker standing in for claude ----
+if (require.main === module) {
+  const cp = require("node:child_process");
+  const { scratchTmux, gitRepo } = require("./engine_helpers.js");
+  const claudeTmux = require("../lib/engine/backend/claude_tmux.js");
+  const paths = require("../lib/engine/paths.js");
+  const REPO = path.join(__dirname, "../..");
+  const WORKER = path.join(__dirname, "fixtures/engine/fake-worker.js");
+  const VALID = "done\n\n```json:status\n{\"status\":\"done\",\"commits\":[],\"concerns\":[]}\n```\n";
+
+  async function makeClaudeTmux(root, agentCmd) {
+    const tmux = scratchTmux();
+    const sess = "eng";
+    tmux.run(["new-session", "-d", "-s", sess, "-n", "main", "-x", "200", "-y", "50"]);
+    const sock = tmux.run(["display", "-p", "#{socket_path}"]).stdout.trim();
+    const repo = gitRepo();
+    const worktree = path.join(root, "wt");
+    repo.git("worktree", "add", "-q", worktree, "-b", "wtb");
+    const statusDir = paths.statusDir();
+    const report = path.join(root, "reports", "r.md");
+    const brief = path.join(root, "brief.md");
+    fs.writeFileSync(brief, "Goal: do it.\n");
+    // fake-worker writes DONE (not a valid implementer report), so a wrapper replaces it once the worker is ready
+    const wrapper = path.join(root, "w.js");
+    fs.writeFileSync(wrapper, `const cp=require("node:child_process"),fs=require("node:fs");
+const [w,r,s]=process.argv.slice(2);
+cp.spawnSync(process.execPath,[w,r,s,"noreport"],{stdio:"ignore"});
+fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(r,${JSON.stringify(VALID)});\n`);
+    const argvLog = path.join(root, "argv.log");
+    const ctl = path.join(root, "ctl.sh");
+    fs.writeFileSync(ctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(argvLog)}\nexec ${JSON.stringify(path.join(REPO, "bin/tmux-ctl"))} "$@"\n`, { mode: 0o755 });
+    const env = {
+      TMUX_TMPDIR: path.dirname(path.dirname(sock)),
+      TC_AGENT_CMD: agentCmd || `FAKE_PANE=$TMUX_PANE ${process.execPath} ${wrapper} ${WORKER} ${report} ${path.join(statusDir, "fake.json")}`,
+    };
+    const backend = claudeTmux.createBackend({
+      session: sess, tmuxCtl: ctl, statusDir,
+      tmuxArgs: ["-L", tmux.socket, "-f", "/dev/null"], env,
+    });
+    return {
+      backend, argvLog, worktree, report,
+      job: (x) => ({ id: "myspec-p1:implement1:1", spec: "myspec-p1", kind: "implement", task: 1, attempt: 1, tier: "standard",
+        model: "sonnet", effort: "low", brief, report, worktree, ...x }),
+      cleanup() { tmux.kill(); repo.cleanup(); },
+    };
+  }
+  const driveTmux = async () => {};
+  conformance("claude-tmux", makeClaudeTmux, driveTmux);
+
+  test("claude-tmux: start passes --dir, model, effort, brief; window is <slug>·<kind><task>", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root); t.after(() => ctx.cleanup());
+    const h = await ctx.backend.start(ctx.job({}));
+    assert.equal(h.window, "myspec-p1·implement1");
+    assert.match(h.pane, /^%\d+$/);
+    const argv = fs.readFileSync(ctx.argvLog, "utf8").trim();
+    assert.equal(argv, `agent myspec-p1·implement1 --dir ${ctx.worktree} --model sonnet --effort low --brief ${path.join(env.root, "brief.md")}`);
+  });
+
+  test("claude-tmux: resume runs agent --resume <session_id> with the text as the brief", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root); t.after(() => ctx.cleanup());
+    const h = await ctx.backend.start(ctx.job({}));
+    const next = await ctx.backend.resume(h, "fix the findings");
+    assert.match(next.session_id, /^fake-worker-\d+$/);
+    const lines = fs.readFileSync(ctx.argvLog, "utf8").trim().split("\n");
+    assert.equal(lines.length, 2);
+    assert.match(lines[1], new RegExp(`^agent \\S+ --dir ${ctx.worktree} --resume ${next.session_id} --model sonnet --effort low --brief \\S+$`));
+    const briefArg = lines[1].split(" --brief ")[1];
+    assert.equal(fs.readFileSync(briefArg, "utf8"), "fix the findings");
+    assert.notEqual(next.window, h.window);
+  });
+
+  test("claude-tmux: close saves the pane's last lines to <workspace>/logs/<job>-<attempt>.log, then the pane is gone", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root); t.after(() => ctx.cleanup());
+    const h = await ctx.backend.start(ctx.job({}));
+    await sleep(500);
+    await ctx.backend.close(h);
+    const log = path.join(paths.workspace(ctx.worktree), "logs", "myspec-p1_implement1-1.log");
+    assert.ok(fs.existsSync(log), log);
+    const ev = await collect(ctx.backend, (e) => e.some((x) => x.type === "gone"));
+    assert.equal(ev.filter((x) => x.type === "gone").length, 1);
+  });
+
+  test("claude-tmux: status events fire on each change of state or updatedAt, not on repeats", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root, "sleep 60"); t.after(() => ctx.cleanup());
+    const h = await ctx.backend.start(ctx.job({}));
+    const f = path.join(paths.statusDir(), "fake.json");
+    fs.mkdirSync(paths.statusDir(), { recursive: true });
+    const write = (state, updatedAt) => fs.writeFileSync(f, JSON.stringify({ pane: h.pane, session_id: "s1", state, updatedAt, tool: null }));
+    await collect(ctx.backend, (e) => e.some((x) => x.type === "started"));
+    fs.rmSync(f, { force: true });
+    await sleep(100);
+    write("busy", 100);
+    let ev = await collect(ctx.backend, (e) => e.some((x) => x.type === "status"));
+    assert.deepEqual(ev.filter((x) => x.type === "status").map((x) => [x.state, x.updatedAt]), [["busy", 100]]);
+    assert.deepEqual(ctx.backend.poll(), []);
+    write("busy", 101);
+    ev = await collect(ctx.backend, (e) => e.some((x) => x.type === "status"));
+    assert.deepEqual(ev.filter((x) => x.type === "status").map((x) => [x.state, x.updatedAt]), [["busy", 101]]);
+    // another pane's record, newer, is ignored
+    fs.writeFileSync(path.join(paths.statusDir(), "other.json"), JSON.stringify({ pane: "%9999", state: "needs-you", updatedAt: 500 }));
+    await sleep(100);
+    assert.deepEqual(ctx.backend.poll(), []);
+  });
+
+  test("claude-tmux: a report that does not parse for the job kind emits no report event", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root); t.after(() => ctx.cleanup());
+    const h = await ctx.backend.start(ctx.job({ kind: "review" }));
+    const ev = await collect(ctx.backend, (e) => e.some((x) => x.type === "report"), 6000);
+    assert.ok(h.pane);
+    assert.ok(!ev.some((x) => x.type === "report"), "implementer report is not a review report");
+  });
+
+  test("claude-tmux: real agent-status dir (read-only): every file is a record with pane and state, or skipped", (t) => {
+    const dir = path.join(process.env.TC_STATE || `${(process.env.TMPDIR || "/tmp").replace(/\/+$/, "")}/tmux-ctl-${process.getuid()}`, "agent-status");
+    const { records, skipped } = claudeTmux.readStatusFiles(dir);
+    for (const r of records) { assert.equal(typeof r.pane, "string"); assert.equal(typeof r.state, "string"); }
+    console.log(`real statusDir ${dir}: read ${records.length} records, skipped ${skipped}`);
+    if (!fs.existsSync(dir)) return;
+    assert.ok(records.length > 0, "an existing statusDir yields at least one record");
+    assert.equal(records.length + skipped, fs.readdirSync(dir).filter((f) => f.endsWith(".json")).length);
+  });
+}

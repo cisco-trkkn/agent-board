@@ -15,7 +15,7 @@
 #   tmux-ctl send  [-C dir] <win> <text>   type text + Enter into an IDLE shell window, don't wait
 #   tmux-ctl keys  <win> <key>...          raw keys, e.g. C-c to stop something you started
 #   tmux-ctl new   <win> [dir]             open a new shell window
-#   tmux-ctl agent <name> [--force] [--model M] [--effort E] <task> | --brief FILE
+#   tmux-ctl agent <name> [--force] [--dir WT [--resume ID]] [--model M] [--effort E] <task> | --brief FILE
 #                                          start a worker Claude in its own worktree + window.
 #                                          --model haiku|sonnet|opus|fable (default sonnet), --effort low|medium|high|xhigh (default medium)
 #                                          The brief needs goal, scope, done-criterion: <8 words is
@@ -530,12 +530,16 @@ case "$cmd" in
 
   agent)
     name="$1"; shift
-    force=0; briefile=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"
+    force=0; briefile=""; wdir=""; resume=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"
     while [[ "$1" == --* ]]; do
       case "$1" in
         --force) force=1; shift ;;
         --brief) [[ -n "$2" ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
                  briefile="$2"; shift 2 ;;
+        --dir)    [[ -n "$2" ]] || die "--dir needs a worktree directory"
+                  wdir="$2"; shift 2 ;;
+        --resume) [[ -n "$2" ]] || die "--resume needs a session id"
+                  resume="$2"; shift 2 ;;
         --model)  (( ${TC_MODELS[(Ie)$2]} )) || die "--model needs one of: ${TC_MODELS}"
                   model="$2"; shift 2 ;;
         --effort) (( ${TC_EFFORTS[(Ie)$2]} )) || die "--effort needs one of: ${TC_EFFORTS}"
@@ -544,7 +548,8 @@ case "$cmd" in
       esac
     done
     [[ -n "$name" && ( -n "$briefile" || $# -gt 0 ) ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
-    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "usage: tmux-ctl agent <name> ...: the name starts with a letter or digit and holds only letters, digits, . _ -"
+    nre='^[A-Za-z0-9][A-Za-z0-9._-]*$'; [[ -n "$wdir" ]] && nre='^[A-Za-z0-9][A-Za-z0-9._·-]*$'   # --dir names are the engine's <spec>·<kind><task>
+    [[ "$name" =~ $nre ]] || die "usage: tmux-ctl agent <name> ...: the name starts with a letter or digit and holds only letters, digits, . _ -"
     if [[ -n "$briefile" ]]; then
       [[ -z "$*" ]] || die "give either --brief FILE or a task on the command line, not both"
       [[ -r "$briefile" ]] || die "no readable brief file '$briefile'"
@@ -569,11 +574,23 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     rules=""; wr="$HOME/.config/agent-board/worker.md"; [[ -r "$wr" ]] || wr="$AB_REPO/claude/worker.md"   # a user override wins
     [[ -r "$wr" ]] && rules=" --append-system-prompt-file ${(q)wr}"
     # workers never see the end-of-session CLAUDE.md nudge (it asks an absent user a question)
-    root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
+    if [[ -n "$wdir" ]]; then
+      [[ -d "$wdir" ]] || die "--dir '$wdir' is not a directory"
+      [[ "$(git -C "$wdir" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || die "--dir '$wdir' is not inside a git worktree"
+      root="${wdir:A}"
+    else
+      [[ -z "$resume" ]] || die "--resume needs --dir"
+      root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
+    fi
     # cd first: a pane can start somewhere other than its -c directory (a tmux server whose own cwd was removed starts
     # every pane there, docs/superpowers/notes/2026-11-09-relay-gone-cwd.md); claude then exits at startup or makes its
     # worktree in the wrong repo
-    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude --model $model --effort $effort -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
+    # --dir: the worker runs in an existing worktree (no -w); --resume continues that session, the brief is its first message
+    wflag="-w ${(q)name} "; [[ -n "$wdir" ]] && wflag=""
+    rflag=""; [[ -n "$resume" ]] && rflag="--resume ${(q)resume} "
+    cmd="claude --model $model --effort $effort ${rflag}${wflag}-n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
+    [[ -n "$TC_AGENT_CMD" ]] && cmd="$TC_AGENT_CMD"   # test seam: replaces the claude command
+    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} $cmd"
     # the line is long (task, PATH): typed into a shell that has not started ZLE it overflows the tty's 1024-byte typeahead, so it goes in a file and only `. file` is typed
     launchf="$STATE/agents/${SESSION//[^A-Za-z0-9._-]/_}-$name.zsh"   # a tmux session name can hold other characters
     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; print -r -- "DRYRUN launch: $launchf"; exit 0 }   # test seam: stop before any window is created
@@ -586,7 +603,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     # worker rules (superpowers skills, decide instead of asking) ride along as a system prompt (built above in $line)
     t send-keys -t "$(target "$name")" -l -- ". ${(q)launchf}"
     t send-keys -t "$(target "$name")" Enter
-    print -r -- "started worker '$name' in window $SESSION:$name (worktree .claude/worktrees/$name)" ;;
+    print -r -- "started worker '$name' in window $SESSION:$name (worktree ${${wdir:+$root}:-.claude/worktrees/$name})" ;;
 
   tell)
     name="$1"; shift
