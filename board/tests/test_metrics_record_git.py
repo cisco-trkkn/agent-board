@@ -126,6 +126,16 @@ class MergedTest(Base):
         self.assertEqual(r["spec"], SPEC_A + "#part-2")
         self.assertEqual(r["plan"], PLAN_A)
 
+    def test_a_real_merge_wins_over_a_later_ledger_commit_on_main(self):
+        """The fast-forward path is for runs with no merge commit: a merged run keeps its merge range even when main
+        later gets another commit under the same ledger directory."""
+        write(self.repo, "docs/superpowers/ledgers/2026-01-01-a/late.md", "late\n")
+        git(self.repo, "add", "."); git(self.repo, "commit", "-q", "-m", "docs(ledger): late note")
+        r = self.rec()
+        self.assertEqual(r["merge"], self.merge_a)
+        self.assertEqual(r["head"], git(self.repo, "rev-parse", self.merge_a + "^2"))
+        self.assertEqual(r["base"], self.base0)
+
     def test_outcome_mapping(self):
         for text, want, miss in (("mr", "mr", False), ("kept because x", "kept", False), ("FAILED hard", "failed", False),
                                  ("merged", "merged", False), ("weird words", "weird", True)):
@@ -362,6 +372,50 @@ class FastForwardTest(unittest.TestCase):
                                    "main": plan_commit, "worktree": ".claude/worktrees/ff"})
         self.assertEqual(self.rec()["base"], plan_commit)   # the plan is an ancestor of start.main: the range starts there
 
+    def test_failed_run_with_its_ledger_on_main_is_not_called_merged(self):
+        """A failed spec whose ledger was committed on main (branch gone) resolves its range from the ledger commits, as a
+        fast-forwarded run does; the outcome stays what the caller said and no `merge` gap is added. Known: touched_files
+        and manifest then describe the ledger range, although nothing of it was merged by a merge."""
+        r = self.rec("failed")
+        self.assertEqual(r["outcome"], "failed")
+        self.assertIsNone(r["merge"])
+        self.assertNotIn("merge", r["missing"])
+        self.assertEqual((r["head"], r["base"]), (self.head, self.plan_parent))
+        self.assertEqual(r["touched_list"], ["src/a.py", "src/c.py"])
+
+
+class PartRunTest(FastForwardTest):
+    """A spec run in parts: `<spec>#part-2` has its own plan (named `...-part2`, its `Spec:` line without the suffix) next
+    to the part-1 plan; the part-2 record must resolve against the part-2 plan and its ledger directory."""
+    PLAN2 = "docs/superpowers/plans/2026-01-05-ff-part2.md"
+
+    def setUp(self):
+        super().setUp()
+        r = self.repo
+        write(r, self.PLAN2, f"# P2\n\n**Spec:** `{self.SPEC}` section 4 (part 2)\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "docs(plan): ff part 2")
+        self.p2_parent = git(r, "rev-parse", "HEAD^")
+        write(r, "src/part2.py", "p\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "feat: part 2 work")
+        write(r, "docs/superpowers/ledgers/2026-01-05-ff-part2/progress.md", "# progress\n")
+        git(r, "add", "."); git(r, "commit", "-q", "-m", "docs(ledger): ff part 2")
+        self.head2 = git(r, "rev-parse", "HEAD")
+        metrics.append(r, {"kind": "start", "batch": "B", "spec": self.SPEC + "#part-2", "at": metrics.utc(self.now - 600),
+                           "main": self.p2_parent, "worktree": ".claude/worktrees/ff-part2"})
+
+    def test_part_2_resolves_against_its_own_plan_and_ledger(self):
+        r = metrics.build_record_static(self.repo, self.SPEC + "#part-2", "B", None, self.now)
+        self.assertEqual(r["plan"], self.PLAN2)
+        self.assertEqual((r["head"], r["base"]), (self.head2, self.p2_parent))
+        self.assertEqual(r["touched_list"], ["src/part2.py"])
+        self.assertNotIn("plan", r["missing"])
+
+    def test_the_plain_spec_still_resolves_to_the_first_plan(self):
+        r = self.rec()
+        self.assertEqual(r["plan"], self.PLAN)
+        self.assertEqual(r["head"], self.head)
+
+
 class BackfillFastForwardTest(FastForwardTest):
     """`metrics backfill <spec>|--all-null [--apply]`: re-resolve null run records, touching nothing else."""
     ODD = '{"kind":"start",  "batch": "B", "zz": 1,"a":2}'   # not in json.dumps(sort_keys) form: must survive byte for byte
@@ -409,11 +463,68 @@ class BackfillFastForwardTest(FastForwardTest):
         self.assertEqual(baks[0].read_text(), self.before)
         self.assertIn(self.ODD, b)                               # byte-identical odd line
 
-    def test_second_apply_is_a_no_op_and_unresolved_spec_is_skipped(self):
+    NOPE = "docs/superpowers/specs/nope.md"
+
+    def add_unresolved(self):
+        rec = {"kind": "run", "batch": "B", "spec": self.NOPE, "at": "2026-01-01T00:00:00Z", "head": None, "outcome": "merged"}
+        with open(self.log, "a") as f:
+            f.write(json.dumps(rec, sort_keys=True) + "\n")
+        self.before = self.log.read_text()
+
+    def test_second_apply_is_a_no_op(self):
         self.run_cli("--all-null", "--apply")
         mid = self.log.read_text()
-        self.assertEqual(self.run_cli("--all-null", "--apply").strip(), "0 records to backfill")
+        self.assertEqual(self.run_cli("--all-null", "--apply").strip(), "0 records to backfill, 0 skipped")
         self.assertEqual(self.log.read_text(), mid)
+
+    def test_unresolved_spec_is_named_and_counted_in_dry_run_and_apply(self):
+        self.add_unresolved()
+        for argv, summary in ((("--all-null",), "1 records to backfill, 1 skipped"),
+                              (("--all-null", "--apply"), "1 records backfilled, 1 skipped")):
+            out = self.run_cli(*argv)
+            self.assertIn(f"skipped {self.NOPE}: no plan found", out)
+            self.assertEqual(out.strip().splitlines()[-1], summary)
+        again = self.run_cli("--all-null", "--apply")
+        self.assertIn(f"skipped {self.NOPE}: no plan found", again)   # still null: still named
+        self.assertIn(json.dumps({"kind": "run", "batch": "B", "spec": self.NOPE, "at": "2026-01-01T00:00:00Z",
+                                  "head": None, "outcome": "merged"}, sort_keys=True), self.log.read_text())
+
+    def test_reason_when_the_plan_exists_but_no_ledger_is_on_main(self):
+        write(self.repo, "docs/superpowers/plans/2026-01-06-nl.md", "# P\n\n**Spec:** `docs/superpowers/specs/nl.md`\n")
+        git(self.repo, "add", "."); git(self.repo, "commit", "-q", "-m", "docs(plan): nl")
+        with open(self.log, "a") as f:
+            f.write(json.dumps({"kind": "run", "batch": "B", "spec": "docs/superpowers/specs/nl.md", "head": None}) + "\n")
+        self.assertIn("skipped docs/superpowers/specs/nl.md: no ledger commit on main", self.run_cli("--all-null"))
+
+    def test_a_line_appended_between_resolve_and_write_survives_apply(self):
+        late = {"kind": "start", "batch": "B", "spec": "docs/superpowers/specs/late.md", "at": "2026-01-02T00:00:00Z"}
+        seen = []
+        def hook():
+            seen.append(1)
+            metrics.append(self.repo, late)
+        changes = metrics.backfill_null_runs(self.repo, self.SPEC, apply=True, _after_resolve=hook)
+        self.assertEqual(seen, [1])
+        self.assertEqual(len(changes), 1)
+        lines = self.log.read_text().splitlines()
+        self.assertEqual(len(lines), len(self.before.splitlines()) + 1)
+        self.assertEqual(json.loads(lines[-1]), late)
+        self.assertEqual(sum(1 for l in lines if '"head": "%s"' % self.head in l), 1)   # the rewrite still happened
+
+    def test_a_line_changed_between_resolve_and_write_is_skipped_with_a_message(self):
+        def hook():
+            lines = self.log.read_text().splitlines()
+            i = next(i for i, l in enumerate(lines) if '"head": null' in l and self.SPEC in l)
+            lines[i] = lines[i].replace('"outcome": "merged"', '"outcome": "kept"')
+            self.log.write_text("\n".join(lines) + "\n")
+        skipped, err = [], io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = metrics.backfill_null_runs(self.repo, self.SPEC, apply=True, _after_resolve=hook, skipped=skipped)
+        self.assertEqual(changes, [])
+        self.assertIn("changed since it was read", err.getvalue())
+        self.assertIn('"outcome": "kept"', self.log.read_text())
+        self.assertNotIn(self.head, self.log.read_text())
+        self.assertEqual(list(self.log.parent.glob("runs.jsonl.bak-*")), [])   # nothing written: no backup either
+        self.assertEqual([s for s, _ in skipped], [self.SPEC])
 
 
 if __name__ == "__main__":

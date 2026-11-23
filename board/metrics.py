@@ -286,16 +286,21 @@ def find_plan(repo, spec):
                 rc, text = _git_try(repo, "show", f"{ref}:{n}")
                 if rc == 0:
                     sources.append((ref, n, text))
+    part = re.search(r"#part-(\d+)$", spec)
     hits = []
     for ref, path, text in sources:
         for line in text.splitlines()[:40]:
             if "**Spec:**" in line and core in line:
-                hits.append((ref, path, text, spec in line))
+                named = re.search(r"part-?(\d+)", Path(path).name)   # `...-part-1.md`, `...-part2.md`
+                if part and named and named.group(1) != part.group(1):
+                    break   # another part's plan
+                hits.append((ref, path, text, spec in line, bool(part and named)))
                 break
     if not hits:
         return None
-    hits.sort(key=lambda h: (not h[3], h[0] != ""))  # a line carrying the #part-N suffix first, working tree first
-    ref, path, text, _ = hits[0]
+    # a line carrying the #part-N suffix first, then a plan whose file name carries that part, working tree first
+    hits.sort(key=lambda h: (not h[3], not h[4], h[0] != ""))
+    ref, path, text = hits[0][:3]
     return path, text, ref or None
 
 
@@ -374,25 +379,34 @@ def _worktree_branch(start):
     return Path(wt).name if wt else None
 
 
-def _fast_forward_range(repo, plan_path, plan_commit, start):
-    """(head, base, True) of a run that was fast-forwarded onto main, else None. Such a run leaves no merge commit and
-    no branch, so the range comes from what remains on main: head is the last commit that touched the plan's ledger
-    directory (the ledger is the last thing a run commits), base is the main tip the run started from when the plan
-    already existed then, else the parent of the plan's first commit."""
+def _fast_forward_range(repo, plan_path, plan_commit, start, why=None):
+    """(head, base, True) of a run that was fast-forwarded onto main, else None (the reason is appended to `why`). Such a
+    run leaves no merge commit and no branch, so the range comes from what remains on main: head is the last commit that
+    touched the plan's ledger directory (the ledger is the last thing a run commits), base is the main tip the run
+    started from when the plan already existed then, else the parent of the plan's first commit."""
+    why = [] if why is None else why
     ldir = "docs/superpowers/ledgers/" + Path(plan_path).name[:-3]
     rc, out = _git_try(repo, "log", "-1", "--format=%H", "main", "--", ldir)
     head = out.strip() if rc == 0 else ""
-    if not head or _git_try(repo, "merge-base", "--is-ancestor", plan_commit, head)[0] != 0:
+    if not head:
+        why.append("no ledger commit on main")
+        return None
+    if _git_try(repo, "merge-base", "--is-ancestor", plan_commit, head)[0] != 0:
+        why.append("plan commit is not an ancestor of the ledger commit on main")
         return None
     rc, fp = _git_try(repo, "rev-list", "--first-parent", "main")   # a fast-forwarded run sits on main's own line; a merged branch does not
     if rc != 0 or not {plan_commit, head} <= set(fp.split()):
+        why.append("plan or ledger commit is not on main's first-parent line")
         return None
     smain = (start or {}).get("main")
     if smain and _git_try(repo, "merge-base", "--is-ancestor", plan_commit, smain)[0] == 0 \
             and _git_try(repo, "merge-base", "--is-ancestor", smain, head)[0] == 0:
         return head, smain, True
     rc, par = _git_try(repo, "rev-parse", "--verify", "-q", plan_commit + "^")
-    return (head, par.strip(), True) if rc == 0 and par.strip() else None
+    if rc == 0 and par.strip():
+        return head, par.strip(), True
+    why.append("plan commit has no parent")
+    return None
 
 
 def _numstat(repo, base, head):
@@ -1821,10 +1835,31 @@ def _show(v):
     return "None" if v is None else str(v)
 
 
-def backfill_null_runs(repo, spec=None, apply=False, now=None):
+def _unresolved_reason(repo, sp, new):
+    """Why a record that build_record_static could not resolve stays null: as specific as the code knows."""
+    if not new.get("plan"):
+        return "no plan found"
+    plan_commit, _ = _first_commit(repo, new["plan"])
+    if not plan_commit:
+        return "plan has no commit"
+    why = []
+    lines, _ = read_log(repo)
+    start = next((d for d in reversed(lines) if d.get("kind") == "start" and d.get("batch") == new.get("batch")
+                  and d.get("spec") == sp), None)
+    _fast_forward_range(repo, new["plan"], plan_commit, start, why)
+    return why[0] if why else "range could not be resolved"
+
+
+def backfill_null_runs(repo, spec=None, apply=False, now=None, skipped=None, _after_resolve=None):
     """Re-resolve `run` lines whose head is null (a fast-forwarded run recorded before the fast-forward logic existed).
     Only FF_FIELDS change, and only on the last run line of each (batch, spec) that now resolves; every other line is
-    kept byte for byte. Dry run unless apply. Returns [(record, {field: (old, new)})]."""
+    kept byte for byte. Dry run unless apply. Returns [(record, {field: (old, new)})]; every null-head record that stays
+    null is appended to `skipped` as (spec, reason).
+
+    Resolving takes minutes and runs outside the lock; the write re-reads the file under the lock and replaces a line
+    only when it is still byte-equal to what was resolved against, so lines appended meanwhile are kept. A line that
+    changed meanwhile is skipped. `_after_resolve` is a test seam called between the two."""
+    skipped = [] if skipped is None else skipped
     p = log_path(repo)
     raw = p.read_text().splitlines() if p.exists() else []
     parsed = []
@@ -1838,13 +1873,17 @@ def backfill_null_runs(repo, spec=None, apply=False, now=None):
     for i, d in enumerate(parsed):
         if d and d.get("kind") == "run":
             last[(d.get("batch"), d.get("spec"))] = i
-    changes, out = [], list(raw)
+    changes, edits = [], []   # edits: (line index, line as read, new line, record, spec)
     for (batch, sp), i in sorted(last.items(), key=lambda kv: kv[1]):
         d = parsed[i]
-        if d.get("head") is not None or d.get("batch") == "backfill" or (spec and sp != spec):
+        if d.get("head") is not None or (spec and sp != spec):
+            continue
+        if d.get("batch") == "backfill":
+            skipped.append((sp, "window backfill record, not re-resolved here"))
             continue
         new = build_record_static(repo, sp, batch, d.get("outcome"), now or time.time())
         if new.get("head") is None:
+            skipped.append((sp, _unresolved_reason(repo, sp, new)))
             continue
         upd = {k: new.get(k) for k in FF_FIELDS if k in new}
         diff = {k: (d.get(k), v) for k, v in upd.items() if d.get(k) != v}
@@ -1855,11 +1894,24 @@ def backfill_null_runs(repo, spec=None, apply=False, now=None):
         gone = {k for k in FF_FIELDS if k not in new["missing"]}   # a fresh record would not list these as gaps
         merged["missing"] = [m for m in d.get("missing") or [] if m not in gone]
         changes.append((merged, diff))
-        out[i] = json.dumps(merged, sort_keys=True)
-    if apply and changes:
-        with open(str(p) + ".lock", "a") as lk:
-            fcntl.flock(lk, fcntl.LOCK_EX)
-            try:
+        edits.append((i, raw[i], json.dumps(merged, sort_keys=True), merged, sp))
+    if _after_resolve:
+        _after_resolve()
+    if not apply or not edits:
+        return changes
+    with open(str(p) + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            cur = p.read_text().splitlines()
+            kept, applied = list(cur), []
+            for i, was, line, merged, sp in edits:
+                if i < len(cur) and cur[i] == was:
+                    kept[i] = line
+                    applied.append(merged)
+                else:
+                    print(f"metrics: backfill: skipped {sp}: its line changed since it was read", file=sys.stderr)
+                    skipped.append((sp, "its line changed since it was read"))
+            if applied:
                 day = time.strftime("%Y%m%d", time.gmtime(now or time.time()))
                 bak, n = Path(f"{p}.bak-{day}"), 1
                 while bak.exists():
@@ -1867,23 +1919,28 @@ def backfill_null_runs(repo, spec=None, apply=False, now=None):
                     bak = Path(f"{p}.bak-{day}-{n}")
                 shutil.copy2(p, bak)
                 tmp = Path(f"{p}.tmp")
-                tmp.write_text("\n".join(out) + "\n")
+                tmp.write_text("\n".join(kept) + "\n")
                 os.replace(tmp, p)
-            finally:
-                fcntl.flock(lk, fcntl.LOCK_UN)
+            changes = [c for c in changes if any(c[0] is m for m in applied)]
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
     return changes
 
 
 def cmd_backfill_null(repo, args):
     def go():
-        changes = backfill_null_runs(repo, args.spec, args.apply)
+        skipped = []
+        changes = backfill_null_runs(repo, args.spec, args.apply, skipped=skipped)
         for rec, diff in changes:
             print(rec["spec"] + (" (batch " + str(rec.get("batch")) + ")"))
             for k, (o, n) in diff.items():
                 if k in ("touched_list", "stale_base", "refreshes", "stale_paths"):
                     continue
                 print(f"  {k} {_show(o)} -> {_show(n)}")
-        print(f"{len(changes)} records to backfill" if not args.apply or not changes else f"{len(changes)} records backfilled")
+        for sp, why in skipped:
+            print(f"skipped {sp}: {why}")
+        verb = "to backfill" if not args.apply or not changes else "backfilled"
+        print(f"{len(changes)} records {verb}, {len(skipped)} skipped")
     _with_log(args, go)
 
 
