@@ -9,18 +9,17 @@ git -C "$repo" worktree add -q "$work/wt" -b wtb
 mkdir -p "$work/plain"
 brief="$work/brief.md"; print -r -- "Goal: do the thing.
 Second line." > "$brief"
-# baseline: the tmux-ctl before this change, next to its sibling files
-base="$work/base"; mkdir -p "$base/bin"
-for f in "$R"/bin/*(N.); do [[ ${f:t} == tmux-ctl ]] || ln -s "$f" "$base/bin/${f:t}"; done
-for d in "$R"/*(N/); do [[ ${d:t} == bin ]] || ln -s "$d" "$base/${d:t}"; done
-git -C "$R" show 6b9394c:bin/tmux-ctl > "$base/bin/tmux-ctl"; chmod +x "$base/bin/tmux-ctl"
 dry() { ( cd "$repo" && TC_STATE="$work/st" TC_SESSION=tt TC_AGENT_DRYRUN=1 "$@" 2>&1 ) }
 new="$R/bin/tmux-ctl"
 
-a="$(dry "$base/bin/tmux-ctl" agent same --model opus --effort high --brief "$brief")"
-b="$(dry "$new" agent same --model opus --effort high --brief "$brief")"
-# the baseline's AB_REPO is the checkout via symlink resolution; compare the DRYRUN lines verbatim
-check "no --dir: DRYRUN output identical to the pre-change script" test "$a" = "$b"
+# golden: the pre-change no---dir launch line (6b9394c), variable parts normalised; byte-identical intent, no git-history dependency
+line="$(dry "$new" agent same --model opus --effort high --brief "$brief" | grep '^DRYRUN line:')"
+norm="$line"
+norm="${norm//${repo:A}/ROOT}"; norm="${norm//$repo/ROOT}"
+norm="$(sed -E -e 's# PATH=[^ ]+# PATH=PATHV#' -e 's# AGENT_BOARD_REPO=[^ ]+# AGENT_BOARD_REPO=REPOV#' -e 's# --settings [^ ]+# --settings SETTINGSV#' -e 's# --plugin-dir [^ ]+# --plugin-dir PLUGINV#' -e 's# --append-system-prompt-file [^ ]+# --append-system-prompt-file RULESV#' <<< "$norm")"
+golden='DRYRUN line: cd -- ROOT && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=PATHV AGENT_BOARD_REPO=REPOV claude --model opus --effort high -w same -n same --settings SETTINGSV --plugin-dir PLUGINV --append-system-prompt-file RULESV Goal:\ do\ the\ thing.$'"'"'\n'"'"'Second\ line.'
+check "no --dir: launch line equals the pre-change golden line" test "$norm" = "$golden"
+b="$line"
 check "no --dir: line still has -w same"  grep -q ' -w same ' <<< "$b"
 
 out="$(dry "$new" agent w1 --dir "$work/wt" --model sonnet --effort low --brief "$brief")"; rc=$?
