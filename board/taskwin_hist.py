@@ -113,9 +113,30 @@ def report_rows(root):
     return out
 
 
+def _start_days(root, specs):
+    """UTC dates of the `start` lines in the metrics run log for these specs (the run's start), sorted."""
+    days = []
+    try:
+        lines = (Path(root) / "docs/superpowers/metrics/runs.jsonl").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return days
+    for l in lines:
+        try:
+            d = json.loads(l)
+        except ValueError:
+            continue
+        m = _DAY.match(d.get("at") or "") if isinstance(d, dict) and isinstance(d.get("at"), str) else None
+        if m and d.get("kind") == "start" and d.get("spec") in specs:
+            days.append(m.group(1))
+    return sorted(days)
+
+
 def queue_report(root, queue_tasks):
-    """docs/superpowers/reports/<first answeredAt date>-queue.md when it exists, else ''."""
-    days = sorted(t["answeredAt"][:10] for t in queue_tasks if _DAY.match(t.get("answeredAt") or ""))
+    """docs/superpowers/reports/<run start date>-queue.md when it exists, else ''. The run start is the earliest
+    metrics `start` line of a queued spec; without one, the earliest answeredAt date."""
+    import taskwin_state
+    specs = {taskwin_state.spec_of(t.get("subject") or "") for t in queue_tasks} - {""}
+    days = _start_days(root, specs) or sorted(t["answeredAt"][:10] for t in queue_tasks if _DAY.match(t.get("answeredAt") or ""))
     if not days:
         return ""
     rel = REPORTS / f"{days[0]}-queue.md"

@@ -115,6 +115,17 @@ class FakeRootTest(unittest.TestCase):
         self.assertEqual(th.queue_report(self.root, q[:1]), "")
         self.assertEqual(th.queue_report(self.root, []), "")
 
+    def test_queue_report_is_named_by_the_run_start_not_the_answer(self):
+        """The lead names the report after the run's start date; answeredAt may be a day earlier (answered in the evening)."""
+        m = self.root / "docs/superpowers/metrics"
+        m.mkdir(parents=True)
+        (m / "runs.jsonl").write_text("\n".join(json.dumps(d) for d in (
+            {"kind": "start", "spec": "docs/superpowers/specs/x.md", "at": "2026-11-20T08:00:00Z", "batch": "b"},
+            {"kind": "start", "spec": "docs/superpowers/specs/other.md", "at": "2026-11-19T08:00:00Z", "batch": "c"})) + "\nnot json\n")
+        q = [{"subject": "Plan & run: docs/superpowers/specs/x.md", "answeredAt": "2026-11-19T22:00:00Z"}]
+        self.assertEqual(th.queue_report(self.root, q), "docs/superpowers/reports/2026-11-20-queue.md")
+        self.assertEqual(th.queue_report(self.root, [dict(q[0], subject="Plan & run: docs/superpowers/specs/none.md")]), "")
+
 
 class FixRound1Test(unittest.TestCase):
     """Review fixes: wrong-typed journal fields, shared-spec ledgers, #part spec matching."""
