@@ -69,8 +69,9 @@ to `html_links`.
   is edited to show `added: <name> (<kind>)` and the first 3 item titles, or `added, first fetch failed: <reason>`
   (the source stays; failures show in the health report as today). A refused URL (b1) gets `refused: <reason>` and
   no ✅ prompt.
-- The add path is one function used by the CLI, the #scout request and `/source`; `tmux-ctl scout source add` keeps
-  taking an explicit kind and gains `--detect` (kind optional).
+- The add path is one function used by the CLI, the #scout request and `/source`; `tmux-ctl scout source add <name> --kind <k> --url <u>`
+  keeps working; `--kind` becomes optional and, when left out, `detect` picks it. The tmux-ctl help header line for it
+  is edited in place (the header range is pinned by suites; add no line).
 
 Tests (`board/tests/test_scout_sources.py`, `test_scout_fetch.py`, bridge node test for `/source`): each refused
 address class with a fake resolver; one real resolution of `localhost` refused; redirect to a private address refused;
@@ -98,7 +99,7 @@ so a teammate gets nothing.
 
 - a: `board/discord_merge.py`, `claude/orchestrator.md`, their tests.
 - b: `board/scout_sources.py`, `board/scout_fetch.py`, `tools/discord-bridge/lib/commands.js` (+ bridge wiring),
-  `bin/tmux-ctl` (`--detect`), their tests.
+  `bin/tmux-ctl` (`--kind` optional), their tests.
 - c: `claude/plugin/scripts/context-recall-file.sh` (new), `claude/plugin/hooks/hooks.json`, tests.
 
 ## Out of scope
