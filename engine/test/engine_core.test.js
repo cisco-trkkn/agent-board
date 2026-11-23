@@ -879,6 +879,48 @@ async function parkedPrompt(t, o = {}) {
   return { h, id };
 }
 
+async function runningJob(t, o = {}) {
+  const h = mk(t, { script: { implement1: [] }, ...o });
+  h.add();
+  const id = "demo:implement1:1";
+  await h.until(() => h.job(id) && h.job(id).state === "running");
+  return { h, id };
+}
+
+test("backend events match a job by handle.job: a gone for an earlier attempt that held the same pane id does not fail the new attempt", async (t) => {
+  const { h, id } = await runningJob(t, { config: { retry: { implement: { backoff_s: [0] } } } });
+  h.backend.push({ handle: handleOf(h, id), type: "gone" });
+  const id2 = "demo:implement1:2";
+  await h.until(() => h.job(id2) && h.job(id2).state === "running");
+  h.db.prepare("UPDATE jobs SET pane=? WHERE id=?").run(h.job(id2).pane, id); // the pane id is reused
+  h.backend.push({ handle: handleOf(h, id), type: "gone" });
+  await h.step(3);
+  assert.equal(h.job(id2).state, "running");
+  assert.equal(h.of("job_failed").length, 1);
+});
+
+test("backend events match a job by handle.job: a gone for the same job on a different pane is stale and ignored", async (t) => {
+  const { h, id } = await runningJob(t);
+  h.backend.push({ handle: { job: id, window: h.job(id).window, pane: "%stale" }, type: "gone" });
+  await h.step(3);
+  assert.equal(h.job(id).state, "running");
+  assert.equal(h.of("job_failed").length, 0);
+});
+
+test("backend events match a job by handle.job: the job's own gone still fails it", async (t) => {
+  const { h, id } = await runningJob(t, { config: { retry: { implement: { backoff_s: [0] } } } });
+  h.backend.push({ handle: handleOf(h, id), type: "gone" });
+  await h.step();
+  assert.equal(firstFail(h).detail.reason, "gone");
+});
+
+test("backend events without handle.job still match the running job by pane", async (t) => {
+  const { h, id } = await runningJob(t, { config: { retry: { implement: { backoff_s: [0] } } } });
+  h.backend.push({ handle: { pane: h.job(id).pane }, type: "gone" });
+  await h.step();
+  assert.equal(firstFail(h).detail.reason, "gone");
+});
+
 test("a job that fails while its permission-prompt wait is open closes the wait and un-parks the spec", async (t) => {
   const { h, id } = await parkedPrompt(t);
   h.script.implement1 = worker(DONE);

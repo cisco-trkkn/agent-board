@@ -155,7 +155,7 @@ function start(opts) {
   const finalizeFn = opts.finalize || ((spec, outcome) => realIntegrate.finalize(ictx(spec), spec, outcome));
 
   const status = new Map(); // job id -> the latest status event (memory only)
-  const lastState = new Map(); // pane -> the state of the last worker row offered
+  const lastState = new Map(); // job id -> the state of the last worker row offered
   const pumped = new Map(); // spec id -> seq of the last input whose commands are all applied
   const plans = new Map();
   const closed = new Set();
@@ -896,7 +896,7 @@ function start(opts) {
     const t = now();
     const running = { ...ready, state: "running", started_at: t, window: handle.window || ready.window, pane: handle.pane,
       session_id: handle.session_id || null, base: gitHead(wt) };
-    lastState.delete(handle.pane);
+    lastState.delete(job.id);
     const r = deadlineRows(running, d, t + HEARTBEAT_S);
     emit("dispatched", { spec: spec.id, job: job.id, rows: r.rows, task: job.task === null ? "-" : job.task, window: running.window,
       tier: job.tier, model: job.model, how, text: `${running.window} (${job.tier}, ${job.model})` });
@@ -931,13 +931,24 @@ function start(opts) {
     const offered = [];
     for (const ev of backend.poll()) {
       const h = ev.handle || {};
-      const job = db.prepare("SELECT * FROM jobs WHERE pane=? AND state='running'").get(h.pane);
+      // by job id when the handle has one (pane ids repeat across processes and tmux restarts). A resumed session's
+      // handle carries the job it resumed, with a pane that job never had: that one is matched by pane. An event whose
+      // job is known and whose pane is that job's own is for an earlier attempt and is ignored.
+      let job;
+      if (h.job) {
+        const named = get("jobs", h.job);
+        if (named && named.state === "running") job = named.pane && h.pane && named.pane !== h.pane ? null : named;
+        else if (named && named.pane === h.pane) job = null;
+        else job = named ? db.prepare("SELECT * FROM jobs WHERE pane=? AND state='running'").get(h.pane) : null;
+      } else {
+        job = db.prepare("SELECT * FROM jobs WHERE pane=? AND state='running'").get(h.pane);
+      }
       if (!job) continue;
       if (h.session_id && h.session_id !== job.session_id) emit("job_session", { spec: job.spec, job: job.id, rows: [["jobs", { ...job, session_id: h.session_id }]] });
       if (ev.type === "status") {
         status.set(job.id, ev);
-        if (lastState.get(h.pane) === ev.state) continue; // one row per change of state
-        lastState.set(h.pane, ev.state);
+        if (lastState.get(job.id) === ev.state) continue; // one row per change of state
+        lastState.set(job.id, ev.state);
       } else if (ev.type !== "gone") {
         continue;
       }
