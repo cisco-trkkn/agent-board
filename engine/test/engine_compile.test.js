@@ -94,6 +94,17 @@ test("compile: errors and defaults", () => {
     { tasks: [{ n: 1, subject: "S", tier: "frontier", files: [], verifyCommand: "true" }] });
 });
 
+test("compile: metadata fence tolerates a trailing newline, trailing text, and takes the last fence", () => {
+  const fence = (o) => "```json:metadata\n" + JSON.stringify(o) + "\n```";
+  const doc = (d) => JSON.stringify({ tasks: [{ subject: "S", description: d }] });
+  const want = { tasks: [{ n: 1, subject: "S", tier: "standard", files: [], verifyCommand: "true" }] };
+  const m = { verifyCommand: "true", modelTier: "standard" };
+  assert.deepEqual(compile.compile(doc("body\n\n" + fence(m) + "\n")), want);
+  assert.deepEqual(compile.compile(doc("body\n\n" + fence(m) + "\n\n  \n")), want);
+  assert.deepEqual(compile.compile(doc("body\n\n" + fence(m) + "\n\nNotes after the fence.")), want);
+  assert.deepEqual(compile.compile(doc(fence({ verifyCommand: "false", modelTier: "mechanical" }) + "\nmid\n" + fence(m) + "\ntail\n")), want);
+});
+
 function redRuns() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "bounce-"));
   try {

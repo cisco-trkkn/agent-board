@@ -1,12 +1,14 @@
 "use strict";
 
-const META = /```json:metadata[ \t]*\r?\n([\s\S]*?)```[ \t]*$/;
+const META = /```json:metadata[ \t]*\r?\n([\s\S]*?)```/g;
 
 function metadata(description) {
-  const m = typeof description === "string" ? description.match(META) : null;
-  if (!m) return {};
+  if (typeof description !== "string") return {};
+  let last = null; // the LAST json:metadata fence wins, whatever follows it
+  for (const m of description.matchAll(META)) last = m[1];
+  if (last === null) return {};
   try {
-    const o = JSON.parse(m[1]);
+    const o = JSON.parse(last);
     return o && typeof o === "object" && !Array.isArray(o) ? o : {};
   } catch { return {}; }
 }
