@@ -42,11 +42,6 @@ const fake = require(${JSON.stringify(path.resolve(__dirname, "../lib/engine/bac
 const create = fake.createBackend;
 fake.createBackend = (opts) => {
   const b = create(opts);
-  // The fake numbers its panes %fake1, %fake2 ... per process, and core.pollBackend finds a job by pane id alone: after a
-  // resume the close of the dead engine's %fake1 would land on the new %fake1. A real tmux server never repeats a pane
-  // id, so the shim makes them unique per process (the handle object is shared with the queued events).
-  const start = b.start;
-  b.start = async (job) => { const h = await start(job); h.pane = h.pane + "-" + process.pid; return h; };
   const adopted = new Set();
   if (process.env.ENGINE_TEST_ADOPT) b.adopt = async (job, handle) => { adopted.add(job.id); const h = await b.start(job); h.pane = handle.pane; return true; };
   const poll = b.poll;
@@ -155,8 +150,9 @@ function realEngineDir() {
 function realTmux() {
   const env = { ...process.env };
   delete env.TMUX;
-  const r = cp.spawnSync("tmux", ["-L", "agent-board", "list-sessions"], { env, encoding: "utf8" });
-  return { status: r.status, out: r.stdout, err: r.stderr, error: r.error ? r.error.code : null };
+  // session names only: window counts and attach state change under a live server
+  const r = cp.spawnSync("tmux", ["-L", "agent-board", "list-sessions", "-F", "#{session_name}"], { env, encoding: "utf8" });
+  return { status: r.status, names: r.status === 0 ? r.stdout.split("\n").filter(Boolean).sort() : null, err: r.status === 0 ? null : r.stderr, error: r.error ? r.error.code : null };
 }
 const leakBefore = { dir: realEngineDir(), tmux: realTmux() };
 
@@ -247,7 +243,7 @@ test("without adopt a worker running at the kill gets a second attempt; jobs wit
 
 // ---- signals (acceptance 2) ------------------------------------------------------------------------------------
 
-test("a signal written while the engine is down and one written after the resume are each applied once", async (t) => {
+test("a signal written before the kill and one written after the resume written after the resume are each applied once", async (t) => {
   const script = {
     implement1: worker(BLOCKED), implement2: worker(BLOCKED),
     architect: worker(PARK), architect1: worker(PARK), architect2: worker(PARK),
@@ -259,13 +255,14 @@ test("a signal written while the engine is down and one written after the resume
   const child = p.spawnRun(sf);
   const waiting = () => p.peek((d) => d.prepare("SELECT * FROM waits WHERE answered_at IS NULL").all()).length === 1;
   await until(waiting, "the first park");
-  child.kill("SIGKILL");
-  await child.exited;
 
-  // signal one: written with no engine running
+  // signal one: written to the live engine, which is SIGKILLed as soon as the inbox row exists (applied or not yet)
   const s1 = p.run(["signal", SPEC, "approve", "--note", "one"]);
   assert.equal(s1.code, 0, s1.err);
-  assert.match(s1.out, /no engine is running/);
+  assert.doesNotMatch(s1.out, /no engine is running/, "signal one must reach a live engine");
+  await until(() => p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM inbox WHERE source='user'").get().n) >= 1, "signal one in the inbox");
+  child.kill("SIGKILL");
+  await child.exited;
 
   // resume in the background, wait for it to apply signal one and park again, then write signal two to the live engine
   const res = cp.spawn("node", [ENGINE, "resume", "--backend", "fake", "--script", sf], { cwd: p.wt, env: p.childEnv, stdio: "ignore" });
