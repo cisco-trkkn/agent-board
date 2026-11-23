@@ -1,0 +1,369 @@
+"use strict";
+// The engine CLI as a child process (spec section 5): every subcommand's exit code, on a fake backend, a scratch
+// git repo and a temp TC_ENGINE_DIR. Nothing here opens ~/.local/state/agent-board.
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const cp = require("node:child_process");
+const { tmpEnv, gitRepo, scratchTmux } = require("./engine_helpers");
+const db = require("../lib/engine/db");
+
+const ENGINE = path.resolve(__dirname, "../bin/engine.js");
+const TMUX_CTL = path.resolve(__dirname, "../../bin/tmux-ctl");
+const SPEC = "docs/superpowers/specs/2026-01-01-demo-design.md";
+const PLAN = "docs/superpowers/plans/2026-01-01-demo.md";
+
+const report = (o) => "notes\n\n```json:status\n" + JSON.stringify(o) + "\n```\n";
+const DONE = report({ status: "done", commits: ["abc1234"], concerns: [] });
+const BLOCKED = report({ status: "blocked", commits: [], concerns: ["needs a secret"] });
+const PASS = report({ verdict: "pass", findings: [] });
+const FAIL_SPEC = report({ decision: "fail_spec", ruling: "give up", cost_if_wrong: "none" });
+const worker = (text) => [{ status: "busy", at: 0.1 }, { report: text, at: 0.3 }, { status: "ready", at: 0.5 }];
+const GOOD = { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) };
+
+const task = (verifyCommand = "true") => ({
+  subject: "T1",
+  description: `Do T1.\n\n\`\`\`json:metadata\n${JSON.stringify({ verifyCommand, modelTier: "standard", files: ["a.js"] })}\n\`\`\``,
+});
+
+// A scratch project: the main checkout (branch main) and a spec worktree on branch spec-demo holding a committed
+// plan and its .tasks.json. `ctl` is a stub tmux-ctl that logs its arguments and answers "fresh".
+function project(t, o = {}) {
+  const env = tmpEnv();
+  const repo = gitRepo();
+  const w = (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(repo.dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(repo.dir, rel), text);
+  };
+  w(SPEC, "# Demo\n\n## Decisions\n\n- D1: keep it small.\n");
+  w(PLAN, `# Demo plan\n\n**Spec:** ${SPEC}\n`);
+  w(`${PLAN}.tasks.json`, JSON.stringify({ tasks: o.tasks || [task()] }));
+  repo.git("add", "-A");
+  repo.git("commit", "-q", "-m", "spec and plan");
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), "ecli-wt-"));
+  fs.rmSync(wt, { recursive: true });
+  repo.git("worktree", "add", "-q", "-b", "spec-demo", wt);
+  const log = path.join(env.root, "ctl.log");
+  const ctl = path.join(env.root, "tmux-ctl");
+  fs.writeFileSync(ctl, `#!/bin/sh\necho "$@" >> "${log}"\necho fresh\nexit 0\n`, { mode: 0o755 });
+  const scriptFile = path.join(env.root, "script.json");
+  fs.writeFileSync(scriptFile, JSON.stringify(o.script || GOOD));
+  const childEnv = { ...process.env, HOME: env.root, TC_ENGINE_DIR: env.engineDir, TC_STATE: env.state, TC_PROJECT: "demo", TC_TMUX_CTL: ctl };
+  delete childEnv.TMUX;
+  delete childEnv.TC_SESSION;
+  const p = {
+    env, repo, wt, ctl, log, scriptFile, childEnv,
+    args: (...a) => a,
+    run(args, opts = {}) {
+      const r = cp.spawnSync("node", [ENGINE, ...args], { cwd: opts.cwd || wt, env: { ...childEnv, ...(opts.env || {}) }, encoding: "utf8", timeout: 60000 });
+      return { code: r.status, out: r.stdout, err: r.stderr };
+    },
+    runSpec: (extra = []) => p.run(["run", SPEC, "--integration", "keep", "--batch", "b1", "--backend", "fake", "--script", scriptFile, ...extra]),
+    ctlLog: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : ""),
+    open: () => db.open("demo"),
+  };
+  t.after(() => {
+    try { repo.git("worktree", "remove", "--force", wt); } catch (_) { /* already gone */ }
+    repo.cleanup();
+    env.restore();
+  });
+  return p;
+}
+
+// ---- usage -----------------------------------------------------------------------------------------------------
+
+test("no subcommand and a bad subcommand print the usage line and exit 2", (t) => {
+  const p = project(t);
+  for (const args of [[], ["bogus"]]) {
+    const r = p.run(args);
+    assert.equal(r.code, 2);
+    assert.equal(r.err, "engine: usage: engine <run|status|events|resume|signal|rebuild> ...\n");
+  }
+});
+
+test("run without --integration, or with a bad one, exits 2", (t) => {
+  const p = project(t);
+  assert.equal(p.run(["run", SPEC]).code, 2);
+  assert.equal(p.run(["run", SPEC, "--integration", "squash"]).code, 2);
+  assert.equal(p.run(["run", "--integration", "keep"]).code, 2);
+});
+
+test("a command without a project (no --project, no TC_PROJECT) exits 2", (t) => {
+  const p = project(t);
+  const r = p.run(["status"], { env: { TC_PROJECT: "" } });
+  assert.equal(r.code, 2);
+  assert.match(r.err, /no project/);
+});
+
+// ---- run -------------------------------------------------------------------------------------------------------
+
+test("run: a one-task plan reaches kept, prints one line per event, exit 0, metrics start ran as a step", (t) => {
+  const p = project(t);
+  const r = p.runSpec();
+  assert.equal(r.code, 0, r.err + r.out);
+  const lines = r.out.trim().split("\n");
+  const events = lines.filter((l) => l !== lines[lines.length - 1]);
+  for (const l of events) assert.match(l, /^\d\d:\d\d:\d\d \S+ \S+( .*)?$/, `event line: ${l}`);
+  assert.ok(events.some((l) => /^\d\d:\d\d:\d\d spec_added - /.test(l)), "spec_added line");
+  assert.ok(events.some((l) => / dispatched \S+:implement1:1 /.test(l)), "dispatched line carries the job id");
+  assert.match(lines[lines.length - 1], /^outcome: kept spec-demo$/);
+  assert.equal(events.filter((l) => /^\d\d:\d\d:\d\d (deadline|timer_fired|step_intent|step_done|job_session|inbox_\w+) /.test(l)).length, 0, "bookkeeping hidden");
+  assert.match(p.ctlLog(), new RegExp(`metrics start --batch b1 --spec ${SPEC} --worktree ${fs.realpathSync(p.wt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  const d = p.open();
+  try {
+    const step = d.prepare("SELECT * FROM steps WHERE key=?").get(`metrics_start:${SPEC}`);
+    assert.equal(step.kind, "metrics_start");
+    assert.equal(step.state, "done");
+    const s = d.prepare("SELECT * FROM specs WHERE id=?").get(SPEC);
+    assert.equal(s.integration, "keep");
+    assert.equal(s.push, 0);
+    assert.equal(s.branch, "spec-demo");
+    assert.equal(s.batch, "b1");
+    assert.equal(s.plan, PLAN);
+  } finally { d.close(); }
+});
+
+test("run: a spec already done prints its outcome again and exits by it, without running anything", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  const before = p.ctlLog();
+  const r = p.runSpec();
+  assert.equal(r.code, 0);
+  assert.equal(r.out.trim(), "outcome: kept spec-demo");
+  assert.equal(p.ctlLog(), before);
+});
+
+test("run: a failed outcome exits 1", (t) => {
+  const p = project(t, { script: { implement1: worker(BLOCKED), architect: worker(FAIL_SPEC) } });
+  const r = p.runSpec();
+  assert.equal(r.code, 1, r.err + r.out);
+  assert.match(r.out.trim().split("\n").pop(), /^outcome: failed — /);
+});
+
+test("run: a plan without a verifyCommand prints [Engine] your turn and exits 3, and inserts nothing", (t) => {
+  const p = project(t, { tasks: [{ subject: "T1", description: "no metadata" }] });
+  fs.writeFileSync(path.join(p.wt, `${PLAN}.tasks.json`), JSON.stringify({ tasks: [{ subject: "T1", description: "no metadata" }] }));
+  const r = p.runSpec();
+  assert.equal(r.code, 3);
+  assert.equal(r.out.trim(), `[Engine] your turn: ${SPEC}`);
+  assert.match(r.err, /no verifyCommand: task 1/);
+  assert.equal(fs.existsSync(path.join(p.env.engineDir, "demo.sqlite")), false);
+});
+
+test("run: no .tasks.json, a plan only on another branch, and no plan naming the spec all exit 3", (t) => {
+  const p = project(t);
+  fs.rmSync(path.join(p.wt, `${PLAN}.tasks.json`));
+  const a = p.runSpec();
+  assert.equal(a.code, 3);
+  assert.match(a.err, /no \.tasks\.json/);
+  fs.writeFileSync(path.join(p.wt, PLAN), "# Demo plan\n\nno spec line\n");
+  const b = p.runSpec();
+  assert.equal(b.code, 3);
+  assert.match(b.err, /its plan is on branch refs\/heads\/main/);
+  const other = "docs/superpowers/specs/2026-01-02-other-design.md";
+  fs.writeFileSync(path.join(p.wt, other), "# Other\n");
+  const c = p.run(["run", other, "--integration", "keep", "--backend", "fake"]);
+  assert.equal(c.code, 3);
+  assert.match(c.err, /no plan names/);
+  assert.equal(c.out.trim(), `[Engine] your turn: ${other}`);
+});
+
+test("run: a spec file that does not exist exits 2", (t) => {
+  const p = project(t);
+  const r = p.run(["run", "docs/superpowers/specs/nope.md", "--integration", "keep", "--backend", "fake"]);
+  assert.equal(r.code, 2);
+});
+
+test("run: an unfinished spec already in the database exits 1 and points at resume", (t) => {
+  const p = project(t);
+  const d = p.open();
+  d.prepare("INSERT INTO specs (id, state, integration) VALUES (?, 'running', 'keep')").run(SPEC);
+  d.close();
+  const r = p.runSpec();
+  assert.equal(r.code, 1);
+  assert.match(r.err, /use engine resume/);
+});
+
+// ---- status and events -----------------------------------------------------------------------------------------
+
+test("status: no database prints no specs; after a run it lists the spec and, by name, its jobs and last events", (t) => {
+  const p = project(t);
+  const none = p.run(["status"]);
+  assert.equal(none.code, 0);
+  assert.equal(none.out.trim(), "no specs");
+  assert.equal(p.run(["status", "--waiting"]).out.trim(), "nothing is waiting");
+  assert.equal(p.runSpec().code, 0);
+  const all = p.run(["status"]);
+  assert.equal(all.code, 0);
+  assert.match(all.out, new RegExp(`^${SPEC}  done  kept spec-demo  keep$`, "m"));
+  const one = p.run(["status", SPEC]);
+  assert.equal(one.code, 0);
+  assert.match(one.out, /:implement1:1 {2}done /);
+  assert.match(one.out, /:review1:1 {2}done /);
+  assert.match(one.out, /last events:/);
+  const bad = p.run(["status", "docs/superpowers/specs/other.md"]);
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /no such spec/);
+});
+
+test("events: prints every event including the bookkeeping the foreground run hides; unknown spec exits 1", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  const r = p.run(["events", SPEC]);
+  assert.equal(r.code, 0);
+  const lines = r.out.trim().split("\n");
+  assert.match(lines[0], /^\d\d:\d\d:\d\d spec_added - /);
+  assert.ok(lines.some((l) => / step_done /.test(l)), "step_done is listed by events");
+  assert.ok(lines.length > r.out.trim().split("\n").filter((l) => !/ (step_intent|step_done|deadline|timer_fired|job_session|inbox_\w+) /.test(l)).length);
+  const unknown = p.run(["events", "docs/superpowers/specs/other.md"]);
+  assert.equal(unknown.code, 1);
+  assert.equal(p.run(["events"]).code, 2);
+});
+
+// ---- signal and status --waiting -------------------------------------------------------------------------------
+
+function park(p) {
+  const d = p.open();
+  db.tx(d, () => {
+    db.put(d, "specs", { id: SPEC, state: "awaiting_you", integration: "keep", push: 0, position: 0, runner: "engine", created_at: 1, updated_at: 1 });
+    db.put(d, "waits", { id: `${SPEC}@1#1`, spec: SPEC, step: "integrate", question: "live checkout is mid-change", options: "approve|deny|fail", asked_at: 1700000000, answered_at: null, answer: null, note: null });
+  });
+  d.close();
+}
+
+test("status --waiting shows question, options, asked at and the exact signal command", (t) => {
+  const p = project(t);
+  park(p);
+  const r = p.run(["status", "--waiting"]);
+  assert.equal(r.code, 0);
+  assert.match(r.out, new RegExp(`^${SPEC}$`, "m"));
+  assert.match(r.out, /question: live checkout is mid-change/);
+  assert.match(r.out, /options: {2}approve\|deny\|fail/);
+  assert.match(r.out, /asked at: 2023-11-14T22:13:20\.000Z/);
+  assert.match(r.out, new RegExp(`answer: {3}tmux-ctl engine signal ${SPEC} approve\\|deny\\|fail`));
+});
+
+test("signal: an open wait gets an inbox row and exit 0; no wait exits 2; a bad answer exits 2", (t) => {
+  const p = project(t);
+  assert.equal(p.run(["signal", SPEC, "approve"]).code, 2, "no database");
+  park(p);
+  const bad = p.run(["signal", SPEC, "maybe"]);
+  assert.equal(bad.code, 2);
+  assert.match(bad.err, /usage: engine signal/);
+  const other = p.run(["signal", "docs/superpowers/specs/other.md", "approve"]);
+  assert.equal(other.code, 2);
+  assert.match(other.err, /no open wait for docs\/superpowers\/specs\/other\.md/);
+  const ok = p.run(["signal", SPEC, "deny", "--note", "not now"]);
+  assert.equal(ok.code, 0, ok.err);
+  assert.match(ok.out, /signalled .* deny/);
+  assert.match(ok.out, /no engine is running/);
+  const d = p.open();
+  try {
+    const row = d.prepare("SELECT * FROM inbox WHERE spec=? AND kind='signal'").get(SPEC);
+    assert.deepEqual(JSON.parse(row.payload), { answer: "deny", note: "not now" });
+  } finally { d.close(); }
+});
+
+// ---- resume ----------------------------------------------------------------------------------------------------
+
+test("resume: nothing unfinished exits 0; a spec whose engine was killed mid-job is carried to its outcome", async (t) => {
+  const p = project(t);
+  assert.equal(p.run(["resume", "--backend", "fake"]).out.trim(), "nothing to resume");
+  fs.mkdirSync(path.join(p.repo.dir, "docs/superpowers"), { recursive: true });
+  fs.writeFileSync(path.join(p.repo.dir, "docs/superpowers/engine.json"), JSON.stringify({ retry: { implement: { backoff_s: [0] } } }));
+  const hang = path.join(p.env.root, "hang.json");
+  fs.writeFileSync(hang, JSON.stringify({ implement1: [{ hang: true, at: 0.1 }] }));
+  const child = cp.spawn("node", [ENGINE, "run", SPEC, "--integration", "keep", "--batch", "b1", "--backend", "fake", "--script", hang],
+    { cwd: p.wt, env: p.childEnv, stdio: "ignore" });
+  t.after(() => { try { child.kill("SIGKILL"); } catch (_) { /* gone */ } });
+  const t0 = Date.now();
+  for (;;) {
+    if (fs.existsSync(path.join(p.env.engineDir, "demo.sqlite"))) {
+      const d = p.open();
+      const n = d.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state='running'").get().n;
+      d.close();
+      if (n) break;
+    }
+    assert.ok(Date.now() - t0 < 20000, "the first engine never started a job");
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  child.kill("SIGKILL");
+  await new Promise((r) => child.once("exit", r));
+  const r = p.run(["resume", "--backend", "fake", "--script", p.scriptFile]);
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.match(r.out.trim().split("\n").pop(), /^outcome: kept spec-demo$/);
+  assert.match(r.out, / resumed /);
+  const st = p.run(["status"]);
+  assert.match(st.out, /done {2}kept spec-demo/);
+});
+
+test("resume: a failed outcome among the unfinished specs exits 1", (t) => {
+  const p = project(t, { script: { implement1: worker(BLOCKED), architect: worker(FAIL_SPEC) } });
+  const d = p.open();
+  d.close();
+  const first = p.runSpec();
+  assert.equal(first.code, 1);
+  assert.equal(p.run(["resume", "--backend", "fake"]).out.trim(), "nothing to resume", "a done spec is not resumed");
+});
+
+// ---- rebuild ---------------------------------------------------------------------------------------------------
+
+test("rebuild --check exits 0 on a faithful database and 1 on a drifted one; --apply repairs it", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  const ok = p.run(["rebuild", "--check"]);
+  assert.equal(ok.code, 0, ok.out + ok.err);
+  assert.match(ok.out, /replay matches/);
+  const d = p.open();
+  d.prepare("UPDATE specs SET state='queued', outcome=NULL WHERE id=?").run(SPEC);
+  d.close();
+  const bad = p.run(["rebuild", "--check"]);
+  assert.equal(bad.code, 1);
+  assert.match(bad.out, /specs .*state live=queued replay=done/);
+  const fix = p.run(["rebuild", "--apply"]);
+  assert.equal(fix.code, 0, fix.err);
+  assert.match(fix.out, /backup /);
+  assert.equal(p.run(["rebuild", "--check"]).code, 0);
+});
+
+test("rebuild --apply with the engine lock held exits 2; no flag or both flags exit 2", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  fs.writeFileSync(path.join(p.env.engineDir, "demo.lock"), `${process.pid}\n`);
+  const held = p.run(["rebuild", "--apply"]);
+  assert.equal(held.code, 2);
+  assert.match(held.err, /engine lock held/);
+  assert.equal(p.run(["rebuild"]).code, 2);
+  assert.equal(p.run(["rebuild", "--check", "--apply"]).code, 2);
+});
+
+// ---- tmux-ctl engine -------------------------------------------------------------------------------------------
+
+test("tmux-ctl engine bogus exits 2 with the usage line, outside tmux too", () => {
+  const env = { ...process.env };
+  delete env.TMUX;
+  const r = cp.spawnSync("zsh", [TMUX_CTL, "engine", "bogus"], { env, encoding: "utf8" });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /engine: usage: engine <run\|status/);
+});
+
+test("tmux-ctl engine exports TC_PROJECT from the session's feed key: status reads that project's database", (t) => {
+  const e = tmpEnv();
+  const tm = scratchTmux();
+  t.after(() => { tm.kill(); e.restore(); });
+  assert.equal(tm.run(["new-session", "-d", "-s", "cliproj", "-x", "80", "-y", "24"]).status, 0);
+  const sock = tm.run(["display", "-p", "#{socket_path}"]).stdout.trim();
+  const prev = process.env.TC_ENGINE_DIR;
+  const d = db.open("cliproj");
+  d.prepare("INSERT INTO specs (id, state, integration) VALUES ('s1.md', 'queued', 'keep')").run();
+  d.close();
+  if (prev === undefined) delete process.env.TC_ENGINE_DIR; else process.env.TC_ENGINE_DIR = prev;
+  const env = { ...process.env, TMUX: `${sock},0,0`, TMUX_DASH_TMUX_ARGS: `-L ${tm.socket}`, TMUX_TMPDIR: path.dirname(sock).replace(/\/tmux-\d+$/, ""),
+    TC_SESSION: "cliproj", TC_ENGINE_DIR: e.engineDir, TC_STATE: e.state, HOME: e.root };
+  delete env.TC_PROJECT;
+  const r = cp.spawnSync("zsh", [TMUX_CTL, "engine", "status"], { env, encoding: "utf8", timeout: 30000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^s1\.md {2}queued {2}- {2}keep$/m);
+});
