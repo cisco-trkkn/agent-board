@@ -81,14 +81,21 @@ function project(t, o = {}) {
   fs.rmSync(wt, { recursive: true });
   repo.git("worktree", "add", "-q", "-b", "spec-demo", wt);
   const ctl = path.join(env.root, "tmux-ctl");
-  fs.writeFileSync(ctl, `#!/bin/sh\necho fresh\nexit 0\n`, { mode: 0o755 });
+  // o.actDelayS: `metrics start` (the act of the metrics_start step) takes that long, so a kill lands between step_intent and step_done
+  const slow = o.actDelayS ? `[ "$1 $2" = "metrics start" ] && sleep ${o.actDelayS}\n` : "";
+  fs.writeFileSync(ctl, `#!/bin/sh\n${slow}echo fresh\nexit 0\n`, { mode: 0o755 });
   const scriptFile = path.join(env.root, "script.json");
   fs.writeFileSync(scriptFile, JSON.stringify(o.script || GOOD));
   const childEnv = { ...process.env, HOME: env.root, TC_ENGINE_DIR: env.engineDir, TC_STATE: env.state, TC_PROJECT: "demo", TC_TMUX_CTL: ctl };
   delete childEnv.TMUX;
   delete childEnv.TC_SESSION;
   const preload = path.join(env.root, "adopt-preload.js");
-  fs.writeFileSync(preload, ADOPT_PRELOAD);
+  // o.preDelayMs: the step starts that long after spec_added, so a kill lands before step_intent
+  const delayPre = o.preDelayMs ? `const steps = require(${JSON.stringify(path.resolve(__dirname, "../lib/engine/steps.js"))});
+const run = steps.run;
+steps.run = (d, desc, ...rest) => { if (String(desc.key).startsWith("metrics_start:")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${o.preDelayMs}); return run(d, desc, ...rest); };
+` : "";
+  fs.writeFileSync(preload, ADOPT_PRELOAD + delayPre);
   childEnv.NODE_OPTIONS = `--require=${preload}`;
   if (o.adopt) childEnv.ENGINE_TEST_ADOPT = "1";
   const runArgs = ["run", SPEC, "--integration", "keep", "--batch", "b1", "--backend", "fake"];
@@ -189,6 +196,8 @@ test("kill at each distinct event kind of a run, then resume: same final state a
         const validOnDisk = atKill.filter((j) => j.state === "running" && j.report && fs.existsSync(j.report)
           && /```json:status/.test(fs.readFileSync(j.report, "utf8")));
 
+        // the metrics start window is read from the kinds at the kill, before resume: resume can write the pair itself
+        const killKinds = p.kinds();
         const r = p.resume();
         assert.equal(r.code, 0, `resume after ${kind}: ${r.err}${r.out}`);
 
@@ -201,8 +210,10 @@ test("kill at each distinct event kind of a run, then resume: same final state a
         // The metrics start (step_intent, step_done right after spec_added) is run by `engine run` itself, outside the
         // core, and `engine resume` does not redo it: measurement never blocks a spec. A kill that lands between
         // spec_added and that step, which a loaded machine makes likely, leaves the run without the pair.
-        const lostStart = kind === "spec_added" && !p.kinds().slice(0, 3).includes("step_done");
+        // A kill between step_intent and step_done is not a loss: resume reconciles the intent row (see the window tests).
+        const lostStart = kind === "spec_added" && !killKinds.includes("step_intent");
         const want = sequence(refKinds);
+        assert.deepEqual(want.slice(0, 3), ["spec_added", "step_intent", "step_done"], "the reference starts with the metrics start pair");
         if (lostStart) want.splice(1, 2);
         assert.deepEqual(sequence(p.kinds()), want, "same event-kind sequence, resume-only kinds excluded");
 
@@ -225,6 +236,41 @@ test("kill at each distinct event kind of a run, then resume: same final state a
   const text = fs.readFileSync(tally, "utf8");
   if (failures.length) console.log(`kill-point tally:\n${text}`);
   assert.deepEqual(failures, [], `kill points that failed:\n${text}`);
+});
+
+// ---- the metrics start window (run by cli.js after spec_added, outside the core) -----------------------------------
+
+test("kill between spec_added and the metrics start step: resume completes the spec and the lost start is not redone", async (t) => {
+  const p = project(t, { adopt: true, preDelayMs: 2000 });
+  const child = p.spawnRun();
+  await until(() => p.kinds().includes("spec_added"), "spec_added");
+  child.kill("SIGKILL");
+  await child.exited;
+  assert.deepEqual(p.kinds(), ["spec_added"], "killed before step_intent");
+  const r = p.resume();
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.match(r.out.trim().split("\n").pop(), /^outcome: kept spec-demo$/);
+  assert.equal(p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM steps WHERE kind='metrics_start'").get().n), 0, "resume never redoes the start");
+  assert.equal(p.check().code, 0);
+});
+
+test("kill between step_intent and step_done of the metrics start: resume reconciles the intent row to done", async (t) => {
+  const p = project(t, { adopt: true, actDelayS: 2 });
+  const child = p.spawnRun();
+  await until(() => p.kinds().includes("step_intent"), "step_intent");
+  child.kill("SIGKILL");
+  await child.exited;
+  assert.deepEqual(p.kinds(), ["spec_added", "step_intent"], "killed inside the act");
+  const r = p.resume();
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.match(r.out.trim().split("\n").pop(), /^outcome: kept spec-demo$/);
+  // the check (`metrics has start`, answered "done" by the stub) closes the row: step_done at position 2, no second intent
+  assert.deepEqual(p.kinds().slice(0, 3), ["spec_added", "step_intent", "step_done"]);
+  const row = p.peek((d) => d.prepare("SELECT state, result FROM steps WHERE kind='metrics_start'").all());
+  assert.equal(row.length, 1);
+  assert.equal(row[0].state, "done");
+  assert.equal(JSON.parse(row[0].result).reconciled, true, "closed by reconcile, not by a rerun");
+  assert.equal(p.check().code, 0);
 });
 
 // ---- no adopt: a window that died with the engine is a new attempt (spec section 9) ---------------------------------
