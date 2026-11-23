@@ -197,12 +197,18 @@ async function cmdRun(args, io) {
     if (!eng.db.prepare("SELECT 1 FROM specs WHERE id=?").get(spec)) { io.err(`engine: run: could not insert ${spec}\n`); return 1; }
     if (p.flags.batch) {
       const tmuxCtl = tmuxCtlPath();
-      steps.run(eng.db, { key: `metrics_start:${spec}`, spec, kind: "metrics_start", facts: { spec, batch: p.flags.batch } }, () => {
-        const r = cp.spawnSync(tmuxCtl, ["metrics", "start", "--batch", p.flags.batch, "--spec", spec, "--worktree", worktree],
-          { cwd: repo, encoding: "utf8", timeout: 60000 });
-        if (r.error || r.status !== 0) throw new Error(`metrics start: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
-        return { spec, batch: p.flags.batch };
-      });
+      // Measurement never fails or blocks a spec: a failed metrics start leaves the step failed (steps.run records
+      // the error and a step_failed event), prints its line, and the run goes on.
+      try {
+        steps.run(eng.db, { key: `metrics_start:${spec}`, spec, kind: "metrics_start", facts: { spec, batch: p.flags.batch } }, () => {
+          const r = cp.spawnSync(tmuxCtl, ["metrics", "start", spec, "--batch", p.flags.batch, "--worktree", worktree],
+            { cwd: repo, encoding: "utf8", timeout: 60000 });
+          if (r.error || r.status !== 0) throw new Error(`metrics start: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
+          return { spec, batch: p.flags.batch };
+        });
+      } catch (e) {
+        io.out(`${hms(Date.now() / 1000)} metrics_failed - ${String((e && e.message) || e).split("\n")[0]}`);
+      }
     }
     return await runSpec(eng, spec, io);
   } finally {

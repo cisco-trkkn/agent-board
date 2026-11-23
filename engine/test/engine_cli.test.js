@@ -47,7 +47,9 @@ function project(t, o = {}) {
   repo.git("worktree", "add", "-q", "-b", "spec-demo", wt);
   const log = path.join(env.root, "ctl.log");
   const ctl = path.join(env.root, "tmux-ctl");
-  fs.writeFileSync(ctl, `#!/bin/sh\necho "$@" >> "${log}"\necho fresh\nexit 0\n`, { mode: 0o755 });
+  fs.writeFileSync(ctl, o.ctlFail
+    ? `#!/bin/sh\necho "$@" >> "${log}"\nif [ "$2" = start ]; then echo "metrics: unknown batch b1" >&2; exit 1; fi\necho fresh\nexit 0\n`
+    : `#!/bin/sh\necho "$@" >> "${log}"\necho fresh\nexit 0\n`, { mode: 0o755 });
   const scriptFile = path.join(env.root, "script.json");
   fs.writeFileSync(scriptFile, JSON.stringify(o.script || GOOD));
   const childEnv = { ...process.env, HOME: env.root, TC_ENGINE_DIR: env.engineDir, TC_STATE: env.state, TC_PROJECT: "demo", TC_TMUX_CTL: ctl };
@@ -110,7 +112,7 @@ test("run: a one-task plan reaches kept, prints one line per event, exit 0, metr
   assert.ok(events.some((l) => / dispatched \S+:implement1:1 /.test(l)), "dispatched line carries the job id");
   assert.match(lines[lines.length - 1], /^outcome: kept spec-demo$/);
   assert.equal(events.filter((l) => /^\d\d:\d\d:\d\d (deadline|timer_fired|step_intent|step_done|job_session|inbox_\w+) /.test(l)).length, 0, "bookkeeping hidden");
-  assert.match(p.ctlLog(), new RegExp(`metrics start --batch b1 --spec ${SPEC} --worktree ${fs.realpathSync(p.wt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(p.ctlLog(), new RegExp(`metrics start ${SPEC} --batch b1 --worktree ${fs.realpathSync(p.wt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   const d = p.open();
   try {
     const step = d.prepare("SELECT * FROM steps WHERE key=?").get(`metrics_start:${SPEC}`);
@@ -299,13 +301,41 @@ test("resume: nothing unfinished exits 0; a spec whose engine was killed mid-job
   assert.match(st.out, /done {2}kept spec-demo/);
 });
 
-test("resume: a failed outcome among the unfinished specs exits 1", (t) => {
+test("resume: a finished (failed) spec is not resumed", (t) => {
   const p = project(t, { script: { implement1: worker(BLOCKED), architect: worker(FAIL_SPEC) } });
-  const d = p.open();
-  d.close();
   const first = p.runSpec();
   assert.equal(first.code, 1);
   assert.equal(p.run(["resume", "--backend", "fake"]).out.trim(), "nothing to resume", "a done spec is not resumed");
+});
+
+// ---- metrics start (F1, F2) ------------------------------------------------------------------------------------
+
+test("run: a failing metrics start leaves the step failed, prints its error, and the run still reaches its outcome", (t) => {
+  const p = project(t, { ctlFail: true });
+  const r = p.runSpec();
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.match(r.out, /metrics_failed - .*unknown batch b1/);
+  assert.match(r.out.trim().split("\n").pop(), /^outcome: kept spec-demo$/);
+  const d = p.open();
+  try {
+    const step = d.prepare("SELECT * FROM steps WHERE key=?").get(`metrics_start:${SPEC}`);
+    assert.equal(step.state, "failed");
+    assert.match(step.result, /unknown batch b1/);
+    assert.equal(d.prepare("SELECT state FROM specs WHERE id=?").get(SPEC).state, "done");
+  } finally { d.close(); }
+});
+
+test("the metrics start argv is accepted by the real board/metrics.py parser (spec positional, --batch, --worktree)", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  const argv = p.ctlLog().split("\n").find((l) => l.startsWith("metrics start ")).trim().split(" ").slice(2);
+  assert.equal(argv[0], SPEC);
+  // A parse error exits 2 with "usage:"; an accepted argv gets as far as the log lookup ("unknown batch").
+  // (the real parser also wants the worktree under .claude/worktrees/, so that one value is swapped)
+  argv[argv.indexOf("--worktree") + 1] = path.join(p.repo.dir, ".claude/worktrees/x");
+  const r = cp.spawnSync("python3", [path.resolve(__dirname, "../../board/metrics.py"), "start", ...argv, "--repo", p.repo.dir], { encoding: "utf8" });
+  assert.doesNotMatch(r.stderr, /unrecognized arguments|usage:/);
+  assert.match(r.stderr + r.stdout, /unknown batch b1/);
 });
 
 // ---- rebuild ---------------------------------------------------------------------------------------------------
