@@ -572,15 +572,21 @@ def lead_infos(projects, lead_sids, lead_pids):
     return out
 
 
-def feed_tick(records, now, live=None):
+def read_limits(now):
+    """The plan limits from the statusline taps, or None when there are none (the one tap read every tick shares)."""
+    try:
+        return usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+    except Exception:   # noqa: BLE001 -- no taps: the lines show "?", the card "—", the pace stays None
+        return None
+
+
+def feed_tick(records, now, live=None, limits=None):
     """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (inbound events); the dialog scan runs once before them.
     A failure in one project is logged and never breaks the overview or the next project."""
     home = HOME / ".claude"
     ops_on = discord_ops.configured()
-    try:
-        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-    except Exception:   # noqa: BLE001 -- no taps: the lines show "?"
-        limits = None
+    if limits is None:
+        limits = read_limits(now)
     try:   # once per tick, before the projects: it covers every session, with or without a channel
         discord_dialogs.scan(_dialog_sessions, now, run=lambda argv: run_script(argv, timeout=20))
     except Exception as e:   # noqa: BLE001
@@ -627,10 +633,7 @@ def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=N
     for p in (r["project"] for r in records):
         tasks_by_project.setdefault(p, [])   # a project whose lead list could not be read still appears on the card
     if limits is None:
-        try:
-            limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-        except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
-            limits = None
+        limits = read_limits(now)
     try:
         discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line, live=live, lead_sids=lead_sids,
                          lead_info=lead_info, holder_panes=discord_leads)
@@ -651,15 +654,13 @@ def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=N
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
-def build_overview(now=None):
+def build_overview(now=None, limits=None):
     now = now or time.time()
     st = state()
     live = INDEXER.snapshot() if INDEXER else []
     th, _ = usage.thresholds()
-    try:   # one tap read per build: the pace field takes it, nothing else rereads it
-        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-    except Exception:   # noqa: BLE001 -- no taps: pace stays None
-        limits = None
+    if limits is None:
+        limits = read_limits(now)
     return overview.build(st["sessions"], live, now, home=HOME / ".claude", state_dir=tc_env.state_dir(), tmux=tmux, th=th,
                           spend=lambda repo: spend_today(repo, now), activity=window_activity(), mods=mod_records(now), limits=limits)
 
@@ -669,13 +670,15 @@ def overview_payload():
     with _overview_lock:
         if _overview_cache["value"] is not None and time.monotonic() - _overview_cache["at"] < OVERVIEW_EVERY:
             return _overview_cache["value"]
-        ov = build_overview()
+        now = time.time()
+        limits = read_limits(now)   # the tick's one tap read: the overview (pace) and feed_tick/ops_tick share it
+        ov = build_overview(now, limits)
         NOTIFIER.observe(ov)
         value = {**ov, "events": NOTIFIER.recent(), "overseer": overseer_info()}
         _overview_cache.update(at=time.monotonic(), value=value)
     ensure_overseer()   # once per fresh build, outside the lock: its run_script can take up to 20 s and must not stall /api/overview
     ensure_discord_bridges(ov["projects"])
-    feed_tick(ov["projects"], ov["generated"], live=INDEXER.snapshot() if INDEXER else [])
+    feed_tick(ov["projects"], ov["generated"], live=INDEXER.snapshot() if INDEXER else [], limits=limits)
     return value
 
 
