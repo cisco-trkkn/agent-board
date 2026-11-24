@@ -53,6 +53,7 @@ def tmux_server_cwd(run=_run, tmux=None):
         if rc != 0:
             return None
         cwd = next((l[1:] for l in (out or "").splitlines() if l.startswith("n")), "")
+        cwd = cwd.removesuffix(" (deleted)")   # Linux lsof marks a removed cwd that way; macOS prints the bare path
         return CWD_GONE.format(cwd=cwd, sock=sock) if cwd and not os.path.isdir(cwd) else None
     except Exception:   # noqa: BLE001 -- detection only: a failure is no warning
         return None

@@ -119,7 +119,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -388,6 +388,7 @@ case "$cmd" in
     lsof_bin=/usr/sbin/lsof; [[ -x "$lsof_bin" ]] || lsof_bin="${commands[lsof]:-}"
     if [[ "$srv_pid" == <-> && -n "$lsof_bin" ]]; then
       srv_cwd="$("$lsof_bin" -a -p "$srv_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+      srv_cwd="${srv_cwd% \(deleted\)}"   # Linux lsof marks a removed cwd that way; macOS prints the bare path
       [[ -n "$srv_cwd" && ! -d "$srv_cwd" ]] && print -r -- "tmux server cwd is gone ($srv_cwd): new panes start there; restart the tmux server from ~ (tmux -S $srv_sock kill-server ends every session on it; reopen each project with agent-board dev)"
     fi
     list_session

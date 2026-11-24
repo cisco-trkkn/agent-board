@@ -187,6 +187,12 @@ _dc_forget() {
   print -r -- "discord: token removed for $project"
 }
 
+# _dc_penv <pid>: the process's command line and environment as one space-separated line. macOS: `ps -Eww`; Linux has no -E
+# (procps `ps` takes BSD `e`), so read /proc/<pid>/environ with NULs turned into spaces.
+_dc_penv() {
+  if [[ -r /proc/$1/environ ]]; then tr '\0' ' ' < /proc/$1/environ 2>/dev/null
+  else ps -Eww -o command= -p $1 2>/dev/null; fi
+}
 # dc_holder <state dir>: "<claude pid> <pane id|->" when a live lead holds the discord channel for that state dir, else nothing.
 # A holder is a process that is the discord server (args hold /discord/ and `bun run … start`, `bun … server.ts` or `node … server.ts`, or
 # discord-mcp-launch; never the stub) with DISCORD_STATE_DIR=<dir> exactly in its `ps -E` environment, and that has a
@@ -204,7 +210,7 @@ dc_holder() {
     if [[ "$args" == *discord-mcp-launch* ]] || [[ "$args" == */discord/* && ( "$args" =~ 'bun run .*start' || "$args" =~ 'bun .*server\.ts' || "$args" =~ 'node .*(^| |/)server\.ts( |$)' ) ]]; then cands+=($pid); fi
   done < <(ps -A -o pid=,ppid=,args= 2>/dev/null)
   for pid in $cands; do
-    e="$(ps -Eww -o command= -p $pid 2>/dev/null) "
+    e="$(_dc_penv $pid) "
     [[ "$e" == *" DISCORD_STATE_DIR=$dir "* ]] || continue
     p=$pid n=0
     while [[ -n "${par[$p]}" && $p -gt 1 && $n -lt 64 ]]; do
@@ -213,7 +219,7 @@ dc_holder() {
       # version-named processes (2.1.325 …) are teammates and deliberately do not count as a lead
       if [[ "${${args%% *}:t}" == claude || "$args" == "claude "* ]]; then
         [[ "${par[$p]}" == 1 ]] && break
-        e="$(ps -Eww -o command= -p $p 2>/dev/null) "
+        e="$(_dc_penv $p) "
         c="-"; [[ "$e" =~ ' TMUX_PANE=(%[0-9]+) ' ]] && c="${match[1]}"
         print -r -- "$p $c"; return 0
       fi

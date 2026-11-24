@@ -28,11 +28,12 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        # cleanups run last-in first-out: tzset must run after the env patch is undone
+        self.addCleanup(time.tzset)
         p = mock.patch.dict(os.environ, {"TC_STATE": self.tmp.name, "TZ": "Europe/Madrid"})
         p.start()
         self.addCleanup(p.stop)
         time.tzset()
-        self.addCleanup(time.tzset)
         dg._warned = False
         self.ops = tc_env.ops_dir()
         self.ops.mkdir(parents=True)

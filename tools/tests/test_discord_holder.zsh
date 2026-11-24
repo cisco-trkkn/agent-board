@@ -13,7 +13,8 @@ cat > "$S/fc.js" <<'FC'
 const { spawn } = require('child_process')
 require('fs').writeFileSync(process.argv[3], String(process.pid))
 const kargs = process.env.FC_MODE === 'node' ? ['--experimental-strip-types', '/fake/discord/0.0.4/server.ts'] : process.env.FC_MODE === 'dev' ? ['--experimental-strip-types', '/fake/discord/0.0.4/dev-server.ts'] : process.env.FC_MODE === 'bridge' ? ['/fake/tools/discord-bridge/bridge.js', '/fake/state/discord/agent-board'] : ['bun', 'run', '--cwd', '/fake/discord/0.0.4', 'start']
-const k = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', ...kargs],
+// `--` keeps older node (CI has 20) from rejecting the unknown --experimental-strip-types
+const k = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', '--', ...kargs],
   { env: { ...process.env, DISCORD_STATE_DIR: process.argv[2] }, stdio: 'ignore' })
 k.on('exit', () => process.exit(0))
 FC
@@ -39,7 +40,7 @@ SD="$S/state/p"; SD2="$S/state/p2"
 spawn "$SD"; CP1=$CP; KID1=$KID
 check "fake: claude args start with the claude path"  test "$(ps -o args= -p $CP | awk '{print $1}')" = "$S/bin/claude"
 check "fake: child args show bun run --cwd /fake/discord"  test -n "$(ps -o args= -p $KID | grep -F 'bun run --cwd /fake/discord/0.0.4 start')"
-check "fake: child env carries DISCORD_STATE_DIR"  test -n "$(ps -Eww -o command= -p $KID | grep -F "DISCORD_STATE_DIR=$SD")"
+check "fake: child env carries DISCORD_STATE_DIR"  test -n "$(_dc_penv $KID | grep -F "DISCORD_STATE_DIR=$SD")"
 
 check "live holder: '<claude pid> %99'"   test "$(dc_holder "$SD")" = "$CP1 %99"
 check "other dir: nothing"                test -z "$(dc_holder "$S/state/other")"
