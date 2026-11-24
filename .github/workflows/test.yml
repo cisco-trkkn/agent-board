@@ -19,6 +19,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"   # install.sh --check and the engine need node >= 22.13; ubuntu-24.04 ships 20
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
         run: brew install tmux ttyd fzf jq zsh
