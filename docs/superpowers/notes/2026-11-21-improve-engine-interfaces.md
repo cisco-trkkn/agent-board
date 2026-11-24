@@ -1,5 +1,7 @@
 # Improve-loop: engine interfaces on main (Task 1)
 
+> **Superseded (plan refresh 2026-11-24, main 0af42b5).** This first run predates the engine: parts 1 and 2 merged as 064a029, so `engine/lib/engine/`, `engine/bin/engine.js` and the `tmux-ctl engine` wrapper (`bin/tmux-ctl`, `engine)` ~796) now exist, and the line numbers and "absent" findings below are out of date. Task 1 re-runs against main and rewrites this note whole; the plan's Task 1 lists the starting points. Engine §13 (holds) and §14 (schedules) were still absent at 0af42b5.
+
 Checked on branch `supervised-improvement-loop` (rebased on main d4ded08; no code differs from main). The PCEE engine spec (`docs/superpowers/specs/2026-11-10-pcee-engine-design.md`) parts 1 and 2 failed entry gate K1 and were never built. `engine/` holds only the registry (`engine/bin/registry.js`, `engine/lib/registry/*`, a different spec). Result: the engine is absent, so every row is MISSING.
 
 Checks run (all from the worktree root):

@@ -12,7 +12,11 @@
 
 ```json:manifest
 {"spec": "docs/superpowers/specs/2026-11-16-supervised-improvement-loop-design.md",
- "base": "878263ef370347c6be0e8911c42ef5a69911b9ff",
+ "base": "0af42b5b388826b46ecd25063192c9d2f558f87d",
+ "refreshed_from": {"base": "878263ef370347c6be0e8911c42ef5a69911b9ff",
+                    "stale_paths": ["bin/tmux-ctl", "board/discord_feed.py", "board/metrics.py", "docs/superpowers/engine.json",
+                                    "docs/superpowers/metrics/runs.jsonl", "docs/superpowers/metrics/tasks.jsonl",
+                                    "docs/superpowers/specs/2026-11-10-pcee-engine-design.md", "engine/bin/engine.js"]},
  "depends_on": [
    {"spec": "docs/superpowers/specs/2026-11-10-pcee-engine-design.md", "kind": "hard",
     "interface": "engine DB events/inbox (§1, §12), engine-run specs and briefs (§3 step 2), merge step and steps/Engine-Step (§3.7, §10.4), morning report (§7), approval holds (§13), schedules (§14), tmux-ctl engine (§5)"},
@@ -52,9 +56,16 @@
    {"path": "engine/test/improve.test.js", "mode": "create"},
    {"path": "engine/test/improve_merge.test.js", "mode": "create"},
    {"path": "engine/test/improve_holds.test.js", "mode": "create"},
+   {"path": "engine/lib/engine/core.js", "mode": "modify"},
+   {"path": "engine/lib/engine/integrate.js", "mode": "modify"},
+   {"path": "engine/lib/engine/cli.js", "mode": "modify"},
+   {"path": "engine/lib/engine/rebuild.js", "mode": "modify"},
+   {"path": "engine/lib/engine/queue_report.js", "mode": "modify"},
    {"path": "README.md", "mode": "modify"}],
  "reads": ["docs/superpowers/specs/2026-11-10-pcee-engine-design.md",
            "engine/bin/engine.js", "engine/bin/hold.js", "claude/hooks/engine-hold.sh", "docs/superpowers/engine.json",
+           "engine/lib/engine/db.js", "engine/lib/engine/steps.js", "engine/lib/engine/paths.js", "engine/lib/engine/architect.js",
+           "board/tests/test_metrics_weekly.py",
            "docs/superpowers/model-routing.json", "docs/superpowers/metrics/runs.jsonl", "docs/superpowers/metrics/tasks.jsonl",
            "docs/superpowers/metrics/configs/upfront-seq.md", "board/dream_paths.py", "board/dream_check.py",
            "board/findings.py", "board/scout_post.py", "board/scout_decisions.py", "board/discover_post.py",
@@ -76,12 +87,17 @@
 
 ## Global Constraints
 
-- **The engine is not on `main` yet.** This plan is written against the interfaces that `2026-11-10-pcee-engine-design.md`
-  states (sections are cited where they are used). Task 1 confirms each one on `main` before anything is built and stops
-  the plan if one is missing. Engine files (`engine/bin/engine.js` and whatever part 1/2 split it into) are in the
-  manifest's `reads`, because they do not exist at this plan's base. **Refresh note:** when the stale check's refresh
-  agent runs, it moves each engine path a task changes from `reads` to `writes` (`modify`), using the paths that Task 1's
-  note will list.
+- **Engine parts 1 and 2 are on `main`** (merged as 064a029; refreshed onto main 0af42b5 on 2026-11-24). The CLI is
+  `engine/bin/engine.js` → `engine/lib/engine/cli.js` (subcommands `run status events resume signal rebuild enqueue start
+  done`, `cli.js:22`), and `bin/tmux-ctl` wraps it as `tmux-ctl engine` (`engine)` case, line ~796; it works outside
+  tmux). Engine §13 (approval holds) and §14 (schedules) are **not** on main: there is no `engine/bin/hold.js`, no
+  `claude/hooks/engine-hold.sh`, no `holds` key in `docs/superpowers/engine.json` (it holds only `test` and `test_ok`),
+  no `schedule` inbox source and no `schedule`/`wake` subcommand. Task 1 confirms each interface on `main` before anything
+  is built and stops the plan if one is missing. The engine files the later tasks are expected to change (from main
+  0af42b5; Task 1's note confirms or corrects them) are in the manifest's `writes` as `modify`: `engine/lib/engine/core.js`
+  (brief builder `briefFor` ~955, tier-to-model map ~151, `metrics start` call ~1121, queue report step ~1234),
+  `engine/lib/engine/integrate.js` (merge ~83, revert ~216, `metrics record` argv ~158), `engine/lib/engine/cli.js`,
+  `engine/lib/engine/rebuild.js` and `engine/lib/engine/queue_report.js`.
 - **Protected set** (spec §6), the exact content of `docs/superpowers/improve/protected.txt`, one glob per line:
   ```
   board/metrics.py
@@ -119,8 +135,11 @@
   `spec_id` is the metrics spec id (spec path, with `#part-N` when present).
 - **Metric definitions (defined once; every task cites these):**
   - *trial half* of P: the latest run records (by `last_runs`) with `P` in `variants`. *Control half* of P: the run records
-    of engine-run specs (`runner` engine, as the run record or Task 1's note says) since P entered `trial`, whose spec is
-    in P's control half by the split. Lead-run specs are in neither half.
+    of engine-run specs since P entered `trial`, whose spec is in P's control half by the split. Lead-run specs are in
+    neither half. *Engine-run record*: at main 0af42b5 run records carry no `runner` field (the engine keeps `runner` on
+    its own `specs` row, `engine/lib/engine/db.js:9`); a record is engine-run when its `budget` field is non-null, which
+    only the engine's `metrics record --budget … --engine-jobs …` call sets (`engine/lib/engine/integrate.js:158`). Task 1
+    row 6 confirms this or names the field to use instead.
   - `tokens_per_merged_task` (O1 signal, R4): `sum(tokens.total over every spec in the half, failed and abandoned
     included) / sum(tasks over specs with outcome merged or mr)`. Infinite (worse) when the denominator is 0.
   - `failed_specs`: count of specs with outcome `failed`. `red_after_merge`: count of specs whose run record has
@@ -157,7 +176,15 @@ one spec queued last; first outcome O1 as written in spec §1; low changes kept 
 prompts and routing promoted only by the user, permissions and protected files never trialled; evidence from real work
 only; protected set as §6; start quiet; Claude Code stays the runtime.
 
-**Assumptions / known risk:** as queued, this plan will stop at Task 1 unless stage 7 (engine §13 approval holds and §14 schedules) lands first: the engine spec's 2026-11-19 revision, decision 5, moved both to stage 7. Lead ruling 2026-11-21: keep the stop, no fallbacks.
+**Assumptions / known risk:** as queued, this plan will stop at Task 1 unless stage 7 (engine §13 approval holds and §14 schedules) lands first: the engine spec's 2026-11-19 revision, decision 5, moved both to stage 7. Lead ruling 2026-11-21: keep the stop, no fallbacks. Refresh 2026-11-24: engine parts 1 and 2 are now on main, but §13 and §14 are still absent at main 0af42b5 (see Global Constraints), so Task 1 rows 3 (the `schedule` source), 10 and 11 are expected to come out `MISSING` and the stop still applies.
+
+**Assumptions (refresh 2026-11-24, refresh agent):**
+- The loop's spend cap (R4) is separate from the engine's per-spec budget (engine §8b: attempts 60, tokens 5,000,000 by
+  default, a `budget` wait when reached). A trial spec parked on `budget` stays a trial spec, and its tokens count in its
+  half as recorded. A `ruling` event answering a `budget` wait (engine §8a: detail keys `kind`, `recommended`, `answer`,
+  `followed`) is not a "variant blamed" ruling unless its text contains `Trial <P>`.
+- `docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md` (Task 1's first run, before the engine landed) is
+  superseded: Task 1 re-runs against main and rewrites it.
 
 **Rulings made while planning (planner, for the lead to confirm):**
 - Ruling: engine §13 (approval holds) and §14 (schedules) are marked "moved to stage 7" in the engine spec's 2026-11-19
@@ -200,7 +227,7 @@ only; protected set as §6; start quiet; Claude Code stays the runtime.
   3. `inbox` table and the `schedule` source (`source_id` `<name>@<due_at>`) — §12
   4. the brief builder for an engine-run spec's jobs (function and file) and the worktree workspace `<worktree>/.superpowers/engine/` — §1, §3 step 2
   5. the tier-to-model map the engine uses for a spec's jobs (where it is read from `model-routing.json`) — §2
-  6. `metrics start` / `metrics record` calls from the engine (argv) and whether run records carry `runner` — §3 step 7, §7
+  6. `metrics start` / `metrics record` calls from the engine (argv) and how a run record is told to be engine-run (a `runner` field, or the non-null `budget` that the engine's `--budget` sets) — §3 step 7, §7
   7. the merge step: `steps` kind `merge`, `Engine-Step: <key>` trailer, live-checkout check — §3 step 7, §10.4
   8. the morning report writer (file, and the point after the report is committed) — §7
   9. the event forms for an architect `ruling`, a review finding, and "tests red after the merge" (the exact `kind` and `detail` keys) — §3, §4
@@ -211,11 +238,12 @@ only; protected set as §6; start quiet; Claude Code stays the runtime.
 - [ ] Row 2 names which way Task 3 must go: `ignored` (the loop's table needs nothing) or `needs registration` (Task 3 adds the `proposals` table to the replay in the file named).
 - [ ] The note ends with a section `## Files the later tasks change`: for each of Tasks 3, 5, 7, 10 and 11, the engine files it will modify, from what was found.
 - [ ] If any row is `MISSING`: commit the note, mark this task `failed — engine interface missing: <row names>`, and message the lead. Do not start Task 2.
+- [ ] The note is rewritten whole: the 2026-11-21 version (all `MISSING`, written before the engine landed) is superseded. Starting points found at main 0af42b5 (check each, do not copy): DB path `engine/lib/engine/paths.js:7`; tables `engine/lib/engine/db.js:9-23` (`events(seq, ts, spec, job, kind, detail)`, `inbox(... source, source_id ... UNIQUE(source, source_id))`, `steps`); replay `engine/lib/engine/rebuild.js`; brief builder `briefFor`, `engine/lib/engine/core.js:955`; routing map `core.js:151`; `metrics start` `core.js:1121`, `metrics record` `engine/lib/engine/integrate.js:158`; merge and `Engine-Step` `integrate.js:83`, `engine/lib/engine/steps.js:74`; queue report step `core.js:1234`, `engine/lib/engine/queue_report.js`; `ruling` events `core.js:772`, `engine/lib/engine/architect.js:62`; tests red after the merge `architect.js:6` (case `tests_red_after_merge`); wrapper `bin/tmux-ctl` `engine)` ~796. Not found at 0af42b5: `holds`, `hold.js`, `engine-hold.sh`, a `schedule` source, `schedule`/`wake` subcommands.
 
 **Verify:** `grep -c '^| [0-9]' docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md; grep -c 'MISSING' docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md` → `12` then `0`
 
 ```json:metadata
-{"files": ["docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md"], "verifyCommand": "grep -c '^| [0-9]' docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md; grep -c 'MISSING' docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md", "acceptanceCriteria": ["12-row interface table, each present or MISSING", "each present row cites file:line and a check command with output", "row 2 decides ignored vs needs registration", "section listing engine files each later task changes", "any MISSING: commit the note, fail the task, message the lead, stop"], "modelTier": "standard"}
+{"files": ["docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md"], "verifyCommand": "grep -c '^| [0-9]' docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md; grep -c 'MISSING' docs/superpowers/notes/2026-11-21-improve-engine-interfaces.md", "acceptanceCriteria": ["12-row interface table, each present or MISSING", "each present row cites file:line and a check command with output", "row 2 decides ignored vs needs registration", "section listing engine files each later task changes", "any MISSING: commit the note, fail the task, message the lead, stop", "note rewritten whole against main; the 2026-11-21 version superseded"], "modelTier": "standard"}
 ```
 
 ---
@@ -446,7 +474,7 @@ Note on `prose_only`: `first` tracks "first body line of a hunk", so a hunk that
 
 **Files:**
 - Create: `board/improve_store.py`, `board/improve.py`, `tools/lib/improve.zsh`, `board/tests/improve_fixtures.py`, `board/tests/test_improve_store.py`, `tools/tests/test_ctl_improve.zsh`
-- Modify: `bin/tmux-ctl` (new `improve)` case before `metrics)`; help lines), and the engine replay file named by Task 1's note when row 2 says `needs registration`
+- Modify: `bin/tmux-ctl` (new `improve)` case after `engine)` (~796) and before `metrics)` (~853)), and the engine replay file (`engine/lib/engine/rebuild.js` at main 0af42b5, or the file Task 1's note names) when row 2 says `needs registration`. The help line is Task 13's.
 
 **Acceptance Criteria:**
 - [ ] DB path: `${TC_ENGINE_DIR:-~/.local/state/agent-board/engine}/<project>.sqlite`, `<project>` from `tc_env` as the rest of `board/` does. `CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, source, kind, target, patch, evidence, class, state, outcome, created_at, updated_at, trial_started_at, trial_len INTEGER DEFAULT 5, commit_sha, dedupe_key TEXT UNIQUE, title, shrinks_reads INTEGER DEFAULT 0, reason)`. The loop never creates the engine's own tables. With no `events` table (no engine DB yet), the store refuses with `improve: no engine database at <path>` and exit 1.
@@ -463,7 +491,7 @@ Note on `prose_only`: `first` tracks "first body line of a hunk", so a hunk that
 
 **Steps:**
 
-- [ ] **Step 1:** `board/tests/improve_fixtures.py`: `engine_db(tmp)` creates `<tmp>/<project>.sqlite` with `events(id INTEGER PRIMARY KEY, time TEXT, spec TEXT, job TEXT, kind TEXT, detail TEXT)`, copying the engine's real column list from Task 1's note row 1. Add `run(spec, **kw)` (a run record dict with `kind: "run"`, `outcome`, `tasks`, `tokens: {"total": …}`, `variants`, `runner`, `batch`, `ended_at`) and `write_log(tmp, lines)` for later tasks.
+- [ ] **Step 1:** `board/tests/improve_fixtures.py`: `engine_db(tmp)` creates `<tmp>/<project>.sqlite` with the engine's real `events` columns, `events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, spec TEXT, job TEXT, kind TEXT, detail TEXT)` at main 0af42b5 (`engine/lib/engine/db.js:16`; Task 1's note row 1 confirms). The store writes `ts` as epoch seconds, as the engine does. Add `run(spec, **kw)` (a run record dict with `kind: "run"`, `outcome`, `tasks`, `tokens: {"total": …}`, `variants`, `runner`, `batch`, `ended_at`) and `write_log(tmp, lines)` for later tasks.
 - [ ] **Step 2:** RED tests for every criterion above (store and CLI), each naming its mutation.
 - [ ] **Step 3:** Implement `improve_store.py` (sqlite3, `BEGIN IMMEDIATE` per change, `detail` JSON), `improve.py` (argparse subcommands, one-line errors `improve: <sub>: <reason>` to stderr, exit 1), `tools/lib/improve.zsh` (`exec python3 -I "$root/board/improve.py" "$@"`), and the `bin/tmux-ctl` case:
 
@@ -486,7 +514,7 @@ improve_main() {
 - [ ] **Step 4:** GREEN; **commit** `feat(improve): proposals store, events and the improve CLI`.
 
 ```json:metadata
-{"files": ["board/improve_store.py", "board/improve.py", "tools/lib/improve.zsh", "bin/tmux-ctl", "board/tests/improve_fixtures.py", "board/tests/test_improve_store.py", "tools/tests/test_ctl_improve.zsh"], "verifyCommand": "python3 -m unittest board.tests.test_improve_store -v && zsh tools/tests/test_ctl_improve.zsh", "acceptanceCriteria": ["proposals table in the engine DB; refuses without one", "insert: P<n>, derived class, R1 refusal, dedupe key no-op, retire cap 5 per tick", "transition: allowed set only, one improve event in the same transaction, atomic", "patches under TC_STATE/improve/<project>/patches", "propose incl. --from-dream with report evidence", "list and show", "outcome status prints value vs baseline, guardrails, verdict", "replay registration when Task 1 row 2 says so; rebuild --check 0", "zsh CLI test ok"], "modelTier": "standard"}
+{"files": ["board/improve_store.py", "board/improve.py", "tools/lib/improve.zsh", "bin/tmux-ctl", "engine/lib/engine/rebuild.js", "board/tests/improve_fixtures.py", "board/tests/test_improve_store.py", "tools/tests/test_ctl_improve.zsh"], "verifyCommand": "python3 -m unittest board.tests.test_improve_store -v && zsh tools/tests/test_ctl_improve.zsh", "acceptanceCriteria": ["proposals table in the engine DB; refuses without one", "insert: P<n>, derived class, R1 refusal, dedupe key no-op, retire cap 5 per tick", "transition: allowed set only, one improve event in the same transaction, atomic", "patches under TC_STATE/improve/<project>/patches", "propose incl. --from-dream with report evidence", "list and show", "outcome status prints value vs baseline, guardrails, verdict", "replay registration when Task 1 row 2 says so; rebuild --check 0", "zsh CLI test ok"], "modelTier": "standard"}
 ```
 
 ---
@@ -525,7 +553,7 @@ improve_main() {
 **Goal:** Run records carry `variants`, `red_after_merge` and `final_review_crit_imp`, and `board/metrics.py` gains `compare_halves`, the decision rule for a trial half against a control half.
 
 **Files:**
-- Modify: `board/metrics.py` (`cmd_start` and the start parser: `--variants`; `build_record`: copy `variants` from the start record, add `red_after_merge` and `final_review_crit_imp`; new `compare_halves`)
+- Modify: `board/metrics.py` (`cmd_start` ~219 and the start parser: `--variants`; `build_record` ~836: copy `variants` from the start record, add `red_after_merge` and `final_review_crit_imp`; new `compare_halves` next to `permutation_p` ~1418 and `quality_veto` ~1469). At main 0af42b5 the engine calls `metrics start <spec> --batch B --worktree W` (`engine/lib/engine/core.js:1121`) and `metrics record <spec> --batch B --outcome O --budget JSON --engine-jobs JSON` (`engine/lib/engine/integrate.js:158`); `build_record` already takes `engine_jobs` and `budget_spec`. Keep both flags working.
 - Create: `board/tests/test_metrics_halves.py`
 
 **Acceptance Criteria:**
@@ -534,7 +562,7 @@ improve_main() {
 - [ ] `compare_halves(trial, control, metric, defects=())` implements the Metric definitions verdict exactly: `too early` (< 4 specs in either half), `better`, `equal`, `worse` for `tokens_per_merged_task`, `fix_rounds_per_task` and `bounces_per_task`; `worse`/`equal` for the count guardrails. It returns `{"verdict", "index", "p_better", "p_worse", "n_trial", "n_control", "trial_value", "control_value"}`.
 - [ ] R4 test: a trial half whose failed specs are cheap but unmerged does not come out `better` than control (mutation: sum tokens over merged specs only → test fails).
 - [ ] R2 fixture: trial `tokens_per_merged_task` 30% lower (`better`) while `red_after_merge` is 3 vs 0 over 5 specs each → the guardrail verdict is `worse`. (Task 8 asserts the resulting `reverted`.)
-- [ ] `metrics report` and `metrics compare` output on the existing fixtures is unchanged (`test_metrics_report.py` passes as-is).
+- [ ] `metrics report` and `metrics compare` output on the existing fixtures is unchanged (`test_metrics_report.py` passes as-is), and a record built with `--budget`/`--engine-jobs` still carries `budget`, `control_tokens` and `control_share`.
 
 **Verify:** `python3 -m unittest board.tests.test_metrics_halves board.tests.test_metrics_report -v` → `OK`
 
@@ -584,7 +612,7 @@ improve_main() {
 
 **Files:**
 - Create: `engine/lib/improve.js`, `engine/test/improve.test.js`
-- Modify: the engine's brief builder, job dispatch and `metrics start` call (files listed in Task 1's note, section "Files the later tasks change", Task 7)
+- Modify: the engine's brief builder, job dispatch and `metrics start` call: at main 0af42b5 all in `engine/lib/engine/core.js` (`briefFor` ~955, the tier-to-model map ~151, `metrics start` ~1121); Task 1's note, section "Files the later tasks change", Task 7, confirms or corrects this
 
 **Constraints:**
 - The engine calls only `tmux-ctl improve variants <spec> --json` (one call per spec when it starts running), stores the result on the spec (an event, so replay holds), and never opens the `proposals` table.
@@ -604,7 +632,7 @@ improve_main() {
 **Verify:** `(cd engine && node --test test/improve.test.js)` → `# fail 0`
 
 ```json:metadata
-{"files": ["engine/lib/improve.js", "engine/test/improve.test.js"], "verifyCommand": "(cd engine && node --test test/improve.test.js)", "acceptanceCriteria": ["overlay only in trial specs' briefs", "challenger skill copy only in the trial worktree, git-ignored, champion unchanged", "routing trial changes only the trial spec's mechanical model", "metrics start carries --variants", "variants call failure: spec runs, one error event", "rebuild --check 0"], "modelTier": "frontier"}
+{"files": ["engine/lib/improve.js", "engine/lib/engine/core.js", "engine/test/improve.test.js"], "verifyCommand": "(cd engine && node --test test/improve.test.js)", "acceptanceCriteria": ["overlay only in trial specs' briefs", "challenger skill copy only in the trial worktree, git-ignored, champion unchanged", "routing trial changes only the trial spec's mechanical model", "metrics start carries --variants", "variants call failure: spec runs, one error event", "rebuild --check 0"], "modelTier": "frontier"}
 ```
 
 ---
@@ -676,7 +704,7 @@ improve_main() {
 
 **Files:**
 - Create: `board/improve_apply.py`, `board/tests/test_improve_apply.py`, `engine/test/improve_merge.test.js`
-- Modify: `board/improve.py` (`revert`), the engine merge step and CLI (files in Task 1's note, Task 10), `engine/lib/improve.js` (protected-path check, reads `docs/superpowers/improve/protected.txt`)
+- Modify: `board/improve.py` (`revert`), the engine merge step and CLI (at main 0af42b5: `engine/lib/engine/integrate.js`, merge ~83 and revert ~216; `engine/lib/engine/cli.js`, the `SUBS` list ~22 gains the merge entry; the `Engine-Step` check is `engine/lib/engine/steps.js:74`; Task 1's note, Task 10, confirms), `engine/lib/improve.js` (protected-path check, reads `docs/superpowers/improve/protected.txt`)
 
 **Constraints:**
 - The loop builds the commit on branch `improve/<id>` (from `main`, in a worktree under `${TC_STATE}/improve/<project>/wt/<id>`). Message `improve(<kind>): <id> <title>`, trailers `Proposal: <id>` and `Engine-Step: improve:<id>@<main sha>`. Path-scoped: the commit touches only the patch's target. It then asks the engine to merge it with one command (name it in the note, for example `tmux-ctl engine merge-branch improve/<id> --key improve:<id>@<sha> --proposal <id>`). The engine runs its merge step: a `steps` row kind `merge`, the live-checkout check (mid-change → the commit waits for the next tick, state unchanged), and the trailer check on resume (§10.4).
@@ -697,7 +725,7 @@ improve_main() {
 **Verify:** `python3 -m unittest board.tests.test_improve_apply -v && (cd engine && node --test test/improve_merge.test.js)` → `OK` and `# fail 0`
 
 ```json:metadata
-{"files": ["board/improve_apply.py", "board/improve.py", "engine/lib/improve.js", "board/tests/test_improve_apply.py", "engine/test/improve_merge.test.js"], "verifyCommand": "python3 -m unittest board.tests.test_improve_apply -v && (cd engine && node --test test/improve_merge.test.js)", "acceptanceCriteria": ["one improve commit with Proposal and Engine-Step trailers, path-scoped, no duplicate on re-run", "engine merge refuses protected paths unless promoted and not protected", "revert: one commit, refuses no commit / protected", "retire + revert byte-identical", "drafted spec only on improve/<id>", "live checkout mid-change waits"], "modelTier": "frontier"}
+{"files": ["board/improve_apply.py", "board/improve.py", "engine/lib/improve.js", "engine/lib/engine/integrate.js", "engine/lib/engine/cli.js", "board/tests/test_improve_apply.py", "engine/test/improve_merge.test.js"], "verifyCommand": "python3 -m unittest board.tests.test_improve_apply -v && (cd engine && node --test test/improve_merge.test.js)", "acceptanceCriteria": ["one improve commit with Proposal and Engine-Step trailers, path-scoped, no duplicate on re-run", "engine merge refuses protected paths unless promoted and not protected", "revert: one commit, refuses no commit / protected", "retire + revert byte-identical", "drafted spec only on improve/<id>", "live checkout mid-change waits"], "modelTier": "frontier"}
 ```
 
 ---
@@ -708,7 +736,7 @@ improve_main() {
 
 **Files:**
 - Create: `engine/test/improve_holds.test.js`
-- Modify: `engine/lib/improve.js`, the engine's hold defaults, report writer and install/schedule setup (files in Task 1's note, Task 11)
+- Modify: `engine/lib/improve.js`, the engine's hold defaults, report writer and install/schedule setup (files in Task 1's note, Task 11). At main 0af42b5 the report writer is the `queue_report` step (`engine/lib/engine/core.js:1234`, `engine/lib/engine/queue_report.js`); hold defaults and the schedule setup do not exist yet (engine §13/§14, stage 7), which is why Task 1 stops the plan until they do.
 
 **Constraints:**
 - Hold (§13, spec §6): the engine's default hold list gains, for each line of `protected.txt` (except `~/` lines, which become an absolute-path pattern, and `bin/tmux-ctl#improve`, which becomes `bin/tmux-ctl`), a `{"tool": "Write|Edit", "pattern": <regex of the glob>, "outside_worktree": false}`. Patterns are built when the hold hook loads, from the file on `main`.
@@ -726,7 +754,7 @@ improve_main() {
 **Verify:** `(cd engine && node --test test/improve_holds.test.js) && test "$(grep -c improve claude/plugin/hooks/hooks.json)" = 0 && grep -c stop_hook_active board/improve.py` → `# fail 0`, then `1` or more
 
 ```json:metadata
-{"files": ["engine/lib/improve.js", "engine/test/improve_holds.test.js", "board/improve.py"], "verifyCommand": "(cd engine && node --test test/improve_holds.test.js) && test \"$(grep -c improve claude/plugin/hooks/hooks.json)\" = 0 && grep -c stop_hook_active board/improve.py", "acceptanceCriteria": ["Edit of a protected path held; other paths not", "improve schedule row weekly Sun 08:00, idempotent install", "one schedule inbox row per report date", "85% weekly usage skips with an event", "no improve Stop hook; R3 rule in improve.py docstring"], "modelTier": "frontier"}
+{"files": ["engine/lib/improve.js", "engine/lib/engine/core.js", "engine/lib/engine/queue_report.js", "engine/test/improve_holds.test.js", "board/improve.py"], "verifyCommand": "(cd engine && node --test test/improve_holds.test.js) && test \"$(grep -c improve claude/plugin/hooks/hooks.json)\" = 0 && grep -c stop_hook_active board/improve.py", "acceptanceCriteria": ["Edit of a protected path held; other paths not", "improve schedule row weekly Sun 08:00, idempotent install", "one schedule inbox row per report date", "85% weekly usage skips with an event", "no improve Stop hook; R3 rule in improve.py docstring"], "modelTier": "frontier"}
 ```
 
 ---
@@ -773,8 +801,9 @@ improve_main() {
 - [ ] README section names: `tmux-ctl improve outcome status|list|show|propose|revert|tick`, the protected file `docs/superpowers/improve/protected.txt`, the outcome files `docs/superpowers/outcomes/`, and the rule "learning is cheap, changing behaviour needs evidence, changing authority needs approval".
 - [ ] `zsh bin/tmux-ctl help | grep -c improve` ≥ 1.
 - [ ] `zsh tools/tests/all.zsh --list | grep -c improve` ≥ 1.
+- [ ] The help header still ends `…registry|engine <sub> …` / `…metrics <sub> …` / `#`, and `python3 -m unittest board.tests.test_metrics_weekly.HelpTest` passes (it pins the `metrics <sub>` line as the last line of the printed range and the range end on the header's `#` line).
 
-**Verify:** `zsh bin/tmux-ctl help | grep -c improve; zsh tools/tests/all.zsh --list | grep -c improve; grep -c 'protected.txt' README.md` → each ≥ 1
+**Verify:** `zsh bin/tmux-ctl help | grep -c improve; zsh tools/tests/all.zsh --list | grep -c improve; grep -c 'protected.txt' README.md; python3 -m unittest board.tests.test_metrics_weekly.HelpTest` → each count ≥ 1, then `OK`
 
 **Steps:**
 
@@ -791,18 +820,18 @@ of the engine-run specs, keeps or reverts low ones by the metrics decision rule 
 `docs/superpowers/improve/protected.txt`. Commands: `tmux-ctl improve outcome status|list|show|propose|revert|tick`.
 ```
 
-- [ ] **Step 2:** In `bin/tmux-ctl`'s help header (the lines `sed -n '2,85p'` prints), add after the `metrics` line, in the same comment style:
+- [ ] **Step 2:** In `bin/tmux-ctl`'s help header (the lines `sed -n '2,85p'` prints, at line ~857), add this line directly **above** the `#   tmux-ctl registry|engine <sub> …` line (line 83 at main 0af42b5), in the same comment style:
 
 ```
-#   improve outcome status|list|show|propose|revert|tick   the supervised improvement loop (board/improve.py)
+#   tmux-ctl improve outcome status|list|show|propose|revert|tick   the supervised improvement loop (board/improve.py)
 ```
 
-  Check that the help range still covers it (`sed -n '2,85p'`; widen the range if the line falls past 85).
+  Not after the `metrics` line: `board/tests/test_metrics_weekly.py` `HelpTest` requires `#   tmux-ctl metrics <sub>` to stay the last line before the header's `#` line. The header grows by one line, so change `sed -n '2,85p'` to `sed -n '2,86p'`, then check `sed -n '86p' bin/tmux-ctl` prints `#` and `sed -n '87p' bin/tmux-ctl` starts `# send/run only type`.
 - [ ] **Step 3:** Confirm `zsh tools/tests/all.zsh --list | grep improve` lists `zsh/test_ctl_improve.zsh` and the `board/test_improve_*` jobs.
 - [ ] **Step 4:** Run Verify; **commit** `docs(improve): README, help, all.zsh job`.
 
 ```json:metadata
-{"files": ["README.md", "bin/tmux-ctl"], "verifyCommand": "zsh bin/tmux-ctl help | grep -c improve; zsh tools/tests/all.zsh --list | grep -c improve; grep -c 'protected.txt' README.md", "acceptanceCriteria": ["README section with commands, protected.txt, outcomes dir, the rule", "tmux-ctl help lists improve", "all.zsh --list shows the improve jobs (auto-discovered)"], "modelTier": "mechanical"}
+{"files": ["README.md", "bin/tmux-ctl"], "verifyCommand": "zsh bin/tmux-ctl help | grep -c improve; zsh tools/tests/all.zsh --list | grep -c improve; grep -c 'protected.txt' README.md; python3 -m unittest board.tests.test_metrics_weekly.HelpTest", "acceptanceCriteria": ["README section with commands, protected.txt, outcomes dir, the rule", "tmux-ctl help lists improve", "all.zsh --list shows the improve jobs (auto-discovered)", "help line above registry|engine, range 2,86p, metrics <sub> still last; HelpTest passes"], "modelTier": "mechanical"}
 ```
 
 ---
