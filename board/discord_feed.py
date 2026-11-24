@@ -669,7 +669,9 @@ def tick(project, record, root, now, lead_tasks=None, list_id="", live=None, lim
 
 # ---- board wiring: the notifier's sink, the channel check ----
 NOTIFY_TIERS = {"needs_you": "decision", "test_failed": "critical", "failing": "critical", "stuck": "critical",
-                "plan_done": "progress", "lead_idle": "routine", "context": "routine", "usage": "routine"}
+                "plan_done": "progress", "lead_idle": "routine", "context": "routine", "usage": "routine",
+                "teammate_gone": "critical", "teammate_silent": "critical", "awake_dropped": "critical", "weekly_pace": "critical",
+                "watch": "critical"}
 
 
 def channel_of(project):

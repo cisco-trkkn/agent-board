@@ -11,14 +11,18 @@ import sys
 import time
 from collections import deque
 
-KINDS = ("needs_you", "plan_done", "test_failed", "lead_idle", "context", "usage", "failing", "stuck")
+KINDS = ("needs_you", "plan_done", "test_failed", "lead_idle", "context", "usage", "failing", "stuck",
+         "teammate_gone", "teammate_silent", "awake_dropped", "weekly_pace")
 RATE_S = 300      # at most one event of a kind per project in this window
 IDLE_S = 900      # a lead idle this long with open tasks is event 4
 USAGE_KINDS = ("burn", "total", "day_total")
+SILENT_S = 1800   # a teammate at its prompt this long with its task in progress (night watch, queue mode only)
+PACE_MARGIN = 15  # weekly usage this many points above the elapsed share of the week (night watch, queue mode only)
 
 
-def conditions(ov):
-    """Every condition true in one overview: [{project, kind, key, title, text}]. Deterministic order."""
+def conditions(ov, queue_before=frozenset()):
+    """Every condition true in one overview: [{project, kind, key, title, text}]. Deterministic order.
+    queue_before: the project names in queue mode in the previous overview (awake_dropped needs it: one-overview grace)."""
     out = []
 
     def add(project, kind, key, title, text):
@@ -39,6 +43,8 @@ def conditions(ov):
         idle = lead.get("idle_s")
         if lead.get("status") == "ready" and idle is not None and idle >= IDLE_S and total and done < total:
             add(name, "lead_idle", "lead", f"{name}: lead idle", f"idle {idle // 60} min with {total - done} open task{'s' if total - done != 1 else ''}")
+        if p.get("queue"):
+            _watch_conditions(p, add, name in queue_before)
         for a in p.get("alerts") or []:
             who = a.get("session") or name
             if a.get("kind") == "context":
@@ -52,6 +58,25 @@ def conditions(ov):
             elif a.get("kind") in USAGE_KINDS:
                 add(name, "usage", f"{a['kind']}:{who}", f"{name}: high usage", f"{who} {a.get('label', '')}".strip())
     return out
+
+
+def _watch_conditions(p, add, queue_before):
+    """The night watch kinds for a project in queue mode (spec 2026-11-23-night-watch-design.md §2)."""
+    name = p["project"]
+    for o in p.get("owned") or []:
+        owner, tid = o["owner"], o["task"]
+        if not o.get("window") or o.get("dead"):
+            why = "window is gone" if not o.get("window") else "pane is dead"
+            add(name, "teammate_gone", owner, f"{name}: teammate gone", f"teammate {owner} {why} (task #{tid} in progress)")
+        elif o.get("ready_s") is not None and o["ready_s"] >= SILENT_S:
+            add(name, "teammate_silent", owner, f"{name}: teammate silent",
+                f"teammate {owner} has been idle {o['ready_s'] // 60} min with task #{tid} in progress")
+    if not p.get("awake") and queue_before:
+        add(name, "awake_dropped", "awake", f"{name}: awake hold dropped", "the queue runs with no live keep-awake hold")
+    pace = p.get("pace")
+    if pace and pace["used"] - pace["elapsed"] > PACE_MARGIN:
+        add(name, "weekly_pace", "seven_day", f"{name}: weekly usage ahead of pace",
+            f"weekly usage {pace['used']:g}% with {pace['elapsed']:g}% of the week gone")
 
 
 def _esc(s):
@@ -85,13 +110,14 @@ class Notifier:
         self.events = deque(maxlen=keep)
         self._active = set()        # (project, kind, key) true in the last overview
         self._projects = None       # projects seen in the last overview; None before the first
+        self._queue = frozenset()   # projects in queue mode in the last overview (awake_dropped grace)
         self._last = {}             # (project, kind) -> ts of the last event emitted
         self._seq = 0
 
     def observe(self, ov):
         """Compare one overview with the previous; return the events emitted (also appended to .events)."""
         now = self.now()
-        cur = {(c["project"], c["kind"], c["key"]): c for c in conditions(ov)}
+        cur = {(c["project"], c["kind"], c["key"]): c for c in conditions(ov, self._queue)}
         events = []
         for k in sorted(set(cur) - self._active):
             c = cur[k]
@@ -105,6 +131,7 @@ class Notifier:
             events.append({"id": self._seq, "ts": now, **c})
         self._active = set(cur)
         self._projects = {p["project"] for p in ov.get("projects") or []}
+        self._queue = frozenset(p["project"] for p in ov.get("projects") or [] if p.get("queue"))
         for ev in events:
             self.events.append(ev)
             if self.enabled:
