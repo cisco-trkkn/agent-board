@@ -119,6 +119,12 @@ const CHECKS = {
   revert: (ctx, row) => engineStepCommit(ctx, row.key),
   commit_report: (ctx, row) => engineStepCommit(ctx, row.key),
   commit_ledger: (ctx, row) => engineStepCommit(ctx, row.key, row.result || {}),
+  // a report that exists at the path the step recorded was made: the hook is not run again
+  queue_report(ctx, row) {
+    const f = row.result || {};
+    if (typeof f.path !== "string" || !f.path) return "not_done";
+    try { return fs.existsSync(path.resolve(ctx.repo || ".", f.path)) ? "done" : "not_done"; } catch (_) { return "unknown"; }
+  },
   metrics_start: metricsHas("start"),
   metrics_record: metricsHas("run"),
   // the owners of these steps (tasks 4 and 9) have no check yet: an unfinished row is unknown, and fails

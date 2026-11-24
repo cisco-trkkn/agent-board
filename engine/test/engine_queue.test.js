@@ -572,7 +572,7 @@ test("lead.publish: the five texts, a torn last line, and a file from another da
 
 // ---- the shared predicate (R12) ----------------------------------------------------------------------------------
 
-// Mutations: "a parked-failed spec counts as open" -> the d.md assertion; "only open specs count" -> the kill after the
+// Mutations: "a parked-failed spec counts as open" -> the d.md assertion; "answers ignored" -> the stored-answer and inbox assertions; "only open specs count" -> the kill after the
 // last done; "any spec_added opens a queue" -> the engine-run-only database.
 test("queue.unfinished: open specs, or a queued spec added after the last queue_finished; an engine-run-only database is finished", (t) => {
   const env = tmpEnv();
@@ -593,6 +593,16 @@ test("queue.unfinished: open specs, or a queued spec added after the last queue_
   add("d.md", 4, "awaiting_you", "failed — awaiting you: q");
   assert.deepEqual(queue.unfinished(d), ["a.md", "b.md"]);
   add("e.md", 5, "awaiting_you");
+  // a parked-failed spec whose answer is waiting (stored on its wait, or a signal still in the inbox) is unfinished
+  d.prepare("INSERT INTO waits(id, spec, question, asked_at, answered_at, answer) VALUES('d.md@1','d.md','q',1,2,'approve')").run();
+  assert.deepEqual(queue.unfinished(d), ["a.md", "b.md", "d.md", "e.md"], "a stored answer");
+  d.prepare("DELETE FROM waits WHERE spec='d.md'").run();
+  d.prepare("INSERT INTO waits(id, spec, question, asked_at) VALUES('d.md@1','d.md','q',1)").run();
+  assert.deepEqual(queue.unfinished(d), ["a.md", "b.md", "e.md"], "an open wait with no answer");
+  inbox.insert(d, { source: "user", source_id: "s1", spec: "d.md", kind: "signal", payload: { answer: "approve", note: null } }, 3);
+  assert.deepEqual(queue.unfinished(d), ["a.md", "b.md", "d.md", "e.md"], "a signal in the inbox");
+  d.prepare("DELETE FROM inbox").run();
+  d.prepare("DELETE FROM waits WHERE spec='d.md'").run();
   assert.deepEqual(queue.unfinished(d), ["a.md", "b.md", "e.md"]);
   assert.equal(queue.pendingEnqueue(d), 0);
   queue.enqueue(d, "f.md", { runner: "lead", batch: "b1" }, 1);

@@ -7,7 +7,12 @@ const lead = require("./lead");
 
 // A spec that still needs the engine: not done, and not a parked spec the end of a queue already failed (it keeps its
 // wait and resumes on a signal: spec section 11).
-const OPEN = "state!='done' AND NOT (state='awaiting_you' AND outcome IS NOT NULL)";
+// One that has an answer waiting (stored on its wait with no new open wait, or a signal still in the inbox) is open:
+// the restore path must apply it.
+const OPEN = "state!='done' AND NOT (state='awaiting_you' AND outcome IS NOT NULL" +
+  " AND NOT EXISTS (SELECT 1 FROM inbox i WHERE i.spec=specs.id AND i.kind='signal' AND i.state='new')" +
+  " AND (EXISTS (SELECT 1 FROM waits w WHERE w.spec=specs.id AND w.answered_at IS NULL)" +
+  " OR NOT EXISTS (SELECT 1 FROM waits w WHERE w.spec=specs.id AND w.answered_at IS NOT NULL)))";
 const openSpecs = (db) => db.prepare(`SELECT id FROM specs WHERE ${OPEN} ORDER BY position, created_at`).all().map((r) => r.id);
 
 // The spec ids of an unfinished queue, in queue order; [] when there is none. One predicate for `status --unfinished`,

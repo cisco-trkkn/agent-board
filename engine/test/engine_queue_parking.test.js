@@ -15,6 +15,7 @@ const fake = require("../lib/engine/backend/fake");
 const inbox = require("../lib/engine/inbox");
 const rebuild = require("../lib/engine/rebuild");
 const queue = require("../lib/engine/queue");
+const steps = require("../lib/engine/steps");
 
 const ENGINE = path.resolve(__dirname, "../bin/engine.js");
 const spec = (name) => `docs/superpowers/specs/2026-01-01-${name}-design.md`;
@@ -59,7 +60,7 @@ function mkq(t, o = {}) {
   const backend = { ...inner, start: (job) => { cur = String(job.id).split(":")[0]; return inner.start(job); } };
   const finals = [];
   const eng = core.start({
-    project: "demo", repo: wt, backend, now: () => clock.t, tmuxCtl: ctl, report: o.report,
+    project: "demo", repo: wt, backend, now: () => clock.t, tmuxCtl: ctl, report: o.report, reportPath: o.reportPath,
     integrate: async (s) => ({ outcome: `kept ${s.branch}` }), revert: async () => {}, finalize: async (s, outcome) => { finals.push([s.id, outcome]); },
     tell: () => {}, notify: () => {}, transcriptRoot: path.join(env.root, "transcripts"), sleep: async () => { clock.t += 5; },
   });
@@ -200,7 +201,7 @@ test("the end of the queue: an unanswered parked spec is failed with its wait ke
   assert.ok(h.seq("spec_done", S2) < h.seq("parked_failed", S1) && h.seq("parked_failed", S1) < h.of("queue_finished")[0].seq);
   const rec = () => h.ctlLog().filter((l) => l.startsWith(`metrics record ${S1} --batch b1 --outcome failed — awaiting you: user gate: task 1 T1 --budget `));
   assert.equal(rec().length, 1);
-  const step = h.eng.db.prepare("SELECT * FROM steps WHERE key=?").get(`metrics_record:${S1}:parked`);
+  const step = h.eng.db.prepare("SELECT * FROM steps WHERE key=?").get(`metrics_record:${S1}:parked:${h.wait(S1).id}`);
   assert.deepEqual([step.kind, step.state], ["metrics_record_parked", "done"]);
   assert.deepEqual(queue.unfinished(h.eng.db), [], "the queue has finished");
   assert.deepEqual(h.texts(), [`[Engine] awaiting you: ${S1}: user gate: task 1 T1`, "[Engine] queue finished: (no report)"]);
@@ -229,6 +230,73 @@ test("the report hook's path is the queue_finished event's report and the lead l
   assert.equal(h.of("queue_finished")[0].detail.report, "docs/superpowers/reports/2026-01-01-queue.md");
   assert.deepEqual(h.texts(), ["[Engine] queue finished: docs/superpowers/reports/2026-01-01-queue.md"]);
   assert.ok(h.seq("spec_done", S1) < h.of("queue_finished")[0].seq);
+});
+
+// I1. Mutation: "drop the catch around the report hook" -> the engine halts, no queue_finished, start exits 1 (this test fails).
+test("a report hook that throws: report_failed with its first line, then queue_finished with no report, and the loop returns 0", async (t) => {
+  const h = mkq(t, { specs: { one: {} }, report: async () => { throw new Error("disk full\nsecond line"); } });
+  h.enqueue("one");
+  assert.equal(await h.run(), 0);
+  assert.ok(!h.eng.halted);
+  assert.equal(h.of("report_failed").length, 1);
+  assert.equal(h.of("report_failed")[0].detail.error, "disk full");
+  assert.deepEqual(h.of("queue_finished").map((e) => e.detail.report), [null]);
+  assert.ok(h.seq("report_failed") < h.seq("queue_finished"));
+  assert.deepEqual(h.texts(), ["[Engine] queue finished: (no report)"]);
+  const row = h.eng.db.prepare("SELECT kind, state FROM steps WHERE kind='queue_report'").get();
+  assert.equal(row.state, "failed");
+  assert.equal(await h.run(), 0, "a restart adds nothing");
+  assert.equal(h.of("queue_finished").length, 1);
+});
+
+// I1. Mutation: "the queue_report check answers not_done" -> the hook is called a second time.
+test("a kill between the report hook and queue_finished: after the restart one queue_finished, and a report that exists is not made again", async (t) => {
+  let calls = 0;
+  const rel = "docs/superpowers/reports/2026-01-01-queue.md";
+  const h = mkq(t, { specs: { one: {} }, reportPath: () => rel, report: async () => { calls++; return rel; } });
+  h.enqueue("one");
+  await h.until(() => h.done(S1), "the spec done");
+  // the state a kill leaves: the step at intent, the report written, no queue_finished
+  steps.begin(h.eng.db, { key: "queue_report:0", spec: null, kind: "queue_report", facts: { path: rel } }, { now: () => h.clock.t });
+  fs.mkdirSync(path.dirname(path.join(h.wt, rel)), { recursive: true });
+  fs.writeFileSync(path.join(h.wt, rel), "# report\n");
+  await h.eng.resume();
+  assert.equal(await h.run(), 0);
+  assert.equal(calls, 0, "the hook was not called");
+  assert.deepEqual(h.of("queue_finished").map((e) => e.detail.report), [rel]);
+  assert.equal(await h.run(), 0);
+  assert.equal(h.of("queue_finished").length, 1);
+});
+
+// I1. Mutation: "an intent row whose report is missing is failed instead of run again" -> the hook is not called.
+test("a kill between the report hook's start and its report: the hook runs again", async (t) => {
+  let calls = 0;
+  const rel = "docs/superpowers/reports/2026-01-01-queue.md";
+  const h = mkq(t, { specs: { one: {} }, reportPath: () => rel, report: async () => { calls++; return rel; } });
+  h.enqueue("one");
+  await h.until(() => h.done(S1), "the spec done");
+  steps.begin(h.eng.db, { key: "queue_report:0", spec: null, kind: "queue_report", facts: { path: rel } }, { now: () => h.clock.t });
+  await h.eng.resume();
+  assert.equal(await h.run(), 0);
+  assert.equal(calls, 1);
+  assert.deepEqual(h.of("queue_finished").map((e) => e.detail.report), [rel]);
+});
+
+// Minor 1. Mutation: "key the parked record per spec" -> one call, with the first park's question.
+test("a spec parked twice is recorded once per wait, the last record carrying the second park's outcome", async (t) => {
+  const h = mkq(t, { specs: { one: { tasks: [task({ userGate: true }), task({ userGate: true })] } } });
+  h.enqueue("one");
+  assert.equal(await h.run(), 0);
+  const first = h.wait(S1);
+  const rec = () => h.ctlLog().filter((l) => l.startsWith(`metrics record ${S1} --batch b1 --outcome failed — awaiting you: `));
+  assert.equal(rec().length, 1);
+  assert.deepEqual(h.signal(S1), { rc: 0 });
+  assert.equal(await h.run(), 0);
+  const second = h.wait(S1);
+  assert.ok(second && second.id !== first.id, "parked again on a new wait");
+  assert.equal(rec().length, 2);
+  assert.ok(rec()[0].includes(first.question) && rec()[1].includes(second.question), rec().join("\n"));
+  assert.notEqual(first.question, second.question);
 });
 
 // Mutation: "parked_failed closes the wait" -> the answer 26 hours later finds no open wait (signal rc 2).

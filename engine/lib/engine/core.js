@@ -40,7 +40,7 @@ const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
 const INPUTS = ["spec_started", "stale_result", "job_done", "job_failed", "check_result", "architect_decision", "integrated", "signal"];
 const PK = { specs: "id", jobs: "id", steps: "key", timers: "id", waits: "id", retry_policies: "kind", inbox: "id" };
 const MY_STEPS = ["check", "stale_check", "integrate"];
-const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report", "commit_report", "metrics_record_parked"]; // measurement and notices
+const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report", "commit_report", "metrics_record_parked", "queue_report"]; // measurement and notices
 const WORKER_KINDS = ["refresh", "implement", "fix", "fix_wave"];
 const RETRY_ALIAS = { fix_wave: "fix", re_review: "final_review" };
 const BLOCKING = ["critical", "important"];
@@ -1206,7 +1206,7 @@ function start(opts) {
       const outcome = `failed — awaiting you: ${wait.question}`;
       if (spec.batch !== null && spec.batch !== undefined && spec.batch !== "") {
         try {
-          steps.run(db, { key: `metrics_record:${spec.id}:parked`, spec: spec.id, kind: "metrics_record_parked", facts: { spec: spec.id, batch: spec.batch } }, () => {
+          steps.run(db, { key: `metrics_record:${spec.id}:parked:${wait.id}`, spec: spec.id, kind: "metrics_record_parked", facts: { spec: spec.id, batch: spec.batch } }, () => {
             const r = cp.spawnSync(tmuxCtl, realIntegrate.metricsRecordArgv({ db, repo }, spec, outcome), { cwd: repo, env, encoding: "utf8", timeout: 60000 });
             if (r.error || r.status !== 0) throw new Error(`metrics record: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
             return { spec: spec.id, batch: spec.batch, outcome };
@@ -1214,6 +1214,31 @@ function start(opts) {
         } catch (_) { /* recorded as a failed step */ }
       }
       emit("parked_failed", { spec: spec.id, rows: [["specs", { ...spec, outcome, updated_at: now() }]], question: wait.question, outcome, text: outcome });
+    }
+  }
+
+  // The report hook is a step keyed per queue end, and never blocks it: a failure is a report_failed event and a
+  // queue_finished with no report. A step left at intent was checked on resume (a report that exists is used); else
+  // the hook runs again, and it must be idempotent.
+  async function queueReport() {
+    if (!opts.report) return null;
+    const fin = db.prepare("SELECT MAX(seq) AS s FROM events WHERE kind='queue_finished'").get().s || 0;
+    const key = `queue_report:${fin}`;
+    const have = steps.getRow(db, key);
+    if (have && have.state === "done") return (parse(have.result) || {}).path || null;
+    const ctx = { db, repo, project, tmuxCtl, env, now };
+    const desc = { key, spec: null, kind: "queue_report" };
+    try {
+      steps.begin(db, { ...desc, facts: { path: typeof opts.reportPath === "function" ? opts.reportPath(ctx) : null } }, { now });
+      const out = await opts.report(ctx);
+      const p = typeof out === "string" && out ? out : null;
+      steps.finish(db, desc, { path: p }, { now });
+      return p;
+    } catch (e) {
+      const msg = String((e && e.message) || e).split("\n")[0];
+      try { steps.fail(db, steps.getRow(db, key) || desc, msg, { now }); } catch (_) { /* the event below is the record */ }
+      emit("report_failed", { error: msg, text: `report failed: ${msg}` });
+      return null;
     }
   }
 
@@ -1304,8 +1329,8 @@ function start(opts) {
         if (!atEnd()) return false;
         failParked();
         if (queueOpen()) {
-          const report = opts.report ? await opts.report({ db, repo, project, tmuxCtl, env, now }) : null;
-          emit("queue_finished", { report: typeof report === "string" && report ? report : null, text: typeof report === "string" && report ? report : "no report" });
+          const report = await queueReport();
+          emit("queue_finished", { report, text: report || "no report" });
         }
         return true;
       } catch (e) {
