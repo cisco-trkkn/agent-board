@@ -248,7 +248,16 @@ function cmdStatus(args, io) {
   try {
     if (p.flags.waiting) {
       const rows = d.prepare("SELECT w.*, s.state AS spec_state FROM waits w JOIN specs s ON s.id=w.spec WHERE w.answered_at IS NULL AND s.state='awaiting_you' ORDER BY w.asked_at").all();
-      if (!rows.length) { io.out("nothing is waiting"); return 0; }
+      // a held answer closed its wait (R18): the spec is still parked, with nothing left to answer
+      const held = d.prepare("SELECT s.id, (SELECT answer FROM waits w WHERE w.spec=s.id ORDER BY asked_at DESC, rowid DESC LIMIT 1) AS answer, " +
+        "(SELECT note FROM waits w WHERE w.spec=s.id ORDER BY asked_at DESC, rowid DESC LIMIT 1) AS note FROM specs s " +
+        "WHERE s.state='awaiting_you' AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.spec=s.id AND w.answered_at IS NULL) ORDER BY s.position, s.created_at").all()
+        .filter((h) => h.answer !== null);
+      if (!rows.length && !held.length) { io.out("nothing is waiting"); return 0; }
+      for (const h of held) {
+        io.out(h.id);
+        io.out(`  answer held: ${h.answer}${h.note ? ` (${h.note})` : ""}`);
+      }
       for (const w of rows) {
         io.out(w.spec);
         let rec = null;
@@ -301,6 +310,22 @@ function cmdEvents(args, io) {
 
 // ---- resume, signal, rebuild -----------------------------------------------------------------------------------
 
+// The foreground loop of `engine start` and `engine resume`: resume (spec section 9), then tick until nothing is
+// runnable. The lead lines are published after every tick. Resolves to queue.run's code.
+async function runLoop(eng, project) {
+  const stop = () => { eng.stop(); process.exit(130); };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    lead.begin(project, eng.db); // before resume and the first drain: nothing older than this start becomes a lead line
+    await eng.resume();
+    return await queue.run(eng, { project });
+  } finally {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+  }
+}
+
 async function cmdResume(args, io) {
   const p = parseArgs(args);
   if (p.error || p.pos.length) { io.err(`engine: resume: ${p.error || "usage: engine resume [--project P] [--backend claude-tmux|fake]"}\n`); return 2; }
@@ -324,9 +349,18 @@ async function cmdResume(args, io) {
       io.out(`reconciled ${intents} step(s)`);
       return 0;
     }
-    await eng.resume(); // spec section 9: intent steps, due timers, inbox, policy, then running jobs (the ticks that follow)
-    let rc = 0;
-    for (const s of open) if ((await runSpec(eng, s.id, io)) !== 0) rc = 1;
+    // the queue's loop: every runnable spec goes to its outcome; a parked spec nobody answered is left waiting
+    let rc = await runLoop(eng, project);
+    for (const s of open) {
+      const cur = eng.db.prepare("SELECT state, outcome FROM specs WHERE id=?").get(s.id);
+      if (cur.state === "done") {
+        io.out(`outcome: ${cur.outcome}`);
+        if (!OK_OUTCOME.test(String(cur.outcome))) rc = 1;
+      } else {
+        const w = inbox.openWaitFor(eng.db, s.id);
+        io.out(cur.state === "awaiting_you" && w ? `awaiting you: ${s.id}: ${w.question}` : `${s.id}: ${cur.state}`);
+      }
+    }
     return rc;
   } finally {
     eng.stop();
@@ -396,9 +430,10 @@ function cmdEnqueue(args, io) {
   return 0;
 }
 
-// --preflight: 0 when the lock is free and there is something to run (R12: the --unfinished predicate, or a new enqueue row).
+// --preflight: 0 when the lock is free and there is something to run (R12: the --unfinished predicate, or a new enqueue
+// row); 4 when an engine already runs (R5: for the caller that is as good as started); 1 with nothing to do.
 function preflight(project, io) {
-  if (engineRunning(project)) { io.err(`engine: start: an engine is already running for ${project}\n`); return 1; }
+  if (engineRunning(project)) { io.err(`engine: start: an engine is already running for ${project}\n`); return START_RUNNING; }
   let todo = false;
   if (dbExists(project)) {
     const d = db.open(project);
@@ -418,22 +453,15 @@ async function cmdStart(args, io) {
   if (engineRunning(project)) return running();
   const repo = mainRoot(git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd);
   let eng;
-  try { eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || "claude-tmux", { queue: true }); } catch (e) {
+  try { eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || "claude-tmux"); } catch (e) {
     if (/^engine already running/.test(String(e && e.message))) return running(); // another start took the lock in between
     throw e;
   }
-  const stop = () => { eng.stop(); process.exit(130); };
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
   try {
-    lead.begin(project, eng.db); // before resume and the first drain: nothing older than this start becomes a lead line
-    await eng.resume(); // spec section 9; the ticks of the loop do the rest
-    const rc = await queue.run(eng, { project });
+    const rc = await runLoop(eng, project);
     io.out(rc === 0 ? "queue finished" : "engine stopped: tmux-ctl engine start continues it");
     return rc;
   } finally {
-    process.removeListener("SIGINT", stop);
-    process.removeListener("SIGTERM", stop);
     eng.stop();
   }
 }

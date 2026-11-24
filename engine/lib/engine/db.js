@@ -49,8 +49,8 @@ function migrate(db) {
 function open(project) {
   fs.mkdirSync(path.dirname(paths.dbPath(project)), { recursive: true });
   const db = new DatabaseSync(paths.dbPath(project));
+  db.exec("PRAGMA busy_timeout=5000"); // first: the statements below already wait for another connection's lock
   db.exec("PRAGMA journal_mode=WAL");
-  db.exec("PRAGMA busy_timeout=5000");
   db.exec(SCHEMA);
   migrate(db);
   return db;

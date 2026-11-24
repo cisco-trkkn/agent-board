@@ -23,7 +23,6 @@ function unfinished(db) {
 }
 
 const pendingEnqueue = (db) => db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE state='new' AND source='user' AND kind='enqueue'").get().n;
-const pendingRows = (db) => db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE state='new'").get().n;
 
 // `engine enqueue`: one inbox row; the same spec and batch twice is one row. The core turns it into the spec when drained.
 function enqueue(db, spec, payload, now) {
@@ -40,20 +39,27 @@ function done(db, spec, outcome, now) {
 
 // One tick, then the lead lines of whatever it wrote. A line that cannot be appended now is appended after a later
 // tick (the cursor is the file itself); each failure is one stderr line.
-async function step(eng, project, err = (s) => process.stderr.write(s)) {
-  await eng.tick();
+async function publish(eng, project, err = (s) => process.stderr.write(s)) {
   try { lead.publish(project, eng.db); } catch (e) {
     try { err(`engine: lead lines: ${String((e && e.message) || e).split("\n")[0]}\n`); } catch (_) { /* stderr is gone */ }
   }
 }
+async function step(eng, project, err) {
+  await eng.tick();
+  await publish(eng, project, err);
+}
 
-// The loop of `engine start`: ticks until no spec is open and the inbox is empty (0), or the engine stopped on an
-// internal error (1).
+// The loop of `engine start` and `engine resume`: ticks until nothing is runnable and the core has written the queue's
+// end (0), or the engine stopped on an internal error (1).
 async function run(eng, { project }) {
   for (;;) {
     await step(eng, project);
     if (eng.halted) return 1;
-    if (!pendingRows(eng.db) && !openSpecs(eng.db).length) return 0;
+    if (await eng.finish()) {
+      await publish(eng, project); // the queue finished line
+      return 0;
+    }
+    if (eng.halted) { await publish(eng, project); return 1; }
     await eng.wait();
   }
 }

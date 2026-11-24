@@ -161,7 +161,9 @@ test("a queue of an engine, a lead and a gated spec runs in order: kept, engine 
   assert.deepEqual([gate.gate, gate.rc, gate.line], ["K9", 1, GATE_LINE]);
   assert.equal(p.read((x) => x.prepare("SELECT policy_version FROM specs WHERE id=?").get(SPEC_L).policy_version), null, "R7: a lead-run spec has no policy version");
   // the lead-lines file: your turn once, at its event's seq
-  assert.deepEqual(p.lines().map((l) => [l.seq, l.text]), [[seq("lead_turn", SPEC_L)[0], `[Engine] your turn: ${SPEC_L}`]]);
+  assert.deepEqual(p.lines().map((l) => [l.seq, l.text]), [[seq("lead_turn", SPEC_L)[0], `[Engine] your turn: ${SPEC_L}`],
+    [p.events("queue_finished")[0].seq, "[Engine] queue finished: (no report)"]]);
+  assert.ok(p.events("queue_finished")[0].seq > seq("fail_spec", SPEC_G)[0], "queue_finished is the queue's last event");
   assert.equal(typeof p.lines()[0].ts, "number");
   // metrics: start once, through the core's step, for the engine spec only (R17); the gate failure is recorded
   const log = p.ctlLog();
@@ -171,12 +173,8 @@ test("a queue of an engine, a lead and a gated spec runs in order: kept, engine 
   assert.equal(log.filter((l) => l.startsWith(`metrics record ${SPEC_G} --batch b1 --outcome failed — gate K9: `)).length, 1, log.join("\n"));
   assert.equal(log.filter((l) => l.startsWith(`metrics record ${SPEC_L} `)).length, 0, "the lead records its own spec");
   // afterwards
-  // every spec is done but no queue_finished follows them yet (the queue's end is written by the report step): the
-  // queue still counts as unfinished, so a restart finishes it; a queue_finished event closes it
-  const end = p.run(["status", "--unfinished"]);
-  assert.deepEqual([end.code, end.out.trim().split("\n")], [0, [SPEC_A, SPEC_L, SPEC_G]]);
-  assert.equal(p.run(["start", "--preflight"]).code, 0);
-  p.read((x) => db.event(x, { kind: "queue_finished", report: null }));
+  // the queue_finished event closed the queue
+  assert.equal(p.events("queue_finished").length, 1);
   const closed = p.run(["status", "--unfinished"]);
   assert.deepEqual([closed.code, closed.out], [1, ""]);
   assert.equal(p.run(["done", SPEC_L, "--outcome", "merged"]).code, 2, "the turn is over");
@@ -283,7 +281,7 @@ test("enqueue: no .tasks.json, no plan naming the spec, a missing spec file and 
 // ---- preflight ---------------------------------------------------------------------------------------------------
 
 // Mutation: "preflight skips the lock" -> exit 0 while another engine holds it.
-test("start --preflight: 1 while another engine holds the lock, 0 with a pending enqueue row, 1 with nothing to do", (t) => {
+test("start --preflight: 4 while another engine holds the lock, 0 with a pending enqueue row, 1 with nothing to do", (t) => {
   const p = project(t);
   const none = p.run(["start", "--preflight"]);
   assert.equal(none.code, 1);
@@ -291,8 +289,10 @@ test("start --preflight: 1 while another engine holds the lock, 0 with a pending
   assert.equal(p.enqueue(SPEC_L, "lead").code, 0);
   assert.deepEqual(((r) => [r.code, r.out, r.err])(p.run(["start", "--preflight"])), [0, "", ""]);
   fs.writeFileSync(path.join(p.env.engineDir, "demo.lock"), `${process.pid}\n`); // this test process is alive
+  // R5: an engine that already runs is exit 4 for the preflight too (the wrapper counts 0 and 4 as started).
+  // Mutation: "preflight answers 1 for a held lock" -> this assertion.
   const held = p.run(["start", "--preflight"]);
-  assert.equal(held.code, 1);
+  assert.equal(held.code, 4);
   assert.match(held.err, /^engine: start: an engine is already running/);
   assert.equal(held.err.trim().split("\n").length, 1);
   // R5. Mutation: "engine start leaves the held lock to the core's throw" -> exit 1.
@@ -330,7 +330,7 @@ test("engine start killed while a lead turn is open, then started again: no seco
   assert.equal(p.spec(SPEC_L).outcome, "merged abc1234");
   assert.equal(p.spec(SPEC_A).outcome, "kept spec-demo");
   assert.equal(p.events("lead_turn").length, 1);
-  assert.equal(p.lines().length, 1);
+  assert.deepEqual(p.lines().map((l) => l.text), [`[Engine] your turn: ${SPEC_L}`, "[Engine] queue finished: (no report)"]);
   assert.equal(p.run(["rebuild", "--check"]).code, 0);
 });
 
@@ -350,7 +350,7 @@ function mkq(t, o = {}) {
   const clock = { t: Date.UTC(2026, 0, 1, 20, 0, 0) / 1000 };
   const script = o.script || GOOD(1);
   const boot = () => core.start({
-    project: "demo", repo: wt, backend: fake.createBackend({ script, now: () => clock.t }), now: () => clock.t, tmuxCtl: ctl, queue: true,
+    project: "demo", repo: wt, backend: fake.createBackend({ script, now: () => clock.t }), now: () => clock.t, tmuxCtl: ctl,
     integrate: o.integrate || (async () => ({ outcome: "kept spec-demo" })), revert: async () => {}, finalize: async () => {},
     tell: () => {}, notify: () => {}, transcriptRoot: path.join(env.root, "transcripts"), sleep: async () => { clock.t += 5; },
   });

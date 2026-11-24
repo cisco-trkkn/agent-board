@@ -40,7 +40,7 @@ const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
 const INPUTS = ["spec_started", "stale_result", "job_done", "job_failed", "check_result", "architect_decision", "integrated", "signal"];
 const PK = { specs: "id", jobs: "id", steps: "key", timers: "id", waits: "id", retry_policies: "kind", inbox: "id" };
 const MY_STEPS = ["check", "stale_check", "integrate"];
-const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report", "commit_report"]; // measurement and notices
+const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report", "commit_report", "metrics_record_parked"]; // measurement and notices
 const WORKER_KINDS = ["refresh", "implement", "fix", "fix_wave"];
 const RETRY_ALIAS = { fix_wave: "fix", re_review: "final_review" };
 const BLOCKING = ["critical", "important"];
@@ -51,6 +51,7 @@ const STATUS_SHAPES = {
   reviewer: '{"verdict": "pass" | "findings", "findings": [{"severity": "critical" | "important" | "minor", "task": <n>, "text": "<text>"}]}',
 };
 const STOP = Symbol("stop drain");
+const ENDED_AT_PROMPT = ["worker_busy", "job_ended"]; // how a needs-you wait closes without the user
 const NOT_LEAD = "COALESCE(runner, 'engine') != 'lead'"; // a lead-run spec never reaches the strategy, a job or the policy check (R7)
 
 const parse = (s) => {
@@ -378,7 +379,7 @@ function start(opts) {
       const spec = get("specs", job.spec);
       const prev = (lastEvent(spec.id, "awaiting_you") || { detail: {} }).detail.prev_state || "running";
       rows.push(["waits", { ...wait, answered_at: t, answer: "job_ended", note: null }]);
-      if (spec.state === "awaiting_you") rows.push(["specs", { ...spec, state: prev, updated_at: t }]);
+      if (spec.state === "awaiting_you" && turnFreeFor(spec.id)) rows.push(["specs", { ...spec, state: prev, outcome: null, updated_at: t }]);
     }
     return { fields, rows };
   }
@@ -498,7 +499,8 @@ function start(opts) {
       const wait = inbox.openWaitFor(db, cur.spec);
       if (spec.state === "awaiting_you" && wait && wait.step === `core:needs_you:${cur.id}`) {
         const prev = (lastEvent(spec.id, "awaiting_you") || { detail: {} }).detail.prev_state || "running";
-        r.rows.push(["waits", { ...wait, answered_at: t, answer: "worker_busy", note: null }], ["specs", { ...spec, state: prev, updated_at: t }]);
+        r.rows.push(["waits", { ...wait, answered_at: t, answer: "worker_busy", note: null }]);
+        if (turnFreeFor(spec.id)) r.rows.push(["specs", { ...spec, state: prev, outcome: null, updated_at: t }]); // else `unparked` at its turn
       }
       emit("needs_you_end", { spec: cur.spec, job: cur.id, rows: r.rows });
       cur = get("jobs", cur.id);
@@ -540,6 +542,44 @@ function start(opts) {
     return { drop: `no handler for timer kind ${row.kind}` };
   }
 
+  // ---- the turn across parked specs (spec section 11) ----
+
+  const newestWait = (specId) => db.prepare("SELECT * FROM waits WHERE spec=? ORDER BY asked_at DESC, rowid DESC LIMIT 1").get(specId) || null;
+  // Parked specs whose wait is answered and not applied yet, oldest answer first: a user answer stored while another
+  // spec held the turn, or a needs-you wait its worker ended.
+  function heldSpecs() {
+    const out = [];
+    for (const spec of all(`SELECT * FROM specs WHERE state='awaiting_you' AND ${NOT_LEAD}`)) {
+      if (inbox.openWaitFor(db, spec.id)) continue;
+      const wait = newestWait(spec.id);
+      if (!wait || wait.answered_at === null) continue;
+      if (!ENDED_AT_PROMPT.includes(wait.answer)) { // a user answer whose signal is written has its commands pending, not its turn
+        const sig = lastEvent(spec.id, "signal");
+        if (sig && sig.detail.wait === wait.id) continue;
+      }
+      out.push({ spec, wait });
+    }
+    return out.sort((x, y) => x.wait.answered_at - y.wait.answered_at);
+  }
+  const holder = (but) => db.prepare("SELECT id FROM specs WHERE state NOT IN ('queued','done','awaiting_you') AND id IS NOT ? LIMIT 1").get(but === undefined ? null : but);
+  // Whether a parked spec may go on now: no other spec holds the turn and no other answered spec is ahead of it.
+  const turnFreeFor = (specId) => !holder(specId) && !heldSpecs().some((h) => h.spec.id !== specId);
+  // A needs-you wait its worker ended while the spec is still parked: the job's end is decided when the spec is unparked.
+  function waitsForUnpark(spec) {
+    if (spec.state !== "awaiting_you" || inbox.openWaitFor(db, spec.id)) return false;
+    const w = newestWait(spec.id);
+    return !!w && ENDED_AT_PROMPT.includes(w.answer);
+  }
+
+  // The `signal` input: the answer applied. `wait` is the answered row (its answered_at is when the user answered).
+  function writeSignal(spec, wait) {
+    const asked = (lastEvent(spec.id, "awaiting_you") || { detail: {} }).detail;
+    const rows = [["waits", wait]];
+    if (wait.answer === "approve") rows.push(["specs", { ...spec, state: asked.prev_state || "running", outcome: null, updated_at: now() }]);
+    emit("signal", { spec: spec.id, rows, answer: wait.answer, note: wait.note, step: wait.step, question: wait.question, wait: wait.id, kind: wait.kind,
+      recommendation: parse(wait.recommendation), stored: asked.stored, answered_at: wait.answered_at, text: `${wait.answer}: ${wait.question}` });
+  }
+
   function onSignal(row) {
     const t = now();
     const spec = row.spec ? get("specs", row.spec) : null;
@@ -547,11 +587,10 @@ function start(opts) {
     if (!spec || spec.state !== "awaiting_you" || !wait) return { drop: "spec is not waiting" };
     const p = parse(row.payload) || {};
     if (!String(wait.options || "approve|deny|fail").split("|").includes(p.answer)) return { drop: `unknown answer ${p.answer}` };
-    const asked = (lastEvent(spec.id, "awaiting_you") || { detail: {} }).detail;
-    const rows = [["waits", { ...wait, answered_at: t, answer: p.answer, note: p.note === undefined ? null : p.note }]];
-    if (p.answer === "approve") rows.push(["specs", { ...spec, state: asked.prev_state || "running", updated_at: t }]);
-    emit("signal", { spec: spec.id, rows, answer: p.answer, note: p.note === undefined ? null : p.note, step: wait.step,
-      question: wait.question, wait: wait.id, kind: wait.kind, recommendation: parse(wait.recommendation), stored: asked.stored, text: `${p.answer}: ${wait.question}` });
+    const answered = { ...wait, answered_at: t, answer: p.answer, note: p.note === undefined ? null : p.note };
+    if (turnFreeFor(spec.id)) { writeSignal(spec, answered); return undefined; }
+    // another spec holds the turn: the answer is stored on the wait at once and applied when the turn is free
+    emit("answer_held", { spec: spec.id, rows: [["waits", answered]], answer: answered.answer, note: answered.note, wait: wait.id, text: `${p.answer} (held): ${wait.question}` });
     return undefined;
   }
 
@@ -655,7 +694,7 @@ function start(opts) {
     if (ev.kind === "signal") {
       out.push({ type: "record_ruling", by: "user", cost_if_wrong: "the user's own call",
         text: `${d.answer}${d.note ? ` (${d.note})` : ""}: ${d.question}`,
-        kind: d.kind, recommended: d.recommendation ? d.recommendation.option : null, answer: d.answer,
+        kind: d.kind, recommended: d.recommendation ? d.recommendation.option : null, answer: d.answer, answered_at: d.answered_at,
         followed: !!d.recommendation && d.answer === d.recommendation.option }, { type: "metrics_ask", wait: d.wait });
       if (String(d.step).startsWith("core:")) return out.concat(coreSignal(d));
     }
@@ -723,7 +762,7 @@ function start(opts) {
       applyEscalate(spec, c, base);
     } else if (c.type === "record_ruling") {
       emit("ruling", { ...base, text: c.text, cost_if_wrong: c.cost_if_wrong, by: c.by,
-        ...(c.by === "user" ? { kind: c.kind, recommended: c.recommended, answer: c.answer, followed: c.followed } : {}) });
+        ...(c.by === "user" ? { kind: c.kind, recommended: c.recommended, answer: c.answer, followed: c.followed, answered_at: c.answered_at } : {}) });
     } else if (c.type === "metrics_ask") {
       metricsAsk(spec, c, base);
     } else if (c.type === "set_state" && c.state === "done") {
@@ -814,7 +853,10 @@ function start(opts) {
   async function pumpAll() {
     produced = false;
     let any = false;
-    for (const s of all(`SELECT id FROM specs WHERE state!='queued' AND ${NOT_LEAD} ORDER BY position, created_at`)) if (await pump(s.id)) any = true;
+    for (const s of all(`SELECT id FROM specs WHERE state!='queued' AND ${NOT_LEAD} ORDER BY position, created_at`)) {
+      if (waitsForUnpark(get("specs", s.id))) continue; // no job of a spec without the turn is created
+      if (await pump(s.id)) any = true;
+    }
     return any;
   }
 
@@ -969,7 +1011,8 @@ function start(opts) {
   }
 
   async function dispatch() {
-    if (db.prepare("SELECT 1 FROM jobs WHERE state='running' LIMIT 1").get()) return; // concurrency 1
+    // concurrency 1 for the spec that holds the turn; a parked spec's worker still at its prompt does not block the next spec (A3)
+    if (db.prepare("SELECT 1 FROM jobs j JOIN specs s ON s.id=j.spec WHERE j.state='running' AND s.state!='awaiting_you' LIMIT 1").get()) return;
     const job = db.prepare(`SELECT j.* FROM jobs j JOIN specs s ON s.id=j.spec WHERE j.state='pending' AND s.state NOT IN ('queued','done','awaiting_you') AND ${NOT_LEAD.replace("runner", "s.runner")} ORDER BY j.rowid LIMIT 1`).get();
     if (!job) return;
     if (!usagePaused()) { // the status-line tap reads 100%: pause before spending a start
@@ -1111,13 +1154,25 @@ function start(opts) {
     emit("lead_turn", { spec: spec.id, rows: [["specs", { ...spec, state: "running", updated_at: now() }]], text: spec.id });
   }
 
-  // The turn: at most one spec is past `queued` and not parked or done; when none is, the next queued spec by position gets it.
+  // The turn: at most one spec is past `queued` and not parked or done. When none is, an answered parked spec gets it
+  // first (oldest answer first), then the next queued spec by position.
   function startQueued() {
-    if (db.prepare("SELECT 1 FROM specs WHERE state NOT IN ('queued','done','awaiting_you') LIMIT 1").get()) return;
+    if (holder()) return;
+    const held = heldSpecs()[0];
+    if (held) {
+      if (ENDED_AT_PROMPT.includes(held.wait.answer)) {
+        const prev = (lastEvent(held.spec.id, "awaiting_you") || { detail: {} }).detail.prev_state || "running";
+        emit("unparked", { spec: held.spec.id, rows: [["specs", { ...held.spec, state: prev, outcome: null, updated_at: now() }]], answer: held.wait.answer, text: held.wait.answer });
+      } else {
+        writeSignal(held.spec, held.wait);
+      }
+      return;
+    }
     const spec = db.prepare("SELECT * FROM specs WHERE state='queued' ORDER BY position, created_at LIMIT 1").get();
     if (!spec) return;
     if (spec.runner === "lead") { leadTurn(spec); return; }
-    if (opts.queue) { // in a queue, a plan that no longer compiles hands the spec to the lead; its turn comes on the next tick
+    const added = lastEvent(spec.id, "spec_added");
+    if (added && added.detail.queued) { // a queue's spec whose plan no longer compiles is handed to the lead; its turn comes on the next tick
       try { plan(spec); } catch (e) {
         const reason = String((e && e.message) || e);
         emit("handed_to_lead", { spec: spec.id, rows: [["specs", { ...spec, runner: "lead", updated_at: now() }]], reason, text: reason });
@@ -1129,6 +1184,37 @@ function start(opts) {
     const t = now();
     emit("spec_started", { spec: spec.id, rows: [["specs", { ...spec, state: "running", policy_version: policy.POLICY_VERSION, policy_hash: hash, updated_at: t }], ...retryRows()],
       text: spec.id });
+  }
+
+  // ---- the end of the queue (spec section 11) ----
+
+  // Nothing is runnable: no spec holds the turn (an open lead turn does), none is queued, no parked spec has an answer
+  // waiting and the inbox is empty.
+  const atEnd = () => !holder() && !db.prepare("SELECT 1 FROM specs WHERE state='queued' LIMIT 1").get() && !heldSpecs().length
+    && !db.prepare("SELECT 1 FROM inbox WHERE state='new' LIMIT 1").get();
+  const queueOpen = () => {
+    const fin = db.prepare("SELECT MAX(seq) AS s FROM events WHERE kind='queue_finished'").get().s || 0;
+    return !!db.prepare("SELECT 1 FROM events WHERE kind='spec_added' AND seq>? AND json_extract(detail, '$.queued')=1 LIMIT 1").get(fin);
+  };
+
+  // A spec still parked at the end is completed as failed, but its state, wait, worktree and windows stay: a later
+  // signal resumes it, and finalize records it again (R6: this record is its own step kind, with no check).
+  function failParked() {
+    for (const spec of all(`SELECT * FROM specs WHERE state='awaiting_you' AND outcome IS NULL AND ${NOT_LEAD} ORDER BY position, created_at`)) {
+      const wait = inbox.openWaitFor(db, spec.id);
+      if (!wait) continue;
+      const outcome = `failed — awaiting you: ${wait.question}`;
+      if (spec.batch !== null && spec.batch !== undefined && spec.batch !== "") {
+        try {
+          steps.run(db, { key: `metrics_record:${spec.id}:parked`, spec: spec.id, kind: "metrics_record_parked", facts: { spec: spec.id, batch: spec.batch } }, () => {
+            const r = cp.spawnSync(tmuxCtl, realIntegrate.metricsRecordArgv({ db, repo }, spec, outcome), { cwd: repo, env, encoding: "utf8", timeout: 60000 });
+            if (r.error || r.status !== 0) throw new Error(`metrics record: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
+            return { spec: spec.id, batch: spec.batch, outcome };
+          }, { now });
+        } catch (_) { /* recorded as a failed step */ }
+      }
+      emit("parked_failed", { spec: spec.id, rows: [["specs", { ...spec, outcome, updated_at: now() }]], question: wait.question, outcome, text: outcome });
+    }
   }
 
   function policyCheck() {
@@ -1205,6 +1291,26 @@ function start(opts) {
         await dispatch();
       } catch (e) {
         fail(e);
+      } finally {
+        if (!stopped) flush();
+      }
+    },
+
+    // The end of the queue, when nothing is runnable (else false): parked specs are failed with their waits kept, and
+    // an open queue gets its report (opts.report) and its queue_finished. A queue that already has one gets no second.
+    async finish() {
+      if (halted || stopped) return false;
+      try {
+        if (!atEnd()) return false;
+        failParked();
+        if (queueOpen()) {
+          const report = opts.report ? await opts.report({ db, repo, project, tmuxCtl, env, now }) : null;
+          emit("queue_finished", { report: typeof report === "string" && report ? report : null, text: typeof report === "string" && report ? report : "no report" });
+        }
+        return true;
+      } catch (e) {
+        fail(e);
+        return false;
       } finally {
         if (!stopped) flush();
       }

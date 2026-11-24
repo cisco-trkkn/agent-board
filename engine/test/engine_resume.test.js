@@ -317,7 +317,9 @@ test("without adopt a worker running at the kill gets a second attempt; jobs wit
 
 // ---- signals (acceptance 2) ------------------------------------------------------------------------------------
 
-test("a signal written before the kill and one written after the resume written after the resume are each applied once", async (t) => {
+// Part 2: `engine resume` runs the queue's loop, so it no longer waits on a parked spec nobody has answered: it fails
+// it with its wait kept and exits; the second answer and a second resume finish the spec.
+test("a signal written before the kill and one written after the resume are each applied once", async (t) => {
   const script = {
     implement1: worker(BLOCKED), implement2: worker(BLOCKED),
     architect: worker(PARK), architect1: worker(PARK), architect2: worker(PARK),
@@ -338,15 +340,18 @@ test("a signal written before the kill and one written after the resume written 
   child.kill("SIGKILL");
   await child.exited;
 
-  // resume in the background, wait for it to apply signal one and park again, then write signal two to the live engine
-  const res = cp.spawn("node", [ENGINE, "resume", "--backend", "fake", "--script", sf], { cwd: p.wt, env: p.childEnv, stdio: "ignore" });
-  t.after(() => { try { res.kill("SIGKILL"); } catch (_) { /* gone */ } });
-  const resExit = new Promise((r) => res.once("exit", r));
-  await until(() => p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NOT NULL").get().n >= 1
-    && d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NULL").get().n === 1), "the second park after signal one");
+  // resume applies signal one (whether or not the dead engine had drained it), parks again at the second task, and
+  // with nothing runnable ends: the spec is failed as awaiting you, its wait kept
+  const r1 = p.resume(sf);
+  assert.equal(r1.code, 0, r1.err + r1.out);
+  assert.match(r1.out, /^awaiting you: \S+: /m);
+  assert.equal(p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NOT NULL").get().n), 1, "signal one answered the first wait");
+  assert.equal(p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NULL").get().n), 1, "the second park's wait is open");
+  assert.match(p.peek((d) => d.prepare("SELECT state || ' ' || outcome AS s FROM specs").get().s), /^awaiting_you failed — awaiting you: /);
   const s2 = p.run(["signal", SPEC, "approve", "--note", "two"]);
   assert.equal(s2.code, 0, s2.err);
-  assert.equal(await resExit, 0);
+  const r2 = p.resume(sf);
+  assert.equal(r2.code, 0, r2.err + r2.out);
 
   const sig = p.peek((d) => d.prepare("SELECT detail FROM events WHERE kind='signal' ORDER BY seq").all().map((e) => JSON.parse(e.detail).note));
   assert.deepEqual(sig, ["one", "two"], "each signal applied once, in order");
