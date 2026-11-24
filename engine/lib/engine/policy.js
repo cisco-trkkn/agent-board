@@ -14,6 +14,14 @@ const ASK_DEFAULTS = {
   stop_class: { option: "deny", why: "an irreversible step needs your yes", confidence: "medium" },
   user_gate: { option: "approve", why: "the plan marks this task as yours to check", confidence: "low" },
 };
+// Recommendations the park sites supply themselves (spec 8a table); constants here so the policy hash covers them.
+const SITE_RECS = {
+  tests_red: { option: "approve", why: "approve runs the project tests again", confidence: "low" },
+  live_checkout: { option: "approve", why: "approve retries once the live checkout is clean", confidence: "low" },
+  exhausted: { option: "approve", why: "approve runs the job once more", confidence: "low" },
+  unknown_case: { option: "fail", why: "the strategy named a case the engine does not know", confidence: "medium" },
+  refused: { option: "approve", why: "approve sends the case to the architect once more", confidence: "low" },
+};
 const DEFAULT_BUDGET = { attempts: 60, tokens: 5000000 };
 
 function recommendationFor(kind, override) {
@@ -63,6 +71,6 @@ function retryFor(config, kind) {
 
 const policyHash = (config) =>
   crypto.createHash("sha256")
-    .update((config && config.raw !== undefined ? config.raw : "{}") + "\n" + JSON.stringify(ASK_DEFAULTS)).digest("hex");
+    .update((config && config.raw !== undefined ? config.raw : "{}") + "\n" + JSON.stringify({ ASK_DEFAULTS, SITE_RECS })).digest("hex");
 
-module.exports = { POLICY_VERSION, ASK_KINDS, ASK_DEFAULTS, DEFAULT_BUDGET, recommendationFor, waitProblem, DEFAULT_RETRY, loadConfig, retryFor, policyHash };
+module.exports = { POLICY_VERSION, ASK_KINDS, ASK_DEFAULTS, SITE_RECS, DEFAULT_BUDGET, recommendationFor, waitProblem, DEFAULT_RETRY, loadConfig, retryFor, policyHash };

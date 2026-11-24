@@ -219,6 +219,9 @@ function cmdStatus(args, io) {
       if (!rows.length) { io.out("nothing is waiting"); return 0; }
       for (const w of rows) {
         io.out(w.spec);
+        let rec = null;
+        try { rec = JSON.parse(w.recommendation); } catch (_) { rec = null; }
+        if (rec) io.out(`  I recommend: ${rec.option} (${rec.confidence}): ${rec.why}`);
         io.out(`  question: ${w.question}`);
         io.out(`  options:  ${w.options}`);
         io.out(`  asked at: ${iso(w.asked_at)}`);

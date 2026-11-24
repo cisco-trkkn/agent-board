@@ -102,7 +102,7 @@ test("live checkout dirty: parked, nothing changed; .claude/ and metrics lines d
   const s = setup();
   fs.writeFileSync(path.join(s.g.dir, "scratch.txt"), "x");
   const r = integrate.run(s.ctx, s.spec);
-  assert.deepEqual(r, { outcome: "parked", question: "live checkout is mid-change" });
+  assert.deepEqual(r, { outcome: "parked", question: "live checkout is mid-change", recommendation: { option: "approve", why: "approve retries once the live checkout is clean", confidence: "low" } });
   assert.deepEqual(s.keys(), []);
   assert.ok(!fs.existsSync(path.join(s.g.dir, "feature.txt")));
   fs.unlinkSync(path.join(s.g.dir, "scratch.txt"));
@@ -163,6 +163,7 @@ test("mr without push consent: parked, no push, no gh", () => {
   const r = integrate.run(s.ctx, s.spec);
   assert.equal(r.outcome, "parked");
   assert.match(r.question, /no stored consent/);
+  assert.equal(r.recommendation, undefined, "the policy default (stop_class: deny) applies");
   assert.equal(s.g.git("--git-dir", s.bare, "branch", "--list", "feat-a").trim(), "");
   assert.deepEqual(s.calls(), []);
 });

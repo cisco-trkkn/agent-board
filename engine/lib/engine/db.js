@@ -90,9 +90,10 @@ function put(db, table, row) {
   return putRaw(db, table, row);
 }
 
-function event(db, { spec = null, job = null, kind, rows = [], ts, ...extra }) {
+// `detailKind` is a `kind` field inside the detail (a wait's kind); `kind` itself is the event's.
+function event(db, { spec = null, job = null, kind, rows = [], ts, detailKind, ...extra }) {
   const t = ts !== undefined ? ts : Date.now() / 1000;
-  const detail = JSON.stringify({ rows, ...extra });
+  const detail = JSON.stringify({ rows, ...extra, ...(detailKind === undefined ? {} : { kind: detailKind }) });
   db.prepare("INSERT INTO events (ts, spec, job, kind, detail) VALUES (?,?,?,?,?)").run(t, spec, job, kind, detail);
 }
 

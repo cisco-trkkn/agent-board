@@ -160,7 +160,7 @@ test("loadConfig, retryFor override and policyHash", () => {
   try {
     const none = policy.loadConfig(g.dir);
     assert.deepEqual(none, { test: null, test_ok: [0], retry: {}, budget: { attempts: 60, tokens: 5000000 }, raw: "{}" });
-    const H = (raw) => crypto.createHash("sha256").update(raw + "\n" + JSON.stringify(policy.ASK_DEFAULTS)).digest("hex");
+    const H = (raw) => crypto.createHash("sha256").update(raw + "\n" + JSON.stringify({ ASK_DEFAULTS: policy.ASK_DEFAULTS, SITE_RECS: policy.SITE_RECS })).digest("hex");
     assert.equal(policy.policyHash(none), H("{}"));
     assert.deepEqual(policy.retryFor(none, "review"), policy.DEFAULT_RETRY.review);
 

@@ -261,7 +261,8 @@ function park(p) {
   const d = p.open();
   db.tx(d, () => {
     db.put(d, "specs", { id: SPEC, state: "awaiting_you", integration: "keep", push: 0, position: 0, runner: "engine", created_at: 1, updated_at: 1 });
-    db.put(d, "waits", { id: `${SPEC}@1#1`, spec: SPEC, step: "integrate", question: "live checkout is mid-change", options: "approve|deny|fail", asked_at: 1700000000, answered_at: null, answer: null, note: null });
+    db.put(d, "waits", { id: `${SPEC}@1#1`, spec: SPEC, step: "integrate", question: "live checkout is mid-change", options: "approve|deny|fail", asked_at: 1700000000, answered_at: null, answer: null, note: null,
+      kind: "stop_class", recommendation: JSON.stringify({ option: "approve", why: "approve retries once the live checkout is clean", confidence: "low" }) });
   });
   d.close();
 }
@@ -273,6 +274,9 @@ test("status --waiting shows question, options, asked at and the exact signal co
   assert.equal(r.code, 0);
   assert.match(r.out, new RegExp(`^${SPEC}$`, "m"));
   assert.match(r.out, /question: live checkout is mid-change/);
+  const lines = r.out.split("\n");
+  assert.equal(lines[lines.indexOf(SPEC) + 1], "  I recommend: approve (low): approve retries once the live checkout is clean", "the recommendation is the first line under the spec id");
+  assert.match(lines[lines.indexOf(SPEC) + 2], /^ {2}question:/);
   assert.match(r.out, /options: {2}approve\|deny\|fail/);
   assert.match(r.out, /asked at: 2023-11-14T22:13:20\.000Z/);
   assert.match(r.out, new RegExp(`answer: {3}tmux-ctl engine signal ${SPEC} approve\\|deny\\|fail`));

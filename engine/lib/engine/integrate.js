@@ -6,7 +6,7 @@ const path = require("node:path");
 const cp = require("node:child_process");
 const steps = require("./steps");
 const ledger = require("./ledger");
-const { loadConfig } = require("./policy");
+const { loadConfig, SITE_RECS } = require("./policy");
 
 const TEST_TIMEOUT = 30 * 60 * 1000;
 const PROTECTED = new Set(["main", "master"]);
@@ -21,7 +21,7 @@ const must = (r, what) => {
   if (r.error || r.status !== 0) throw new Error(`${what} failed: ${(r.error && r.error.message) || (r.stderr || r.stdout || "").trim()}`);
   return (r.stdout || "").trim();
 };
-const parked = (question) => ({ outcome: "parked", question });
+const parked = (question, recommendation) => (recommendation ? { outcome: "parked", question, recommendation } : { outcome: "parked", question });
 const stepOpts = (ctx) => ({ now: ctx.now });
 const run = (ctx, spec, kind, key, facts, act) =>
   steps.run(ctx.db, { key, spec: spec.id, kind, facts }, act, stepOpts(ctx));
@@ -74,9 +74,9 @@ function doMerge(ctx, spec) {
   const done = steps.getRow(ctx.db, key);
   if (!(done && done.state === "done")) {
     const busy = liveCheckoutBusy(ctx);
-    if (busy) return parked("live checkout is mid-change");
+    if (busy) return parked("live checkout is mid-change", SITE_RECS.live_checkout);
     const cur = must(git(ctx, ctx.repo, ["rev-parse", "--abbrev-ref", "HEAD"]), "rev-parse");
-    if (cur !== target(ctx)) return parked(`live checkout is on ${cur}, not ${target(ctx)}`);
+    if (cur !== target(ctx)) return parked(`live checkout is on ${cur}, not ${target(ctx)}`, SITE_RECS.live_checkout);
   }
   try {
     const r = run(ctx, spec, "merge", key, { branch: spec.branch, target: target(ctx) }, () => {

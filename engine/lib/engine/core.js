@@ -175,10 +175,10 @@ function start(opts) {
   const all = (sql, ...a) => db.prepare(sql).all(...a);
   const W = (fn) => (inTx ? fn() : tx(db, fn));
   // One state change: the rows and their one event, in one transaction (the drain's own when inside it).
-  function emit(kind, { spec = null, job = null, rows = [], ...extra } = {}) {
+  function emit(kind, { spec = null, job = null, rows = [], kind: detailKind, ...extra } = {}) { // a `kind` in the fields is the detail's
     W(() => {
       const full = rows.map(([table, row]) => { put(db, table, row); return { table, row: get(table, row[PK[table]]) }; });
-      event(db, { spec, job, kind, rows: full, ts: now(), ...extra });
+      event(db, { spec, job, kind, rows: full, ts: now(), ...extra, detailKind });
     });
     if (INPUTS.includes(kind)) produced = true;
   }
@@ -225,17 +225,21 @@ function start(opts) {
 
   // ---- parking (spec 10.3) ----
 
+  // extra: {kind (required), recommendation?, options?, stored?, ...tag}. The recommendation is the site's, else the kind's default.
   function park(spec, question, step, extra = {}) {
+    const { kind, recommendation, options: opts, ...rest } = extra;
+    if (!kind) throw new Error("park needs a kind");
     if (inbox.openWaitFor(db, spec.id)) return false;
     const t = now();
+    const rec = policy.recommendationFor(kind, recommendation);
+    const options = opts || "approve|deny|fail";
     const n = db.prepare("SELECT COUNT(*) AS n FROM waits WHERE spec=?").get(spec.id).n;
-    const wait = { id: `${spec.id}@${t}#${n + 1}`, spec: spec.id, step, question, options: extra.options || "approve|deny|fail",
-      asked_at: t, answered_at: null, answer: null, note: null,
-      kind: "cannot_tell", recommendation: JSON.stringify(policy.ASK_DEFAULTS.cannot_tell) }; // Task 4 passes the real kind
-    delete extra.options;
-    const command = `tmux-ctl engine signal ${spec.id} approve|deny|fail`;
+    const wait = { id: `${spec.id}@${t}#${n + 1}`, spec: spec.id, step, question, options,
+      asked_at: t, answered_at: null, answer: null, note: null, kind, recommendation: JSON.stringify(rec) };
+    const command = `tmux-ctl engine signal ${spec.id} ${options}`;
     emit("awaiting_you", { spec: spec.id, rows: [["waits", wait], ["specs", { ...spec, state: "awaiting_you", updated_at: t }]],
-      question, step, prev_state: spec.state, command, text: `${question} — answer with: ${command}`, ...extra });
+      question, step, prev_state: spec.state, command, kind, recommendation: rec,
+      text: `I recommend: ${rec.option} (${rec.confidence}): ${rec.why} — ${question} — answer with: ${command}`, ...rest });
     return true;
   }
 
@@ -291,7 +295,7 @@ function start(opts) {
         return;
       }
       // one open wait per spec: when another question is open, ask again in a minute
-      if (park(get("specs", job.spec), `permission prompt in ${job.window}`, `core:needs_you:${job.id}`)) {
+      if (park(get("specs", job.spec), `permission prompt in ${job.window}`, `core:needs_you:${job.id}`, { kind: "needs_you" })) {
         emit("needs_you_parked", { spec: job.spec, job: job.id, rows: [["jobs", withDetail(job, { ...d, parked: true })]] });
       } else {
         emit("deadline", { spec: job.spec, job: job.id, rows: deadlineRows(job, d, t + 60).rows });
@@ -406,7 +410,7 @@ function start(opts) {
     status.delete(job.id);
     if (job.kind === "architect") {
       emit("architect_decision", { spec: spec.id, job: d.target || null, rows, case: d.case, task: d.task === null ? undefined : d.task,
-        decision: st.decision, ruling: st.ruling, cost_if_wrong: st.cost_if_wrong, architect_job: job.id,
+        decision: st.decision, ruling: st.ruling, cost_if_wrong: st.cost_if_wrong, recommend: st.recommend, architect_job: job.id,
         text: `${st.decision}: ${st.ruling}`, ...ctx });
       return;
     }
@@ -500,12 +504,12 @@ function start(opts) {
     const wait = spec ? inbox.openWaitFor(db, spec.id) : null;
     if (!spec || spec.state !== "awaiting_you" || !wait) return { drop: "spec is not waiting" };
     const p = parse(row.payload) || {};
-    if (!["approve", "deny", "fail"].includes(p.answer)) return { drop: `unknown answer ${p.answer}` };
+    if (!String(wait.options || "approve|deny|fail").split("|").includes(p.answer)) return { drop: `unknown answer ${p.answer}` };
     const asked = (lastEvent(spec.id, "awaiting_you") || { detail: {} }).detail;
     const rows = [["waits", { ...wait, answered_at: t, answer: p.answer, note: p.note === undefined ? null : p.note }]];
     if (p.answer === "approve") rows.push(["specs", { ...spec, state: asked.prev_state || "running", updated_at: t }]);
     emit("signal", { spec: spec.id, rows, answer: p.answer, note: p.note === undefined ? null : p.note, step: wait.step,
-      question: wait.question, stored: asked.stored, text: `${p.answer}: ${wait.question}` });
+      question: wait.question, wait: wait.id, kind: wait.kind, recommendation: parse(wait.recommendation), stored: asked.stored, text: `${p.answer}: ${wait.question}` });
     return undefined;
   }
 
@@ -562,7 +566,9 @@ function start(opts) {
     const out = [];
     if (ev.kind === "signal") {
       out.push({ type: "record_ruling", by: "user", cost_if_wrong: "the user's own call",
-        text: `${d.answer}${d.note ? ` (${d.note})` : ""}: ${d.question}` });
+        text: `${d.answer}${d.note ? ` (${d.note})` : ""}: ${d.question}`,
+        kind: d.kind, recommended: d.recommendation ? d.recommendation.option : null, answer: d.answer,
+        followed: !!d.recommendation && d.answer === d.recommendation.option }, { type: "metrics_ask", wait: d.wait });
       if (String(d.step).startsWith("core:")) return out.concat(coreSignal(d));
     }
     if (ev.kind === "check_result" && d.ok) out.push({ type: "ledger", kind: "green_check", task: d.task, sha: short(d.sha), rc: 0 });
@@ -583,7 +589,7 @@ function start(opts) {
       const prev = cmds[i - 1];
       const next = cmds[i + 1];
       if (c.type === "start_job" && c.kind === "implement" && (p.byN.get(c.task) || {}).gate) {
-        out.push({ type: "park", question: `user gate: task ${c.task} ${p.byN.get(c.task).subject}`, step: `core:gate:${c.task}`, stored: c });
+        out.push({ type: "park", question: `user gate: task ${c.task} ${p.byN.get(c.task).subject}`, step: `core:gate:${c.task}`, stored: c, kind: "user_gate" });
       } else if (c.type === "start_job" && c.kind === "fix" && c.round) {
         out.push({ type: "ledger", kind: "fix_round", task: c.task, round: c.round }, c);
       } else if (c.type === "start_job" && c.kind === "fix_wave") {
@@ -598,7 +604,7 @@ function start(opts) {
     });
     if (ev.kind === "job_failed" && d.exhausted && job) {
       const what = `${label(job)} failed: ${d.reason}`;
-      if (d.on_exhausted === "park") out.push({ type: "park", question: what, step: `core:exhausted:${job.id}` });
+      if (d.on_exhausted === "park") out.push({ type: "park", question: what, step: `core:exhausted:${job.id}`, kind: "architect_park", recommendation: policy.SITE_RECS.exhausted });
       if (d.on_exhausted === "fail_spec") out.push(done(`failed — ${label(job)}: ${d.reason}`));
     }
     return out;
@@ -619,11 +625,14 @@ function start(opts) {
       const row = { key: `integrate:${spec.id}:${tag.cause}`, spec: spec.id, kind: "integrate", state: "intent", result: "{}", created_at: t, updated_at: t };
       emit("integrate_requested", { ...base, rows: [["steps", row]] });
     } else if (c.type === "park") {
-      if (!park(spec, c.question, c.step, { options: c.options, stored: c.stored, ...tag })) emit("park_skipped", { ...base, question: c.question, step: c.step });
+      if (!park(spec, c.question, c.step, { options: c.options, stored: c.stored, kind: c.kind, recommendation: c.recommendation || policy.SITE_RECS[c.site], ...tag })) emit("park_skipped", { ...base, question: c.question, step: c.step });
     } else if (c.type === "escalate") {
       applyEscalate(spec, c, base);
     } else if (c.type === "record_ruling") {
-      emit("ruling", { ...base, text: c.text, cost_if_wrong: c.cost_if_wrong, by: c.by });
+      emit("ruling", { ...base, text: c.text, cost_if_wrong: c.cost_if_wrong, by: c.by,
+        ...(c.by === "user" ? { kind: c.kind, recommended: c.recommended, answer: c.answer, followed: c.followed } : {}) });
+    } else if (c.type === "metrics_ask") {
+      metricsAsk(spec, c, base);
     } else if (c.type === "set_state" && c.state === "done") {
       const merged = lastEvent(spec.id, "integrated");
       // section 4: a spec that fails after tests red after its merge reverts that merge
@@ -669,7 +678,7 @@ function start(opts) {
   // with the refusal in the case file; the second refusal for the same job parks the spec.
   function applyEscalate(spec, c, base) {
     if (!architect.CASES.includes(c.case)) {
-      if (!park(spec, `unknown escalation case: ${c.case}`, "core:case", base)) emit("park_skipped", { ...base, case: c.case });
+      if (!park(spec, `unknown escalation case: ${c.case}`, "core:case", { kind: "architect_park", recommendation: policy.SITE_RECS.unknown_case, ...base })) emit("park_skipped", { ...base, case: c.case });
       return;
     }
     if (c.refusal) {
@@ -678,7 +687,7 @@ function start(opts) {
         .map((e) => parse(e.detail) || {}).filter((d) => d.case === c.case && d.target === c.job).length;
       if (n >= 2) {
         const question = `retry_higher_tier refused twice for ${c.job === undefined ? c.case : c.job}`;
-        if (!park(spec, question, `core:refused:${c.case}`, { stored: c, ...base })) emit("park_skipped", { ...base, question });
+        if (!park(spec, question, `core:refused:${c.case}`, { stored: c, kind: "architect_park", recommendation: policy.SITE_RECS.refused, ...base })) emit("park_skipped", { ...base, question });
         return;
       }
     }
@@ -743,7 +752,7 @@ function start(opts) {
       }
     } else if (st.kind === "integrate") {
       const res = (await integrateFn(spec)) || {};
-      if (res.outcome === "parked") { park(get("specs", spec.id), res.question, "core:integrate"); return; }
+      if (res.outcome === "parked") { park(get("specs", spec.id), res.question, "core:integrate", { kind: "stop_class", recommendation: res.recommendation }); return; }
       emit("integrated", { spec: spec.id, rows: [finished(res)], outcome: res.outcome, merge: res.merge, text: String(res.outcome) });
     }
   }
@@ -917,6 +926,28 @@ function start(opts) {
     backoff_s: JSON.stringify(r.backoff_s === undefined ? [] : r.backoff_s), timeout_min: r.timeout_min === undefined ? null : r.timeout_min,
     no_retry_on: JSON.stringify(r.no_retry_on || []), on_exhausted: r.on_exhausted || null }]);
 
+  // One `ask` metrics line per user answer (spec 8a). The step row makes a replay run the command once; a failed
+  // command is a failed step and the spec goes on. The ask_recorded event always follows (the pump's one command, one event).
+  function metricsAsk(spec, c, base) {
+    const w = get("waits", c.wait);
+    const rec = (w && parse(w.recommendation)) || {};
+    const iso = (s) => new Date(s * 1000).toISOString();
+    const json = { spec: spec.id, batch: spec.batch === undefined ? null : spec.batch, kind: w ? w.kind : null, recommended: rec.option === undefined ? null : rec.option,
+      confidence: rec.confidence === undefined ? null : rec.confidence, answer: w ? w.answer : null,
+      followed: !!w && rec.option !== undefined && w.answer === rec.option, asked_at: w ? iso(w.asked_at) : null, answered_at: w && w.answered_at ? iso(w.answered_at) : null };
+    let ok = true;
+    try {
+      steps.run(db, { key: `metrics_ask:${c.wait}`, spec: spec.id, kind: "metrics_ask", facts: { wait: c.wait } }, () => {
+        const hasBatch = spec.batch !== null && spec.batch !== undefined && spec.batch !== "";
+        const r = cp.spawnSync(tmuxCtl, ["metrics", "append", "ask", "--json", JSON.stringify(json), ...(hasBatch ? ["--batch", String(spec.batch)] : [])],
+          { cwd: repo, env, encoding: "utf8", timeout: 60000 });
+        if (r.error || r.status !== 0) throw new Error(`metrics append ask: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
+        return { wait: c.wait };
+      }, { now });
+    } catch (_) { ok = false; /* recorded as a failed step */ }
+    emit("ask_recorded", { ...base, wait: c.wait, ok });
+  }
+
   // Measurement never blocks a spec: a failed metrics start stays a failed step (steps.run wrote the error and its
   // step_failed event) and the run goes on.
   function metricsStart(spec) {
@@ -946,7 +977,7 @@ function start(opts) {
     for (const s of all("SELECT * FROM specs WHERE state NOT IN ('queued','done','awaiting_you') AND policy_version IS NOT NULL")) {
       if (s.policy_version === policy.POLICY_VERSION && s.policy_hash === hash) continue;
       const tag = (v, h) => `${v}:${String(h).slice(0, 8)}`;
-      park(s, `engine rules changed (${tag(s.policy_version, s.policy_hash)}→${tag(policy.POLICY_VERSION, hash)}): continue under the new rules?`, "core:policy");
+      park(s, `engine rules changed (${tag(s.policy_version, s.policy_hash)}→${tag(policy.POLICY_VERSION, hash)}): continue under the new rules?`, "core:policy", { kind: "policy_change" });
     }
   }
 
@@ -1052,7 +1083,7 @@ function start(opts) {
           }
           if (!s || MY_STEPS.includes(s.kind) || !s.spec) continue; // the core's own rows are simply run again
           const spec = get("specs", s.spec);
-          if (spec && spec.state !== "done") park(spec, p.question, `core:step:${p.key}`);
+          if (spec && spec.state !== "done") park(spec, p.question, `core:step:${p.key}`, { kind: "cannot_tell" });
         }
         // a start_worker step the check found done: its pane is adopted
         for (const s of all("SELECT * FROM steps WHERE kind='start_worker' AND state='done'")) {

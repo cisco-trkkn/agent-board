@@ -23,7 +23,8 @@ const DONE = report({ status: "done", commits: ["abc1234"], concerns: [] });
 const BLOCKED = report({ status: "blocked", commits: [], concerns: ["needs a secret"] });
 const PASS = report({ verdict: "pass", findings: [] });
 const FINDINGS = (task, severity = "important") => report({ verdict: "findings", findings: [{ severity, task, text: `wrong in ${task}` }] });
-const DECIDE = (decision) => report({ decision, ruling: `ruling ${decision}`, cost_if_wrong: `cost of ${decision}` });
+const DECIDE = (decision) => report({ decision, ruling: `ruling ${decision}`, cost_if_wrong: `cost of ${decision}`,
+  ...(decision === "park" ? { recommend: { option: "fail", why: "the plan is wrong", confidence: "high" } } : {}) });
 const worker = (text) => [{ status: "busy", at: 1 }, { report: text, at: 2 }, { status: "ready", at: 3 }];
 
 const task = (subject, meta = {}) => ({
@@ -521,7 +522,7 @@ test("architect.build: the case file holds the finding, report, review, decision
 const stopClass = {
   decide(state, event) {
     const e = event.detail && typeof event.detail === "object" ? { name: event.kind, ...event.detail } : event;
-    if (e.name === "spec_started") return [{ type: "park", question: "push to the shared branch release", step: "push" }];
+    if (e.name === "spec_started") return [{ type: "park", question: "push to the shared branch release", step: "push", kind: "stop_class" }];
     if (e.name === "signal" && e.step === "push") {
       if (e.answer === "approve") return [{ type: "set_state", state: "done", outcome: "pushed" }];
       if (e.answer === "deny") return [{ type: "set_state", state: "done", outcome: "kept (push skipped)" }];
@@ -639,10 +640,10 @@ test("policy: a spec stamped with version 0 parks with the rules-changed questio
   h.db.prepare("UPDATE specs SET policy_version=0 WHERE id=?").run(SPEC);
   await h.step();
   assert.equal(h.spec().state, "awaiting_you");
-  assert.equal(h.wait().question, `engine rules changed (0:${hash.slice(0, 8)}→1:${hash.slice(0, 8)}): continue under the new rules?`);
+  assert.equal(h.wait().question, `engine rules changed (0:${hash.slice(0, 8)}→${policy.POLICY_VERSION}:${hash.slice(0, 8)}): continue under the new rules?`);
   h.signal("approve");
   await h.step();
-  assert.equal(h.spec().policy_version, 1);
+  assert.equal(h.spec().policy_version, policy.POLICY_VERSION);
   assert.notEqual(h.spec().state, "awaiting_you");
   await h.until(h.done);
   assert.equal(h.spec().outcome, "merged");
@@ -655,7 +656,7 @@ test("policy: another hash parks too; deny fails the spec with policy changed", 
   const hash = h.spec().policy_hash;
   h.db.prepare("UPDATE specs SET policy_hash='0123456789abcdef' WHERE id=?").run(SPEC);
   await h.step();
-  assert.equal(h.wait().question, `engine rules changed (1:01234567→1:${hash.slice(0, 8)}): continue under the new rules?`);
+  assert.equal(h.wait().question, `engine rules changed (${policy.POLICY_VERSION}:01234567→${policy.POLICY_VERSION}:${hash.slice(0, 8)}): continue under the new rules?`);
   h.signal("deny");
   await h.step();
   assert.equal(h.spec().state, "done");
@@ -672,7 +673,7 @@ test("policy: an answer and a finished job drained in one tick are each decided 
   inbox.insert(h.db, { source: "user", source_id: "quick", spec: SPEC, kind: "signal", payload: { answer: "approve", note: null } }, h.clock.t);
   await h.step();
   assert.equal(h.db.prepare("SELECT state FROM inbox WHERE source_id='quick'").get().state, "done");
-  assert.equal(h.spec().policy_version, 1);
+  assert.equal(h.spec().policy_version, policy.POLICY_VERSION);
   assert.equal(h.of("policy_restamped").length, 1);
   assert.equal(h.of("job_done").length, 1);
   assert.equal(h.of("check_result").length, 1); // the job's own commands were applied too

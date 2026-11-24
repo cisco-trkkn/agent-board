@@ -25,7 +25,7 @@ const report = (o) => "notes\n\n```json:status\n" + JSON.stringify(o) + "\n```\n
 const DONE = report({ status: "done", commits: ["abc1234"], concerns: [] });
 const BLOCKED = report({ status: "blocked", commits: [], concerns: ["needs a secret"] });
 const PASS = report({ verdict: "pass", findings: [] });
-const PARK = report({ decision: "park", ruling: "ask the user", cost_if_wrong: "a day" });
+const PARK = report({ decision: "park", ruling: "ask the user", cost_if_wrong: "a day", recommend: { option: "fail", why: "the plan is wrong", confidence: "high" } });
 const worker = (text, at = 0.4) => [{ status: "busy", at: 0.1 }, { report: text, at }, { status: "ready", at: at + 0.2 }];
 const GOOD = { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) };
 
