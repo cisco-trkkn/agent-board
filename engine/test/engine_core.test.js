@@ -1247,14 +1247,15 @@ test("M9: an intent step of a measurement or notice kind never parks on resume: 
   assert.equal(o.wait(), null);
 });
 
-// Mutation: the NEVER_PARK branch moved after the `!s.spec` skip in resume() -> the row stays at intent (fails this test).
-test("M9 (pre-flight ruling 9): a spec-less awake_off step left at intent is failed on resume, never parked or skipped", async (t) => {
+// Mutations: the NEVER_PARK branch moved after the `!s.spec` skip in resume() -> both rows stay at intent;
+// "commit_report" dropped from NEVER_PARK -> the commit_report row stays at intent (git cannot tell in a plain dir: unknown).
+test("M9 (pre-flight ruling 9): a spec-less awake_off or commit_report step left at intent is failed on resume, never parked or skipped", async (t) => {
   const steps = require("../lib/engine/steps");
   const h = mk(t);
-  steps.begin(h.db, { key: "awake_off:night", kind: "awake_off", facts: {} }, { now: h.clock.t });
+  for (const kind of ["awake_off", "commit_report"]) steps.begin(h.db, { key: `${kind}:night`, kind, facts: {} }, { now: h.clock.t });
   await h.eng.resume();
-  assert.equal(h.db.prepare("SELECT state FROM steps WHERE key='awake_off:night'").get().state, "failed");
-  assert.equal(h.of("step_failed").length, 1);
+  for (const kind of ["awake_off", "commit_report"]) assert.equal(h.db.prepare("SELECT state FROM steps WHERE key=?").get(`${kind}:night`).state, "failed", kind);
+  assert.equal(h.of("step_failed").length, 2);
   assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM waits").get().n, 0, "nothing parked");
-  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM steps WHERE state='intent'").get().n, 0, "the done-spec intent count no longer includes it");
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM steps WHERE state='intent'").get().n, 0, "the done-spec intent count no longer includes them");
 });
