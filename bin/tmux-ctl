@@ -804,7 +804,12 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
       done
       if [[ -z "$TMUX" ]]; then   # the restore job's launchd run: the session comes from --session
         [[ -n "$esess" ]] || die "engine start: usage: tmux-ctl engine start --session <name> [engine flags] (outside tmux)"
-        git rev-parse --show-toplevel >/dev/null 2>&1 || die "engine start: usage: run it from inside the project's git checkout (cwd $PWD is not in one): the engine window opens there"
+        ecwdroot="$(git rev-parse --show-toplevel 2>/dev/null)" || die "engine start: usage: run it from inside the project's git checkout (cwd $PWD is not in one): the engine window opens there"
+        # $HOME is itself a git repo on some machines: the cwd's checkout must be the one the project's main session works in
+        esp="$(t display -p -t "=$esess:^" '#{pane_current_path}' 2>/dev/null)"
+        espr="$(git -C "$esp" rev-parse --show-toplevel 2>/dev/null)" || espr=
+        [[ -n "$esp" && -n "$espr" ]] || die "engine start: session $esess has no git pane path (first window: '$esp'); cannot tell its checkout from cwd $ecwdroot"
+        [[ "${espr:A}" == "${ecwdroot:A}" ]] || die "engine start: cwd checkout $ecwdroot is not session $esess's checkout $espr"
         SESSION="$esess"; MAIN="$esess"
         FEEDKEY="$(t display -p -t "=$SESSION:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; FEEDKEY="${FEEDKEY:-$SESSION}"
         BG="$FEEDKEY-bg"

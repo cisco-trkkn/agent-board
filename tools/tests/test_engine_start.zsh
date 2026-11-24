@@ -73,7 +73,7 @@ check "second start: names the window" grep -q 'window engine already exists in 
 check "second start: still one engine window" test "$(wins tt-bg | grep -cx engine)" -eq 1
 
 # --session with TMUX unset (the restore job's launchd run), for another project on the same server
-tt new-session -d -s pj -c "$work" -x 200 -y 50
+tt new-session -d -s pj -c "$repo" -x 200 -y 50
 : > "$nodelog"
 out="$(cd "$repo" && env -u TMUX -u TMUX_PANE -u TC_SESSION -u AGENT_BOARD_LEAD "$ctl" engine start --session pj 2>&1)"; rc=$?
 check "--session without TMUX: returns 0" test $rc -eq 0
@@ -120,7 +120,7 @@ out="$(run engine start 2>&1)"; rc=$?
 check "engine dies at once: returns 1" test $rc -eq 1
 check "engine dies at once: no 'engine started'" test -z "$(grep 'engine started' <<< "$out")"
 check "engine dies at once: the log's last lines are printed" grep -q 'engine died: stub' <<< "$out"
-check "engine dies at once: the log ends with its exit status" grep -q 'engine exited rc=3' "$work/eng/tt.log"
+check "engine dies at once: the log ends with its exit status" tt_wait 10 grep -q 'engine exited rc=3' "$work/eng/tt.log"
 print "  (tt-bg has $(nwin tt-bg) windows)"
 rm -f "$work/die_now"
 
@@ -129,5 +129,16 @@ mkdir -p "$work/plain"
 out="$(cd "$work/plain" && env -u TMUX -u TMUX_PANE -u TC_SESSION -u AGENT_BOARD_LEAD "$ctl" engine start --session pj 2>&1)"; rc=$?
 check "TMUX unset, cwd outside a git checkout: returns 2" test $rc -eq 2
 check "TMUX unset, cwd outside a git checkout: the usage names the problem" grep -q 'not in one' <<< "$out"
+
+# TMUX unset, cwd in ANOTHER git checkout than the session's (a launchd run with cwd $HOME, itself a repo): refused, both paths named
+other="$work/other"; mkdir -p "$other"; git -C "$other" init -q
+out="$(cd "$other" && env -u TMUX -u TMUX_PANE -u TC_SESSION -u AGENT_BOARD_LEAD "$ctl" engine start --session pj 2>&1)"; rc=$?
+check "TMUX unset, cwd in another checkout: returns 2" test $rc -eq 2
+check "TMUX unset, cwd in another checkout: both paths named" test -n "$(grep -F "${other:A}" <<< "$out" | grep -F "${repo:A}")"
+# a session whose first pane is in no git checkout: refused
+tt new-session -d -s np -c "$work/plain" -x 200 -y 50
+out="$(cd "$repo" && env -u TMUX -u TMUX_PANE -u TC_SESSION -u AGENT_BOARD_LEAD "$ctl" engine start --session np 2>&1)"; rc=$?
+check "TMUX unset, session pane outside git: returns 2" test $rc -eq 2
+check "TMUX unset, session pane outside git: says so" grep -q 'has no git pane path' <<< "$out"
 
 tt_done
