@@ -4,6 +4,10 @@
 // file never writes a table but `inbox`.
 const inbox = require("./inbox");
 const lead = require("./lead");
+const queueReport = require("./queue_report");
+
+// The report hook of the real engine (core.start({report, reportPath})): the morning report and the path it will have.
+const reportHooks = { report: queueReport.write, reportPath: queueReport.reportPath };
 
 // A spec that still needs the engine: not done, and not a parked spec the end of a queue already failed (it keeps its
 // wait and resumes on a signal: spec section 11).
@@ -69,4 +73,4 @@ async function run(eng, { project }) {
   }
 }
 
-module.exports = { enqueue, done, openSpecs, unfinished, pendingEnqueue, step, run };
+module.exports = { reportHooks, enqueue, done, openSpecs, unfinished, pendingEnqueue, step, run };

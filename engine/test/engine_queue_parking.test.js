@@ -448,7 +448,8 @@ test("no answer: engine start exits 0 with the first spec failed — awaiting yo
   assert.equal(records().length, 1);
   assert.ok(records()[0].startsWith(`metrics record ${S1} --batch b1 --outcome failed — awaiting you: ${gate} --budget `), records()[0]);
   assert.equal(p.events("queue_finished").length, 1);
-  assert.deepEqual(p.lines(), [`[Engine] awaiting you: ${S1}: ${gate}`, "[Engine] queue finished: (no report)"]);
+  assert.deepEqual(p.lines(), [`[Engine] awaiting you: ${S1}: ${gate}`,
+    `[Engine] queue finished: docs/superpowers/reports/${new Date(p.events("spec_added")[0].ts * 1000).toISOString().slice(0, 10)}-queue.md`]);
   assert.equal(p.run(["status", "--unfinished"]).code, 1, "queue_finished closed the queue");
   assert.equal(p.run(["start", "--preflight"]).code, 1);
   const waiting = p.run(["status", "--waiting"]);

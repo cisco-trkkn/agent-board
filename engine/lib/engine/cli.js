@@ -126,7 +126,7 @@ function startCore(ctx, flags, backendKind, extra = {}) {
   const session = process.env.TC_SESSION || "";
   const { backend, tickMs, tmuxArgs } = makeBackend(backendKind, flags, session, tmuxCtl);
   const eng = core.start({
-    project: ctx.project, repo: ctx.repo, backend, tmuxCtl, session, tmuxArgs, tickMs, backendKind, ...extra,
+    project: ctx.project, repo: ctx.repo, backend, tmuxCtl, session, tmuxArgs, tickMs, backendKind, ...queue.reportHooks, ...extra,
     notify: notifier(ctx.project, ctx.out),
     onEvent: (e) => { if (!QUIET.test(e.kind)) ctx.out(eventLine(e)); },
   });

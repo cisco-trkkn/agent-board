@@ -161,8 +161,12 @@ test("a queue of an engine, a lead and a gated spec runs in order: kept, engine 
   assert.deepEqual([gate.gate, gate.rc, gate.line], ["K9", 1, GATE_LINE]);
   assert.equal(p.read((x) => x.prepare("SELECT policy_version FROM specs WHERE id=?").get(SPEC_L).policy_version), null, "R7: a lead-run spec has no policy version");
   // the lead-lines file: your turn once, at its event's seq
+  const reportRel = `docs/superpowers/reports/${new Date(p.events("spec_added")[0].ts * 1000).toISOString().slice(0, 10)}-queue.md`;
   assert.deepEqual(p.lines().map((l) => [l.seq, l.text]), [[seq("lead_turn", SPEC_L)[0], `[Engine] your turn: ${SPEC_L}`],
-    [p.events("queue_finished")[0].seq, "[Engine] queue finished: (no report)"]]);
+    [p.events("queue_finished")[0].seq, `[Engine] queue finished: ${reportRel}`]]);
+  assert.ok(fs.existsSync(path.join(p.repo.dir, reportRel)), "the report file is in the main checkout");
+  assert.match(fs.readFileSync(path.join(p.repo.dir, reportRel), "utf8"), /^# Queue report \d{4}-\d\d-\d\d\n\nWritten by the engine \(demo\)\.\n/);
+  assert.ok(p.ctlLog().some((l) => l.startsWith("artifact ") && l.endsWith(reportRel)) && p.ctlLog().includes("awake off"), "shown and the hold off");
   assert.ok(p.events("queue_finished")[0].seq > seq("fail_spec", SPEC_G)[0], "queue_finished is the queue's last event");
   assert.equal(typeof p.lines()[0].ts, "number");
   // metrics: start once, through the core's step, for the engine spec only (R17); the gate failure is recorded
@@ -330,7 +334,8 @@ test("engine start killed while a lead turn is open, then started again: no seco
   assert.equal(p.spec(SPEC_L).outcome, "merged abc1234");
   assert.equal(p.spec(SPEC_A).outcome, "kept spec-demo");
   assert.equal(p.events("lead_turn").length, 1);
-  assert.deepEqual(p.lines().map((l) => l.text), [`[Engine] your turn: ${SPEC_L}`, "[Engine] queue finished: (no report)"]);
+  assert.deepEqual(p.lines().map((l) => l.text), [`[Engine] your turn: ${SPEC_L}`,
+    `[Engine] queue finished: docs/superpowers/reports/${new Date(p.events("spec_added")[0].ts * 1000).toISOString().slice(0, 10)}-queue.md`]);
   assert.equal(p.run(["rebuild", "--check"]).code, 0);
 });
 
