@@ -29,6 +29,12 @@ has "line: awaiting you"                     '[Engine] awaiting you: <spec>: <qu
 has "engine done after a lead-run spec"      'tmux-ctl engine done <spec> --outcome'
 has "the lead never answers a parked spec"   'never answer it'
 has "the lead does not write the report"     'does not write the morning report'
+has "R5: exit 0 or 4 means the engine has the queue" 'Exit 0 or 4 from `tmux-ctl engine start` means the engine has the queue; any other exit: run the queue as steps 2 to 5 say.'
+has "a starting lead checks status --unfinished" 'A lead that starts while `tmux-ctl engine status --unfinished` exits 0 skips (1) to (3) and waits for `[Engine]` lines.'
+has "R4: the engine path replaces the batch starts" "replaces step 1's seq-sdd \`batch start\` and the up-front planning's batch start, and the engine writes \`metrics start\` for engine-run specs"
+has "queue finished ends with awake off"     'then run `tmux-ctl awake off`'
+has "queue finished: no report"              'When the path is `(no report)`, write the report as step 5 says.'
+has "queue finished: report_uncommitted"     'commit the report together with the rulings'
 block="$(cat "$HANDOFF")"
 has "handoff doc says Engine: running"       'Engine: running'
 has "handoff doc lists engine status"        'tmux-ctl engine status'
