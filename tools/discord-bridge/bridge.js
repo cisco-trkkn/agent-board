@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const outbox = require('./lib/outbox');
 const stateLib = require('./lib/state');
 const commands = require('./lib/commands');
+const watch = require('./lib/watch');
 
 const CARD_MIN_MS = 30000;
 const BACKOFF_START = 1000;
@@ -48,7 +49,7 @@ function isRetryable(e) {
   return /socket hang up|fetch failed|network|timed? ?out/i.test(String(e?.message));
 }
 
-function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), heartbeat = watch.heartbeatFile() }) {
   const token = readToken(dir);
   let st = stateLib.read(dir);
   let pendingCard = null; // {text} held back by the 30 s throttle
@@ -428,6 +429,24 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     } finally { busy = false; }
   }
 
+  // Night watch (spec 2026-11-23-night-watch-design.md §5): project mode only, called every watch.CHECK_MS by main().
+  // State in <dir>/watch-state.json, so a bridge restart neither repeats a down post nor forgets one.
+  async function watchTick() {
+    if (ops || closed) return null;
+    const file = path.join(dir, 'watch-state.json');
+    const { next, text } = watch.decide(readJson(file, null), watch.readHeartbeat(heartbeat), path.basename(dir), now());
+    if (text) {
+      const c = cfg();
+      const down = text.startsWith('⚠️');
+      const content = down && c.user ? `<@${c.user}> ${text}` : text;
+      await withRetry(async () => (await home()).send({ content, allowedMentions: down && c.user ? { users: [String(c.user)] } : { parse: [] } }));
+      say(`watch ${snip(text)}`);
+    }
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(next));
+    fs.renameSync(`${file}.tmp`, file);
+    return text;
+  }
+
   // Slash commands: once per connection, in the guild of the home channel. Failure is logged only.
   let registered = false;
   async function register(ch) {
@@ -685,7 +704,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   function close() { closed = true; }
 
   const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
-  return { ctx, tick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
+  return { ctx, tick, watchTick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 
 function main() {
@@ -716,6 +735,7 @@ function main() {
   bridge = createBridge({ dir, client, ops: process.argv.includes('--ops'), log });
   bridge.attach();
   timer = setInterval(() => { bridge.tick().catch((e) => log(`tick error: ${scrub(e?.message)}`)); }, TICK_MS);
+  setInterval(() => { bridge.watchTick().catch((e) => log(`watch error: ${scrub(e?.message)}`)); }, watch.CHECK_MS);
   client.login(token).catch((e) => { log(`login failed: ${scrub(e?.message)}`); process.exit(1); });
 }
 
