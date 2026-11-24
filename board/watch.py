@@ -110,6 +110,8 @@ class Watch:
         now = self.now()
         if self.stalls is None:
             self.stalls = self._load()
+            # a project with a persisted stall was in queue mode before the restart: keep awake_dropped's grace
+            self._queue = frozenset(k.split("\t")[0] for k in self.stalls)
         recs = {p["project"]: p for p in ov.get("projects") or [] if p.get("queue")}
         try:
             _write_json(self.heartbeat, {"at": iso(now), "queue": sorted(recs)})

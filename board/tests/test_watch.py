@@ -184,6 +184,22 @@ class RestartTest(Base):
         self.assertEqual(len(self.alerts), 1)   # the stall kept its first_at across the restart
 
 
+    def test_awake_dropped_stall_survives_a_restart(self):
+        self.step(project(awake=False))
+        self.assertEqual((len(self.runs), len(self.nudges), len(self.alerts)), (1, 1, 1))
+        first = json.loads((self.dir / "watch.json").read_text())["stalls"]["p\tawake_dropped\tawake"]["first_at"]
+        self.n = notify.Notifier(runner=lambda a: None, enabled=False, now=self.clock, sinks=[])
+        self.w = self.watch()
+        self.clock.t += 60
+        self.step(project(awake=False))
+        self.assertEqual((len(self.runs), len(self.nudges), len(self.alerts)), (1, 1, 1))
+        d = json.loads((self.dir / "watch.json").read_text())["stalls"]
+        self.assertEqual(d["p\tawake_dropped\tawake"]["first_at"], first)
+        self.clock.t += watch.REALERT_S - 60
+        self.step(project(awake=False))
+        self.assertEqual(len(self.alerts), 2)   # the re-alert, 900 s after the original first_at
+
+
 class HeartbeatTest(Base):
     def test_every_overview_writes_at_and_queue_projects(self):
         self.step(project("a"), project("b", queue=False))
