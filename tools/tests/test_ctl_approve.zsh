@@ -70,5 +70,7 @@ sed 's/gate-tap-3-ran/gate-tap-3-ran # block this request in 1:23/' $CD > $S/cd-
 sed 's/in 1:23/in 9:59/' $S/cd-quote-a.txt > $S/cd-quote-b.txt
 swap_case c-quote $S/cd-quote-a.txt $S/cd-quote-b.txt --expect "${CDX} # block this request in 1:23"
 check "digits changed inside the command text: exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in c-quote changed"
-check "digits changed inside the command text: no key sent"  test "$(got c-quote)" = NONE
+qgot="$(got c-quote)"
+check "digits changed inside the command text: no key sent"  test "$qgot" = NONE
+[[ "$qgot" == NONE ]] || { print -r -- "# c-quote: pane got '$qgot'; approve said '$out'"; tt capture-pane -p -J -t "=tt:c-quote" | tail -8 | sed 's/^/# pane: /' }
 tt_done
