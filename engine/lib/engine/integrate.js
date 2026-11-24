@@ -10,6 +10,8 @@ const { loadConfig } = require("./policy");
 
 const TEST_TIMEOUT = 30 * 60 * 1000;
 const PROTECTED = new Set(["main", "master"]);
+// A terminal outcome that is not a success: `failed — …` and `denied: <question>` (the only strings the engine emits).
+const isFailure = (outcome) => /^(failed|denied)/.test(String(outcome));
 const target = (ctx) => ctx.target || "main";
 const envOf = (ctx) => ({ ...process.env, ...(ctx.env || {}) });
 const tmuxCtl = (ctx) => ctx.tmuxCtl || process.env.TC_TMUX_CTL || path.join(ctx.repo, "bin/tmux-ctl");
@@ -125,7 +127,7 @@ function commitLedger(ctx, spec, outcome = "") {
   const rel = path.join("docs/superpowers/ledgers", path.basename(spec.plan || spec.id).replace(/\.md$/, ""));
   const file = path.join(rel, "progress.md");
   // A failed or denied spec never merged: its ledger goes on the spec branch whatever the stored answer.
-  const onSpecBranch = spec.integration === "mr" || spec.integration === "keep" || String(outcome).startsWith("failed") || outcome === "denied";
+  const onSpecBranch = spec.integration === "mr" || spec.integration === "keep" || isFailure(outcome);
   const dir = onSpecBranch ? (spec.worktree || ctx.worktree) : ctx.repo;
   const branch = onSpecBranch ? spec.branch : target(ctx);
   run(ctx, spec, "commit_ledger", `commit_ledger:${spec.id}`, { branch, dir }, () => {
@@ -198,4 +200,4 @@ function revert(ctx, spec) {
   return { outcome: "reverted", merge: sha, revert: r.result.revert };
 }
 
-module.exports = { run: runIntegrate, revert, finalize, runTests, liveCheckoutBusy };
+module.exports = { isFailure, run: runIntegrate, revert, finalize, runTests, liveCheckoutBusy };

@@ -90,3 +90,25 @@ test("apply: dead pid or junk lock is not held", () => {
   fs.writeFileSync(paths.lockPath("p"), "2147483646\n");
   assert.equal(rebuild.apply("p").rc, 0);
 });
+
+// ---- final review I6: a pending user answer survives rebuild ------------------------------------------------
+function withNewInboxRow(project) {
+  seed(project);
+  const d = db.open(project);
+  d.prepare("INSERT INTO inbox (source, source_id, spec, kind, payload, received_at, state) VALUES ('user','sig-1','s1','signal','{}',5,'new')").run();
+  d.close();
+}
+
+test("check: a state='new' inbox row (written without an event) is not a difference", () => {
+  withNewInboxRow("p");
+  assert.deepEqual(rebuild.check("p"), { rc: 0, diffs: [] });
+});
+
+test("apply: a state='new' inbox row survives", () => {
+  withNewInboxRow("p");
+  assert.equal(rebuild.apply("p").rc, 0);
+  const d = db.open("p");
+  const rows = d.prepare("SELECT source_id, state FROM inbox").all().map((r) => ({ ...r }));
+  d.close();
+  assert.deepEqual(rows, [{ source_id: "sig-1", state: "new" }]);
+});

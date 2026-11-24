@@ -35,6 +35,10 @@ function replay(project) {
   }
 }
 
+// `inbox.insert` writes no event (inbox.js), so a row still `new` exists only in the live table: replay cannot know it.
+const PENDING = { inbox: "state='new'" };
+const isPending = (t, r) => t === "inbox" && r.state === "new";
+
 const show = (v) => (v === null || v === undefined ? "NULL" : String(v));
 
 function diff(live, data) {
@@ -42,8 +46,8 @@ function diff(live, data) {
   for (const t of tablesOf(live)) {
     const pk = pkOf(live, t);
     const key = (r) => pk.map((c) => show(r[c])).join("|");
-    const l = new Map(live.prepare(`SELECT * FROM ${t}`).all().map((r) => [key(r), r]));
-    const p = new Map((data[t] || []).map((r) => [key(r), r]));
+    const l = new Map(live.prepare(`SELECT * FROM ${t}${PENDING[t] ? ` WHERE NOT (${PENDING[t]})` : ""}`).all().map((r) => [key(r), r]));
+    const p = new Map((data[t] || []).filter((r) => !isPending(t, r)).map((r) => [key(r), r]));
     for (const [k, lr] of l) {
       const pr = p.get(k);
       if (!pr) { diffs.push(`${t} ${k}: missing in replay`); continue; }
@@ -80,7 +84,7 @@ function apply(project) {
     fs.copyFileSync(paths.dbPath(project), backup);
     db.tx(r.live, () => {
       for (const [t, rows] of Object.entries(r.data)) {
-        r.live.exec(`DELETE FROM ${t}`);
+        r.live.exec(`DELETE FROM ${t}${PENDING[t] ? ` WHERE NOT (${PENDING[t]})` : ""}`);
         for (const row of rows) db.put(r.live, t, row);
       }
     });

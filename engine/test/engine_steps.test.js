@@ -229,21 +229,20 @@ test("feed.publish: tier map, spec name, text, refs", () => {
   const { e } = env();
   const tiers = {
     fail_spec: "critical", engine_error: "critical", park: "decision", awaiting_you: "decision",
-    job_done: "progress", review_verdict: "progress", merge: "progress", step_done: "routine",
+    job_done: "progress", review: "progress", integrated: "progress", spec_done: "progress", step_done: "routine", task_complete: "routine",
   };
   for (const [k, t] of Object.entries(tiers)) feed.publish("p", ev(k));
-  feed.publish("p", ev("ruling", { detail: { needs_user: true } }));
   feed.publish("p", ev("ruling"));
   feed.publish("p", ev("job_done", { detail: { text: "x".repeat(400) + "\nmore" }, top: { job: "s:implement1:1" } }));
   const lines = fs.readFileSync(paths.feedPath("p"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  assert.deepEqual(lines.slice(0, 8).map((l) => l.tier), Object.values(tiers));
-  assert.equal(lines[8].tier, "decision");
-  assert.equal(lines[9].tier, "routine");
+  const n = Object.keys(tiers).length;
+  assert.deepEqual(lines.slice(0, n).map((l) => l.tier), Object.values(tiers));
+  assert.equal(lines[n].tier, "routine");
   assert.equal(lines[0].spec, "2026-11-23-x-design");
   assert.equal(lines[0].project, "p");
   assert.equal(lines[0].text, "fail_spec");
   assert.deepEqual(lines[0].refs, {});
-  const last = lines[10];
+  const last = lines[n + 1];
   assert.equal(last.text.length, 300);
   assert.ok(!last.text.includes("\n"));
   assert.ok(last.text.startsWith("job_done: xxx"));

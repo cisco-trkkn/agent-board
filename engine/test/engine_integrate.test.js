@@ -252,7 +252,7 @@ test("ledger.render lines are counted by metrics.py ledger_fields", () => {
 // ---- task 8b: a failed spec's ledger goes on the spec branch ---------------------------------------------------
 // Mutation run for this guard: `outcome.startsWith("failed")` dropped from the onSpecBranch test in commitLedger ->
 // the merge-integration case fails (the ledger lands on main, and main's HEAD moves).
-for (const outcome of ["failed — implement1: gone", "failed", "denied"]) {
+for (const outcome of ["failed — implement1: gone", "failed", "denied: user gate: task 1 T1"]) {
   test(`finalize(${outcome}) on a merge spec: ledger on the spec branch, main untouched, resume does not commit again`, () => {
     const s = setup({ integration: "merge" });
     const mainHead = s.g.git("rev-parse", "main").trim();

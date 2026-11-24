@@ -623,14 +623,14 @@ function start(opts) {
     } else if (c.type === "set_state" && c.state === "done") {
       const merged = lastEvent(spec.id, "integrated");
       // section 4: a spec that fails after tests red after its merge reverts that merge
-      if (merged && merged.detail.outcome === "tests_red" && /^failed/.test(String(c.outcome))) await revertFn(spec);
+      if (merged && merged.detail.outcome === "tests_red" && realIntegrate.isFailure(c.outcome)) await revertFn(spec);
       // every terminal outcome, failed and denied included, gets its ledger archive and metrics record. This runs before
       // the event commits; finalize's steps are keyed per spec, so a replay after a crash runs none of them twice.
       await finalizeFn(spec, c.outcome);
       const rows = [["specs", { ...spec, state: "done", outcome: c.outcome === undefined ? null : c.outcome, updated_at: t }]];
       const wait = inbox.openWaitFor(db, spec.id);
       if (wait) rows.push(["waits", { ...wait, answered_at: t, answer: "closed", note: "the spec ended" }]);
-      emit(/^(failed|denied)/.test(String(c.outcome)) ? "fail_spec" : "spec_done", { ...base, rows, outcome: c.outcome, text: String(c.outcome) });
+      emit(realIntegrate.isFailure(c.outcome) ? "fail_spec" : "spec_done", { ...base, rows, outcome: c.outcome, text: String(c.outcome) });
     } else if (c.type === "set_state") {
       emit("spec_state", { ...base, rows: [["specs", { ...spec, state: c.state, updated_at: t }]], state: c.state });
     } else if (c.type === "log") {
@@ -849,6 +849,12 @@ function start(opts) {
     });
   }
 
+  // The brief and report paths of a job, the same for a fresh dispatch and for a worker adopted after a crash.
+  function jobPaths(spec, job) {
+    const ws = paths.workspace(spec.worktree || repo);
+    return { brief: path.join(ws, "briefs", `${fileName(job.id)}.md`), report: path.join(ws, "reports", `${fileName(job.id)}.md`) };
+  }
+
   async function dispatch() {
     if (db.prepare("SELECT 1 FROM jobs WHERE state='running' LIMIT 1").get()) return; // concurrency 1
     const job = db.prepare("SELECT j.* FROM jobs j JOIN specs s ON s.id=j.spec WHERE j.state='pending' AND s.state NOT IN ('queued','done','awaiting_you') ORDER BY j.rowid LIMIT 1").get();
@@ -865,10 +871,8 @@ function start(opts) {
     if (usagePaused()) return;
     const spec = get("specs", job.spec);
     const wt = spec.worktree || repo;
-    const ws = paths.workspace(wt);
     const d = detailOf(job);
-    const ready = { ...job, brief: path.join(ws, "briefs", `${fileName(job.id)}.md`), report: path.join(ws, "reports", `${fileName(job.id)}.md`),
-      window: `${slugOf(spec)}·${label(job)}` };
+    const ready = { ...job, ...jobPaths(spec, job), window: `${slugOf(spec)}·${label(job)}` };
     const text = briefFor(spec, ready, ready.report);
     fs.mkdirSync(path.dirname(ready.brief), { recursive: true });
     fs.mkdirSync(path.dirname(ready.report), { recursive: true });
@@ -1028,7 +1032,8 @@ function start(opts) {
           const job = res.reconciled && res.job ? get("jobs", res.job) : null;
           if (!job || job.state !== "pending" || !res.pane) continue;
           const t = now();
-          const running = { ...job, state: "running", started_at: t, window: res.window, pane: res.pane };
+          const spec = get("specs", job.spec);
+          const running = { ...job, ...jobPaths(spec, job), state: "running", started_at: t, window: res.window, pane: res.pane, base: gitHead(spec.worktree || repo) };
           emit("dispatched", { spec: job.spec, job: job.id, rows: deadlineRows(running, detailOf(job), t + HEARTBEAT_S).rows, task: job.task === null ? "-" : job.task,
             window: res.window, tier: job.tier, model: job.model, how: "adopted" });
         }

@@ -1041,3 +1041,106 @@ test("resume: an adopted job's heartbeat and no-progress deadlines are re-armed 
   assert.deepEqual(reason(), ["heartbeat_timeout"]);
   assert.deepEqual(rebuild.check("demo").diffs, []);
 });
+
+// ---- final review fixes (I1, I3) ----------------------------------------------------------------------------
+// Mutations run for these guards: the /^failed/ revert test of core.js back in place -> the I1 core test fails (no revert);
+// the adoption row built from the pending job again -> the I3 test fails (brief and report null).
+
+test("I1: tests red after the merge, architect parks, user denies -> the merge is reverted, then the denied spec is finalized", async (t) => {
+  const calls = [];
+  const h = mk(t, { script: { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS), architect: worker(DECIDE("park")) },
+    integrate: async () => ({ outcome: "tests_red", merge: "abc" }),
+    revert: async (spec) => { calls.push(["revert", spec.id]); return { outcome: "reverted" }; },
+    finalize: async (spec, outcome) => { calls.push(["finalize", outcome]); } });
+  h.add();
+  await h.until(() => h.spec().state === "awaiting_you");
+  h.signal("deny");
+  await h.until(h.done);
+  assert.match(h.spec().outcome, /^denied: /);
+  assert.deepEqual(calls.map((c) => c[0]), ["revert", "finalize"]);
+  assert.equal(h.of("fail_spec").length, 1);
+});
+
+test("I3: a worker adopted after a crash during dispatch gets its brief and report paths and can finish", async (t) => {
+  const h = mk(t, { script: { implement1: [{ status: "busy", at: 1 }] } });
+  h.add();
+  await h.until(() => h.job("demo:implement1:1") && h.job("demo:implement1:1").state === "running");
+  const j = h.job("demo:implement1:1");
+  h.eng.stop();
+  // the state at the crash: the job still pending (the `dispatched` event never committed), the step row says the window exists
+  const d = require("../lib/engine/db").open("demo");
+  d.exec(`UPDATE jobs SET state='pending', brief=NULL, report=NULL, base=NULL, pane=NULL, started_at=NULL WHERE id='${j.id}'`);
+  d.exec(`DELETE FROM steps WHERE key='start_worker:${j.id}'`);
+  d.prepare("INSERT INTO steps (key, spec, kind, state, result, created_at, updated_at) VALUES (?,?,?,?,?,1,1)")
+    .run(`start_worker:${j.id}`, SPEC, "start_worker", "done", JSON.stringify({ reconciled: true, job: j.id, window: j.window, pane: "%77" }));
+  d.close();
+  const clock = h.clock;
+  const backend = wrap(fake.createBackend({ script: {}, now: () => clock.t }), clock);
+  backend.adopt = async () => true;
+  const e2 = core.start({ project: "demo", repo: h.wt, now: () => clock.t, tmuxCtl: path.join(h.env.root, "tmux-ctl"), backend,
+    integrate: async () => ({ outcome: "merged" }), finalize: async () => {}, tell: () => {}, notify: () => {}, transcriptRoot: h.env.root });
+  t.after(() => e2.stop());
+  await e2.resume();
+  const row = e2.db.prepare("SELECT * FROM jobs WHERE id=?").get(j.id);
+  assert.equal(row.state, "running");
+  assert.equal(row.pane, "%77");
+  assert.ok(row.brief && row.brief.endsWith(".md"), `brief ${row.brief}`);
+  assert.ok(row.report && row.report.endsWith(".md"), `report ${row.report}`);
+  fs.mkdirSync(path.dirname(row.report), { recursive: true });
+  fs.writeFileSync(row.report, DONE);
+  backend.push(status({ job: row.id, window: row.window, pane: row.pane }, "ready", clock));
+  clock.t += 5; await e2.tick();
+  assert.equal(e2.db.prepare("SELECT state FROM jobs WHERE id=?").get(j.id).state, "done");
+});
+
+// The core with the real integrate.js on a scratch repo for a `merge` spec: no fake integrate, finalize or revert.
+function realMerge(t, { tasks, script }) {
+  const env = tmpEnv();
+  const g = gitRepo();
+  fs.mkdirSync(path.join(g.dir, "docs/superpowers"), { recursive: true });
+  fs.writeFileSync(path.join(g.dir, "docs/superpowers/engine.json"), JSON.stringify({ test: "true" }));
+  fs.writeFileSync(path.join(g.dir, ".gitignore"), ".superpowers/\n");
+  g.git("add", "docs/superpowers/engine.json", ".gitignore");
+  g.git("commit", "-q", "-m", "engine.json");
+  const wt = path.join(env.root, "wt");
+  g.git("worktree", "add", "-q", "-b", "spec-demo", wt, "main");
+  fs.mkdirSync(path.join(wt, "docs/superpowers/plans"), { recursive: true });
+  fs.mkdirSync(path.join(wt, "docs/superpowers/specs"), { recursive: true });
+  fs.writeFileSync(path.join(wt, `${PLAN}.tasks.json`), JSON.stringify({ tasks }));
+  fs.writeFileSync(path.join(wt, SPEC), "# Demo\n\n## Decisions\n\n- D1: keep it small.\n");
+  cp.execFileSync("git", ["-C", wt, "add", "docs"]);
+  cp.execFileSync("git", ["-C", wt, "commit", "-q", "-m", "feat"]);
+  const ctl = path.join(env.root, "tmux-ctl");
+  fs.writeFileSync(ctl, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const clock = { t: 1000 };
+  const backend = wrap(fake.createBackend({ script, now: () => clock.t }), clock);
+  const eng = core.start({ project: "demo", repo: g.dir, backend, now: () => clock.t, tmuxCtl: ctl, tell: () => {}, notify: () => {},
+    transcriptRoot: path.join(env.root, "transcripts"), sleep: async () => { clock.t += 5; } });
+  t.after(() => { eng.stop(); g.cleanup(); env.restore(); });
+  const spec = () => eng.db.prepare("SELECT * FROM specs WHERE id=?").get(SPEC);
+  return { g, wt, eng, clock, spec,
+    add: () => eng.addSpec({ id: SPEC, plan: PLAN, worktree: wt, branch: "spec-demo", integration: "merge", push: 0, batch: null }),
+    async until(pred, max = 400) { for (let i = 0; i < max && !pred(); i++) { clock.t += 5; await eng.tick(); } assert.ok(pred(), `not reached; spec ${JSON.stringify(spec())}; events ${eng.db.prepare("SELECT kind, detail FROM events ORDER BY seq DESC LIMIT 8").all().map((e) => e.kind + " " + e.detail.slice(0, 160)).join(" // ")}`); },
+    hasLedger: (ref) => g.git("ls-tree", "-r", "--name-only", ref).split("\n").some((f) => f.endsWith("progress.md")) };
+}
+
+test("real integrate, merge spec: a done spec merges and its ledger lands on main", async (t) => {
+  const r = realMerge(t, { tasks: [task("T1")], script: { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) } });
+  r.add();
+  await r.until(() => r.spec().state === "done");
+  assert.equal(r.spec().outcome, "merged");
+  assert.ok(r.hasLedger("main"));
+});
+
+test("I1: a denied merge spec (real integrate) puts its ledger on the spec branch and never moves main", async (t) => {
+  const r = realMerge(t, { tasks: GATED(), script: {} });
+  const main = r.g.git("rev-parse", "main").trim();
+  r.add();
+  await r.until(() => r.spec().state === "awaiting_you");
+  assert.equal(inbox.signal(r.eng.db, SPEC, "deny", undefined, r.clock.t).rc, 0);
+  await r.until(() => r.spec().state === "done");
+  assert.match(r.spec().outcome, /^denied: /);
+  assert.equal(r.g.git("rev-parse", "main").trim(), main, "main did not move");
+  assert.ok(r.hasLedger("spec-demo"), "ledger on the spec branch");
+  assert.ok(!r.hasLedger("main"));
+});

@@ -6,11 +6,11 @@ const paths = require("./paths");
 
 const CRITICAL = new Set(["fail_spec", "engine_error"]);
 const DECISION = new Set(["park", "awaiting_you"]);
-const PROGRESS = new Set(["job_done", "review_verdict", "merge"]);
+const PROGRESS = new Set(["job_done", "review", "integrated", "spec_done"]);
 
-function tier(event, detail) {
+function tier(event) {
   if (CRITICAL.has(event.kind)) return "critical";
-  if (DECISION.has(event.kind) || (event.kind === "ruling" && detail.needs_user)) return "decision";
+  if (DECISION.has(event.kind)) return "decision";
   if (PROGRESS.has(event.kind)) return "progress";
   return "routine";
 }
@@ -34,7 +34,7 @@ function line(project, event) {
   const s = summary(detail);
   const text = `${event.kind}${s ? ": " + s : ""}`.replace(/\s+/g, " ").trim().slice(0, 300);
   return {
-    ts: event.ts, project, spec: specName(event.spec), kind: event.kind, tier: tier(event, detail), text,
+    ts: event.ts, project, spec: specName(event.spec), kind: event.kind, tier: tier(event), text,
     refs: event.job ? { run: event.job } : {},
   };
 }
