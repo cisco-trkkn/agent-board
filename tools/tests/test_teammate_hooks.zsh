@@ -179,6 +179,6 @@ kill $rp 2>/dev/null; wait $rp 2>/dev/null
 check "real ps: name and lead id read from a real process" test "$(field "$D/realmate.json" text)" = "real run"
 check "real ps: key not stored"                         zsh -c '! grep -rq "$1" "$2"' _ "$SECRET" "$TC_STATE"
 sleep 1.5
-check "leak: no stray process"                          zsh -c '! pgrep -f -- "--agent-name realmate" >/dev/null' _
+check "leak: no stray process"                          zsh -c '! pgrep -f -- "--agent-name realmat[e]" >/dev/null' _
 
 tt_done

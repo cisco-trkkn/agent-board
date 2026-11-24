@@ -704,7 +704,7 @@ def main(argv):
             print(line)
         return 0
     if argv[:1] in (["install"], ["uninstall"], ["status"]):
-        if sys.platform != "darwin" and "TW_LAUNCHCTL" not in os.environ:
+        if sys.platform != "darwin" and "TW_LAUNCHCTL" not in os.environ and not shutil.which("launchctl"):
             print("discord watch: launchd is macOS only; run `tmux-ctl discord watch --once` from cron or a timer", file=sys.stderr)
             return 2
         try:

@@ -67,6 +67,14 @@ Source: `docs/superpowers/notes/2026-11-20-efficiency-learnings-for-pcee.md`; th
 - **E3.** A job's end event carries its final context size and the limits reading (section 1, `jobs`).
 - **E4.** Applied (docs/superpowers/notes/2026-11-20-worker-context-probe.md): each job kind has a tools/mcp list, allow-all by default (section 3, step 2).
 
+## Revised 2026-11-23: typed ask and per-spec budget (F1, F2; user, Discord 21:39Z)
+
+Source: the ideas regroup, group F (from the Archon study, `docs/superpowers/notes/2026-11-20-archon-insights-for-pcee.md`).
+Both are Part 2 work, specified in sections 8a and 8b; section 10.3's `waits` row gains the two columns of 8a.
+
+- **F1.** Every parked question is typed and carries a recommendation; metrics count how often the user follows it (8a).
+- **F2.** Each spec has an attempts and tokens budget in the engine core; unmeasurable cost parks the spec (8b).
+
 ## Problem
 
 One Opus lead session runs the whole queue. On the 12 baseline specs it is 48 to 74% of each spec's cost, nearly
@@ -332,6 +340,55 @@ Queue mode in `claude/orchestrator.md` (carrying the user's uncommitted edit as 
 start (section 6); what the five `[Engine]` lines mean; `engine done` after a lead-run spec; the lead no longer
 writes the morning report when an engine runs the queue. With `TC_ENGINE=0`, or when `engine start` fails, Queue
 mode runs as before this stage.
+
+#### 8a. Typed ask (Part 2; F1, 2026-11-23)
+
+- `waits` gains `kind` and `recommendation`. `kind` is one of `stop_class`, `needs_you`, `architect_park`,
+  `policy_change`, `cannot_tell`, `user_gate`, `budget` (the parking causes of 10.3, plus 8b).
+  `recommendation` is JSON `{"option": <one of the wait's options>, "why": <one line>, "confidence": "low|medium|high"}`.
+  Writing a wait without both is an error: `db.put` of a `waits` row checks them.
+- Source: the architect job's `park` decision carries the recommendation (its report's `json:status` gains
+  `recommend`, same shape; a report without it fails parse like any malformed report). Every other kind takes a fixed
+  default from `policy.js` `ASK_DEFAULTS`: `cannot_tell` → approve, "the check cannot see the side effect; it most
+  likely ran", low; `policy_change` → approve, "the new policy was set by the user", medium; `needs_you` → approve,
+  "the worker is waiting on a prompt it raised", low; `stop_class` → deny, "an irreversible step needs your yes", medium;
+  `user_gate` → approve, "the plan marks this task as yours to check", low; `budget` → see 8b. The defaults are
+  part of the policy hash (10.5).
+- Shown first: `engine status --waiting`, the `decision` feed line and the Discord post lead with
+  `I recommend: <option> (<confidence>): <why>`, then the question and the signal commands.
+- On an answer the `ruling` event records `kind`, `recommended`, `answer` and `followed` (answer == recommended
+  option). The engine appends one `ask` record per answer through `tmux-ctl metrics append ask --json …`
+  (`{spec, batch, kind, recommended, confidence, answer, followed, asked_at, answered_at}`; `board/metrics.py` gains
+  the `ask` kind). The morning report's Metrics section gains `asks: <n>, followed <k> (<pct>%)` overall and per kind.
+
+#### 8b. Per-spec budget (Part 2; F2, 2026-11-23)
+
+- Budget per spec: `attempts` (job attempts of every kind, default 60) and `tokens` (default 5000000), from
+  `docs/superpowers/engine.json` `"budget": {"attempts": N, "tokens": N}`, overridden per spec by
+  `engine run|enqueue --budget-attempts N --budget-tokens N`. Stored on the `specs` row (`budget_attempts`,
+  `budget_tokens`) with the spend counters `spent_attempts`, `spent_tokens`.
+- Before each dispatch the core writes a `budget_reserve` event (intent: job id, attempt) in the same transaction
+  that increments `spent_attempts`, then dispatches. At job end it reads the job's tokens (input + output + cache
+  creation, from the worker transcript's usage rows for that job; the claude-tmux backend reports them, the fake
+  backend takes them from its script) and adds them to `spent_tokens` in the transaction that records the job's end.
+- A finished job whose tokens cannot be measured (no transcript, no usage rows) parks the spec: kind `budget`,
+  question `cost unknown for job <id>`, recommendation approve / "count it as unknown and go on" / low. On approve
+  the job's tokens are recorded as `null` and the spec's report marks its spend as a lower bound.
+- Reaching either cap before a dispatch parks the spec: kind `budget`, question
+  `budget reached: <attempts a/A, tokens t/T>`, options `approve|fail`, recommendation approve / "extend by 50%" /
+  medium when the spec's last three tasks completed without a fix round, else fail / "the spec is looping" / medium.
+  Approve raises the reached cap(s) by 50% and dispatches.
+- `engine status <spec>` shows `attempts a/A · tokens t/T`. `metrics record` stores both in the record.
+- Resume (section 9): a `budget_reserve` with no matching dispatch is reconciled like any intent step (10.4): the
+  job is dispatched (the attempt stays counted), never counted twice.
+
+#### Testing additions (8a, 8b)
+
+Each parking site writes a kind and a recommendation (a missing one is a thrown error, tested); the architect
+report without `recommend` is malformed; `followed` true and false recorded and the `ask` metrics line written;
+a fake backend with fixed token counts reaches the token cap and parks with the right recommendation; approve
+extends by 50%; unmeasurable usage parks; a kill between `budget_reserve` and dispatch resumes to one dispatch and one
+counted attempt.
 
 ### Both parts
 

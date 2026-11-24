@@ -14,9 +14,14 @@ jobs:
       PYTHONFAULTHANDLER: "1"   # a crash prints the Python stack
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tests read old commits (git show a773c48:...); a depth-1 clone lacks them
       - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"   # install.sh --check and the engine need node >= 22.13; ubuntu-24.04 ships 20
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
         run: brew install tmux ttyd fzf jq zsh
