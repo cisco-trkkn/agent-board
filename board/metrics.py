@@ -666,7 +666,10 @@ def attributed_rows(conn, root, branch, wt_dirs, window, others):
     return out
 
 
-def budget(weighted, prices):
+def budget(weighted, prices, engine_jobs=None):
+    """engine_jobs = {session id: job kind}: those sessions are agents (never the lead); an `architect` one is control."""
+    engine_jobs = engine_jobs or {}
+    control = 0.0
     tot = {k: 0.0 for k in LEAD_KEYS}
     usd = unpriced = 0
     by_role = {"lead": [0.0, 0.0], "agents": [0.0, 0.0]}
@@ -676,7 +679,10 @@ def budget(weighted, prices):
         c = usage.call_cost(r, prices)
         if c is None:
             unpriced += 1
-        role = by_role["lead" if is_lead(r) else "agents"]
+        engine = r["session_id"] in engine_jobs
+        role = by_role["lead" if is_lead(r) and not engine else "agents"]
+        if (is_lead(r) and not engine) or engine_jobs.get(r["session_id"]) == "architect":
+            control += t
         role[0] += t
         role[1] += (c or 0.0) * w
         usd += (c or 0.0) * w
@@ -690,6 +696,8 @@ def budget(weighted, prices):
             "usd": round(usd, 6), "unpriced_calls": unpriced,
             "by_role": {k: {"tokens": round(v[0]), "usd": round(v[1], 6)} for k, v in by_role.items()},
             "lead_share": round(by_role["lead"][0] / sum(v[0] for v in by_role.values()), 4) if total else None,
+            "control_tokens": round(control),
+            "control_share": round(control / sum(v[0] for v in by_role.values()), 4) if total else None,
             "by_model": {m: round(v) for m, v in by_model.items()}, "lead_shared": shared}
 
 
@@ -826,7 +834,7 @@ def manifest_tokens(conn, spec, batch, batch_line, lo, hi):
 
 
 def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, project=None, window=None, plan=None, merge=None,
-                 batch_base=None, backfilled=False):
+                 batch_base=None, backfilled=False, engine_jobs=None, budget_spec=None):
     """The whole `run` line: build_record_static plus the usage half. `window` = (start_ts, end_ts, kind) overrides
     the stamped window (backfill)."""
     repo = Path(repo)
@@ -865,7 +873,8 @@ def build_record(repo, spec, batch, outcome, now, branch=None, conn=None, projec
     if start and start.get("worktree"):
         wt = set(wt) | {os.path.join(root, start["worktree"])}   # rows of a worktree removed before record still count
     weighted = attributed_rows(conn, root, rec["branch"], wt, (lo, hi), others)
-    rec.update(budget(weighted, usage.load_prices()))
+    rec.update(budget(weighted, usage.load_prices(), engine_jobs))
+    rec["budget"] = budget_spec
     rec.update(time_fields((batch_line or {}).get("at"), lo, hi, weighted))
     if backfilled:
         # today's tap reading says nothing about a run that ended days ago; ready_at/wait_s have no batch line either
@@ -950,14 +959,28 @@ def ingest_project(conn, root):
                 pass
 
 
+def _json_flag(text, name):
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        raise MetricsError(f"{name} is not valid JSON")
+
+
 def cmd_record(repo, args):
+    budget_spec = _json_flag(args.budget, "--budget")
+    engine_jobs = _json_flag(args.engine_jobs, "--engine-jobs")
+    if engine_jobs is not None and not isinstance(engine_jobs, dict):
+        raise MetricsError("--engine-jobs must be a JSON object")
     if not any(d.get("kind") == "batch" and d.get("batch") == args.batch for d in read_log(repo)[0]):
         raise MetricsError(f"unknown batch {args.batch}")
     conn = usage.connect(args.usage_db or usage.db_path())
     try:
         if not args.no_ingest:
             ingest_project(conn, main_root(repo))
-        rec = build_record(repo, args.spec, args.batch, args.outcome, time.time(), branch=args.branch, conn=conn, project=args.project)
+        rec = build_record(repo, args.spec, args.batch, args.outcome, time.time(), branch=args.branch, conn=conn, project=args.project,
+                           engine_jobs=engine_jobs, budget_spec=budget_spec)
         append(repo, rec)
         try:   # the task half never fails the run record
             for t in task_lines_for_run(repo, rec, conn):
@@ -1284,6 +1307,7 @@ def report_text(repo, batch_id, usage_db=None):
             line = f"status: {e}"
         if line:
             out += ["", line]
+    out += _asks_lines(lines, batch_id)
     return "\n".join(out) + "\n"
 
 
@@ -1330,6 +1354,8 @@ def _parser():
     rc.add_argument("--project")
     rc.add_argument("--usage-db")
     rc.add_argument("--no-ingest", action="store_true")
+    rc.add_argument("--budget")
+    rc.add_argument("--engine-jobs")
     rp = sp.add_parser("report", parents=[common])
     rp.add_argument("batch")
     rp.add_argument("--usage-db")
@@ -1423,6 +1449,11 @@ def _norm(r, key):
     return tot / tasks if key == "tokens_per_task" else act / tasks
 
 
+def _control(r, base):
+    v = r.get("lead_share") if base else r.get("control_share")
+    return v if isinstance(v, (int, float)) else None
+
+
 def _exclusion(r):
     if r.get("outcome") in ("failed", "kept"):
         return f"outcome {r['outcome']}"
@@ -1502,6 +1533,13 @@ def compare_data(repo, config):
                 if thr is not None:
                     row["met"] = row["index"] <= thr if direction == "max" else row["index"] >= thr
                 row["p"], row["mode"] = permutation_p(cv, bv, direction)
+        elif m == "control_share":
+            cv = [v for v in (_control(r, False) for r in inc_c) if v is not None]
+            bv = [v for v in (_control(r, True) for r in inc_b) if v is not None]
+            if cv and bv and statistics.median(bv):
+                row["index"] = statistics.median(cv) / statistics.median(bv)
+                if thr is not None:
+                    row["met"] = row["index"] <= thr if direction == "max" else row["index"] >= thr
         elif m == "throughput":
             bt = _throughput(base)
             per_batch = {}
@@ -1979,6 +2017,23 @@ def _with_log(args, fn):
         LOG_OVERRIDE = saved
 
 
+ASK_KEYS = ("spec", "kind", "recommended", "confidence", "answer", "followed", "asked_at", "answered_at")
+
+
+def _asks_lines(lines, batch_id):
+    asks = [d for d in lines if d.get("kind") == "ask" and d.get("batch") == batch_id]
+
+    def part(rows):
+        k = sum(1 for d in rows if d.get("followed") is True)
+        return f"{len(rows)}, followed {k} ({round(100 * k / len(rows))}%)"
+    if not asks:
+        return ["asks: 0"]
+    out = [f"asks: {part(asks)}"]
+    for kind in sorted({str(d.get("ask_kind")) for d in asks}):
+        out.append(f"  {kind}: {part([d for d in asks if str(d.get('ask_kind')) == kind])}")
+    return out
+
+
 def cmd_append(repo, args):
     def go():
         if args.kind in STAGE1_KINDS:
@@ -1989,6 +2044,13 @@ def cmd_append(repo, args):
             raise MetricsError("--json is not valid JSON")
         if not isinstance(obj, dict):
             raise MetricsError("--json must be a JSON object")
+        if args.kind == "ask":
+            miss = [k for k in ASK_KEYS if k not in obj]
+            if miss:
+                raise MetricsError(f"ask line lacks {', '.join(miss)}")
+            if not isinstance(obj["followed"], bool):
+                raise MetricsError("ask line: followed must be true or false")
+            obj["ask_kind"] = obj["kind"]   # the wait kind; `kind` stays the log line's kind
         obj["kind"] = args.kind
         if args.batch:
             obj["batch"] = args.batch
