@@ -51,6 +51,7 @@ const STATUS_SHAPES = {
   reviewer: '{"verdict": "pass" | "findings", "findings": [{"severity": "critical" | "important" | "minor", "task": <n>, "text": "<text>"}]}',
 };
 const STOP = Symbol("stop drain");
+const NOT_LEAD = "COALESCE(runner, 'engine') != 'lead'"; // a lead-run spec never reaches the strategy, a job or the policy check (R7)
 
 const parse = (s) => {
   if (s === null || s === undefined) return null;
@@ -554,11 +555,51 @@ function start(opts) {
     return undefined;
   }
 
+  // ---- the queue's rows (spec section 6) ----
+
+  const specRow = (s) => {
+    const t = now();
+    const row = { position: 0, runner: "engine", integration: "keep", push: 0, batch: null, state: "queued", outcome: null, worktree: repo,
+      branch: null, strategy: "spec-driven", backend: "claude-tmux", policy_version: null, policy_hash: null, base: null,
+      created_at: t, updated_at: t, ...s };
+    if (row.budget_attempts === undefined || row.budget_attempts === null) row.budget_attempts = config.budget.attempts;
+    if (row.budget_tokens === undefined || row.budget_tokens === null) row.budget_tokens = config.budget.tokens;
+    row.spent_attempts = row.spent_attempts || 0;
+    row.spent_tokens = row.spent_tokens || 0;
+    return row;
+  };
+
+  // A drained `enqueue` row becomes the spec, at the end of the queue. A spec the enqueue already found the engine
+  // cannot run arrives as lead-run with the reason.
+  function onEnqueue(row) {
+    const p = parse(row.payload) || {};
+    if (!row.spec) return { drop: "no spec" };
+    if (get("specs", row.spec)) return { drop: "spec already added" };
+    const or = (v) => (v === undefined ? null : v);
+    const runner = p.runner === "lead" ? "lead" : "engine";
+    const spec = specRow({ id: row.spec, position: db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM specs").get().p, runner,
+      integration: p.integration || "keep", push: p.push ? 1 : 0, batch: or(p.batch), gate: or(p.gate), worktree: or(p.worktree), branch: or(p.branch),
+      plan: or(p.plan), backend: opts.backendKind || "claude-tmux", budget_attempts: or(p.budget_attempts), budget_tokens: or(p.budget_tokens) });
+    emit("spec_added", { spec: spec.id, rows: [["specs", spec]], runner, text: spec.id });
+    if (p.reason) emit("handed_to_lead", { spec: spec.id, reason: p.reason, text: p.reason });
+    return undefined;
+  }
+
+  // `engine done`: the lead finished its spec. The lead recorded its own metrics and ledger; the engine only ends the turn.
+  function onDone(row) {
+    const spec = row.spec ? get("specs", row.spec) : null;
+    if (!spec || spec.runner !== "lead" || spec.state !== "running") return { drop: "no lead turn open" };
+    const outcome = String((parse(row.payload) || {}).outcome);
+    emit(realIntegrate.isFailure(outcome) ? "fail_spec" : "spec_done", { spec: spec.id, rows: [["specs", { ...spec, state: "done", outcome, updated_at: now() }]],
+      outcome, by: "lead", text: outcome });
+    return undefined;
+  }
+
   function handler(row) {
     if (produced) throw STOP; // one undecided input at a time: pump before the next row
     if (row.source === "worker") return onWorker(row);
     if (row.source === "timer") return onTimer(row);
-    if (row.source === "user") return onSignal(row);
+    if (row.source === "user") return row.kind === "enqueue" ? onEnqueue(row) : row.kind === "done" ? onDone(row) : onSignal(row);
     return { drop: `no handler for source ${row.source}` };
   }
 
@@ -768,7 +809,7 @@ function start(opts) {
   async function pumpAll() {
     produced = false;
     let any = false;
-    for (const s of all("SELECT id FROM specs WHERE state!='queued' ORDER BY position, created_at")) if (await pump(s.id)) any = true;
+    for (const s of all(`SELECT id FROM specs WHERE state!='queued' AND ${NOT_LEAD} ORDER BY position, created_at`)) if (await pump(s.id)) any = true;
     return any;
   }
 
@@ -814,7 +855,7 @@ function start(opts) {
   async function advance() {
     for (let moved = true; moved;) {
       moved = await pumpAll();
-      for (const s of all("SELECT * FROM specs WHERE state NOT IN ('queued','done','awaiting_you') ORDER BY position, created_at")) {
+      for (const s of all(`SELECT * FROM specs WHERE state NOT IN ('queued','done','awaiting_you') AND ${NOT_LEAD} ORDER BY position, created_at`)) {
         const marks = MY_STEPS.map(() => "?").join(",");
         const st = db.prepare(`SELECT * FROM steps WHERE spec=? AND state='intent' AND kind IN (${marks}) ORDER BY created_at, key LIMIT 1`).get(s.id, ...MY_STEPS);
         if (!st) continue;
@@ -924,7 +965,7 @@ function start(opts) {
 
   async function dispatch() {
     if (db.prepare("SELECT 1 FROM jobs WHERE state='running' LIMIT 1").get()) return; // concurrency 1
-    const job = db.prepare("SELECT j.* FROM jobs j JOIN specs s ON s.id=j.spec WHERE j.state='pending' AND s.state NOT IN ('queued','done','awaiting_you') ORDER BY j.rowid LIMIT 1").get();
+    const job = db.prepare(`SELECT j.* FROM jobs j JOIN specs s ON s.id=j.spec WHERE j.state='pending' AND s.state NOT IN ('queued','done','awaiting_you') AND ${NOT_LEAD.replace("runner", "s.runner")} ORDER BY j.rowid LIMIT 1`).get();
     if (!job) return;
     if (!usagePaused()) { // the status-line tap reads 100%: pause before spending a start
       const until = tapReset(now());
@@ -1029,19 +1070,64 @@ function start(opts) {
     } catch (_) { /* recorded as a failed step */ }
   }
 
+  // The gate of a lead-run spec (spec section 6): `metrics gate <id>`, once, as a step; its answer is the gate_result event.
+  function gateOf(spec) {
+    const have = lastEvent(spec.id, "gate_result");
+    if (have) return have.detail;
+    const res = steps.run(db, { key: `gate:${spec.id}`, spec: spec.id, kind: "gate", facts: { gate: spec.gate } }, () => {
+      const r = cp.spawnSync(tmuxCtl, ["metrics", "gate", String(spec.gate)], { cwd: repo, env, encoding: "utf8", timeout: 120000 });
+      const line = `${r.stdout || ""}\n${r.stderr || ""}\n${(r.error && r.error.message) || ""}`.split("\n").map((l) => l.trim()).find(Boolean) || "";
+      return { gate: spec.gate, rc: r.error || r.status === null ? -1 : r.status, line };
+    }, { now }).result;
+    emit("gate_result", { spec: spec.id, gate: res.gate, rc: res.rc, line: res.line, text: `gate ${res.gate}: exit ${res.rc}` });
+    return res;
+  }
+
+  // A lead-run spec at its turn: its gate first, then the lead_turn the lead line is derived from. The spec is then
+  // `running` with no policy version, and the engine waits for the `done` row (R7).
+  function leadTurn(spec) {
+    if (spec.gate !== null && spec.gate !== undefined && spec.gate !== "") {
+      const g = gateOf(spec);
+      if (g.rc !== 0) {
+        const outcome = `failed — gate ${g.gate}: ${g.line}`;
+        if (spec.batch !== null && spec.batch !== undefined && spec.batch !== "") { // measurement never blocks: a failed record is a failed step
+          try {
+            steps.run(db, { key: `metrics_record:${spec.id}`, spec: spec.id, kind: "metrics_record", facts: { spec: spec.id, batch: spec.batch } }, () => {
+              const r = cp.spawnSync(tmuxCtl, realIntegrate.metricsRecordArgv({ db, repo }, spec, outcome), { cwd: repo, env, encoding: "utf8", timeout: 60000 });
+              if (r.error || r.status !== 0) throw new Error(`metrics record: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
+              return { spec: spec.id, batch: spec.batch, outcome };
+            }, { now });
+          } catch (_) { /* recorded as a failed step */ }
+        }
+        emit("fail_spec", { spec: spec.id, rows: [["specs", { ...spec, state: "done", outcome, updated_at: now() }]], outcome, text: outcome });
+        return;
+      }
+    }
+    emit("lead_turn", { spec: spec.id, rows: [["specs", { ...spec, state: "running", updated_at: now() }]], text: spec.id });
+  }
+
+  // The turn: at most one spec is past `queued` and not parked or done; when none is, the next queued spec by position gets it.
   function startQueued() {
     if (db.prepare("SELECT 1 FROM specs WHERE state NOT IN ('queued','done','awaiting_you') LIMIT 1").get()) return;
     const spec = db.prepare("SELECT * FROM specs WHERE state='queued' ORDER BY position, created_at LIMIT 1").get();
     if (!spec) return;
+    if (spec.runner === "lead") { leadTurn(spec); return; }
+    if (opts.queue) { // in a queue, a plan that no longer compiles hands the spec to the lead; its turn comes on the next tick
+      try { plan(spec); } catch (e) {
+        const reason = String((e && e.message) || e);
+        emit("handed_to_lead", { spec: spec.id, rows: [["specs", { ...spec, runner: "lead", updated_at: now() }]], reason, text: reason });
+        return;
+      }
+    }
     plan(spec); // a plan the engine cannot compile is an error before anything starts
-    metricsStart(spec);
+    metricsStart(spec); // not for a lead-run spec: the lead runs its own (R17)
     const t = now();
     emit("spec_started", { spec: spec.id, rows: [["specs", { ...spec, state: "running", policy_version: policy.POLICY_VERSION, policy_hash: hash, updated_at: t }], ...retryRows()],
       text: spec.id });
   }
 
   function policyCheck() {
-    for (const s of all("SELECT * FROM specs WHERE state NOT IN ('queued','done','awaiting_you') AND policy_version IS NOT NULL")) {
+    for (const s of all(`SELECT * FROM specs WHERE state NOT IN ('queued','done','awaiting_you') AND policy_version IS NOT NULL AND ${NOT_LEAD}`)) {
       if (s.policy_version === policy.POLICY_VERSION && s.policy_hash === hash) continue;
       const tag = (v, h) => `${v}:${String(h).slice(0, 8)}`;
       park(s, `engine rules changed (${tag(s.policy_version, s.policy_hash)}→${tag(policy.POLICY_VERSION, hash)}): continue under the new rules?`, "core:policy", { kind: "policy_change" });
@@ -1093,14 +1179,7 @@ function start(opts) {
     get halted() { return halted; },
 
     addSpec(s) {
-      const t = now();
-      const row = { position: 0, runner: "engine", integration: "keep", push: 0, batch: null, state: "queued", outcome: null, worktree: repo,
-        branch: null, strategy: "spec-driven", backend: "claude-tmux", policy_version: null, policy_hash: null, base: null,
-        created_at: t, updated_at: t, ...s };
-      if (row.budget_attempts === undefined || row.budget_attempts === null) row.budget_attempts = config.budget.attempts;
-      if (row.budget_tokens === undefined || row.budget_tokens === null) row.budget_tokens = config.budget.tokens;
-      row.spent_attempts = row.spent_attempts || 0;
-      row.spent_tokens = row.spent_tokens || 0;
+      const row = specRow(s);
       emit("spec_added", { spec: row.id, rows: [["specs", row]], text: row.id });
       flush();
       return get("specs", row.id);
@@ -1126,6 +1205,9 @@ function start(opts) {
       }
     },
 
+    // The pause between two ticks.
+    wait: () => sleep(opts.tickMs === undefined ? TICK_S * 1000 : opts.tickMs),
+
     // Runs one spec to its outcome in the foreground; a parked spec keeps the engine ticking until it is answered.
     async run(specId) {
       for (;;) {
@@ -1133,7 +1215,7 @@ function start(opts) {
         const s = get("specs", specId);
         if (s && s.state === "done") return s.outcome;
         if (halted) throw new Error(`engine stopped: ${halted}`);
-        await sleep(opts.tickMs === undefined ? TICK_S * 1000 : opts.tickMs);
+        await E.wait();
       }
     },
 
@@ -1152,7 +1234,7 @@ function start(opts) {
             steps.fail(db, s, `could not tell whether ${s.key} ran`, { now });
             continue;
           }
-          if (!s || MY_STEPS.includes(s.kind) || !s.spec) continue; // the core's own rows are simply run again
+          if (!s || MY_STEPS.includes(s.kind) || s.kind === "gate" || !s.spec) continue; // the core's own rows are simply run again
           const spec = get("specs", s.spec);
           if (spec && spec.state !== "done") park(spec, p.question, `core:step:${p.key}`, { kind: "cannot_tell" });
         }

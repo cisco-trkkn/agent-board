@@ -88,7 +88,7 @@ test("no subcommand and a bad subcommand print the usage line and exit 2", (t) =
   for (const args of [[], ["bogus"]]) {
     const r = p.run(args);
     assert.equal(r.code, 2);
-    assert.equal(r.err, "engine: usage: engine <run|status|events|resume|signal|rebuild> ...\n");
+    assert.equal(r.err, "engine: usage: engine <run|status|events|resume|signal|rebuild|enqueue|start|done> ...\n");
   }
 });
 
