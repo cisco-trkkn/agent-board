@@ -24,6 +24,7 @@ import discord_feed
 import discord_ideas
 import gauth
 import ideas
+import newproject
 import relay
 import tc_env
 import usage
@@ -392,6 +393,10 @@ def tick(records, tasks_by_project, limits, now, add_line, live=None, lead_sids=
             gauth_sweep(d, now)
         except Exception as e:   # noqa: BLE001 -- a bad pending record never stops the card
             print(f"discord_ops: gauth sweep skipped: {type(e).__name__}", file=sys.stderr, flush=True)
+        try:
+            newproject.tick(d, now)
+        except Exception as e:   # noqa: BLE001 -- a bad setup record never stops the card
+            print(f"discord_ops: newproject tick skipped: {type(e).__name__}", file=sys.stderr, flush=True)
         text = render_card(records, tasks_by_project, links, limits, now, floors)
         card = discord_feed.card_op_due(st, text, now)
         if card:
@@ -665,6 +670,8 @@ def handle_event(project, d, ev, add_line, allow, run=None, spawn=None, st=None)
         project = ev.get("project") or project
     target = str(ev.get("command") or ev.get("form") or ev.get("what") or "")
     spawn = spawn or _spawn_thread
+    if kind == "np_token" or (kind == "modal" and ev.get("form") == "new-project") or (kind == "slash" and ev.get("command") == "new-project"):
+        return _new_project(d, ev, user, kind, allow)
     if kind == "rejected" or user not in allow:
         result = "rejected"
     elif kind == "read":
@@ -725,6 +732,24 @@ def handle_event(project, d, ev, add_line, allow, run=None, spawn=None, st=None)
     return result
 
 
+def _new_project(d, ev, user, kind, allow):
+    """/new-project's form, its resume and its pasted token (board/newproject.py). Audited here, never with the token."""
+    f = ev.get("fields") if isinstance(ev.get("fields"), dict) else {}
+    name = str(ev.get("name") or f.get("name") or "")[:60]
+    if user not in allow:
+        if kind == "np_token":
+            newproject.drop_token_file(ev)
+        result = "rejected"
+    elif kind == "np_token":
+        result = newproject.on_token(d, ev)
+    elif kind == "slash":
+        result = newproject.on_slash(d, ev)
+    else:
+        result = newproject.on_modal(d, ev)
+    discord_feed.audit_append(d, user, kind, f"{name}:new-project", result)
+    return result
+
+
 def _default_merge(project, src_key, rec, add_line, now):
     import discord_merge   # Task 5; imported here so this module loads without it
     return discord_merge.on_merge(project, src_key, rec, add_line, now)
@@ -766,6 +791,8 @@ def _click(d, user, cid, st, add_line, now, on_merge):
         return discord_ideas.click(user, cid, add_line, now)
     if parts[:2] == ["ab", "analytics"]:
         return analytics_post.click(d, user, cid, now)
+    if parts[:2] == ["ab", "np"]:
+        return newproject.on_click(d, user, cid)
     if parts[:2] != ["ab", "ops"] or len(parts) < 3:
         return "ignored"
     act, k = parts[2], ":".join(parts[3:])
@@ -829,6 +856,8 @@ def consume(add_line, run, now, on_merge=None, lead_run=None, spawn=None):
                 dlg = discord_dialogs.consume_event(d, ev, allow, run, now, add_line=add_line)
                 if dlg:
                     discord_feed.audit_append(d, user, *dlg)
+                elif kind == "np_result":   # the ops bridge's own answer to a create_channel / channel_overwrite op: no user
+                    discord_feed.audit_append(d, "", "np_result", f"{str(ev.get('name') or '')[:60]}:{ev.get('action')}", newproject.on_result(d, ev))
                 elif kind == "click":
                     cid = str(ev.get("custom_id") or "")
                     result = _click(d, user, cid, st, add_line, now, on_merge) if user in allow else "rejected"
