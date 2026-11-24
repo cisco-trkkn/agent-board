@@ -44,13 +44,13 @@ function setup({ ops = true, views = VIEWS, opsViews = true, opsAllow = ['U1'], 
 const evShape = (s) => s.events().map((e) => { const { ts, ...r } = e; return r; });
 
 test('payload: 8 chat-input commands; project option required per mode', () => {
-  const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'ideas', 'approvals', 'tasks', 'lead', 'gauth'];
+  const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'ideas', 'approvals', 'tasks', 'lead', 'gauth', 'new-project'];
   const o = commands.payload(true), p = commands.payload(false);
   assert.deepStrictEqual(o.map((c) => c.name), names);
-  assert.deepStrictEqual(p.map((c) => c.name), names.filter((n) => n !== 'ideas')); // project bots do not register /ideas
+  assert.deepStrictEqual(p.map((c) => c.name), names.filter((n) => n !== 'ideas' && n !== 'new-project')); // project bots register neither /ideas nor /new-project
   assert.ok(o.every((c) => c.type === 1));
   const req = (list) => Object.fromEntries(list.map((c) => [c.name, c.options?.find((x) => x.name === 'project')?.required ?? null]));
-  assert.deepStrictEqual(req(o), { status: false, queue: false, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true });
+  assert.deepStrictEqual(req(o), { status: false, queue: false, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true, 'new-project': null });
   assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, approvals: null, tasks: false, lead: false, gauth: false });
   const act = o.find((c) => c.name === 'lead').options.find((x) => x.name === 'action');
   assert.deepStrictEqual([act.type, act.required, act.choices.map((c) => c.value)], [3, true, ['status', 'restart', 'handoff']]);
@@ -63,7 +63,7 @@ test('ready registers the commands once for the guild; a resume after disconnect
   const c = s.client.callsOf('setCommands');
   assert.strictEqual(c.length, 1);
   assert.strictEqual(c[0].target, 'G1');
-  assert.strictEqual(c[0].payload.length, 11);
+  assert.strictEqual(c[0].payload.length, 12);
   s.bridge.onDisconnect();
   await s.bridge.onReady();
   assert.strictEqual(s.client.callsOf('setCommands').length, 2);
@@ -220,7 +220,7 @@ test('attach wires command and modal interactions through the same handler', asy
 
 test('project option has max_length 60 so the modal custom_id stays under 100 chars', () => {
   for (const ops of [true, false]) {
-    for (const c of commands.payload(ops).filter((x) => x.options)) assert.strictEqual(c.options.find((x) => x.name === 'project').max_length, 60, c.name); // lead: action comes first (required before optional)
+    for (const c of commands.payload(ops).filter((x) => x.options)) assert.strictEqual(c.options.find((x) => x.name === (c.name === 'new-project' ? 'name' : 'project')).max_length, 60, c.name); // lead: action comes first (required before optional)
   }
   assert.ok(`ab:modal:new-spec:${'p'.repeat(60)}`.length <= 100);
 });

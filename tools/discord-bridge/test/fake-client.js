@@ -16,6 +16,13 @@ class FakeClient extends EventEmitter {
     this.user = { id: 'BOT', setPresence: (p) => { this.presences.push(p); if (this.presenceError) throw this.presenceError; return {}; } };
     this.channels = { fetch: (id) => this._fetchChannel(id) };
     this.application = { commands: { set: async (payload, guildId) => { this._record('setCommands', guildId, payload); this._maybeFail('setCommands'); return payload; } } };
+    // REST (the /new-project channel steps): guildChannels is the guild's channel list; get/post/put record and honour failNext('restGet'|'restPost'|'restPut').
+    this.guildChannels = [];
+    this.rest = {
+      get: async (route) => { this._record('restGet', route); this._maybeFail('restGet'); return this.guildChannels.map((c) => ({ ...c })); },
+      post: async (route, o) => { this._record('restPost', route, o?.body); this._maybeFail('restPost'); const c = { id: this._newId('ch'), type: o?.body?.type, name: o?.body?.name }; this.guildChannels.push(c); return { ...c }; },
+      put: async (route, o) => { this._record('restPut', route, o?.body); this._maybeFail('restPut'); return null; },
+    };
   }
 
   // failNext('send', {status: 500}) fails the next call of that method; count repeats it.
@@ -141,12 +148,14 @@ function fakeCommand({ name, options = {}, user = 'U1', channelId = 'C1', channe
 }
 
 // A modal submit; fields is {inputId: value}.
-function fakeModal({ customId, fields = {}, user = 'U1' } = {}) {
-  const i = { customId, user: { id: user }, replies: [], updates: [] };
+function fakeModal({ customId, fields = {}, user = 'U1', channelId = 'C1', id = 'iid-m' } = {}) {
+  const i = { id, customId, channelId, user: { id: user }, replies: [], updates: [], deferredReplies: [], edits: [] };
   i.isChatInputCommand = () => false;
   i.isModalSubmit = () => true;
   i.fields = { getTextInputValue: (n) => String(fields[n] ?? '') };
   i.reply = async (x) => { i.replies.push(x); };
+  i.deferReply = async (x) => { i.deferredReplies.push(x); };
+  i.editReply = async (x) => { i.edits.push(x); };
   return i;
 }
 

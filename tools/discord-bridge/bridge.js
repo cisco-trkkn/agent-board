@@ -382,7 +382,44 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     say(`ireply ${snip(iid)} fell back to post`);
   }
 
-  const handlers = { ireply: opIreply, presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  // /new-project (ops only): the two Discord-side steps. Each answers with an np_result event carrying the op's req, so the
+  // board can drop a stale or repeated answer. 5xx/429/network failures are retried by withRetry; any other failure is an answer.
+  const SNOWFLAKE = /^[0-9]{1,20}$/;
+  const NP_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/;
+  const npResult = (op, extra) => writeEvent({ type: 'np_result', action: op.op, name: String(op.name), req: String(op.req), ...extra, ts: now() });
+  const npError = (e) => (e?.code === 50013 || statusOf(e) === 403 ? 'missing permissions' : `status ${statusOf(e) ?? '?'}: ${snip(e?.message)}`);
+  async function opCreateChannel(op) {
+    if (!ops) throw new Error('create_channel op needs ops mode');
+    if (!SNOWFLAKE.test(String(op.guild)) || !NP_NAME.test(String(op.name)) || typeof op.req !== 'string') throw new Error('create_channel: bad guild, name or req');
+    const want = String(op.name).toLowerCase(); // Discord stores text channel names in lower case
+    try {
+      const list = await client.rest.get(`/guilds/${op.guild}/channels`);
+      const have = (Array.isArray(list) ? list : []).find((c) => c?.type === 0 && String(c.name).toLowerCase() === want);
+      const ch = have || await client.rest.post(`/guilds/${op.guild}/channels`, { body: { name: want, type: 0 } });
+      npResult(op, { ok: true, channel_id: String(ch.id), existed: !!have });
+      say(`create_channel ${snip(want)} ${have ? 'existed' : 'created'}`);
+    } catch (e) {
+      if (isRetryable(e)) throw e;
+      npResult(op, { ok: false, error: npError(e) });
+      say(`create_channel ${snip(want)} failed: ${npError(e)}`);
+    }
+  }
+  async function opChannelOverwrite(op) {
+    if (!ops) throw new Error('channel_overwrite op needs ops mode');
+    if (!SNOWFLAKE.test(String(op.channel)) || !SNOWFLAKE.test(String(op.user)) || !/^[0-9]{1,20}$/.test(String(op.allow))
+      || !NP_NAME.test(String(op.name)) || typeof op.req !== 'string') throw new Error('channel_overwrite: bad channel, user, allow, name or req');
+    try {
+      await client.rest.put(`/channels/${op.channel}/permissions/${op.user}`, { body: { type: 1, allow: String(op.allow), deny: '0' } });
+      npResult(op, { ok: true });
+      say(`channel_overwrite ${snip(op.name)}`);
+    } catch (e) {
+      if (isRetryable(e)) throw e;
+      npResult(op, { ok: false, error: npError(e) });
+      say(`channel_overwrite ${snip(op.name)} failed: ${npError(e)}`);
+    }
+  }
+
+  const handlers = { create_channel: opCreateChannel, channel_overwrite: opChannelOverwrite, ireply: opIreply, presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -684,7 +721,20 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   function close() { closed = true; }
 
-  const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
+  // /new-project's pasted token (ops only): a one-shot mode-600 file under <dir>/np-token/, never an event or a log line.
+  // Returns the file's base name; the board reads it, pipes it into tmux-ctl discord token and deletes it.
+  function writeTokenFile(tok) {
+    if (!ops) throw new Error('token files need ops mode');
+    const tdir = path.join(dir, 'np-token');
+    fs.mkdirSync(tdir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(tdir, 0o700);
+    const name = `${now()}-${crypto.randomBytes(4).toString('hex')}.tok`;
+    fs.writeFileSync(path.join(tdir, name), tok, { mode: 0o600, flag: 'wx' });
+    return name;
+  }
+  const dropTokenFile = (name) => { try { fs.rmSync(path.join(dir, 'np-token', path.basename(String(name))), { force: true }); } catch { /* gone */ } };
+
+  const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), commandCenter: () => (ops ? cfg().command_center ?? null : null), writeTokenFile, dropTokenFile, opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
   return { ctx, tick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 
