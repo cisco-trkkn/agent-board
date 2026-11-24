@@ -35,9 +35,13 @@ check "expect mismatch: no key"   test "$(got e-bad)" = NONE
 swap_case() {
   replay $1 $2
   cat > $S/swap-$1.zsh <<SW
-rm -f $S/ready-$1 $S/stop-$1
-$TT_BIN respawn-pane -k -t '=tt:$1' "zsh $S/pane2-$1.zsh"
-n=300; while [[ ! -e $S/ready-$1 ]] && (( n-- > 0 )); do sleep 0.05; done
+# tmux 3.8 on a loaded macOS runner sometimes leaves the respawned pane without a process (empty #{pane_pid}, blank screen): respawn again until the new pane says it is ready
+for a in 1 2 3 4 5 6; do
+  rm -f $S/ready-$1 $S/stop-$1
+  $TT_BIN respawn-pane -k -t '=tt:$1' "zsh $S/pane2-$1.zsh" 2>>$S/swap-err-$1
+  n=60; while [[ ! -e $S/ready-$1 ]] && (( n-- > 0 )); do sleep 0.05; done
+  [[ -e $S/ready-$1 ]] && break
+done
 SW
   cp $S/pane-$1.zsh $S/pane-$1.first; mkpane $1 $3; mv $S/pane-$1.zsh $S/pane2-$1.zsh; cp $S/pane-$1.first $S/pane-$1.zsh
   export TC_APPROVE_BEFORE_SEND="zsh $S/swap-$1.zsh"
