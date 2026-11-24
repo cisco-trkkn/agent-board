@@ -20,6 +20,10 @@ import restore_schedule as rs  # noqa: E402
 
 class Base(unittest.TestCase):
     def setUp(self):
+        # the tests drive a stub launchctl: pass the module's macOS-only guard on any host
+        pl = mock.patch.object(sys, "platform", "darwin")
+        pl.start()
+        self.addCleanup(pl.stop)
         self.tmp = tempfile.mkdtemp()
         self.home = Path(self.tmp) / "home"
         self.home.mkdir()

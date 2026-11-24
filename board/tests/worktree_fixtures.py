@@ -41,6 +41,9 @@ def _template_repo():
         repo = Path(d).resolve() / "repo"
         repo.mkdir()
         git("init", "-b", "main", cwd=repo)
+        # no background `git maintenance`/gc after the commit: it creates and removes .git/objects/maintenance.lock while make_repo copies the tree
+        git("config", "maintenance.auto", "false", cwd=repo)
+        git("config", "gc.auto", "0", cwd=repo)
         git("commit", "--allow-empty", "-m", "init", cwd=repo)
         _TEMPLATE["dir"] = repo
     return _TEMPLATE["dir"]

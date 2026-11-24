@@ -276,6 +276,42 @@ Keys: `ts` (float epoch seconds), `project`, `spec` (spec basename), `kind`, `ti
 
 `critical` and `decision` events become a home-channel post that mentions the user; `progress` events go to the spec's thread; `routine` events only change the status card. The bridge's spool and state files are listed under [State files](#state-files).
 
+## Engine
+
+`engine/` (Node >= 22.13, standard library only) runs one planned spec to its outcome with no lead turn in between
+(`docs/superpowers/specs/2026-11-10-pcee-engine-design.md`). Command: `tmux-ctl engine <sub>`, a zsh case that runs
+`engine/bin/engine.js` with `TC_PROJECT` (the feed key) and `TC_SESSION` exported; code is in `engine/lib/engine/`.
+
+- **State file.** One SQLite database per project, `~/.local/state/agent-board/engine/<project>.sqlite` (`TC_ENGINE_DIR`
+  overrides the directory), WAL mode, opened with `node:sqlite`, plus `<project>.lock` holding the engine's pid (a
+  second engine for the project refuses). Briefs, reports and review packages are files under the spec's git-ignored
+  `<worktree>/.superpowers/engine/`. The engine never opens `runs.jsonl`: it calls `tmux-ctl metrics start|record|has`.
+- **Tables.** `specs`, `jobs`, `events` (append-only ledger; each event's `detail.rows` carries the new row values, so
+  `rebuild` can replay the tables from the events alone), `steps` (side-effect journal: `intent` → `done`|`failed`,
+  reconciled by a check on resume), `timers`, `waits` (parked questions), `retry_policies`, `inbox` (user signals,
+  timers and worker status, drained in order).
+- **Two interfaces.** The *strategy* is a pure function `decide(state, event) -> commands[]` (default `spec-driven`:
+  implement, review, fix loop, final review, integrate); the *backend* is an event source with
+  `start / close / resume / poll` (`claude-tmux`: one worker per tmux window, read from the agent-status files; `fake`:
+  scripted events for tests). The core touches neither tmux nor panes itself.
+- **Commands.**
+  - `engine run <spec> --integration merge|mr|keep [--push] [--batch <id>] [--project P] [--backend claude-tmux|fake]`:
+    finds the plan (`**Spec:**` line), compiles it, inserts the spec, records `metrics start`, then runs in the
+    foreground printing `<HH:MM:SS> <kind> <job or -> <text>` per event (deadline re-arms, timer, inbox and step
+    bookkeeping are hidden).
+  - `engine status [<spec>]`, `engine status --waiting` (question, options, asked at, the `signal` command),
+    `engine events <spec>` (every event).
+  - `engine resume`: reconciles `intent` steps, fires due timers oldest first, drains the inbox, compares the policy,
+    then re-watches or re-runs `running` jobs.
+  - `engine signal <spec> approve|deny|fail [--note <text>]`: answers a parked spec.
+  - `engine rebuild --check|--apply`: replay the events into a scratch database and diff (`--apply` repairs).
+- **Exit codes.** `run`: 0 outcome `merged`, `mr` or `kept`; 1 `failed — …`, `denied: …` or an engine error;
+  3 no plan, plan on another branch or compile error (prints `[Engine] your turn: <spec>`); 2 bad usage.
+  `signal`: 2 `no open wait for <spec>`. `rebuild --check`: 0 match, 1 differences; `--apply`: 2 `engine lock held`.
+  Any bad subcommand or option: 2 with a usage line.
+- **Project test command.** `docs/superpowers/engine.json` (`test`, `test_ok` exit codes, `retry` overrides); this
+  repo's is `zsh tools/tests/all.zsh` with `[0, 4]` (all.zsh exits 4 when every job passed but over its time budget).
+
 ## State files
 
 Runtime state lives in `TC_STATE`, default `${TMPDIR:-/tmp}/tmux-ctl-$UID/`. It is per-user and is deleted per project when the session closes.

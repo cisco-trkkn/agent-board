@@ -3,6 +3,8 @@
 # tmux call at the scratch socket, stub scripts for the orchestrator and for tmux-ctl/agent-board (they log argv), the
 # layout child and `route` replaced by /usr/bin/true. The user's own tmux server, ~/.local/state and claude are never touched.
 source "${0:A:h}/lib.zsh"
+# reboot auto-restore reads kern.boottime (sysctl) and runs from a LaunchAgent: macOS only, board/restore.py has no Linux boot time
+[[ "$OSTYPE" == darwin* ]] || { print -r -- "skip - restore e2e: macOS only (kern.boottime, launchd)"; print "ALL PASS"; exit 0 }
 tt_setup claude
 R="$TT_REPO"
 export TMUX_DASH_TMUX_ARGS="-L $TT_SOCK_NAME"

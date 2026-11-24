@@ -35,9 +35,13 @@ check "expect mismatch: no key"   test "$(got e-bad)" = NONE
 swap_case() {
   replay $1 $2
   cat > $S/swap-$1.zsh <<SW
-rm -f $S/ready-$1 $S/stop-$1
-$TT_BIN respawn-pane -k -t '=tt:$1' "zsh $S/pane2-$1.zsh"
-n=100; while [[ ! -e $S/ready-$1 ]] && (( n-- > 0 )); do sleep 0.05; done
+# tmux 3.8 on a loaded macOS runner sometimes leaves the respawned pane without a process (empty #{pane_pid}, blank screen): respawn again until the new pane says it is ready
+for a in 1 2 3 4 5 6; do
+  rm -f $S/ready-$1 $S/stop-$1
+  $TT_BIN respawn-pane -k -t '=tt:$1' "zsh $S/pane2-$1.zsh" 2>>$S/swap-err-$1
+  n=60; while [[ ! -e $S/ready-$1 ]] && (( n-- > 0 )); do sleep 0.05; done
+  [[ -e $S/ready-$1 ]] && break
+done
 SW
   cp $S/pane-$1.zsh $S/pane-$1.first; mkpane $1 $3; mv $S/pane-$1.zsh $S/pane2-$1.zsh; cp $S/pane-$1.first $S/pane-$1.zsh
   export TC_APPROVE_BEFORE_SEND="zsh $S/swap-$1.zsh"
@@ -70,5 +74,7 @@ sed 's/gate-tap-3-ran/gate-tap-3-ran # block this request in 1:23/' $CD > $S/cd-
 sed 's/in 1:23/in 9:59/' $S/cd-quote-a.txt > $S/cd-quote-b.txt
 swap_case c-quote $S/cd-quote-a.txt $S/cd-quote-b.txt --expect "${CDX} # block this request in 1:23"
 check "digits changed inside the command text: exit 1 + message"  test $rc -eq 1 -a "$out" = "approve: the prompt in c-quote changed"
-check "digits changed inside the command text: no key sent"  test "$(got c-quote)" = NONE
+qgot="$(got c-quote)"
+check "digits changed inside the command text: no key sent"  test "$qgot" = NONE
+[[ "$qgot" == NONE ]] || { print -r -- "# c-quote: pane got '$qgot'; approve said '$out'"; tt capture-pane -p -J -t "=tt:c-quote" | tail -8 | sed 's/^/# pane: /' }
 tt_done

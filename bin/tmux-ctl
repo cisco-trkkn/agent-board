@@ -15,7 +15,7 @@
 #   tmux-ctl send  [-C dir] <win> <text>   type text + Enter into an IDLE shell window, don't wait
 #   tmux-ctl keys  <win> <key>...          raw keys, e.g. C-c to stop something you started
 #   tmux-ctl new   <win> [dir]             open a new shell window
-#   tmux-ctl agent <name> [--force] [--model M] [--effort E] <task> | --brief FILE
+#   tmux-ctl agent <name> [--force] [--dir WT [--resume ID]] [--model M] [--effort E] <task> | --brief FILE
 #                                          start a worker Claude in its own worktree + window.
 #                                          --model haiku|sonnet|opus|fable (default sonnet), --effort low|medium|high|xhigh (default medium)
 #                                          The brief needs goal, scope, done-criterion: <8 words is
@@ -80,7 +80,7 @@
 #   tmux-ctl scout weekly [--dry-run] [--force] [--retry]  the Sunday pass: evaluate, draft specs, post the digest (--dry-run prints, writes nothing)
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
-#   tmux-ctl registry <validate|analyse|stale|report|facts> …  plan manifests, graphs, waves (engine/, node)
+#   tmux-ctl registry|engine <sub> …       plan manifests, graphs, waves; the PCEE engine (engine/, node)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
 # send/run only type into windows' main pane (the one without @tc_role) at a shell
@@ -119,7 +119,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || "$1" == engine || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -388,6 +388,7 @@ case "$cmd" in
     lsof_bin=/usr/sbin/lsof; [[ -x "$lsof_bin" ]] || lsof_bin="${commands[lsof]:-}"
     if [[ "$srv_pid" == <-> && -n "$lsof_bin" ]]; then
       srv_cwd="$("$lsof_bin" -a -p "$srv_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+      srv_cwd="${srv_cwd% \(deleted\)}"   # Linux lsof marks a removed cwd that way; macOS prints the bare path
       [[ -n "$srv_cwd" && ! -d "$srv_cwd" ]] && print -r -- "tmux server cwd is gone ($srv_cwd): new panes start there; restart the tmux server from ~ (tmux -S $srv_sock kill-server ends every session on it; reopen each project with agent-board dev)"
     fi
     list_session
@@ -530,12 +531,16 @@ case "$cmd" in
 
   agent)
     name="$1"; shift
-    force=0; briefile=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"
+    force=0; briefile=""; wdir=""; resume=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"
     while [[ "$1" == --* ]]; do
       case "$1" in
         --force) force=1; shift ;;
         --brief) [[ -n "$2" ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
                  briefile="$2"; shift 2 ;;
+        --dir)    [[ -n "$2" ]] || die "--dir needs a worktree directory"
+                  wdir="$2"; shift 2 ;;
+        --resume) [[ -n "$2" ]] || die "--resume needs a session id"
+                  resume="$2"; shift 2 ;;
         --model)  (( ${TC_MODELS[(Ie)$2]} )) || die "--model needs one of: ${TC_MODELS}"
                   model="$2"; shift 2 ;;
         --effort) (( ${TC_EFFORTS[(Ie)$2]} )) || die "--effort needs one of: ${TC_EFFORTS}"
@@ -544,7 +549,8 @@ case "$cmd" in
       esac
     done
     [[ -n "$name" && ( -n "$briefile" || $# -gt 0 ) ]] || die "usage: tmux-ctl agent <name> [--force] (--brief FILE | <task>)"
-    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "usage: tmux-ctl agent <name> ...: the name starts with a letter or digit and holds only letters, digits, . _ -"
+    nre='^[A-Za-z0-9][A-Za-z0-9._-]*$'; [[ -n "$wdir" ]] && nre='^[A-Za-z0-9][A-Za-z0-9._·-]*$'   # --dir names are the engine's <spec>·<kind><task>
+    [[ "$name" =~ $nre ]] || die "usage: tmux-ctl agent <name> ...: the name starts with a letter or digit and holds only letters, digits, . _ -"
     if [[ -n "$briefile" ]]; then
       [[ -z "$*" ]] || die "give either --brief FILE or a task on the command line, not both"
       [[ -r "$briefile" ]] || die "no readable brief file '$briefile'"
@@ -569,11 +575,23 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     rules=""; wr="$HOME/.config/agent-board/worker.md"; [[ -r "$wr" ]] || wr="$AB_REPO/claude/worker.md"   # a user override wins
     [[ -r "$wr" ]] && rules=" --append-system-prompt-file ${(q)wr}"
     # workers never see the end-of-session CLAUDE.md nudge (it asks an absent user a question)
-    root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
+    if [[ -n "$wdir" ]]; then
+      [[ -d "$wdir" ]] || die "--dir '$wdir' is not a directory"
+      [[ "$(git -C "$wdir" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || die "--dir '$wdir' is not inside a git worktree"
+      root="${wdir:A}"
+    else
+      [[ -z "$resume" ]] || die "--resume needs --dir"
+      root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run from inside a git repo (workers get their own worktree)"
+    fi
     # cd first: a pane can start somewhere other than its -c directory (a tmux server whose own cwd was removed starts
     # every pane there, docs/superpowers/notes/2026-11-09-relay-gone-cwd.md); claude then exits at startup or makes its
     # worktree in the wrong repo
-    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} claude --model $model --effort $effort -w ${(q)name} -n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
+    # --dir: the worker runs in an existing worktree (no -w); --resume continues that session, the brief is its first message
+    wflag="-w ${(q)name} "; [[ -n "$wdir" ]] && wflag=""
+    rflag=""; [[ -n "$resume" ]] && rflag="--resume ${(q)resume} "
+    cmd="claude --model $model --effort $effort ${rflag}${wflag}-n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
+    [[ -n "$TC_AGENT_CMD" ]] && cmd="$TC_AGENT_CMD"   # test seam: replaces the claude command
+    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO} $cmd"
     # the line is long (task, PATH): typed into a shell that has not started ZLE it overflows the tty's 1024-byte typeahead, so it goes in a file and only `. file` is typed
     launchf="$STATE/agents/${SESSION//[^A-Za-z0-9._-]/_}-$name.zsh"   # a tmux session name can hold other characters
     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; print -r -- "DRYRUN launch: $launchf"; exit 0 }   # test seam: stop before any window is created
@@ -586,7 +604,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     # worker rules (superpowers skills, decide instead of asking) ride along as a system prompt (built above in $line)
     t send-keys -t "$(target "$name")" -l -- ". ${(q)launchf}"
     t send-keys -t "$(target "$name")" Enter
-    print -r -- "started worker '$name' in window $SESSION:$name (worktree .claude/worktrees/$name)" ;;
+    print -r -- "started worker '$name' in window $SESSION:$name (worktree ${${wdir:+$root}:-.claude/worktrees/$name})" ;;
 
   tell)
     name="$1"; shift
@@ -774,6 +792,12 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
   registry)
     command -v node >/dev/null || die "registry: node >= 22.13 is required"
     exec node "${0:A:h:h}/engine/bin/registry.js" "$@" ;;
+
+  engine)
+    command -v node >/dev/null || die "engine: node >= 22.13 is required"
+    export TC_PROJECT="$FEEDKEY"
+    [[ -n "$SESSION" ]] && export TC_SESSION="$SESSION"
+    exec node "${0:A:h:h}/engine/bin/engine.js" "$@" ;;
 
   metrics)
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
