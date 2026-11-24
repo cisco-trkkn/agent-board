@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, engine_lines, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, newproject, notify, overview, planview, relay, restore, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, engine_lines, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, newproject, notify, overview, planview, relay, restore, usage, watch, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -229,6 +229,9 @@ COMMENTS = artifacts.CommentQueue()
 ENGINE_LINE_STATE = {}   # project -> engine_lines in-flight state (memory only: the cursor file is the durable part)
 INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
 NOTIFIER = notify.Notifier()   # TC_NOTIFY=0 turns banners and the events list off
+WATCH = watch.Watch(run=lambda argv: run_script([TMUX_CTL, *argv], timeout=30),   # the night watch; TC_WATCH=0 turns it off
+                    nudge=lambda project, line: COMMENTS.add_line(project, line),
+                    alert=None if os.environ.get("TC_DISCORD_ALERTS") == "0" else notify.discord_sink)
 OVERSEER_SESSION = "overseer"   # the read-only overseer's tmux session: never a project card
 TERMINAL_SESSION = os.environ.get("TC_TERMINAL_SESSION", "main")   # the session new terminals attach to: no card unless Claude runs in it; "" shows it always
 OVERVIEW_EVERY = 10   # seconds between overview builds (the notifier thread) and the cache life of /api/overview
@@ -575,15 +578,21 @@ def lead_infos(projects, lead_sids, lead_pids):
     return out
 
 
-def feed_tick(records, now, live=None):
+def read_limits(now):
+    """The plan limits from the statusline taps, or None when there are none (the one tap read every tick shares)."""
+    try:
+        return usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+    except Exception:   # noqa: BLE001 -- no taps: the lines show "?", the card "—", the pace stays None
+        return None
+
+
+def feed_tick(records, now, live=None, limits=None):
     """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (inbound events); the dialog scan runs once before them.
     A failure in one project is logged and never breaks the overview or the next project."""
     home = HOME / ".claude"
     ops_on = discord_ops.configured()
-    try:
-        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-    except Exception:   # noqa: BLE001 -- no taps: the lines show "?"
-        limits = None
+    if limits is None:
+        limits = read_limits(now)
     try:   # once per tick, before the projects: it covers every session, with or without a channel
         discord_dialogs.scan(_dialog_sessions, now, run=lambda argv: run_script(argv, timeout=20))
     except Exception as e:   # noqa: BLE001
@@ -630,10 +639,7 @@ def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=N
     for p in (r["project"] for r in records):
         tasks_by_project.setdefault(p, [])   # a project whose lead list could not be read still appears on the card
     if limits is None:
-        try:
-            limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
-        except Exception:   # noqa: BLE001 -- no taps: the card shows "—"
-            limits = None
+        limits = read_limits(now)
     try:
         discord_ops.tick(records, tasks_by_project, limits, now, COMMENTS.add_line, live=live, lead_sids=lead_sids,
                          lead_info=lead_info, holder_panes=discord_leads)
@@ -654,13 +660,26 @@ def ops_tick(records, tasks_by_project, now, limits=None, live=None, lead_sids=N
         print(f"tmux-dash: discord ops failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
-def build_overview(now=None):
+def build_overview(now=None, limits=None):
     now = now or time.time()
     st = state()
     live = INDEXER.snapshot() if INDEXER else []
     th, _ = usage.thresholds()
+    if limits is None:
+        limits = read_limits(now)
     return overview.build(st["sessions"], live, now, home=HOME / ".claude", state_dir=tc_env.state_dir(), tmux=tmux, th=th,
-                          spend=lambda repo: spend_today(repo, now), activity=window_activity(), mods=mod_records(now))
+                          spend=lambda repo: spend_today(repo, now), activity=window_activity(), mods=mod_records(now), limits=limits)
+
+
+def observe_overview(ov):
+    """The notifier, then the night watch on its events. A failing watch is logged and never breaks the overview."""
+    events = NOTIFIER.observe(ov)
+    if os.environ.get("TC_WATCH") != "0":
+        try:
+            WATCH.observe(ov, events)
+        except Exception as e:   # noqa: BLE001
+            print(f"tmux-dash: watch failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    return events
 
 
 def overview_payload():
@@ -668,13 +687,15 @@ def overview_payload():
     with _overview_lock:
         if _overview_cache["value"] is not None and time.monotonic() - _overview_cache["at"] < OVERVIEW_EVERY:
             return _overview_cache["value"]
-        ov = build_overview()
-        NOTIFIER.observe(ov)
+        now = time.time()
+        limits = read_limits(now)   # the tick's one tap read: the overview (pace) and feed_tick/ops_tick share it
+        ov = build_overview(now, limits)
+        observe_overview(ov)
         value = {**ov, "events": NOTIFIER.recent(), "overseer": overseer_info()}
         _overview_cache.update(at=time.monotonic(), value=value)
     ensure_overseer()   # once per fresh build, outside the lock: its run_script can take up to 20 s and must not stall /api/overview
     ensure_discord_bridges(ov["projects"])
-    feed_tick(ov["projects"], ov["generated"], live=INDEXER.snapshot() if INDEXER else [])
+    feed_tick(ov["projects"], ov["generated"], live=INDEXER.snapshot() if INDEXER else [], limits=limits)
     return value
 
 

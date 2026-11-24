@@ -183,6 +183,7 @@ sys.exit(1 if bad else 0)
 PY
 O="$R/claude/orchestrator.md"
 check "lead rules: Queue mode bullet" grep -qF -- '- **Queue mode.**' "$O"
+check "lead rules: [Watch] lines come from the night watch, not the user" grep -qF -- '- A line starting `[Watch]` is the night watch of the Agent Board (queue mode only), not the user' "$O"
 check "lead rules: queue answers in metadata.queue" grep -qF 'metadata.queue' "$O"
 check "lead rules: queue starts at two or more Plan & run tasks" grep -qF 'two or more pending `Plan & run:` tasks' "$O"
 check "lead rules: morning report path" grep -qF 'docs/superpowers/reports/YYYY-MM-DD-queue.md' "$O"
