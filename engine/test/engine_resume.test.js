@@ -131,7 +131,9 @@ steps.run = (d, desc, ...rest) => { if (String(desc.key).startsWith("metrics_sta
   return p;
 }
 
-async function until(fn, what, ms = 30000) {
+// The deadline is for a run that never gets there, sized for a loaded machine: unloaded, the full run reaches its last event
+// in 3.5 s (task_complete at 2.4 s), and under all.zsh's parallel load a whole kill point took 13-25 s, one stalled past 30 s.
+async function until(fn, what, ms = 120000) {
   const t0 = Date.now();
   for (;;) {
     let v;
