@@ -580,7 +580,7 @@ function start(opts) {
     const spec = specRow({ id: row.spec, position: db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM specs").get().p, runner,
       integration: p.integration || "keep", push: p.push ? 1 : 0, batch: or(p.batch), gate: or(p.gate), worktree: or(p.worktree), branch: or(p.branch),
       plan: or(p.plan), backend: opts.backendKind || "claude-tmux", budget_attempts: or(p.budget_attempts), budget_tokens: or(p.budget_tokens) });
-    emit("spec_added", { spec: spec.id, rows: [["specs", spec]], runner, text: spec.id });
+    emit("spec_added", { spec: spec.id, rows: [["specs", spec]], runner, queued: true, text: spec.id });
     if (p.reason) emit("handed_to_lead", { spec: spec.id, reason: p.reason, text: p.reason });
     return undefined;
   }
@@ -599,7 +599,12 @@ function start(opts) {
     if (produced) throw STOP; // one undecided input at a time: pump before the next row
     if (row.source === "worker") return onWorker(row);
     if (row.source === "timer") return onTimer(row);
-    if (row.source === "user") return row.kind === "enqueue" ? onEnqueue(row) : row.kind === "done" ? onDone(row) : onSignal(row);
+    if (row.source === "user") {
+      if (row.kind === "signal") return onSignal(row);
+      if (row.kind === "enqueue") return onEnqueue(row);
+      if (row.kind === "done") return onDone(row);
+      return { drop: `unknown user row kind ${row.kind}` };
+    }
     return { drop: `no handler for source ${row.source}` };
   }
 

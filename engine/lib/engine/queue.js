@@ -11,12 +11,15 @@ const OPEN = "state!='done' AND NOT (state='awaiting_you' AND outcome IS NOT NUL
 const openSpecs = (db) => db.prepare(`SELECT id FROM specs WHERE ${OPEN} ORDER BY position, created_at`).all().map((r) => r.id);
 
 // The spec ids of an unfinished queue, in queue order; [] when there is none. One predicate for `status --unfinished`,
-// `start --preflight` and the restore path (R12): open specs, unless a queue_finished event follows the newest spec_added.
+// `start --preflight` and the restore path (R12): the open specs, or, when every spec has ended, the specs enqueued
+// (spec_added with `queued`) after the last queue_finished: an engine killed between its last spec's end and the
+// queue's end still has the end to write. Specs added by `engine run` carry no `queued` and open no queue.
 function unfinished(db) {
   const ids = openSpecs(db);
-  if (!ids.length) return [];
-  const last = (kind) => db.prepare("SELECT MAX(seq) AS s FROM events WHERE kind=?").get(kind).s || 0;
-  return last("queue_finished") > last("spec_added") ? [] : ids;
+  if (ids.length) return ids;
+  const fin = db.prepare("SELECT MAX(seq) AS s FROM events WHERE kind='queue_finished'").get().s || 0;
+  return db.prepare("SELECT id FROM specs WHERE id IN (SELECT spec FROM events WHERE kind='spec_added' AND seq>? AND json_extract(detail, '$.queued')=1) " +
+    "ORDER BY position, created_at").all(fin).map((r) => r.id);
 }
 
 const pendingEnqueue = (db) => db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE state='new' AND source='user' AND kind='enqueue'").get().n;
@@ -36,10 +39,12 @@ function done(db, spec, outcome, now) {
 }
 
 // One tick, then the lead lines of whatever it wrote. A line that cannot be appended now is appended after a later
-// tick: the cursor is the file itself.
-async function step(eng, project) {
+// tick (the cursor is the file itself); each failure is one stderr line.
+async function step(eng, project, err = (s) => process.stderr.write(s)) {
   await eng.tick();
-  try { lead.publish(project, eng.db); } catch (_) { /* the next tick tries again */ }
+  try { lead.publish(project, eng.db); } catch (e) {
+    try { err(`engine: lead lines: ${String((e && e.message) || e).split("\n")[0]}\n`); } catch (_) { /* stderr is gone */ }
+  }
 }
 
 // The loop of `engine start`: ticks until no spec is open and the inbox is empty (0), or the engine stopped on an

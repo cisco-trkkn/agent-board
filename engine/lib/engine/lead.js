@@ -39,6 +39,26 @@ function tail(file) {
   return { seq: 0, torn: text !== "" && !text.endsWith("\n") };
 }
 
+// The floor: the database's highest seq when the first `engine start` found no lead file. Nothing at or below it is
+// published, so a database with history (earlier `engine run`s) does not replay its old lines; it is kept in
+// <project>.lead.start until the file has a line of its own, so a start that died before publishing loses nothing.
+const floorPath = (project) => path.join(paths.engineDir(), `${project}.lead.start`);
+const maxSeq = (db) => db.prepare("SELECT MAX(seq) AS s FROM events").get().s || 0;
+function floorOf(project, max) {
+  let n;
+  try { n = parseInt(fs.readFileSync(floorPath(project), "utf8").trim(), 10); } catch (_) { return null; }
+  return Number.isInteger(n) && n >= 0 && n <= max ? n : null; // a floor above the database's highest seq is another database's
+}
+
+// Called once when `engine start` begins, before resume and the first drain.
+function begin(project, db) {
+  if (fs.existsSync(leadPath(project))) return;
+  const max = maxSeq(db);
+  if (floorOf(project, max) !== null) return; // an earlier start already set it and published nothing yet
+  fs.mkdirSync(paths.engineDir(), { recursive: true });
+  fs.writeFileSync(floorPath(project), `${max}\n`);
+}
+
 function line(e) {
   let d = {};
   try { d = JSON.parse(e.detail) || {}; } catch (_) { d = {}; }
@@ -49,12 +69,13 @@ function line(e) {
 function publish(project, db) {
   const file = leadPath(project);
   let { seq: cursor, torn } = tail(file);
-  const max = db.prepare("SELECT MAX(seq) AS s FROM events").get().s || 0;
+  const max = maxSeq(db);
   if (cursor > max) { // the file is from another database: set it aside and start over
     fs.renameSync(file, `${file}.old`);
     cursor = 0;
     torn = false;
   }
+  cursor = Math.max(cursor, floorOf(project, max) || 0);
   const marks = KINDS.map(() => "?").join(",");
   const rows = db.prepare(`SELECT * FROM events WHERE seq>? AND kind IN (${marks}) ORDER BY seq`).all(cursor, ...KINDS);
   if (!rows.length) return 0;
@@ -63,4 +84,4 @@ function publish(project, db) {
   return rows.length;
 }
 
-module.exports = { publish, leadPath, line, KINDS };
+module.exports = { publish, begin, leadPath, line, KINDS };

@@ -16,6 +16,7 @@ const lazy = (name) => new Proxy({}, { get: (_, k) => require(name)[k] });
 const db = lazy("./db");
 const inbox = lazy("./inbox");
 const rebuild = lazy("./rebuild");
+const lead = lazy("./lead");
 const queue = lazy("./queue");
 
 const SUBS = ["run", "status", "events", "resume", "signal", "rebuild", "enqueue", "start", "done"];
@@ -354,6 +355,7 @@ function cmdSignal(args, io) {
 
 // ---- the queue: enqueue, start, done (spec section 6) ----------------------------------------------------------
 
+const START_RUNNING = 4; // `engine start` when an engine already runs for the project (R5): not a failure for the caller
 const ENQUEUE_USAGE = "usage: engine enqueue <spec> --runner lead|engine --integration merge|mr|keep [--push] --batch <id> [--gate <id>] [--worktree <path>] [--budget-attempts N] [--budget-tokens N] [--project P]";
 
 // Writes one inbox row and nothing else. A spec the engine cannot run is queued for the lead, never refused: a queue
@@ -412,12 +414,19 @@ async function cmdStart(args, io) {
   const project = resolveProject(p.flags, io);
   if (!project) return 2;
   if (p.flags.preflight) return preflight(project, io);
+  const running = () => { io.err(`engine: start: an engine is already running for ${project}\n`); return START_RUNNING; };
+  if (engineRunning(project)) return running();
   const repo = mainRoot(git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd);
-  const eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || "claude-tmux", { queue: true });
+  let eng;
+  try { eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || "claude-tmux", { queue: true }); } catch (e) {
+    if (/^engine already running/.test(String(e && e.message))) return running(); // another start took the lock in between
+    throw e;
+  }
   const stop = () => { eng.stop(); process.exit(130); };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
+    lead.begin(project, eng.db); // before resume and the first drain: nothing older than this start becomes a lead line
     await eng.resume(); // spec section 9; the ticks of the loop do the rest
     const rc = await queue.run(eng, { project });
     io.out(rc === 0 ? "queue finished" : "engine stopped: tmux-ctl engine start continues it");

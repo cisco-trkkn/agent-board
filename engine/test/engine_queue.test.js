@@ -171,8 +171,14 @@ test("a queue of an engine, a lead and a gated spec runs in order: kept, engine 
   assert.equal(log.filter((l) => l.startsWith(`metrics record ${SPEC_G} --batch b1 --outcome failed — gate K9: `)).length, 1, log.join("\n"));
   assert.equal(log.filter((l) => l.startsWith(`metrics record ${SPEC_L} `)).length, 0, "the lead records its own spec");
   // afterwards
+  // every spec is done but no queue_finished follows them yet (the queue's end is written by the report step): the
+  // queue still counts as unfinished, so a restart finishes it; a queue_finished event closes it
   const end = p.run(["status", "--unfinished"]);
-  assert.deepEqual([end.code, end.out], [1, ""]);
+  assert.deepEqual([end.code, end.out.trim().split("\n")], [0, [SPEC_A, SPEC_L, SPEC_G]]);
+  assert.equal(p.run(["start", "--preflight"]).code, 0);
+  p.read((x) => db.event(x, { kind: "queue_finished", report: null }));
+  const closed = p.run(["status", "--unfinished"]);
+  assert.deepEqual([closed.code, closed.out], [1, ""]);
   assert.equal(p.run(["done", SPEC_L, "--outcome", "merged"]).code, 2, "the turn is over");
   const pre = p.run(["start", "--preflight"]);
   assert.equal(pre.code, 1, "nothing queued, nothing unfinished");
@@ -235,8 +241,12 @@ test("enqueue: a plan without a verifyCommand is queued for the lead with the st
   assert.equal(q.code, 0, q.err);
   assert.equal(q.err.trim(), `engine: enqueue: ${PLAN_A}: no verifyCommand: task 1: queued for the lead`);
   assert.equal(q.out.trim(), `queued ${SPEC_A} (lead)`);
+  // history from before this start (an engine run long ago) and no lead file. Mutation: "engine start does not call
+  // lead.begin" -> the old stopped: line is the file's first line.
+  p.read((x) => db.event(x, { kind: "engine_error", error: "an old error", ts: 1 }));
   const s = p.start();
   await p.until(() => p.yourTurn(SPEC_A).length === 1, "the your-turn line");
+  assert.deepEqual(p.lines().map((l) => l.text), [`[Engine] your turn: ${SPEC_A}`], "nothing from before this start");
   assert.equal(p.spec(SPEC_A).runner, "lead");
   const handed = p.events("handed_to_lead");
   assert.equal(handed.length, 1);
@@ -285,6 +295,11 @@ test("start --preflight: 1 while another engine holds the lock, 0 with a pending
   assert.equal(held.code, 1);
   assert.match(held.err, /^engine: start: an engine is already running/);
   assert.equal(held.err.trim().split("\n").length, 1);
+  // R5. Mutation: "engine start leaves the held lock to the core's throw" -> exit 1.
+  const second = p.run(["start", "--here", "--backend", "fake"]);
+  assert.equal(second.code, 4, second.err);
+  assert.match(second.err, /^engine: start: an engine is already running/);
+  assert.equal(p.read((d) => d.prepare("SELECT COUNT(*) AS n FROM inbox WHERE state='new'").get().n), 1, "the second start drained nothing");
   fs.rmSync(path.join(p.env.engineDir, "demo.lock"));
   assert.equal(p.run(["start", "--preflight"]).code, 0);
   assert.equal(p.read((d) => d.prepare("SELECT COUNT(*) AS n FROM events").get().n), 0, "preflight only checks");
@@ -477,9 +492,12 @@ test("a done row for a spec that is not at a lead turn, and a second enqueue row
   assert.deepEqual(queue.done(h.eng.db, SPEC_A, "merged", h.clock.t), { rc: 2, msg: `no lead turn open for ${SPEC_A}` });
   inbox.insert(h.eng.db, { source: "user", source_id: "done:forged", spec: SPEC_A, kind: "done", payload: { outcome: "merged" } }, h.clock.t);
   h.lead(SPEC_L, { batch: "b2" }); // another batch: another row, the same spec
+  // Mutation: "any other user row is a signal" -> the reason is the signal handler's "spec is not waiting".
+  inbox.insert(h.eng.db, { source: "user", source_id: "x1", spec: SPEC_L, kind: "bogus", payload: { answer: "approve" } }, h.clock.t);
   await h.step(2);
   const rows = h.eng.db.prepare("SELECT kind, state, reason FROM inbox ORDER BY id").all();
-  assert.deepEqual(rows.map((r) => [r.kind, r.state]), [["enqueue", "done"], ["done", "dropped"], ["enqueue", "dropped"]]);
+  assert.deepEqual(rows.map((r) => [r.kind, r.state]), [["enqueue", "done"], ["done", "dropped"], ["enqueue", "dropped"], ["bogus", "dropped"]]);
+  assert.equal(rows[3].reason, "unknown user row kind bogus");
   assert.equal(h.of("spec_added").length, 1);
   assert.equal(h.of("lead_turn").length, 1);
   assert.equal(rebuild.check("demo").rc, 0);
@@ -554,30 +572,79 @@ test("lead.publish: the five texts, a torn last line, and a file from another da
 
 // ---- the shared predicate (R12) ----------------------------------------------------------------------------------
 
-// Mutation: "a parked-failed spec counts as open" -> the third assertion; "queue_finished is ignored" -> the last.
-test("queue.unfinished: specs not done, not counting awaiting_you with an outcome, and nothing after a queue_finished", (t) => {
+// Mutations: "a parked-failed spec counts as open" -> the d.md assertion; "only open specs count" -> the kill after the
+// last done; "any spec_added opens a queue" -> the engine-run-only database.
+test("queue.unfinished: open specs, or a queued spec added after the last queue_finished; an engine-run-only database is finished", (t) => {
   const env = tmpEnv();
   t.after(() => env.restore());
   const d = db.open("demo");
   t.after(() => d.close());
   assert.deepEqual(queue.unfinished(d), []);
-  const add = (id, position, state, outcome = null) => db.tx(d, () => {
+  const add = (id, position, state, outcome = null, queued = true) => db.tx(d, () => {
     db.putRaw(d, "specs", { id, position, state, outcome, integration: "keep", created_at: 1, updated_at: 1 });
-    db.event(d, { kind: "spec_added", spec: id });
+    db.event(d, { kind: "spec_added", spec: id, ...(queued ? { queued: true } : {}) });
   });
-  add("b.md", 1, "queued");
-  add("a.md", 0, "running");
-  add("c.md", 2, "done", "merged");
-  assert.deepEqual(queue.unfinished(d), ["a.md", "b.md"], "by position");
-  add("d.md", 3, "awaiting_you", "failed — awaiting you: q");
+  add("run.md", 0, "done", "kept x", false); // what `engine run` leaves
+  assert.deepEqual(queue.unfinished(d), [], "engine run alone is no queue");
+  add("b.md", 2, "queued");
+  add("a.md", 1, "running");
+  add("c.md", 3, "done", "merged");
+  assert.deepEqual(queue.unfinished(d), ["a.md", "b.md"], "the open specs, by position");
+  add("d.md", 4, "awaiting_you", "failed — awaiting you: q");
   assert.deepEqual(queue.unfinished(d), ["a.md", "b.md"]);
-  add("e.md", 4, "awaiting_you");
+  add("e.md", 5, "awaiting_you");
   assert.deepEqual(queue.unfinished(d), ["a.md", "b.md", "e.md"]);
   assert.equal(queue.pendingEnqueue(d), 0);
   queue.enqueue(d, "f.md", { runner: "lead", batch: "b1" }, 1);
   assert.equal(queue.pendingEnqueue(d), 1);
+  // the engine killed after the last spec ended and before queue_finished: still unfinished, with the queue's specs
+  d.prepare("UPDATE specs SET state='done', outcome='merged' WHERE state!='done' AND outcome IS NULL").run();
+  assert.deepEqual(queue.unfinished(d), ["a.md", "b.md", "c.md", "d.md", "e.md"]);
   db.event(d, { kind: "queue_finished", report: null });
-  assert.deepEqual(queue.unfinished(d), [], "the queue that held them has finished");
-  add("g.md", 5, "queued");
-  assert.deepEqual(queue.unfinished(d), ["a.md", "b.md", "e.md", "g.md"], "a spec added after it opens a new queue");
+  assert.deepEqual(queue.unfinished(d), [], "the queue has finished");
+  add("run2.md", 6, "done", "kept y", false);
+  assert.deepEqual(queue.unfinished(d), [], "an engine run after it changes nothing");
+  add("g.md", 7, "done", "merged");
+  assert.deepEqual(queue.unfinished(d), ["g.md"], "a spec enqueued after it opens a new queue");
+});
+
+// Mutation: "the floor is taken again at every start" -> the line written before a kill is lost (the last assertion);
+// "no floor" -> the old lines are replayed (the first).
+test("lead.begin: on a database with history and no lead file, nothing from before the start is published, everything after is, across a restart too", (t) => {
+  const env = tmpEnv();
+  t.after(() => env.restore());
+  const d = db.open("demo");
+  t.after(() => d.close());
+  const file = leadFile(env.engineDir);
+  db.event(d, { kind: "awaiting_you", spec: "old.md", question: "an old question" });
+  db.event(d, { kind: "usage_limit", spec: "old.md", until: 5 });
+  db.event(d, { kind: "engine_error", error: "an old error" });
+  db.event(d, { kind: "queue_finished", report: "old-report.md" });
+  lead.begin("demo", d);
+  assert.equal(lead.publish("demo", d), 0);
+  assert.equal(fs.existsSync(file), false);
+  db.event(d, { kind: "lead_turn", spec: "new.md" });
+  // the engine dies here, before it published; the next start begins again with the file still absent
+  lead.begin("demo", d);
+  assert.equal(lead.publish("demo", d), 1);
+  assert.deepEqual(readLines(file).map((l) => [l.seq, l.text]), [[5, "[Engine] your turn: new.md"]]);
+  lead.begin("demo", d);
+  assert.equal(lead.publish("demo", d), 0);
+});
+
+// Mutation: "queue.step swallows a publish error silently" -> no line; "queue.step lets it throw" -> the step rejects.
+test("queue.step: a lead-lines file that cannot be written is one stderr line per failure, and the tick still counts", async (t) => {
+  const h = mkq(t);
+  h.lead(SPEC_L);
+  fs.mkdirSync(leadFile(h.env.engineDir), { recursive: true }); // a directory where the file should be
+  const errs = [];
+  await h.step(); // the spec is added; its turn comes on the next tick
+  await queue.step(h.eng, "demo", (s) => errs.push(s));
+  await queue.step(h.eng, "demo", (s) => errs.push(s));
+  assert.equal(h.of("lead_turn").length, 1, "the engine went on");
+  assert.equal(errs.length, 2);
+  assert.match(errs[0], /^engine: lead lines: .*\n$/);
+  fs.rmdirSync(leadFile(h.env.engineDir));
+  await h.step();
+  assert.deepEqual(h.texts(), [`[Engine] your turn: ${SPEC_L}`], "published once the file can be written");
 });
