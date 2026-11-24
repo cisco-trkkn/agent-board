@@ -123,6 +123,14 @@ class Transcript(Base):
         s = self.state()
         self.assertEqual((s["last_read_text"], s["last_read_message_id"]), ("deploy it?", "m2"))
 
+    def test_row_with_several_tags_reports_the_last(self):   # mutation: first match -> "one"/"m1"
+        r = chan("one", "m1")
+        r["message"]["content"] += "\n" + CH("two", "m2")
+        self.transcript([r])
+        self.tick([rec()])
+        s = self.state()
+        self.assertEqual((s["last_read_text"], s["last_read_message_id"]), ("two", "m2"))
+
     def test_text_cut_to_200(self):
         self.transcript([chan("x" * 300)])
         self.tick([rec()])

@@ -8,6 +8,7 @@ id or "". No LLM, no network. A failing project is logged and skipped. The file:
    "holder", "reason", "window"}
 `last_read_message_id`, `reason` (why down) and `window` are additions to the spec's schema (plan assumption A2).
 """
+import argparse
 import json
 import os
 import re
@@ -110,8 +111,9 @@ def transcript_info(path):
             continue
         o = r.get("origin") or {}
         if r.get("type") == "user" and not r.get("isSidechain") and o.get("kind") == "channel" and o.get("server") == CHANNEL:
-            m = _TAG.search(_text((r.get("message") or {}).get("content")))
-            if m:
+            ms = list(_TAG.finditer(_text((r.get("message") or {}).get("content"))))
+            if ms:
+                m = ms[-1]   # a row can hold several tags: the newest is the last
                 text = m.group(2).strip()[:READ_MAX]
                 mm = _MID.search(m.group(1))
                 mid = mm.group(1) if mm else None
@@ -173,3 +175,47 @@ def tick(records, now, *, holder_of, sid_of, home):
                 write(f, compute(r, holder, info, read(f), now))
         except Exception as e:   # noqa: BLE001 - one project's failure never breaks the overview or the next project
             print(f"lead_state: {p}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
+def _holder_and_sid(project):
+    """(holder, session id) for `project`, the way server.lead_state_tick looks them up (imports server: heavy, CLI only)."""
+    os.environ.setdefault("TMUX_DASH_TOKEN", "local")
+    import server  # noqa: PLC0415
+    import planview  # noqa: PLC0415
+    raw = server.tmux("display", "-p", "-t", f"={project}:claude", "#{pane_id}\t#{pane_pid}").strip()
+    holder = False
+    if raw:
+        pane, ppid = raw.split("\t")
+        holder = pane in server.discord_leads([(pane, int(ppid))])
+    return holder, planview.lead_entry(project, Path.home() / ".claude", server.tmux)[0]
+
+
+def main(argv=None):
+    """--dry-run [--project P]: print what tick would write for each bridged project; write nothing."""
+    import time  # noqa: PLC0415
+    ap = argparse.ArgumentParser(prog="lead_state")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--project")
+    a = ap.parse_args(argv)
+    if not a.dry_run:
+        ap.print_usage(sys.stderr)
+        return 2
+    import overview  # noqa: PLC0415
+    ov = overview.board_overview() or overview.local_overview()
+    now = time.time()
+    for r in ov["projects"]:
+        p = r.get("project")
+        if a.project and p != a.project:
+            continue
+        d = tc_env.discord_dir(p)
+        if not (d / "bridge.json").is_file():
+            continue
+        holder, sid = _holder_and_sid(p)
+        info = transcript_info(transcript_path(Path.home() / ".claude", sid))
+        f = d / "lead-state.json"
+        print(json.dumps({"project": p, "file": str(f), "would_write": compute(r, holder, info, read(f), now)}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

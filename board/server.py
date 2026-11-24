@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, engine_lines, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, newproject, notify, overview, planview, relay, restore, usage, watch, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, engine_lines, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, lead_state, newproject, notify, overview, planview, relay, restore, usage, watch, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -586,6 +586,22 @@ def read_limits(now):
         return None
 
 
+def lead_state_tick(records, now):
+    """lead-state.json for each bridged project (spec 2026-11-23-remote-lead-liveness §1). TC_LEAD_STATE=0: never."""
+    if os.environ.get("TC_LEAD_STATE") == "0":
+        return
+    home = HOME / ".claude"
+
+    def holder_of(p):
+        raw = tmux("display", "-p", "-t", f"={p}:claude", "#{pane_id}\t#{pane_pid}").strip()
+        if not raw:
+            return False
+        pane, ppid = raw.split("\t")
+        return pane in discord_leads([(pane, int(ppid))])
+
+    lead_state.tick(records, now, holder_of=holder_of, sid_of=lambda p: planview.lead_entry(p, home, tmux)[0], home=home)
+
+
 def feed_tick(records, now, live=None, limits=None):
     """The discord feed for each project with a channel: tick (derive, spool, card), then the controls step (inbound events); the dialog scan runs once before them.
     A failure in one project is logged and never breaks the overview or the next project."""
@@ -696,6 +712,10 @@ def overview_payload():
     ensure_overseer()   # once per fresh build, outside the lock: its run_script can take up to 20 s and must not stall /api/overview
     ensure_discord_bridges(ov["projects"])
     feed_tick(ov["projects"], ov["generated"], live=INDEXER.snapshot() if INDEXER else [], limits=limits)
+    try:
+        lead_state_tick(ov["projects"], ov["generated"])
+    except Exception as e:   # noqa: BLE001 - never breaks the overview
+        print(f"tmux-dash: lead state failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     return value
 
 
