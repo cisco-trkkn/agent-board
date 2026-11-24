@@ -795,6 +795,38 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
 
   engine)
     command -v node >/dev/null || die "engine: node >= 22.13 is required"
+    if [[ "$1" == start && " $* " != *" --here "* ]]; then
+      # engine start: one engine for the project in a window `engine` of <project>-bg (exit 4: one already runs)
+      shift
+      eargs=(); esess=
+      while (( $# )); do
+        if [[ "$1" == --session ]]; then [[ -n "$2" ]] || die "engine start: --session needs a name"; esess="$2"; shift 2; else eargs+=("$1"); shift; fi
+      done
+      if [[ -z "$TMUX" ]]; then   # the restore job's launchd run: the session comes from --session
+        [[ -n "$esess" ]] || die "engine start: usage: tmux-ctl engine start --session <name> [engine flags] (outside tmux)"
+        SESSION="$esess"; MAIN="$esess"
+        FEEDKEY="$(t display -p -t "=$SESSION:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; FEEDKEY="${FEEDKEY:-$SESSION}"
+        BG="$FEEDKEY-bg"
+      fi
+      [[ "$TC_ENGINE" == 0 ]] && die "engine start: TC_ENGINE=0"
+      enode="${commands[node]}"; eis="${0:A:h:h}/engine/bin/engine.js"
+      eout="$(TC_PROJECT="$FEEDKEY" TC_SESSION="$SESSION" "$enode" "$eis" start --preflight "${eargs[@]}" 2>&1)"; erc=$?
+      if (( erc != 0 )); then [[ -n "$eout" ]] && print -u2 -r -- "$eout"; exit $erc; fi
+      if t list-windows -t "=$BG:" -F '#{window_name}' 2>/dev/null | grep -qx engine; then
+        print -u2 "tmux-ctl: engine start: window engine already exists in $BG"; exit 4
+      fi
+      ensure_bg
+      edir="${TC_ENGINE_DIR:-$HOME/.local/state/agent-board/engine}"
+      eenv=(TC_PROJECT="$FEEDKEY" TC_SESSION="$SESSION")
+      [[ -n "$TC_ENGINE_DIR" ]] && eenv+=(TC_ENGINE_DIR="$TC_ENGINE_DIR")
+      [[ -n "$TC_STATE" ]] && eenv+=(TC_STATE="$TC_STATE")
+      ecmd=("$enode" "$eis" start --here "${eargs[@]}")
+      eroot="$(git rev-parse --show-toplevel 2>/dev/null)" || eroot="$PWD"
+      t new-window -d -t "=$BG:" -n engine -c "$eroot" \
+        "mkdir -p ${(q)edir}; ${(j: :)${(q)eenv[@]}} ${(j: :)${(q)ecmd[@]}} 2>&1 | tee -a ${(q)edir}/${(q)FEEDKEY}.log" || die "engine start: could not open the engine window in $BG"
+      print "engine started in ${BG}:engine"
+      exit 0
+    fi
     export TC_PROJECT="$FEEDKEY"
     [[ -n "$SESSION" ]] && export TC_SESSION="$SESSION"
     exec node "${0:A:h:h}/engine/bin/engine.js" "$@" ;;
