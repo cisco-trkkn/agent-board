@@ -278,8 +278,8 @@ Keys: `ts` (float epoch seconds), `project`, `spec` (spec basename), `kind`, `ti
 
 ## Engine
 
-`engine/` (Node >= 22.13, standard library only) runs one planned spec to its outcome with no lead turn in between
-(`docs/superpowers/specs/2026-11-10-pcee-engine-design.md`). Command: `tmux-ctl engine <sub>`, a zsh case that runs
+`engine/` (Node >= 22.13, standard library only) runs a planned spec to its outcome with no lead turn in between, and
+runs a queue of specs one at a time (`docs/superpowers/specs/2026-11-10-pcee-engine-design.md`). Command: `tmux-ctl engine <sub>`, a zsh case that runs
 `engine/bin/engine.js` with `TC_PROJECT` (the feed key) and `TC_SESSION` exported; code is in `engine/lib/engine/`.
 
 - **State file.** One SQLite database per project, `~/.local/state/agent-board/engine/<project>.sqlite` (`TC_ENGINE_DIR`
@@ -299,8 +299,17 @@ Keys: `ts` (float epoch seconds), `project`, `spec` (spec basename), `kind`, `ti
     finds the plan (`**Spec:**` line), compiles it, inserts the spec, records `metrics start`, then runs in the
     foreground printing `<HH:MM:SS> <kind> <job or -> <text>` per event (deadline re-arms, timer, inbox and step
     bookkeeping are hidden).
+  - `engine enqueue <spec> --runner lead|engine --integration merge|mr|keep [--push] --batch <id> [--gate <id>]
+    [--worktree <path>] [--budget-attempts N] [--budget-tokens N] [--project P]`: writes one inbox row and nothing
+    else (the same spec and batch twice is one row); the core turns it into a spec when it drains the inbox. A spec the
+    engine cannot run (a `--gate`, no git checkout, no spec file, a plan that does not compile) is queued for the lead
+    with a stderr line, never refused.
+  - `engine start [--preflight] [--here] [--project P] [--backend claude-tmux|fake] [--script F]`: runs the queue loop
+    (tick, publish the lead lines, finish) until the queue is finished or the engine stops. `--preflight` runs
+    nothing: it only says whether there is something to run.
+  - `engine done <spec> --outcome <text>`: the lead's answer for a lead-run spec at its turn; writes one inbox row.
   - `engine status [<spec>]`, `engine status --waiting` (question, options, asked at, the `signal` command),
-    `engine events <spec>` (every event).
+    `engine status --unfinished` (prints the open spec ids, nothing otherwise), `engine events <spec>` (every event).
   - `engine resume`: reconciles `intent` steps, fires due timers oldest first, drains the inbox, compares the policy,
     then re-watches or re-runs `running` jobs.
   - `engine signal <spec> approve|deny|fail [--note <text>]`: answers a parked spec.
@@ -308,9 +317,54 @@ Keys: `ts` (float epoch seconds), `project`, `spec` (spec basename), `kind`, `ti
 - **Exit codes.** `run`: 0 outcome `merged`, `mr` or `kept`; 1 `failed — …`, `denied: …` or an engine error;
   3 no plan, plan on another branch or compile error (prints `[Engine] your turn: <spec>`); 2 bad usage.
   `signal`: 2 `no open wait for <spec>`. `rebuild --check`: 0 match, 1 differences; `--apply`: 2 `engine lock held`.
+  `enqueue`: 0 queued (also when handed to the lead); 1 the spec is already in the database; 2 bad usage.
+  `start`: 0 queue finished; 1 the engine stopped on an error (`--preflight`: nothing queued and no unfinished spec);
+  4 an engine already runs for the project (`--preflight`: 0 when there is something to run). `done`: 2 `no lead turn
+  open for <spec>`. `status --unfinished`: 0 an unfinished queue (ids on stdout), 1 none.
   Any bad subcommand or option: 2 with a usage line.
 - **Project test command.** `docs/superpowers/engine.json` (`test`, `test_ok` exit codes, `retry` overrides); this
   repo's is `zsh tools/tests/all.zsh` with `[0, 4]` (all.zsh exits 4 when every job passed but over its time budget).
+- **The turn and parked specs.** One spec holds the turn at a time (concurrency 1). When it ends or parks, an answered
+  parked spec resumes first (oldest answer first), then the next queued spec starts. A lead-run spec reaches its turn
+  as a `lead_turn` event (its gate runs first; a failing gate fails the spec with `failed — gate <id>: <line>`); the
+  spec stays `running` and the engine waits for the lead's `engine done`. A queued engine spec whose plan no longer
+  compiles is handed to the lead. A spec the engine parks (`awaiting_you`) does not stop the queue. A spec still parked
+  when nothing else is runnable is completed as `failed — awaiting you: <question>`, but its state, wait, worktree and
+  windows stay: `engine signal` later resumes it, and its outcome is recorded again. `engine resume` on a part 1
+  database does not do this: it fails a parked spec as `failed — awaiting you` and does not resume it.
+- **Typed asks.** Every wait has a `kind` (`stop_class`, `needs_you`, `architect_park`, `policy_change`,
+  `cannot_tell`, `user_gate`, `budget`) and a recommendation (`option`, `why`, `confidence`), which `status --waiting`
+  prints as `I recommend:`. A wait without a valid kind or recommendation is refused. An open part 1 wait is migrated to
+  `cannot_tell` with that kind's default, with an event so that `rebuild` replays it. `metrics ask` records whether the
+  answer followed the recommendation.
+- **Budget.** Each spec has an attempt cap and a token cap, default 60 attempts and 5,000,000 tokens (`budget` in
+  `docs/superpowers/engine.json` overrides; `--budget-attempts` and `--budget-tokens` set one spec's). A job reserves
+  one attempt when it starts; at a cap the spec parks as a `budget` ask (`approve|fail`; approve raises each cap that was
+  hit by 50%). Tokens come from the backend's usage; a job whose cost cannot be read parks a `cost unknown` ask, and
+  approving it goes on with that cost unknown, so the spec's spend is shown as a lower bound.
+- **Lead lines.** The engine never types into the lead's window. Each tick it appends the lines the lead must hear to
+  `<engine dir>/<project>.lead.jsonl` (`{seq, ts, text}`, one per qualifying event, the event's seq as cursor, so a
+  line is never written twice): `[Engine] your turn: <spec>`, `awaiting you: <spec>: <question>`,
+  `paused: usage limit until <time>`, `stopped: <reason>` and `queue finished: <report path>`. The first `engine start`
+  on a database with history sets a floor (`<project>.lead.start`) so old events are not replayed. The board's
+  `board/engine_lines.py` is the only reader: it hands one line at a time to the lead's window through the board's
+  queue and moves its cursor (`<project>.lead.cursor`) only after that line has left the queue, so a board restart
+  hands a waiting line over again.
+- **Morning report.** When nothing is runnable the engine writes `docs/superpowers/reports/<date>-queue.md` (the
+  date of the queue's first spec; `-queue-2` and on when the name is taken by another queue), commits it path-scoped
+  on `main`, runs `tmux-ctl artifact` and `tmux-ctl awake off`, then writes `queue_finished` with the path. Per spec it
+  lists the outcome, runner, branch, merge commit or MR, spend, rulings with what each costs if wrong, permission
+  prompts and user gates; then an "Awaiting you" section with the exact `signal` command, Metrics, the PCEE line and
+  Sleep. The hidden marker `<!-- engine-queue: <project> <seq> -->` identifies the queue's report wherever it sits in
+  the file, so the lead appending its rulings to a lead-run spec does not break a rerun. Every outside call is a keyed
+  step of a never-park kind, so a failing call leaves a note in the report and never parks the queue. The hook has no
+  report path in `queue.reportHooks`: after a kill the idempotent hook always runs again and gives one file and one
+  commit; a live checkout that is dirty or busy leaves the file uncommitted with a `report_uncommitted` event.
+- **Restart.** The board's restore action (`board/restore.py`, `_resume_engine`) runs `engine status --unfinished
+  --project <name>` for each restored project; on exit 0 it runs `engine start --session <session>` (the engine, never a
+  lead; exit 4, already running, counts as resumed). The same predicate serves `start --preflight`. When no lead
+  re-armed the keep-awake hold, restore runs `awake on --queue --lid` so the hold follows the tmux server. The
+  snapshot keeps a project that has only an engine window and no lead.
 
 ## State files
 
