@@ -14,7 +14,6 @@ const { findPlan, mainRoot } = require("../registry/git");
 const lazy = (name) => new Proxy({}, { get: (_, k) => require(name)[k] });
 const db = lazy("./db");
 const inbox = lazy("./inbox");
-const steps = lazy("./steps");
 const rebuild = lazy("./rebuild");
 
 const SUBS = ["run", "status", "events", "resume", "signal", "rebuild"];
@@ -189,27 +188,16 @@ async function cmdRun(args, io) {
       io.out(`outcome: ${have.outcome}`);
       return OK_OUTCOME.test(String(have.outcome)) ? 0 : 1;
     }
+    // one unfinished spec at a time: a spec in awaiting_you that already has an outcome (the end of a queue) is finished
+    const other = eng.db.prepare("SELECT id, state FROM specs WHERE id!=? AND state!='done' AND NOT (state='awaiting_you' AND outcome IS NOT NULL) ORDER BY position, created_at LIMIT 1").get(spec);
+    if (other) { io.err(`engine: run: ${other.id} is unfinished (${other.state}): use engine resume\n`); return 1; }
     if (have) { io.err(`engine: run: ${spec} is already in the database (${have.state}): use engine resume\n`); return 1; }
     eng.addSpec({
       id: spec, plan: found.path, worktree, branch: git(worktree, ["branch", "--show-current"]) || null,
       integration: p.flags.integration, push: p.flags.push ? 1 : 0, batch: p.flags.batch || null, backend: backendKind,
     });
     if (!eng.db.prepare("SELECT 1 FROM specs WHERE id=?").get(spec)) { io.err(`engine: run: could not insert ${spec}\n`); return 1; }
-    if (p.flags.batch) {
-      const tmuxCtl = tmuxCtlPath();
-      // Measurement never fails or blocks a spec: a failed metrics start leaves the step failed (steps.run records
-      // the error and a step_failed event), prints its line, and the run goes on.
-      try {
-        steps.run(eng.db, { key: `metrics_start:${spec}`, spec, kind: "metrics_start", facts: { spec, batch: p.flags.batch } }, () => {
-          const r = cp.spawnSync(tmuxCtl, ["metrics", "start", spec, "--batch", p.flags.batch, "--worktree", worktree],
-            { cwd: repo, encoding: "utf8", timeout: 60000 });
-          if (r.error || r.status !== 0) throw new Error(`metrics start: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
-          return { spec, batch: p.flags.batch };
-        });
-      } catch (e) {
-        io.out(`${hms(Date.now() / 1000)} metrics_failed - ${String((e && e.message) || e).split("\n")[0]}`);
-      }
-    }
+    // the core runs `metrics start` itself, as the metrics_start step, when the spec starts
     return await runSpec(eng, spec, io);
   } finally {
     eng.stop();
@@ -284,11 +272,21 @@ async function cmdResume(args, io) {
   if (!dbExists(project)) { io.out("nothing to resume"); return 0; }
   const peek = db.open(project);
   let open;
-  try { open = peek.prepare("SELECT id, backend FROM specs WHERE state!='done' ORDER BY position, created_at").all(); } finally { peek.close(); }
-  if (!open.length) { io.out("nothing to resume"); return 0; }
-  const repo = mainRoot(git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd);
-  const eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || open[0].backend || "claude-tmux");
+  let intents;
   try {
+    open = peek.prepare("SELECT id, backend FROM specs WHERE state!='done' ORDER BY position, created_at").all();
+    intents = peek.prepare("SELECT COUNT(*) AS n FROM steps WHERE state='intent'").get().n;
+  } finally { peek.close(); }
+  if (!open.length && !intents) { io.out("nothing to resume"); return 0; }
+  const repo = mainRoot(git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd);
+  const eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || (open[0] || {}).backend || "claude-tmux");
+  try {
+    if (!open.length) { // every spec is done, but a step (a close_window) was left at intent: reconcile it and stop
+      await eng.resume();
+      await eng.tick();
+      io.out(`reconciled ${intents} step(s)`);
+      return 0;
+    }
     await eng.resume(); // spec section 9: intent steps, due timers, inbox, policy, then running jobs (the ticks that follow)
     let rc = 0;
     for (const s of open) if ((await runSpec(eng, s.id, io)) !== 0) rc = 1;

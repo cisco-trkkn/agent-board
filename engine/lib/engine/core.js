@@ -40,6 +40,7 @@ const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
 const INPUTS = ["spec_started", "stale_result", "job_done", "job_failed", "check_result", "architect_decision", "integrated", "signal"];
 const PK = { specs: "id", jobs: "id", steps: "key", timers: "id", waits: "id", retry_policies: "kind", inbox: "id" };
 const MY_STEPS = ["check", "stale_check", "integrate"];
+const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report"]; // measurement and notices
 const WORKER_KINDS = ["refresh", "implement", "fix", "fix_wave"];
 const RETRY_ALIAS = { fix_wave: "fix", re_review: "final_review" };
 const BLOCKING = ["critical", "important"];
@@ -149,7 +150,9 @@ function start(opts) {
   const tell = opts.tell || ((handle, text) => { cp.spawnSync(tmuxCtl, ["tell", handle.window, text], { env, encoding: "utf8" }); });
   const notify = opts.notify || ((text) => process.stderr.write(`${text}\n`));
   const sleep = opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const ictx = (spec) => ({ db, repo, worktree: spec.worktree, tmuxCtl, tasks: plan(spec).tasks, env: opts.env, now });
+  // a worktree that is gone (a merged spec's, removed by its finalize) is read from the main checkout, where its work now is
+  const wtOf = (spec) => (spec.worktree && fs.existsSync(spec.worktree) ? spec.worktree : repo);
+  const ictx = (spec) => ({ db, repo, worktree: wtOf(spec), tmuxCtl, tasks: plan(spec).tasks, env: opts.env, now });
   const integrateFn = opts.integrate || ((spec) => realIntegrate.run(ictx(spec), spec));
   const revertFn = opts.revert || ((spec) => realIntegrate.revert(ictx(spec), spec));
   const finalizeFn = opts.finalize || ((spec, outcome) => realIntegrate.finalize(ictx(spec), spec, outcome));
@@ -199,7 +202,7 @@ function start(opts) {
 
   function plan(spec) {
     if (plans.has(spec.id)) return plans.get(spec.id);
-    const file = path.resolve(spec.worktree || repo, `${spec.plan}.tasks.json`);
+    const file = path.resolve(wtOf(spec), `${spec.plan}.tasks.json`);
     const text = readOr(file, null);
     const c = compile(text);
     if (c.error) throw new Error(`${spec.id}: ${c.error}`);
@@ -344,7 +347,7 @@ function start(opts) {
     const tryN = d.try || 1;
     const spec = get("specs", job.spec);
     const ny = endNeedsYou(job, t);
-    const rows = [...cancelTimers(job.id), ["jobs", { ...job, ...ny.fields, state: "failed", ended_at: t, head: gitHead(spec.worktree || repo) }], ...ny.rows];
+    const rows = [...cancelTimers(job.id), ["jobs", { ...job, ...ny.fields, state: "failed", ended_at: t, head: gitHead(wtOf(spec)) }], ...ny.rows];
     const proto = { kind: job.kind, task: job.task === null ? undefined : job.task, tier: job.tier, model: job.model };
     const carry = { ...d, deadline: undefined, dl: undefined, nudged_at: undefined, told_at: undefined, parked: undefined, resumed_at: undefined };
     let next = null;
@@ -389,7 +392,7 @@ function start(opts) {
     const t = now();
     const spec = get("specs", job.spec);
     const d = detailOf(job);
-    const wt = spec.worktree || repo;
+    const wt = wtOf(spec);
     if (WORKER_KINDS.includes(job.kind) && st.status === "blocked") {
       const pol = retryRow(job.kind);
       // blocked is a failure unless the policy sends it straight to the architect, which the strategy does on job_done
@@ -709,7 +712,7 @@ function start(opts) {
 
   async function act(spec, st) {
     const t = now();
-    const wt = spec.worktree || repo;
+    const wt = wtOf(spec);
     const finished = (result) => ["steps", { ...st, state: "done", result: JSON.stringify(result), updated_at: t }];
     if (st.kind === "stale_check") {
       const r = cp.spawnSync(tmuxCtl, ["registry", "stale", spec.id], { cwd: wt, env, encoding: "utf8", timeout: 120000 });
@@ -795,13 +798,13 @@ function start(opts) {
     const reviewer = ["review", "re_review", "final_review"].includes(job.kind);
     const tasks = d.tasks || (job.task === null ? [] : [job.task]);
     const out = [`# ${job.kind} job ${job.id}`, "",
-      `Spec: ${spec.id}`, `Plan: ${spec.plan}`, `Worktree: ${spec.worktree || repo}`, `Branch: ${spec.branch}`, ""];
+      `Spec: ${spec.id}`, `Plan: ${spec.plan}`, `Worktree: ${wtOf(spec)}`, `Branch: ${spec.branch}`, ""];
     if (reviewer) {
       out.push("You are a reviewer. Review the work against the task text and the spec; change no file but your report.", "");
       const scope = tasks.length ? all("SELECT * FROM jobs WHERE spec=? ORDER BY rowid", spec.id).filter((j) => tasks.includes(j.task) && WORKER_KINDS.includes(j.kind))
         : all("SELECT * FROM jobs WHERE spec=? ORDER BY rowid", spec.id).filter((j) => WORKER_KINDS.includes(j.kind));
       const first = scope.find((j) => j.base);
-      out.push("## Review package", "", `Commit range: ${first ? first.base : spec.base || "(branch start)"}..${gitHead(spec.worktree || repo) || "HEAD"}`, "");
+      out.push("## Review package", "", `Commit range: ${first ? first.base : spec.base || "(branch start)"}..${gitHead(wtOf(spec)) || "HEAD"}`, "");
       for (const j of scope) out.push(`- ${j.id}: brief ${j.brief}, report ${j.report}`);
       if (job.kind !== "review") {
         const parked = all("SELECT * FROM events WHERE spec=? AND kind IN ('minor','awaiting_you') ORDER BY seq", spec.id).map((e) => `- ${architect.eventLine(e)}`);
@@ -844,14 +847,14 @@ function start(opts) {
     return architect.build({
       kase: d.case, spec: spec.id, job: d.target, task: taskN, finding,
       report: target ? readOr(target.report, "") : "", review: review ? readOr(review.report, "") : "",
-      decisions: architect.decisions(readOr(path.resolve(spec.worktree || repo, String(spec.id).split("#")[0]), "")),
+      decisions: architect.decisions(readOr(path.resolve(wtOf(spec), String(spec.id).split("#")[0]), "")),
       events: all("SELECT * FROM events WHERE spec=? ORDER BY seq", spec.id), reportPath, refusal: d.refusal,
     });
   }
 
   // The brief and report paths of a job, the same for a fresh dispatch and for a worker adopted after a crash.
   function jobPaths(spec, job) {
-    const ws = paths.workspace(spec.worktree || repo);
+    const ws = paths.workspace(wtOf(spec));
     return { brief: path.join(ws, "briefs", `${fileName(job.id)}.md`), report: path.join(ws, "reports", `${fileName(job.id)}.md`) };
   }
 
@@ -870,7 +873,7 @@ function start(opts) {
     }
     if (usagePaused()) return;
     const spec = get("specs", job.spec);
-    const wt = spec.worktree || repo;
+    const wt = wtOf(spec);
     const d = detailOf(job);
     const ready = { ...job, ...jobPaths(spec, job), window: `${slugOf(spec)}·${label(job)}` };
     const text = briefFor(spec, ready, ready.report);
@@ -913,11 +916,26 @@ function start(opts) {
     backoff_s: JSON.stringify(r.backoff_s === undefined ? [] : r.backoff_s), timeout_min: r.timeout_min === undefined ? null : r.timeout_min,
     no_retry_on: JSON.stringify(r.no_retry_on || []), on_exhausted: r.on_exhausted || null }]);
 
+  // Measurement never blocks a spec: a failed metrics start stays a failed step (steps.run wrote the error and its
+  // step_failed event) and the run goes on.
+  function metricsStart(spec) {
+    if (spec.batch === null || spec.batch === undefined || spec.batch === "") return;
+    try {
+      steps.run(db, { key: `metrics_start:${spec.id}`, spec: spec.id, kind: "metrics_start", facts: { spec: spec.id, batch: spec.batch } }, () => {
+        const r = cp.spawnSync(tmuxCtl, ["metrics", "start", spec.id, "--batch", String(spec.batch), "--worktree", String(spec.worktree)],
+          { cwd: repo, env, encoding: "utf8", timeout: 60000 });
+        if (r.error || r.status !== 0) throw new Error(`metrics start: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
+        return { spec: spec.id, batch: spec.batch };
+      }, { now });
+    } catch (_) { /* recorded as a failed step */ }
+  }
+
   function startQueued() {
     if (db.prepare("SELECT 1 FROM specs WHERE state NOT IN ('queued','done','awaiting_you') LIMIT 1").get()) return;
     const spec = db.prepare("SELECT * FROM specs WHERE state='queued' ORDER BY position, created_at LIMIT 1").get();
     if (!spec) return;
     plan(spec); // a plan the engine cannot compile is an error before anything starts
+    metricsStart(spec);
     const t = now();
     emit("spec_started", { spec: spec.id, rows: [["specs", { ...spec, state: "running", policy_version: policy.POLICY_VERSION, policy_hash: hash, updated_at: t }], ...retryRows()],
       text: spec.id });
@@ -993,6 +1011,7 @@ function start(opts) {
         policyCheck();
         inbox.moveDueTimers(db, now());
         pollBackend();
+        await pumpAll(); // the commands of an input decided last tick come before the next row
         await drainAll();
         await advance();
         await closeWindows();
@@ -1020,8 +1039,16 @@ function start(opts) {
     async resume() {
       try {
         const rec = steps.reconcile(db, opts.stepsCtx || { repo, mainRepo: repo, tmuxCtl, session: opts.session, tmuxArgs: opts.tmuxArgs }, { now });
+        for (const r of rec.rerun) {
+          const sp = r.kind === "metrics_start" && r.spec ? get("specs", r.spec) : null;
+          if (sp) metricsStart(sp); // the start never ran
+        }
         for (const p of rec.park) {
           const s = get("steps", p.key);
+          if (s && NEVER_PARK.includes(s.kind)) { // measurement and notices never park: the unknown row is failed
+            steps.fail(db, s, `could not tell whether ${s.key} ran`, { now });
+            continue;
+          }
           if (!s || MY_STEPS.includes(s.kind) || !s.spec) continue; // the core's own rows are simply run again
           const spec = get("specs", s.spec);
           if (spec && spec.state !== "done") park(spec, p.question, `core:step:${p.key}`);
@@ -1033,7 +1060,7 @@ function start(opts) {
           if (!job || job.state !== "pending" || !res.pane) continue;
           const t = now();
           const spec = get("specs", job.spec);
-          const running = { ...job, ...jobPaths(spec, job), state: "running", started_at: t, window: res.window, pane: res.pane, base: gitHead(spec.worktree || repo) };
+          const running = { ...job, ...jobPaths(spec, job), state: "running", started_at: t, window: res.window, pane: res.pane, base: gitHead(wtOf(spec)) };
           emit("dispatched", { spec: job.spec, job: job.id, rows: deadlineRows(running, detailOf(job), t + HEARTBEAT_S).rows, task: job.task === null ? "-" : job.task,
             window: res.window, tier: job.tier, model: job.model, how: "adopted" });
         }
@@ -1042,7 +1069,7 @@ function start(opts) {
           const spec = get("specs", job.spec);
           let ok = false;
           if (typeof backend.adopt === "function") {
-            try { ok = !!(await backend.adopt({ ...job, worktree: spec.worktree || repo }, handleOf(job))); } catch (_) { ok = false; }
+            try { ok = !!(await backend.adopt({ ...job, worktree: wtOf(spec) }, handleOf(job))); } catch (_) { ok = false; }
           }
           if (ok) { // its heartbeat and no-progress clocks restart now: a status that went stale while the engine was down is not a hang
             watched++;

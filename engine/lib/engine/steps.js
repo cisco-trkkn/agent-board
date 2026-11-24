@@ -121,6 +121,11 @@ const CHECKS = {
   commit_ledger: (ctx, row) => engineStepCommit(ctx, row.key, row.result || {}),
   metrics_start: metricsHas("start"),
   metrics_record: metricsHas("run"),
+  // the owners of these steps (tasks 4 and 9) have no check yet: an unfinished row is unknown, and fails
+  metrics_ask: () => "unknown",
+  artifact: () => "unknown",
+  awake_off: () => "unknown",
+  registry_report: () => "unknown",
   push(ctx, row) {
     const f = row.result || {};
     const r = git(ctx.repo || mainRepo(ctx), ["ls-remote", f.remote, f.ref]);
@@ -137,6 +142,11 @@ const CHECKS = {
     return listed.includes(want) ? "not_done" : "done";
   },
 };
+
+// An intent row the check could not decide, for a kind that never blocks a run: failed, with its step_failed event.
+function fail(db, row, error, { now } = {}) {
+  return write(db, row, "failed", { ...(parse(row.result) || row.result || {}), error }, nowOf(now), "step_failed", { error });
+}
 
 // Runs the check of every intent row. Acts on nothing: the caller re-runs `rerun` and parks `park`.
 function reconcile(db, ctx, { now } = {}) {
@@ -160,4 +170,4 @@ function reconcile(db, ctx, { now } = {}) {
   return out;
 }
 
-module.exports = { run, begin, finish, reconcile, CHECKS, getRow };
+module.exports = { run, begin, finish, fail, reconcile, CHECKS, getRow };

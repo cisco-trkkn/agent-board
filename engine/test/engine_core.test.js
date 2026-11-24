@@ -73,7 +73,9 @@ function mk(t, o = {}) {
   fs.writeFileSync(path.join(wt, SPEC), "# Demo\n\n## Decisions\n\n- D1: keep it small.\n\n## Design\n\nbody\n");
   if (o.config) fs.writeFileSync(path.join(wt, "docs/superpowers/engine.json"), JSON.stringify(o.config));
   const ctl = path.join(env.root, "tmux-ctl");
-  fs.writeFileSync(ctl, `#!/bin/sh\necho "$@" >> "${env.root}/ctl.log"\necho ${o.stale ? "stale" : "fresh"}\nexit ${o.stale ? 1 : 0}\n`, { mode: 0o755 });
+  // o.metrics: the exit code of `metrics start` (default 0); o.has: the exit code of `metrics has ...` (default 0)
+  const metricsStub = `if [ "$1 $2" = "metrics start" ]; then exit ${o.metrics || 0}; fi\nif [ "$1 $2" = "metrics has" ]; then exit ${o.has || 0}; fi\n`;
+  fs.writeFileSync(ctl, `#!/bin/sh\necho "$@" >> "${env.root}/ctl.log"\n${metricsStub}echo ${o.stale ? "stale" : "fresh"}\nexit ${o.stale ? 1 : 0}\n`, { mode: 0o755 });
   const clock = { t: 1000 };
   const script = o.script || {};
   const backend = wrap(fake.createBackend({ script, now: () => clock.t }), clock);
@@ -1143,4 +1145,104 @@ test("I1: a denied merge spec (real integrate) puts its ledger on the spec branc
   assert.equal(r.g.git("rev-parse", "main").trim(), main, "main did not move");
   assert.ok(r.hasLedger("spec-demo"), "ledger on the spec branch");
   assert.ok(!r.hasLedger("main"));
+});
+
+// ---- part 2, task 1: part 1 follow-ups (M1, M6, M9) --------------------------------------------------------------
+// Mutations run for these guards (each made the named test fail):
+//   M1: wtOf always returns spec.worktree        fails "M1: a merge spec whose worktree is gone"
+//   M6: pumpAll() moved after drainAll() in tick fails "M6: a tick applies the commands of an undecided input"
+//   M9: the six kinds parked like any other step fails "M9: an intent step of a measurement or notice kind never parks"
+//   M9: metricsStart not called in startQueued   fails "M9: the core runs metrics start"
+
+test("M1: a merge spec whose worktree is gone resumes from the plan and git state in repo, to done, with no engine_error", async (t) => {
+  const r = realMerge(t, { tasks: [task("T1")], script: { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) } });
+  // the first engine runs the real integrate to its end (merge, ledger, worktree removed), then dies before `integrated` is written
+  const realIntegrate = require("../lib/engine/integrate");
+  const e1 = core.start({ project: "demo2", repo: r.g.dir, backend: wrap(fake.createBackend({ script: { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) }, now: () => r.clock.t }), r.clock),
+    now: () => r.clock.t, tmuxCtl: path.join(path.dirname(r.wt), "tmux-ctl"), tell: () => {}, notify: () => {}, transcriptRoot: path.dirname(r.wt), sleep: async () => {},
+    integrate: async (spec) => {
+      realIntegrate.run({ db: e1.db, repo: r.g.dir, worktree: spec.worktree, tmuxCtl: path.join(path.dirname(r.wt), "tmux-ctl"), now: () => r.clock.t }, spec);
+      throw new Error("crash after the merge");
+    } });
+  t.after(() => e1.stop());
+  e1.addSpec({ id: SPEC, plan: PLAN, worktree: r.wt, branch: "spec-demo", integration: "merge", push: 0, batch: null });
+  for (let i = 0; i < 400 && !e1.halted; i++) { r.clock.t += 5; await e1.tick(); }
+  assert.match(e1.halted, /crash after the merge/);
+  assert.equal(e1.db.prepare("SELECT state FROM specs WHERE id=?").get(SPEC).state, "integrating");
+  assert.ok(!fs.existsSync(r.wt), "the real finalize removed the worktree");
+  const crashSeq = e1.db.prepare("SELECT MAX(seq) AS s FROM events").get().s; // the deliberate crash is the last event so far
+  e1.stop();
+  r.eng.stop(); // the unused engine of the helper holds its own project; the second engine is another process's view of "demo2"
+  const e2 = core.start({ project: "demo2", repo: r.g.dir, backend: wrap(fake.createBackend({ script: {}, now: () => r.clock.t }), r.clock),
+    now: () => r.clock.t, tmuxCtl: path.join(path.dirname(r.wt), "tmux-ctl"), tell: () => {}, notify: () => {}, transcriptRoot: path.dirname(r.wt), sleep: async () => {} });
+  t.after(() => e2.stop());
+  await e2.resume();
+  for (let i = 0; i < 40 && e2.db.prepare("SELECT state FROM specs WHERE id=?").get(SPEC).state !== "done"; i++) { r.clock.t += 5; await e2.tick(); }
+  assert.equal(e2.halted, null, String(e2.halted));
+  assert.deepEqual(e2.db.prepare("SELECT detail FROM events WHERE kind='engine_error' AND seq>?").all(crashSeq).map((x) => x.detail), []);
+  assert.equal(e2.db.prepare("SELECT state, outcome FROM specs WHERE id=?").get(SPEC).state, "done");
+});
+
+test("M6: a tick applies the commands of an undecided input before it drains a worker row", async (t) => {
+  const h = mk(t);
+  h.add();
+  // a worker row waits in the inbox when the spec starts: spec_started is an input none of whose commands is applied yet
+  inbox.insert(h.db, { source: "worker", source_id: "w1", spec: SPEC, job: null, kind: "status", payload: { pane: "%1", state: "busy" } }, h.clock.t);
+  await h.step(1);
+  const ev = h.events();
+  const started = ev.find((e) => e.kind === "spec_started");
+  const cmd = ev.find((e) => e.detail.cause === started.seq);
+  const row = ev.find((e) => e.kind === "inbox_worker");
+  assert.ok(cmd, "the input's command was applied");
+  assert.ok(cmd.seq < row.seq, `command event seq ${cmd.seq} before the worker row's seq ${row.seq}`);
+});
+
+test("M9: the core runs metrics start as the metrics_start step before spec_started, and a failed start never stops the spec", async (t) => {
+  const h = mk(t);
+  h.add();
+  await h.step(1);
+  const ev = h.events().map((e) => e.kind);
+  assert.deepEqual(ev.slice(0, 4), ["spec_added", "step_intent", "step_done", "spec_started"]);
+  const log = fs.readFileSync(path.join(h.env.root, "ctl.log"), "utf8");
+  assert.equal(log.split("\n").filter((l) => l.startsWith("metrics start ")).length, 1);
+  assert.match(log, new RegExp(`metrics start ${SPEC} --batch b1 --worktree ${h.wt}`));
+  assert.equal(h.db.prepare("SELECT state FROM steps WHERE key=?").get(`metrics_start:${SPEC}`).state, "done");
+
+  const f = mk(t, { metrics: 1 });
+  f.add();
+  await f.step(2);
+  assert.equal(f.halted, undefined);
+  assert.equal(f.db.prepare("SELECT state FROM steps WHERE key=?").get(`metrics_start:${SPEC}`).state, "failed");
+  const kinds = f.events().map((e) => e.kind);
+  assert.ok(kinds.indexOf("step_failed") < kinds.indexOf("spec_started"), "failed step, then the spec started");
+  assert.equal(f.of("engine_error").length, 0);
+});
+
+test("M9: an intent step of a measurement or notice kind never parks on resume: unknown fails it, not_done reruns the start", async (t) => {
+  const steps = require("../lib/engine/steps");
+  const KINDS = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report"];
+  const h = mk(t, { has: 2 }); // `metrics has` answers 2: unknown
+  h.add();
+  for (const kind of KINDS) steps.begin(h.db, { key: `${kind}:x`, spec: SPEC, kind, facts: { spec: SPEC, batch: "b1" } }, { now: h.clock.t });
+  await h.eng.resume();
+  for (const kind of KINDS) {
+    const row = h.db.prepare("SELECT state FROM steps WHERE key=?").get(`${kind}:x`);
+    assert.equal(row.state, "failed", `${kind} is failed, not parked`);
+  }
+  assert.equal(h.of("step_failed").length, KINDS.length);
+  assert.equal(h.wait(), null, "no wait was opened");
+  assert.notEqual(h.spec().state, "awaiting_you");
+
+  const n = mk(t, { has: 1 }); // not_done: the start runs again
+  n.add();
+  steps.begin(n.db, { key: `metrics_start:${SPEC}`, spec: SPEC, kind: "metrics_start", facts: { spec: SPEC, batch: "b1" } }, { now: n.clock.t });
+  await n.eng.resume();
+  assert.equal(n.db.prepare("SELECT state FROM steps WHERE key=?").get(`metrics_start:${SPEC}`).state, "done");
+  assert.equal(fs.readFileSync(path.join(n.env.root, "ctl.log"), "utf8").split("\n").filter((l) => l.startsWith("metrics start ")).length, 1);
+  const o = mk(t, { has: 1 }); // not_done for another kind: left to its owner, still at intent, not parked
+  o.add();
+  steps.begin(o.db, { key: "metrics_record:x", spec: SPEC, kind: "metrics_record", facts: { spec: SPEC, batch: "b1" } }, { now: o.clock.t });
+  await o.eng.resume();
+  assert.equal(o.db.prepare("SELECT state FROM steps WHERE key=?").get("metrics_record:x").state, "intent");
+  assert.equal(o.wait(), null);
 });
