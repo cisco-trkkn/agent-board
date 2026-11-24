@@ -431,20 +431,24 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   // Night watch (spec 2026-11-23-night-watch-design.md §5): project mode only, called every watch.CHECK_MS by main().
   // State in <dir>/watch-state.json, so a bridge restart neither repeats a down post nor forgets one.
+  let watching = false;
   async function watchTick() {
-    if (ops || closed) return null;
-    const file = path.join(dir, 'watch-state.json');
-    const { next, text } = watch.decide(readJson(file, null), watch.readHeartbeat(heartbeat), path.basename(dir), now());
-    if (text) {
-      const c = cfg();
-      const down = text.startsWith('⚠️');
-      const content = down && c.user ? `<@${c.user}> ${text}` : text;
-      await withRetry(async () => (await home()).send({ content, allowedMentions: down && c.user ? { users: [String(c.user)] } : { parse: [] } }));
-      say(`watch ${snip(text)}`);
-    }
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify(next));
-    fs.renameSync(`${file}.tmp`, file);
-    return text;
+    if (ops || closed || watching) return null;
+    watching = true;
+    try {
+      const file = path.join(dir, 'watch-state.json');
+      const { next, text } = watch.decide(readJson(file, null), watch.readHeartbeat(heartbeat), path.basename(dir), now());
+      if (text) {
+        const c = cfg();
+        const down = text.startsWith('⚠️');
+        const content = down && c.user ? `<@${c.user}> ${text}` : text;
+        await withRetry(async () => (await home()).send({ content, allowedMentions: down && c.user ? { users: [String(c.user)] } : { parse: [] } }));
+        say(`watch ${snip(text)}`);
+      }
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(next));
+      fs.renameSync(`${file}.tmp`, file);
+      return text;
+    } finally { watching = false; }
   }
 
   // Slash commands: once per connection, in the guild of the home channel. Failure is logged only.

@@ -108,3 +108,20 @@ test('watchTick: an ops bridge never checks', async () => {
   assert.strictEqual(await ops.watchTick(), null);
   assert.deepStrictEqual(s.sent(), []);
 });
+
+test('watchTick: a tick while the previous send is still pending does nothing', async () => {
+  const s = setup();
+  s.beat(T0, ['proj']);
+  await s.bridge.watchTick();
+  s.clock.t = T0 + 6 * MIN;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const fetch = s.client.channels.fetch;
+  s.client.channels.fetch = async (id) => { const ch = await fetch(id); const send = ch.send; return { ...ch, send: async (p) => { await gate; return send(p); } }; };
+  const first = s.bridge.watchTick();
+  // mutation: drop the watching guard -> the second tick also decides "down" and queues a send, this fails
+  assert.strictEqual(await s.bridge.watchTick(), null);
+  release();
+  assert.match(await first, /board down/);
+  assert.strictEqual(s.sent().length, 1);
+});
