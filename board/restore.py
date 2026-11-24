@@ -411,6 +411,7 @@ def do_restore(dir, snap, cfg):
         fails = res["failures"]
         try:
             _restore_project(dir, cfg, p, name, path, res, fails, opened)
+            _resume_engine(dir, cfg, p, name, path, res, fails, opened)
         except Exception as e:
             fails.append(("project", f"{type(e).__name__}: {e}"))
             _log(dir, cfg, f"{name}: project failed: {e}")
@@ -420,6 +421,9 @@ def do_restore(dir, snap, cfg):
             _restore_awake(dir, cfg, awake, snap, opened, shared)
         except Exception as e:
             shared.append(("awake", f"{type(e).__name__}: {e}"))
+    elif any(r.get("engine") in ENGINE_UP for r in results.values()):
+        # no lead pid exists to watch for a queue run: --queue binds the hold to the tmux server (spec section 11)
+        _step(dir, cfg, "keep-awake", "awake on", shared, _safe(cfg.sh, list(cfg.ctl) + ["awake", "on", "--queue", "--lid"], cwd=cfg.home))
     for p in snap.get("projects") or []:
         name = p.get("name", "?")
         res = results[name]
@@ -482,6 +486,25 @@ def _restore_project(dir, cfg, p, name, path, res, fails, opened):
               _safe(cfg.sh, list(cfg.ctl) + ["discord", "bridge", "start", "--project", name], cwd=cfg.home))
 
 
+ENGINE_UP = ("resumed", "already running")
+
+
+def _resume_engine(dir, cfg, p, name, path, res, fails, opened):
+    """A project whose engine database has an unfinished queue gets its engine back (spec section 11), never a lead.
+    `engine status --unfinished` exits 0 for an unfinished queue; `engine start` exits 4 when one already runs.
+    --project is the feed key, which is the snapshot's name (the session group, else the session)."""
+    session = opened.get(name)
+    if not session or not path or not os.path.isdir(path):
+        return
+    rc, _ = _safe(cfg.sh, list(cfg.ctl) + ["engine", "status", "--unfinished", "--project", name], cwd=path)
+    if rc != 0:
+        return
+    rc, out = _safe(cfg.sh, list(cfg.ctl) + ["engine", "start", "--session", session], cwd=path)
+    _step(dir, cfg, name, "engine start", fails, (0 if rc in (0, 4) else rc, out))
+    if rc in (0, 4):
+        res["engine"] = "resumed" if rc == 0 else "already running"
+
+
 def _restore_awake(dir, cfg, awake, snap, opened, shared):
     args = list(cfg.ctl) + ["awake", "on"]
     if awake.get("queue"):
@@ -515,6 +538,8 @@ def _report(dir, cfg, snap, p, res, shared):
     mode = "none" if awake.get("project") != name and not awake.get("queue") else ("lid" if awake.get("lid") else "plain")
     parts = ["lead resumed (" + lead["session_id"][:8] + ")" if lead and lead.get("session_id")
              else "lead continued" if lead else "no lead"]
+    if res.get("engine") == "resumed":
+        parts.append("engine resumed")
     parts += ["bridge", f"keep-awake {mode}"]
     text = f"Mac restarted at {_hhmm(snap.get('boot') or 0)} (boot), restored at {_hhmm(cfg.now())}: " + " · ".join(parts)
     text += "".join(f"\nfailed: {a}: {b}" for a, b in res["failures"] + shared)

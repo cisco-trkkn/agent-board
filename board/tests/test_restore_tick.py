@@ -39,6 +39,8 @@ class Sh:
         for k, v in self.fail.items():
             if k in line:
                 return v
+        if "engine status --unfinished" in line:
+            return 1, ""   # no unfinished engine queue unless a test says so (test_restore_engine)
         if cmd[0] == "/dev":
             made = self.dev_makes(cmd[1])
             if made:
