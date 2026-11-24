@@ -28,6 +28,8 @@ const logName = (id) => {
   return (m ? `${m[1]}-${m[2]}` : id).replace(/[:/]/g, "_") + ".log";
 };
 
+const USAGE_KINDS = new Set(["5-hour", "weekly", "session"]);
+
 function createBackend(opts) {
   const { session, tmuxCtl, statusDir, tmuxArgs = [] } = opts;
   const tmuxBin = opts.tmuxBin || process.env.TC_TMUX_BIN || "tmux";
@@ -66,7 +68,7 @@ function createBackend(opts) {
 
   function register(job, window, pane, minMtime) {
     const handle = { job: job.id, window, pane };
-    entries.push({ handle, job, worktree: job.worktree, minMtime: minMtime || 0, started: false, reportSent: false, lastKey: null, gone: false });
+    entries.push({ handle, job, worktree: job.worktree, minMtime: minMtime || 0, started: false, reportSent: false, limitSent: false, lastKey: null, gone: false });
     return handle;
   }
 
@@ -156,6 +158,16 @@ function createBackend(opts) {
           out.push({ handle: h, type: "status", state: best.state, updatedAt: best.updatedAt,
             tool: best.tool == null ? null : best.tool, lastToolAt: best.lastToolAt == null ? null : best.lastToolAt,
             turnStartedAt: best.turnStartedAt == null ? null : best.turnStartedAt });
+        }
+      }
+      // Claude's limit message is only in the pane text: look at ready or unknown handles, once per handle.
+      if (!e.limitSent && (!best || best.state === "ready")) {
+        const cap = tmux(["capture-pane", "-p", "-J", "-t", h.pane, "-S", "-40"]);
+        const m = cap.status === 0 ? /You've hit your (.+?) limit/.exec(cap.stdout) : null;
+        if (m) {
+          e.limitSent = true;
+          out.push({ handle: h, type: "status", state: USAGE_KINDS.has(m[1]) ? "usage_limit" : "model_limit",
+            updatedAt: Math.floor(Date.now() / 1000), tool: null, lastToolAt: null, turnStartedAt: null });
         }
       }
       if (!e.reportSent && e.job.report) {

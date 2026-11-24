@@ -324,6 +324,78 @@ fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(
     assert.deepEqual(ctx.backend.poll(), []);
   });
 
+  // Fixtures: Claude's real limit sentences, probed 2026-11-24 over ~/.claude/projects/**/*.jsonl (synthetic assistant
+  // lines): "You've hit your 5-hour limit · resets 12:30am (America/New_York)" x16, "You've hit your weekly limit ·
+  // resets …" x10, "You've hit your session limit · resets 5:30pm (America/New_York)" x2. No model-limit line was
+  // found (plan assumption A8): fake-worker's "Fable" sentence is invented.
+  async function limitEvents(mode, ms) {
+    const env = tmpEnv();
+    const agent = (r) => `FAKE_PANE=$TMUX_PANE ${process.execPath} ${WORKER} ${path.join(r, "rep.md")} ${path.join(paths.statusDir(), "fake.json")} ${mode}`;
+    const ctx = await makeClaudeTmux(env.root, agent(env.root));
+    try {
+      await ctx.backend.start(ctx.job({}));
+      const seen = [];
+      const end = Date.now() + ms;
+      while (Date.now() < end) { seen.push(...ctx.backend.poll()); await sleep(100); }
+      return seen.filter((x) => x.type === "status");
+    } finally { ctx.cleanup(); env.restore(); }
+  }
+  const limitStates = (ev) => ev.map((x) => x.state).filter((s) => s.endsWith("_limit"));
+
+  test("claude-tmux: a usage-limit pane yields one usage_limit status event", async () => {
+    const ev = await limitEvents("usage-limit", 3000);
+    assert.deepEqual(limitStates(ev), ["usage_limit"]);
+    const x = ev.find((e) => e.state === "usage_limit");
+    assert.equal(typeof x.updatedAt, "number");
+    assert.deepEqual([x.tool, x.lastToolAt, x.turnStartedAt], [null, null, null]);
+  });
+
+  test("claude-tmux: a model-limit pane yields one model_limit status event", async () => {
+    assert.deepEqual(limitStates(await limitEvents("model-limit", 3000)), ["model_limit"]);
+  });
+
+  // Mutation: match /limit/ only -> this pane ("no limit here") reports a limit.
+  test("claude-tmux: a pane that only says 'no limit here' yields no limit event", async () => {
+    assert.deepEqual(limitStates(await limitEvents("noreport", 2500)), []);
+  });
+
+  test("claude-tmux: weekly and session sentences are usage limits, any other kind a model limit", async () => {
+    const cases = [["weekly", "usage_limit"], ["session", "usage_limit"], ["5-hour", "usage_limit"], ["Opus", "model_limit"]];
+    for (const [kind, want] of cases) {
+      const env = tmpEnv();
+      const ctx = await makeClaudeTmux(env.root, `printf "You've hit your ${kind} limit · resets 5:30pm (America/New_York)\\n"; sleep 60`);
+      try {
+        await ctx.backend.start(ctx.job({}));
+        let ev = [];
+        const end = Date.now() + 3000;
+        while (Date.now() < end && !ev.some((x) => x.state && x.state.endsWith("_limit"))) { ev.push(...ctx.backend.poll()); await sleep(100); }
+        assert.deepEqual(limitStates(ev.filter((x) => x.type === "status")), [want], kind);
+      } finally { ctx.cleanup(); env.restore(); }
+    }
+  });
+
+  test("claude-tmux: a busy handle's pane is not captured", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root, "sleep 60"); t.after(() => ctx.cleanup());
+    const h = await ctx.backend.start(ctx.job({}));
+    fs.mkdirSync(paths.statusDir(), { recursive: true });
+    fs.writeFileSync(path.join(paths.statusDir(), "fake.json"), JSON.stringify({ pane: h.pane, session_id: "s1", state: "busy", updatedAt: 100, tool: null }));
+    const log = path.join(env.root, "tmux-calls.log");
+    const bin = path.join(env.root, "tmux-log.sh");
+    fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexec tmux "$@"\n`, { mode: 0o755 });
+    const logged = claudeTmux.createBackend({ session: "eng", tmuxCtl: "unused", statusDir: paths.statusDir(),
+      tmuxArgs: ["-L", ctx.tmux.socket, "-f", "/dev/null"], tmuxBin: bin,
+      env: { TMUX_TMPDIR: path.dirname(path.dirname(ctx.tmux.run(["display", "-p", "#{socket_path}"]).stdout.trim())) } });
+    // adopt the pane so the logging backend watches it
+    assert.equal(await logged.adopt(ctx.job({}), h), true);
+    const captures = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "").split("\n").filter((l) => l.includes("capture-pane")).length;
+    for (let i = 0; i < 3; i++) { logged.poll(); await sleep(50); }
+    assert.equal(captures(), 0);
+    fs.writeFileSync(path.join(paths.statusDir(), "fake.json"), JSON.stringify({ pane: h.pane, session_id: "s1", state: "ready", updatedAt: 101, tool: null }));
+    logged.poll();
+    assert.equal(captures(), 1);
+  });
+
   // Mutations run for adopt (see the Task 8 fix report): the pane-exists check removed, and the window-name check
   // removed, each fail this test.
   test("claude-tmux: a second backend adopts a running job's pane, watches it and closes it", async (t) => {
