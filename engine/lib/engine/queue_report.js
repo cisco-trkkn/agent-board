@@ -19,7 +19,8 @@ const firstLine = (s) => String(s || "").split("\n").map((l) => l.trim()).find(B
 // The queue being reported: the specs added since the last queue_finished, with the seq and time of the first.
 function queueOf(db) {
   const fin = db.prepare("SELECT MAX(seq) AS s FROM events WHERE kind='queue_finished'").get().s || 0;
-  const adds = db.prepare("SELECT seq, ts, spec FROM events WHERE kind='spec_added' AND seq>? ORDER BY seq").all(fin);
+  // only the queue's specs (`engine enqueue` writes spec_added with queued: true); a spec `engine run` added is not in the report
+  const adds = db.prepare("SELECT seq, ts, spec FROM events WHERE kind='spec_added' AND json_extract(detail, '$.queued')=1 AND seq>? ORDER BY seq").all(fin);
   const ids = adds.map((a) => a.spec);
   const specs = ids.length
     ? db.prepare(`SELECT * FROM specs WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY position, created_at`).all(...ids) : [];
@@ -27,17 +28,18 @@ function queueOf(db) {
 }
 const dateOf = (q, now) => isoOf(q.first ? q.first.ts : (typeof now === "function" ? now() : Date.now() / 1000)).slice(0, 10);
 const marker = (project, q) => `<!-- engine-queue: ${project} ${q.first ? q.first.seq : 0} -->`;
-const lastLine = (file) => { try { return fs.readFileSync(file, "utf8").split("\n").filter((l) => l !== "").pop() || ""; } catch (_) { return null; } };
+const textOf = (file) => { try { return fs.readFileSync(file, "utf8"); } catch (_) { return null; } };
 
-// <date>-queue.md, then -queue-2, -queue-3, ...: the first name that is free, or holds THIS queue's marker as its last line.
+// <date>-queue.md, then -queue-2, -queue-3, ...: the first name that is free, or holds THIS queue's marker line (anywhere:
+// the lead appends its rulings below it).
 // Shared by reportPath and write, so both pick the same file.
 function reportName(ctx, q) {
   const date = dateOf(q, ctx.now);
   const want = marker(ctx.project, q);
   for (let n = 1; ; n++) {
     const rel = path.join(REPORT_DIR, n === 1 ? `${date}-queue.md` : `${date}-queue-${n}.md`);
-    const last = lastLine(path.resolve(ctx.repo, rel));
-    if (last === null || last === want) return rel;
+    const text = textOf(path.resolve(ctx.repo, rel));
+    if (text === null || text.split("\n").includes(want)) return rel;
   }
 }
 const reportPath = (ctx) => reportName(ctx, queueOf(ctx.db));
@@ -119,14 +121,17 @@ function call(ctx, q, kind, key, argv) {
   } catch (e) { return { err: firstLine(e && e.message) || "failed" }; }
 }
 
-// The live checkout's state, ignoring the report file itself (a rerun after a kill finds it written and uncommitted).
-function busy(ctx, file) {
-  const why = integrate.liveCheckoutBusy({ db: ctx.db, repo: ctx.repo, env: ctx.env });
-  if (why !== "dirty") return why;
-  const st = git(ctx, ["status", "--porcelain"]);
-  const rest = (st.stdout || "").split("\n").filter(Boolean).map((l) => l.slice(3).replace(/^"|"$/g, ""))
-    .filter((p) => !(p.startsWith(".claude/") || p.startsWith("docs/superpowers/metrics/") || p === file));
-  return rest.length ? "dirty" : null;
+// A report file this queue wrote and a kill left uncommitted is not "someone's work": it is made again below, so it
+// goes before the live-checkout check (which then still runs in full, git processes included).
+function dropUncommitted(ctx, rel) {
+  const abs = path.resolve(ctx.repo, rel);
+  if (fs.existsSync(abs) && git(ctx, ["ls-files", "--error-unmatch", "--", rel]).status !== 0) fs.rmSync(abs);
+}
+
+// One report_uncommitted event per report file: a rerun of the hook does not write it again.
+function uncommitted(ctx, reason, rel) {
+  if (ctx.db.prepare("SELECT 1 FROM events WHERE kind='report_uncommitted' AND json_extract(detail, '$.path')=? LIMIT 1").get(rel)) return;
+  db_.event(ctx.db, { kind: "report_uncommitted", ts: typeof ctx.now === "function" ? ctx.now() : Date.now() / 1000, reason, path: rel });
 }
 
 function write(ctx) {
@@ -149,13 +154,14 @@ function write(ctx) {
 
   const rel = reportName(ctx, q);
   const abs = path.resolve(ctx.repo, rel);
-  const why = busy(ctx, rel) || (git(ctx, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout || "").trim() !== "main" && "main is not checked out";
+  dropUncommitted(ctx, rel);
+  const why = integrate.liveCheckoutBusy({ db: ctx.db, repo: ctx.repo, env: ctx.env }) || (git(ctx, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout || "").trim() !== "main" && "main is not checked out";
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, render({ db: ctx.db, project: ctx.project, outputs: o, now: ctx.now }));
 
   if (why) {
     const reason = why === true || typeof why !== "string" ? "cannot commit" : (why === "dirty" || why === "busy" ? `the live checkout is ${why}` : why);
-    db_.event(ctx.db, { kind: "report_uncommitted", ts: typeof ctx.now === "function" ? ctx.now() : Date.now() / 1000, reason, path: rel });
+    uncommitted(ctx, reason, rel);
   } else {
     const key = `commit_report:${rel}`;
     try {
@@ -170,7 +176,7 @@ function write(ctx) {
         return { path: rel };
       }, { now: ctx.now });
     } catch (e) {
-      db_.event(ctx.db, { kind: "report_uncommitted", ts: typeof ctx.now === "function" ? ctx.now() : Date.now() / 1000, reason: `commit failed: ${firstLine(e && e.message)}`, path: rel });
+      uncommitted(ctx, `commit failed: ${firstLine(e && e.message)}`, rel);
     }
   }
   call(ctx, q, "artifact", `artifact:${seq}:${rel}`, ["artifact", abs]);

@@ -60,13 +60,15 @@ function mk(t, o = {}) {
   fs.writeFileSync(ctl, ctlStub(env.root), { mode: 0o755 });
   const clock = { t: T_START };
   const backend = fake.createBackend({ script: GOOD, now: () => clock.t });
-  const eng = core.start({
+  const startEng = () => core.start({
     project: "demo", repo: wt, backend, now: () => clock.t, tmuxCtl: ctl, ...queue.reportHooks,
     integrate: async (s) => ({ outcome: "merged", merge: "abc1234def" }), revert: async () => {}, finalize: async () => {},
     tell: () => {}, notify: () => {}, transcriptRoot: path.join(env.root, "transcripts"), sleep: async () => { clock.t += 5; },
   });
+  let eng = startEng();
   const h = {
     env, repo, wt, clock, eng, ctl,
+    restart() { eng.stop(); eng = startEng(); h.eng = eng; }, // a kill and a start: the lock is released, the database stays
     enqueued: 0,
     enqueue: (name, payload = {}) => (h.enqueued++, queue.enqueue(eng.db, spec(name), { runner: "engine", integration: "keep", push: 0, batch: "b1", worktree: wt, branch: `spec-${name}`, plan: plan(name), ...payload }, clock.t)),
     async until(pred, what, max = 600) {
@@ -121,7 +123,7 @@ test("render: a lead-run spec has the one rulings line and no Spend line; pure o
   const env = tmpEnv(); t.after(() => env.restore());
   const d = dbm.open("demo");
   dbm.put(d, "specs", { id: "docs/l.md", position: 0, runner: "lead", state: "running", integration: "keep", push: 0, batch: null, created_at: 1, updated_at: 1 });
-  dbm.event(d, { spec: "docs/l.md", kind: "spec_added", ts: 1, rows: [] });
+  dbm.event(d, { spec: "docs/l.md", kind: "spec_added", ts: 1, queued: true, rows: [] });
   const md = qr.render({ db: d, project: "demo", outputs: {}, now: () => 1 });
   assert.ok(md.includes("- Rulings:\n  - (lead-run: the lead appends its rulings)"));
   assert.ok(!md.includes("- Spend:"));
@@ -250,4 +252,114 @@ test("a rerun after a kill picks the same file: reportPath and write agree befor
   assert.equal(qr.reportPath(ctx), first, "the file now exists with this queue's marker: the same name");
   assert.equal(qr.write(ctx), first);
   assert.equal(h.commits().length, 1);
+});
+
+// ---- fix round 1: the kill windows through eng.resume(), the queue's own specs, the marker, one uncommitted event ----
+
+const stepRow = (h, kind) => h.eng.db.prepare("SELECT * FROM steps WHERE kind=?").all(kind);
+const endAfterRestart = async (h) => { await h.eng.resume(); assert.equal(await queue.run(h.eng, { project: "demo" }), 0); };
+
+// Mutation: put reportPath back into queue.reportHooks -> the core's check finds the file and answers done: no commit, no artifact.
+test("kill with the report file written and nothing else: after a restart (eng.resume) one commit, one artifact, one awake off", async (t) => {
+  const h = mk(t, { ungated: true });
+  h.enqueue("one"); h.enqueue("two");
+  await h.until(() => h.of("spec_done").length === 2, "both specs done");
+  // the state a kill leaves: the queue_report step at intent, the file on disk (untracked), no queue_finished
+  const ctx = h.ctxOf();
+  const rel = qr.reportName(ctx, qr.queueOf(h.eng.db));
+  const steps = require("../lib/engine/steps");
+  // the facts the core records when it begins the step: the hook's reportPath, when the hooks have one
+  const facts = { path: typeof queue.reportHooks.reportPath === "function" ? queue.reportHooks.reportPath(ctx) : null };
+  steps.begin(h.eng.db, { key: `queue_report:0`, spec: null, kind: "queue_report", facts }, { now: () => h.clock.t });
+  fs.mkdirSync(path.dirname(path.join(h.wt, rel)), { recursive: true });
+  fs.writeFileSync(path.join(h.wt, rel), qr.render({ db: h.eng.db, project: "demo", outputs: {}, now: ctx.now }));
+  assert.equal(h.commits().length, 0);
+  h.restart();
+  await endAfterRestart(h);
+  assert.equal(h.of("queue_finished").length, 1);
+  assert.equal(h.of("queue_finished")[0].detail.report, rel);
+  assert.equal(h.commits().length, 1, "one commit");
+  assert.equal(h.ctlLog().filter((l) => l.startsWith("artifact ")).length, 1, "one artifact");
+  assert.equal(h.ctlLog().filter((l) => l === "awake off").length, 1, "one awake off");
+  assert.equal(git(h.wt, "status", "--porcelain").trim(), "");
+});
+
+test("kill after the commit step, before awake off: after a restart still one commit, one awake off, one artifact", async (t) => {
+  const h = mk(t, { ungated: true });
+  h.enqueue("one"); h.enqueue("two");
+  await h.until(() => h.of("spec_done").length === 2, "both specs done");
+  const ctx = h.ctxOf();
+  const rel = qr.write(ctx); // every step ran once
+  // the kill: queue_report and awake_off at intent, the awake call not made
+  h.eng.db.prepare("UPDATE steps SET state='intent' WHERE kind IN ('queue_report','awake_off')").run();
+  const facts = { path: typeof queue.reportHooks.reportPath === "function" ? queue.reportHooks.reportPath(ctx) : null };
+  h.eng.db.prepare("INSERT OR REPLACE INTO steps (key, spec, kind, state, result, created_at, updated_at) VALUES ('queue_report:0', NULL, 'queue_report', 'intent', ?, 1, 1)").run(JSON.stringify(facts));
+  const logFile = path.join(h.env.root, "ctl.log");
+  fs.writeFileSync(logFile, h.ctlLog().filter((l) => l !== "awake off").join("\n") + "\n");
+  h.restart();
+  await endAfterRestart(h);
+  assert.equal(h.of("queue_finished")[0].detail.report, rel);
+  assert.equal(h.commits().length, 1);
+  assert.equal(h.ctlLog().filter((l) => l === "awake off").length, 1);
+  assert.equal(h.ctlLog().filter((l) => l.startsWith("artifact ")).length, 1);
+  assert.deepEqual(stepRow(h, "commit_report").map((r) => r.state), ["done"]);
+});
+
+// Mutation: drop the queued filter -> the engine-run spec is in the report and its time is the date.
+test("an `engine run` spec (spec_added without queued) is not in the report, its date or its first seq", (t) => {
+  const env = tmpEnv(); t.after(() => env.restore());
+  const d = dbm.open("demo");
+  dbm.put(d, "specs", { id: "docs/run.md", position: 0, runner: "engine", state: "done", integration: "keep", push: 0, created_at: 1, updated_at: 1 });
+  dbm.event(d, { spec: "docs/run.md", kind: "spec_added", ts: Date.UTC(2025, 11, 30) / 1000, rows: [] });
+  dbm.put(d, "specs", { id: "docs/q.md", position: 1, runner: "engine", state: "done", integration: "keep", push: 0, created_at: 2, updated_at: 2 });
+  dbm.event(d, { spec: "docs/q.md", kind: "spec_added", ts: Date.UTC(2026, 0, 1, 23, 50) / 1000, queued: true, rows: [] });
+  const q = qr.queueOf(d);
+  assert.deepEqual(q.specs.map((s) => s.id), ["docs/q.md"]);
+  assert.equal(q.first.seq, 2);
+  const md = qr.render({ db: d, project: "demo", outputs: {}, now: () => 1 });
+  assert.ok(md.startsWith("# Queue report 2026-01-01\n"));
+  assert.ok(!md.includes("docs/run.md"));
+  assert.ok(md.includes("<!-- engine-queue: demo 2 -->"));
+});
+
+// Mutation: the last line only -> the second call picks -queue-2.
+test("the marker counts anywhere in the file: rulings appended below it do not change the name", async (t) => {
+  const h = mk(t, { ungated: true });
+  h.enqueue("one"); h.enqueue("two");
+  await h.until(() => h.of("spec_done").length === 2, "both specs done");
+  const ctx = h.ctxOf();
+  const rel = qr.write(ctx);
+  fs.appendFileSync(path.join(h.wt, rel), "\n## Rulings by the lead\n\n- one more line\n");
+  assert.equal(qr.reportPath(ctx), rel);
+  assert.equal(qr.write(ctx), rel);
+  assert.ok(!fs.existsSync(path.join(h.wt, rel.replace("-queue.md", "-queue-2.md"))));
+});
+
+test("a rerun of the hook on a dirty checkout writes one report_uncommitted event for the file, not two", async (t) => {
+  const h = mk(t, { ungated: true });
+  h.enqueue("one"); h.enqueue("two");
+  await h.until(() => h.of("spec_done").length === 2, "both specs done");
+  fs.writeFileSync(path.join(h.wt, "wip.txt"), "someone's work\n");
+  const ctx = h.ctxOf();
+  qr.write(ctx);
+  qr.write(ctx);
+  assert.equal(h.of("report_uncommitted").length, 1);
+});
+
+test("the live-checkout check runs in full when the report file itself is the only dirt: a git process in the checkout still blocks the commit", async (t) => {
+  const h = mk(t, { ungated: true });
+  h.enqueue("one"); h.enqueue("two");
+  await h.until(() => h.of("spec_done").length === 2, "both specs done");
+  const ctx = h.ctxOf();
+  const rel = qr.reportName(ctx, qr.queueOf(h.eng.db));
+  fs.mkdirSync(path.dirname(path.join(h.wt, rel)), { recursive: true });
+  fs.writeFileSync(path.join(h.wt, rel), qr.render({ db: h.eng.db, project: "demo", outputs: {}, now: ctx.now })); // left by a kill
+  // a stub `pgrep` and `lsof` say a git process works in the checkout
+  const bin = path.join(h.env.root, "bin"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "pgrep"), "#!/bin/sh\necho 99999\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "lsof"), `#!/bin/sh\necho p99999\necho n${fs.realpathSync(h.wt)}\n`, { mode: 0o755 });
+  const c2 = { ...ctx, env: { PATH: `${bin}:${process.env.PATH}` } };
+  assert.equal(qr.write(c2), rel);
+  assert.equal(h.commits().length, 0, "not committed while a git process is in the checkout");
+  assert.match(h.of("report_uncommitted")[0].detail.reason, /busy/);
 });

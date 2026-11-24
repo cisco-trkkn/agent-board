@@ -6,8 +6,11 @@ const inbox = require("./inbox");
 const lead = require("./lead");
 const queueReport = require("./queue_report");
 
-// The report hook of the real engine (core.start({report, reportPath})): the morning report and the path it will have.
-const reportHooks = { report: queueReport.write, reportPath: queueReport.reportPath };
+// The report hook of the real engine (core.start({report})): the morning report.
+// No reportPath on purpose: the core then answers "not done" for a queue_report step left at intent, and the hook (idempotent:
+// every outside call is a keyed step, the marker keeps the file name) runs again, so a kill after the file was written still
+// gets its commit, its artifact and its awake off.
+const reportHooks = { report: queueReport.write };
 
 // A spec that still needs the engine: not done, and not a parked spec the end of a queue already failed (it keeps its
 // wait and resumes on a signal: spec section 11).
