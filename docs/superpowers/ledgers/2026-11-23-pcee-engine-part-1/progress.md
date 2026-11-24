@@ -259,3 +259,7 @@ Ruling: M1-M14 ship as follow-ups; M1, M5, M6, M9 open part 2's plan — costs t
 Final review: fix wave dispatched fix-final (standard, sonnet) FIX_BASE d911b5f
 Final review: fix wave done 299147a (I1, I2, I3, I6; npm test 322/322 rc 0, one load flake at green_check kill point 320/322 in the first run); scoped re-review dispatched rerev-final (standard)
 Final review: fix wave re-review rerev-final all 4 addressed, no new C/I; final review clean (I4 gates → PR description, I5 → part 2, minors → part 2/follow-ups per final-review.md triage)
+Post-archive: merged origin/fix/ci-green (cb78975; bin/tmux-ctl conflict on the not-inside-tmux line resolved as the union: kept `engine`, added help/no-args).
+Post-archive: engine_resume "kill after spec_done" red after the merge (engine diff 59360ed..cb78975 empty: a race, not the merge); fixed test-only 07a163f; npm test 322/322 x3.
+Ruling: a kill between close_window's step_intent and step_done at the spec_done kill point may lose that tail — resume finds no open spec ("nothing to resume") and the window just stays open for the user — costs if wrong: an unclosed window after a crash; follow-up for part 2: resume reconciles open step intents of a done spec.
+Ruling: one unexplained flake seen once ("kill after job_created", detail not captured; passed on rerun and 3 runs after) — residual risk noted in the PR — costs if wrong: an intermittent red engine suite.
