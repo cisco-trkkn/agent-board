@@ -12,7 +12,7 @@
 
 ```json:manifest
 {"spec": "docs/superpowers/specs/2026-11-23-remote-lead-liveness-design.md",
- "base": "0af42b5b388826b46ecd25063192c9d2f558f87d",
+ "base": "d7efff77db38a27b71100db60a80516694b0ffa9",
  "depends_on": [],
  "writes": [
   {"path": "board/lead_state.py", "mode": "create"},
