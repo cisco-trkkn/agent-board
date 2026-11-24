@@ -25,7 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not 
 import activity as activity_mod  # noqa: E402
 import artifacts, planview, usage  # noqa: E402
 
-RECORD_KEYS = ("project", "path", "attached", "plan", "needs_you", "last_run", "lead", "artifacts", "epoch", "alerts", "spend_today", "agents")
+RECORD_KEYS = ("project", "path", "attached", "plan", "needs_you", "last_run", "lead", "artifacts", "epoch", "alerts", "spend_today",
+               "queue", "owned", "awake", "pace", "agents")
+PLAN_RUN = "Plan & run:"
+WEEK_S = 7 * 86400
+NOT_TEAMMATES = ("team-lead",)   # an owner the lead gives itself has no ✦ window
 ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError)
 
 
@@ -183,7 +187,74 @@ def agent_alerts(s, mods, now, th):
     return out
 
 
-def record(s, live, now, *, home, state_dir, tmux, th, spend, activity, mods=None):
+def queue_mode(view):
+    """True when the lead's live list holds an open `Plan & run:` task whose metadata carries `queue` (night watch spec §1)."""
+    return bool(view.get("active")) and any(
+        t.get("subject", "").startswith(PLAN_RUN) and t.get("status") in ("pending", "blocked", "in_progress") and t.get("queue")
+        for t in view.get("tasks") or [])
+
+
+def owned_tasks(name, view, tmux, mods, now):
+    """One entry per owned in-progress task: {owner, task, window, dead, ready_s}. window: a `✦ <owner>` window exists;
+    dead: its first pane is dead; ready_s: seconds its agent-status record has been `ready`, else None.
+    [] when the pane listing fails or is empty (unknown is never read as gone)."""
+    mine = [t for t in view.get("tasks") or [] if t.get("status") == "in_progress" and t.get("owner") and t["owner"] not in NOT_TEAMMATES]
+    if not mine:
+        return []
+    try:
+        rows = tmux("list-panes", "-s", "-t", f"={name}", "-F", "#{window_name}\t#{pane_id}\t#{pane_dead}\t#{pane_index}")
+    except Exception:   # noqa: BLE001 - a failing or unexpected tmux leaves the field empty
+        return []
+    first = {}
+    for line in str(rows).splitlines():
+        f = line.split("\t")
+        if len(f) == 4 and f[3].isdigit() and (f[0] not in first or int(f[3]) < first[f[0]][2]):
+            first[f[0]] = (f[1], f[2] == "1", int(f[3]))
+    if not first:
+        return []
+    out = []
+    for t in mine:
+        w = first.get(f"✦ {t['owner']}")
+        rec = (mods or {}).get(w[0]) if w else None
+        ready = _secs(now, rec.get("since")) if rec and rec.get("state") == "ready" else None
+        out.append({"owner": t["owner"], "task": t["id"], "window": w is not None, "dead": bool(w and w[1]), "ready_s": ready})
+    return out
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+    return True
+
+
+def awake_live(state_dir, pid_alive=_pid_alive):
+    """True when <state_dir>/awake.json names a live caffeinatePid (the keep-awake hold)."""
+    try:
+        cp = json.loads((Path(state_dir) / "awake.json").read_text()).get("caffeinatePid")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return bool(cp) and bool(pid_alive(cp))
+
+
+def weekly_pace(limits, now):
+    """{used, elapsed} in percent of the 7-day window from usage.plan_limits(), or None (no tap, no reset time, window past)."""
+    sd = (limits or {}).get("seven_day") if isinstance(limits, dict) else None
+    used = sd.get("used_percentage") if isinstance(sd, dict) else None
+    resets = sd.get("resets_at") if isinstance(sd, dict) else None
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    if not num(used) or not num(resets) or resets <= now:
+        return None
+    elapsed = max(0.0, min(100.0, 100 * (1 - (resets - now) / WEEK_S)))
+    return {"used": round(used, 1), "elapsed": round(elapsed, 1)}
+
+
+def record(s, live, now, *, home, state_dir, tmux, th, spend, activity, mods=None, limits=None, pid_alive=_pid_alive):
     name = s["name"]
     root = s.get("path")
     try:
@@ -195,16 +266,19 @@ def record(s, live, now, *, home, state_dir, tmux, th, spend, activity, mods=Non
     except Exception:   # noqa: BLE001
         spent = None
     arts, epoch = recent_artifacts(name)
+    queue = queue_mode(view)
     return {"project": name, "path": s.get("path"), "attached": bool(s.get("attached")),
             "plan": plan_digest(view), "needs_you": needs_you(s, mods), "last_run": last_run(name, now),
             "lead": lead_state(s, (activity or {}).get(name), now, mods), "artifacts": arts, "epoch": epoch,
             "alerts": project_alerts(s, live, spent, th) + agent_alerts(s, mods, now, th), "spend_today": spent,
-            "agents": agents(s, mods, now)}
+            "queue": queue, "owned": owned_tasks(name, view, tmux, mods, now) if queue else [],
+            "awake": awake_live(state_dir, pid_alive), "pace": weekly_pace(limits, now), "agents": agents(s, mods, now)}
 
 
-def build(sessions, live, now, *, home, state_dir, tmux, th=None, spend=None, activity=None, mods=None):
+def build(sessions, live, now, *, home, state_dir, tmux, th=None, spend=None, activity=None, mods=None, limits=None, pid_alive=_pid_alive):
     th = th if th is not None else usage.DEFAULT_ALERTS
-    projects = [record(s, live or [], now, home=home, state_dir=state_dir, tmux=tmux, th=th, spend=spend, activity=activity, mods=mods)
+    projects = [record(s, live or [], now, home=home, state_dir=state_dir, tmux=tmux, th=th, spend=spend, activity=activity, mods=mods,
+                       limits=limits, pid_alive=pid_alive)
                 for s in sessions if not s["name"].startswith("_web-") and s["name"] != "overseer"]
     return {"generated": now, "projects": projects}
 

@@ -656,8 +656,12 @@ def build_overview(now=None):
     st = state()
     live = INDEXER.snapshot() if INDEXER else []
     th, _ = usage.thresholds()
+    try:   # one tap read per build: the pace field takes it, nothing else rereads it
+        limits = usage.plan_limits(usage.tap_entries(now, 10 ** 9))
+    except Exception:   # noqa: BLE001 -- no taps: pace stays None
+        limits = None
     return overview.build(st["sessions"], live, now, home=HOME / ".claude", state_dir=tc_env.state_dir(), tmux=tmux, th=th,
-                          spend=lambda repo: spend_today(repo, now), activity=window_activity(), mods=mod_records(now))
+                          spend=lambda repo: spend_today(repo, now), activity=window_activity(), mods=mod_records(now), limits=limits)
 
 
 def overview_payload():
