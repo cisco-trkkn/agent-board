@@ -75,6 +75,16 @@ Both are Part 2 work, specified in sections 8a and 8b; section 10.3's `waits` ro
 - **F1.** Every parked question is typed and carries a recommendation; metrics count how often the user follows it (8a).
 - **F2.** Each spec has an attempts and tokens budget in the engine core; unmeasurable cost parks the spec (8b).
 
+## Revised 2026-11-24: Part 3, approval holds and schedules pulled forward (G1; user, Discord 20:52Z)
+
+Source: the ideas regroup, group C "self-improvement" (answer C1). The supervised improvement loop
+(`2026-11-16-supervised-improvement-loop-design.md`) needs holds and schedules and would otherwise wait for stage 7.
+
+- **G1.** Sections 13 (approval holds) and 14 (schedules) are built now as **Part 3** of this spec, as written there,
+  on top of Parts 1 and 2 as merged (064a029). The "moved to stage 7" notes on 13 and 14 no longer apply; stage 7
+  keeps the Discord interface. The SDK-backend variant of holds (revision 18, `canUseTool`) stays with stage 8.
+  Plan reference: `docs/superpowers/specs/2026-11-10-pcee-engine-design.md#part-3`.
+
 ## Problem
 
 One Opus lead session runs the whole queue. On the 12 baseline specs it is 48 to 74% of each spec's cost, nearly
@@ -561,8 +571,7 @@ engine is its only reader. This replaces the `signals` table.
 
 #### 13. Approval holds (Part 1)
 
-**Moved to stage 7 (revised 2026-11-19): not built or tested in this stage; the text below stays as the design to
-carry.** The hook runs as `node engine/bin/hold.js`, not as a shell script.
+**Part 3 (revised 2026-11-24, G1): built in Part 3 as written below (it had moved to stage 7 on 2026-11-19).** The hook runs as `node engine/bin/hold.js`, not as a shell script.
 
 Added 2026-11-16. Claude Code's `defer` decision for `PreToolUse` only works in `claude -p` with one tool call per turn
 (hooks reference), and engine workers are visible interactive windows, so a held call is denied and later retried
@@ -593,8 +602,7 @@ under a one-time pass.
 
 #### 14. Schedules (Part 2)
 
-**Moved to stage 7 (revised 2026-11-19): not built or tested in this stage; the text below stays as the design to
-carry.**
+**Part 3 (revised 2026-11-24, G1): built in Part 3 as written below (it had moved to stage 7 on 2026-11-19).**
 
 Added 2026-11-16. Recurring jobs live in the engine's `timers` table and are fired by one launchd heartbeat; the
 engine still runs only for a queue or a short pass.

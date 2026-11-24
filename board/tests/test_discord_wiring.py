@@ -165,10 +165,11 @@ class FeedTickWiringTest(Base):
         idx.snapshot.return_value = [{"session_id": "x"}]
         with mock.patch.object(server, "build_overview", return_value=ov), mock.patch.object(server, "INDEXER", idx), \
              mock.patch.object(server, "ensure_overseer"), mock.patch.object(server, "ensure_discord_bridges"), \
-             mock.patch.object(server, "feed_tick") as ft:
+             mock.patch.object(server, "read_limits", return_value={"five_hour": 1}) as rl, mock.patch.object(server, "feed_tick") as ft:
             server._overview_cache.update(at=0.0, value=None)
             server.overview_payload()
-        self.assertEqual(ft.call_args[1], {"live": [{"session_id": "x"}]})
+        self.assertEqual(ft.call_args[1], {"live": [{"session_id": "x"}], "limits": {"five_hour": 1}})
+        rl.assert_called_once()   # one tap read per tick, shared by the overview build and feed_tick
 
 
 class FeedStepWiringTest(Base):
