@@ -481,7 +481,11 @@ function start(opts) {
       if (st) finishJob(job, st); else failAttempt(job, "gone");
       return undefined;
     }
-    if (p.state === "model_limit" || p.state === "usage_limit") { failAttempt(job, p.state); return undefined; }
+    if (p.state === "model_limit" || p.state === "usage_limit") {
+      const st = validReport(job); // a finished job whose pane also shows a limit line is done, not a limit failure
+      if (st) finishJob(job, st); else failAttempt(job, p.state);
+      return undefined;
+    }
     let cur = job;
     if (p.state === "needs-you") {
       if (cur.needs_you_since === null) {
@@ -614,6 +618,10 @@ function start(opts) {
     const p = parse(row.payload) || {};
     if (!row.spec) return { drop: "no spec" };
     if (get("specs", row.spec)) return { drop: "spec already added" };
+    // a row of an earlier queue whose `engine start` failed (the lead ran that queue itself): the newest enqueue row names the live batch
+    const newest = db.prepare("SELECT payload FROM inbox WHERE kind='enqueue' ORDER BY id DESC LIMIT 1").get();
+    const live = newest ? (parse(newest.payload) || {}).batch : undefined;
+    if (live !== undefined && p.batch !== live) return { drop: "stale batch" };
     const or = (v) => (v === undefined ? null : v);
     const runner = p.runner === "lead" ? "lead" : "engine";
     const spec = specRow({ id: row.spec, position: db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM specs").get().p, runner,
@@ -1218,8 +1226,8 @@ function start(opts) {
   }
 
   // The report hook is a step keyed per queue end, and never blocks it: a failure is a report_failed event and a
-  // queue_finished with no report. A step left at intent was checked on resume (a report that exists is used); else
-  // the hook runs again, and it must be idempotent.
+  // queue_finished with no report. A step left at intent runs the hook again (queue.reportHooks gives no reportPath, so the
+  // check answers not_done; a hook with a reportPath whose file exists would be taken as done), and the hook must be idempotent.
   async function queueReport() {
     if (!opts.report) return null;
     const fin = db.prepare("SELECT MAX(seq) AS s FROM events WHERE kind='queue_finished'").get().s || 0;

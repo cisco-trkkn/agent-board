@@ -200,7 +200,7 @@ function createBackend(opts) {
       // Claude's limit message is only in the pane text: look at ready or unknown handles, once per handle.
       if (!e.limitSent && (!best || best.state === "ready")) {
         const cap = tmux(["capture-pane", "-p", "-J", "-t", h.pane, "-S", "-40"]);
-        const m = cap.status === 0 ? /You've hit your (.+?) limit/.exec(cap.stdout) : null;
+        const m = cap.status === 0 ? /^\s*You've hit your (\S+(?: \S+)?) limit/m.exec(cap.stdout) : null;
         if (m) {
           e.limitSent = true;
           out.push({ handle: h, type: "status", state: USAGE_KINDS.has(m[1]) ? "usage_limit" : "model_limit",

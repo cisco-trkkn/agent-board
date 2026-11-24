@@ -733,6 +733,15 @@ test("usage limit: dispatch pauses until the reset time the status-line tap repo
   assert.equal(h.of("escalated").length, 0);
 });
 
+// Mutation: failAttempt on any limit state (no validReport check) -> the job fails as usage_limit.
+test("usage limit: a job with a valid report finishes as done even when its pane shows a limit line", async (t) => {
+  const h = mk(t, { script: { implement1: [{ status: "busy", at: 1 }, { status: "usage_limit", at: 2 }, { report: DONE, at: 2 }, { status: "ready", at: 3 }] } });
+  h.add();
+  await h.until(() => h.of("job_done").length === 1);
+  assert.equal(h.of("job_failed").length, 0);
+  assert.equal(h.of("usage_limit").length, 0);
+});
+
 test("usage limit: without a tap reading the timer is one hour out", async (t) => {
   const h = mk(t, { script: { implement1: [{ status: "usage_limit", at: 1 }] } });
   h.add();

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 // Fake worker process: node fake-worker.js <report path> <status json path> <mode>
-// modes: done blocked hang silent noreport usage-limit model-limit. Pane from env FAKE_PANE or argv[5].
+// modes: done blocked hang silent noreport quote-limit usage-limit model-limit. Pane from env FAKE_PANE or argv[5].
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -38,6 +38,11 @@ if (mode === "silent") {
   console.log(mode === "usage-limit"
     ? "You've hit your 5-hour limit · resets 12:30am (America/New_York)"
     : "You've hit your Fable limit · resets 1pm (America/New_York)");
+  write("ready");
+  setInterval(() => {}, 1000);
+} else if (mode === "quote-limit") {
+  // the limit sentence quoted mid-line (a review, a diff): not a limit
+  console.log("the log said: You've hit your 5-hour limit · resets 12:30am, which is a quote");
   write("ready");
   setInterval(() => {}, 1000);
 } else if (["done", "blocked", "noreport"].includes(mode)) {

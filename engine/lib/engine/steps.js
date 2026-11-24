@@ -119,7 +119,8 @@ const CHECKS = {
   revert: (ctx, row) => engineStepCommit(ctx, row.key),
   commit_report: (ctx, row) => engineStepCommit(ctx, row.key),
   commit_ledger: (ctx, row) => engineStepCommit(ctx, row.key, row.result || {}),
-  // a report that exists at the path the step recorded was made: the hook is not run again
+  // a recorded path that exists was made: the hook is not run again. The real hooks (queue.reportHooks) give no reportPath, so the
+  // facts carry no path, this answers not_done and the idempotent hook runs again; only a test with a reportPath hook gets "done"
   queue_report(ctx, row) {
     const f = row.result || {};
     if (typeof f.path !== "string" || !f.path) return "not_done";
@@ -127,7 +128,8 @@ const CHECKS = {
   },
   metrics_start: metricsHas("start"),
   metrics_record: metricsHas("run"),
-  // the owners of these steps (tasks 4 and 9) have no check yet: an unfinished row is unknown, and fails
+  // no check for these (metrics_ask is a never-park kind; artifact, awake_off and registry_report are re-run by the report hook, whose
+  // calls are keyed steps): an unfinished row is unknown
   metrics_ask: () => "unknown",
   artifact: () => "unknown",
   awake_off: () => "unknown",

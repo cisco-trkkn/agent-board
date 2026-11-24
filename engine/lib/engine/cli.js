@@ -349,7 +349,7 @@ async function cmdResume(args, io) {
       io.out(`reconciled ${intents} step(s)`);
       return 0;
     }
-    // the queue's loop: every runnable spec goes to its outcome; a parked spec nobody answered is left waiting
+    // the queue's loop: every runnable spec goes to its outcome; a parked spec nobody answered ends as `failed — awaiting you` with a metrics record, and `engine signal` plus `engine resume` resumes it
     let rc = await runLoop(eng, project);
     for (const s of open) {
       const cur = eng.db.prepare("SELECT state, outcome FROM specs WHERE id=?").get(s.id);

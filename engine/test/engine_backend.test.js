@@ -359,6 +359,11 @@ fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(
     assert.deepEqual(limitStates(await limitEvents("noreport", 2500)), []);
   });
 
+  // Mutation: the unanchored /You've hit your (.+?) limit/ -> the quoted sentence reports a usage limit.
+  test("claude-tmux: a pane that quotes the limit sentence mid-line yields no limit event", async () => {
+    assert.deepEqual(limitStates(await limitEvents("quote-limit", 2500)), []);
+  });
+
   test("claude-tmux: weekly and session sentences are usage limits, any other kind a model limit", async () => {
     const cases = [["weekly", "usage_limit"], ["session", "usage_limit"], ["5-hour", "usage_limit"], ["Opus", "model_limit"]];
     for (const [kind, want] of cases) {

@@ -166,7 +166,8 @@ test("a queue of an engine, a lead and a gated spec runs in order: kept, engine 
     [p.events("queue_finished")[0].seq, `[Engine] queue finished: ${reportRel}`]]);
   assert.ok(fs.existsSync(path.join(p.repo.dir, reportRel)), "the report file is in the main checkout");
   assert.match(fs.readFileSync(path.join(p.repo.dir, reportRel), "utf8"), /^# Queue report \d{4}-\d\d-\d\d\n\nWritten by the engine \(demo\)\.\n/);
-  assert.ok(p.ctlLog().some((l) => l.startsWith("artifact ") && l.endsWith(reportRel)) && p.ctlLog().includes("awake off"), "shown and the hold off");
+  assert.ok(p.ctlLog().some((l) => l.startsWith("artifact ") && l.endsWith(reportRel)), "shown");
+  assert.ok(!p.ctlLog().includes("awake off"), "the queue holds a lead-run spec: the hold stays on until the lead's rule runs awake off");
   assert.ok(p.events("queue_finished")[0].seq > seq("fail_spec", SPEC_G)[0], "queue_finished is the queue's last event");
   assert.equal(typeof p.lines()[0].ts, "number");
   // metrics: start once, through the core's step, for the engine spec only (R17); the gate failure is recorded
@@ -187,6 +188,20 @@ test("a queue of an engine, a lead and a gated spec runs in order: kept, engine 
   assert.equal(pre.err.trim().split("\n").length, 1, "one reason line");
   const chk = p.run(["rebuild", "--check"]);
   assert.equal(chk.code, 0, chk.out);
+});
+
+// Mutation: drop the stale-batch check in onEnqueue -> SPEC_A (batch b1) is added with SPEC_L (b2).
+test("an enqueue row of an older batch is dropped as stale batch; only the newest batch's specs are added", async (t) => {
+  const p = project(t);
+  assert.equal(p.enqueue(SPEC_A, "engine").code, 0); // batch b1, no start: the lead ran that queue itself
+  const l = p.run(["enqueue", SPEC_L, "--runner", "lead", "--integration", "keep", "--batch", "b2"]);
+  assert.equal(l.code, 0, l.err);
+  p.start();
+  await p.until(() => p.spec(SPEC_L), "the b2 spec added");
+  const row = p.read((d) => d.prepare("SELECT state, reason FROM inbox WHERE spec=? AND kind='enqueue'").get(SPEC_A));
+  assert.deepEqual([row.state, row.reason], ["dropped", "stale batch"]);
+  assert.equal(p.spec(SPEC_A), undefined);
+  assert.equal(p.events("inbox_user").filter((e) => e.spec === SPEC_A).length, 1, "the drop is an event");
 });
 
 // ---- enqueue -----------------------------------------------------------------------------------------------------

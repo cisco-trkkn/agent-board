@@ -1,6 +1,6 @@
 "use strict";
 // The queue's morning report (spec sections 7 and 11): `render` is the text, a pure function of the database and the
-// outputs of the outside reads; `write` is the engine's report hook (core.start({report, reportPath})). Every outside
+// outputs of the outside reads; `write` is the engine's report hook (core.start({report})). Every outside
 // call is a `steps.run` row of a never-park kind, so a failing read or notice leaves a note, never a parked queue. The
 // hook is idempotent: run twice it gives one file and one commit.
 const fs = require("node:fs");
@@ -156,8 +156,12 @@ function write(ctx) {
   const abs = path.resolve(ctx.repo, rel);
   dropUncommitted(ctx, rel);
   const why = integrate.liveCheckoutBusy({ db: ctx.db, repo: ctx.repo, env: ctx.env }) || (git(ctx, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout || "").trim() !== "main" && "main is not checked out";
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, render({ db: ctx.db, project: ctx.project, outputs: o, now: ctx.now }));
+  // After a kill past the commit the tracked file is final: writing it again could leave it modified (a read that failed the first time works now)
+  const committed = ctx.db.prepare("SELECT 1 FROM steps WHERE key=? AND state='done'").get(`commit_report:${rel}`);
+  if (!committed) {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, render({ db: ctx.db, project: ctx.project, outputs: o, now: ctx.now }));
+  }
 
   if (why) {
     const reason = why === true || typeof why !== "string" ? "cannot commit" : (why === "dirty" || why === "busy" ? `the live checkout is ${why}` : why);
@@ -180,7 +184,9 @@ function write(ctx) {
     }
   }
   call(ctx, q, "artifact", `artifact:${seq}:${rel}`, ["artifact", abs]);
-  call(ctx, q, "awake_off", `awake_off:${seq}`, ["awake", "off"]);
+  // A queue with a lead-run spec or a `keep` spec (what an `ask` answer enqueues with) has merge requests or rulings still to
+  // post: the Mac must stay awake until the lead hears `queue finished`, and the lead's rule ends with `tmux-ctl awake off`.
+  if (!q.specs.some((s) => s.runner === "lead" || s.integration === "keep")) call(ctx, q, "awake_off", `awake_off:${seq}`, ["awake", "off"]);
   return rel;
 }
 

@@ -70,7 +70,7 @@ function mk(t, o = {}) {
     env, repo, wt, clock, eng, ctl,
     restart() { eng.stop(); eng = startEng(); h.eng = eng; }, // a kill and a start: the lock is released, the database stays
     enqueued: 0,
-    enqueue: (name, payload = {}) => (h.enqueued++, queue.enqueue(eng.db, spec(name), { runner: "engine", integration: "keep", push: 0, batch: "b1", worktree: wt, branch: `spec-${name}`, plan: plan(name), ...payload }, clock.t)),
+    enqueue: (name, payload = {}) => (h.enqueued++, queue.enqueue(eng.db, spec(name), { runner: "engine", integration: "merge", push: 0, batch: "b1", worktree: wt, branch: `spec-${name}`, plan: plan(name), ...payload }, clock.t)),
     async until(pred, what, max = 600) {
       for (let i = 0; i < max; i++) { if (pred()) return; clock.t += 5; await queue.step(eng, "demo"); }
       assert.fail(`not reached: ${what}`);
@@ -154,6 +154,25 @@ test("a committed report: one commit with the trailer, only the listed paths; th
   assert.equal(h.of("report_uncommitted").length, 0);
 });
 
+// Mutation: always call awake off -> both queues below call it. (The merge queue's single awake off is pinned by the committed-report test.)
+test("a queue with a keep spec (what an `ask` answer enqueues): the hook writes the report and artifact but not awake off", async (t) => {
+  const h = mk(t, { ungated: true });
+  h.enqueue("one"); h.enqueue("two", { integration: "keep" });
+  await h.finishQueue();
+  assert.equal(h.ctlLog().filter((l) => l === "awake off").length, 0);
+  assert.equal(h.ctlLog().filter((l) => l.startsWith("artifact ")).length, 1);
+});
+
+test("a queue with a lead-run spec: the hook does not call awake off", async (t) => {
+  const h = mk(t, { ungated: true });
+  h.enqueue("one"); h.enqueue("two", { runner: "lead" });
+  await h.until(() => h.eng.db.prepare("SELECT state FROM specs WHERE id=?").get(S2)?.state === "running", "the lead's turn");
+  queue.done(h.eng.db, S2, "merged abc1234", h.clock.t);
+  await h.finishQueue();
+  assert.equal(h.ctlLog().filter((l) => l === "awake off").length, 0);
+  assert.equal(h.of("queue_finished").length, 1);
+});
+
 test("a dirty live checkout: the report is written and shown, not committed, one report_uncommitted event", async (t) => {
   const h = mk(t);
   h.enqueue("one"); h.enqueue("two");
@@ -212,6 +231,12 @@ test("a re-run of the hook after a kill between the commit's intent and its done
   assert.equal(h.eng.db.prepare("SELECT state FROM steps WHERE kind='commit_report'").get().state, "done");
   assert.equal(h.ctlLog().filter((l) => l.startsWith("artifact ")).length, 1, "the notices are steps too: shown once");
   assert.equal(h.ctlLog().filter((l) => l === "awake off").length, 1);
+  // Mutation: write the file whatever the step says -> the changed database below leaves the committed report modified.
+  h.eng.db.prepare("UPDATE specs SET outcome='changed since the commit' WHERE id=?").run(S1);
+  h.eng.db.prepare("UPDATE steps SET state='intent' WHERE kind='awake_off'").run(); // a kill after the commit, before awake off
+  assert.equal(qr.write(ctx), rel);
+  assert.equal(git(h.wt, "status", "--porcelain").trim(), "", "the committed report is not rewritten");
+  assert.equal(h.commits().length, 1);
 });
 
 // R1: the second queue of the same day is -queue-2, a third -queue-3; each queue end has its own queue_report step.
