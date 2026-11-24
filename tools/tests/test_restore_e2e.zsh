@@ -16,7 +16,13 @@ export ORCH_ARGV="$TT_DIR/orch.argv" CTL_LOG="$TT_DIR/ctl.log"
 # the paths are written into the stubs: the scratch server (and its pane shells) started before these exports
 print -r -- "#!/bin/zsh
 print -rl -- \"\$@\" > ${(q)ORCH_ARGV}; sleep 60" > "$STUBS/orch-stub"
+# `engine status --unfinished` is a question, not an action: it is not logged, and answers 1 (no unfinished queue) unless the
+# file $TT_DIR/unfinished-<project> exists (then 0, as the real command does for an unfinished queue). Every other call is logged.
 print -r -- "#!/bin/zsh
+if [[ \"\$1 \$2 \$3\" == 'engine status --unfinished' ]]; then
+  [[ -e ${(q)TT_DIR}/unfinished-\${@[-1]} ]] && exit 0
+  exit 1
+fi
 print -r -- \"\$*\" >> ${(q)CTL_LOG}" > "$STUBS/ctl-stub"
 chmod +x "$STUBS"/*
 export TC_RESTORE_ORCH="$STUBS/orch-stub" TC_RESTORE_CTL="$STUBS/ctl-stub"
@@ -63,6 +69,7 @@ check "second tick: one dash start in total" test "$(grep -cx 'dash start' "$CTL
 if [[ "$OSTYPE" == darwin* ]] && /sbin/route -n get default >/dev/null 2>&1; then
   S kill-session -t "=projA"; S kill-session -t "=projB"
   rm -f "$ORCH_ARGV" "$CTL_LOG"
+  : > "$TT_DIR/unfinished-projA"   # projA has an unfinished engine queue: the restore starts its engine (spec section 11)
   cp "$TT_DIR/seed.json" "$TC_STATE/restore/snapshot.json"   # the seeded older-boot snapshot again (the second tick above replaced it)
   check "launchd env: snapshot reset has two projects" test "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["projects"]))' "$TC_STATE/restore/snapshot.json")" = 2
   # TMUX_TMPDIR (and the real one all.zsh records) must survive env -i, and every tmux call names the scratch socket by path
@@ -75,6 +82,7 @@ if [[ "$OSTYPE" == darwin* ]] && /sbin/route -n get default >/dev/null 2>&1; the
   check "launchd env: tick exits 0" test $? -eq 0
   check "launchd env: both sessions recreated" test "$(S has-session -t "=projA" 2>&1 && S has-session -t "=projB" 2>&1; print $?)" = 0
   check "launchd env: ctl log has dash start and bridge start" test "$(grep -cE '^(dash start|discord bridge start --project projA)$' "$CTL_LOG")" = 2
+  check "launchd env: unfinished engine queue of A: engine start, none for B" test "$(grep -cE '^engine start --session projA$' "$CTL_LOG")" = 1 -a -z "$(grep -F projB "$CTL_LOG")"
   check "launchd env: snapshot marked restored" python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["restored"] is True' "$TC_STATE/restore/snapshot.json"
 else
   print -r -- "skip - launchd env case: needs macOS and a default route"
