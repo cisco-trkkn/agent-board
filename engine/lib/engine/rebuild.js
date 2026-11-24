@@ -24,7 +24,7 @@ function replay(project) {
     for (const ev of live.prepare("SELECT seq, detail FROM events ORDER BY seq").all()) {
       let rows = [];
       try { rows = (JSON.parse(ev.detail) || {}).rows || []; } catch { /* no rows */ }
-      for (const { table, row } of rows) db.put(scratch, table, row);
+      for (const { table, row } of rows) db.putRaw(scratch, table, row);
     }
     const data = {};
     for (const t of tablesOf(scratch)) data[t] = scratch.prepare(`SELECT * FROM ${t}`).all();
@@ -85,7 +85,7 @@ function apply(project) {
     db.tx(r.live, () => {
       for (const [t, rows] of Object.entries(r.data)) {
         r.live.exec(`DELETE FROM ${t}${PENDING[t] ? ` WHERE NOT (${PENDING[t]})` : ""}`);
-        for (const row of rows) db.put(r.live, t, row);
+        for (const row of rows) db.putRaw(r.live, t, row);
       }
     });
     return { rc: 0, backup };

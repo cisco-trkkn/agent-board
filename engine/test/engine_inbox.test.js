@@ -14,6 +14,8 @@ const TABLES = ["specs", "jobs", "events", "steps", "timers", "waits", "retry_po
 const counts = (db) => Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT count(*) c FROM ${t}`).get().c]));
 const row = (db, sql, ...a) => db.prepare(sql).get(...a);
 const states = (db) => db.prepare("SELECT state FROM inbox ORDER BY id").all().map((r) => r.state);
+const REC = { option: "approve", why: "w", confidence: "low" };
+const W = (o) => ({ kind: "cannot_tell", recommendation: REC, ...o });
 const addSpec = (db, id, state) => dbm.put(db, "specs", { id, state });
 
 test("insert is INSERT OR IGNORE and writes only inbox", () => {
@@ -155,10 +157,12 @@ test("a handler returning {drop} marks the row dropped with the reason", () => {
 test("waits: one open wait per spec, answer closes it", () => {
   const f = fresh();
   try {
-    const w = inbox.openWait(f.db, { spec: "s", step: "integrating", question: "push?", options: "approve|deny|fail" }, 100);
+    const w = inbox.openWait(f.db, { spec: "s", step: "integrating", question: "push?", options: "approve|deny|fail", kind: "stop_class", recommendation: REC }, 100);
+    assert.equal(w.kind, "stop_class");
+    assert.deepEqual(JSON.parse(w.recommendation), REC);
     assert.equal(w.id, "s@100");
     assert.equal(inbox.openWaitFor(f.db, "s").question, "push?");
-    assert.throws(() => inbox.openWait(f.db, { spec: "s", step: "x", question: "q" }, 101));
+    assert.throws(() => inbox.openWait(f.db, { spec: "s", step: "x", question: "q", ...W() }, 101));
     assert.equal(inbox.openWaitFor(f.db, "other"), null);
     const a = inbox.answerWait(f.db, "s", "approve", "ok", 150);
     assert.equal(a.answer, "approve");
@@ -166,7 +170,7 @@ test("waits: one open wait per spec, answer closes it", () => {
     const r = row(f.db, "SELECT * FROM waits WHERE id='s@100'");
     assert.equal(r.answered_at, 150);
     assert.equal(r.note, "ok");
-    inbox.openWait(f.db, { spec: "s", step: "y", question: "again" }, 200);
+    inbox.openWait(f.db, { spec: "s", step: "y", question: "again", ...W() }, 200);
     const kinds = f.db.prepare("SELECT kind FROM events ORDER BY seq").all().map((x) => x.kind);
     assert.deepEqual(kinds, ["wait_opened", "wait_answered", "wait_opened"]);
     assert.equal(JSON.parse(f.db.prepare("SELECT detail FROM events ORDER BY seq").all()[1].detail).rows[0].table, "waits");
@@ -180,7 +184,7 @@ test("signal returns rc 2 unless the spec is awaiting_you with an open wait; wri
     assert.deepEqual(inbox.signal(f.db, "s", "approve", null), { rc: 2, msg: "no open wait for s" });
     addSpec(f.db, "s", "awaiting_you");
     assert.deepEqual(inbox.signal(f.db, "s", "approve", null), { rc: 2, msg: "no open wait for s" });
-    inbox.openWait(f.db, { spec: "s", step: "x", question: "q" }, 1);
+    inbox.openWait(f.db, { spec: "s", step: "x", question: "q", ...W() }, 1);
     const before = counts(f.db);
     assert.deepEqual(inbox.signal(f.db, "s", "deny", "no thanks", 5), { rc: 0 });
     inbox.signal(f.db, "s", "deny", "no thanks", 6);
@@ -210,5 +214,16 @@ test("a non-JSON string payload (via insert, and a timer row with raw text) drai
     f.db.prepare("INSERT INTO inbox (source, source_id, spec, kind, payload, received_at, state) VALUES ('user','legacy','s','signal','plain text',30,'new')").run();
     assert.equal(inbox.drain(f.db, () => {}, 40), 1);
     assert.deepEqual(states(f.db), ["done", "done", "done"]);
+  } finally { f.done(); }
+});
+
+test("signal refuses an answer that is not among the open wait's options", () => {
+  const f = fresh();
+  try {
+    addSpec(f.db, "s", "awaiting_you");
+    inbox.openWait(f.db, { spec: "s", step: "x", question: "q", options: "approve|fail", ...W() }, 1);
+    assert.deepEqual(inbox.signal(f.db, "s", "deny", null, 2), { rc: 2, msg: "deny is not an option for s (approve|fail)" });
+    assert.equal(f.db.prepare("SELECT count(*) c FROM inbox").get().c, 0);
+    assert.deepEqual(inbox.signal(f.db, "s", "fail", null, 3), { rc: 0 });
   } finally { f.done(); }
 });

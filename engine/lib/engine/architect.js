@@ -59,8 +59,10 @@ function build(c) {
     "Write your reasoning there; its last fenced block must be:",
     "",
     "```json:status",
-    '{"decision": "proceed" | "retry_higher_tier" | "park" | "fail_spec", "ruling": "<one sentence>", "cost_if_wrong": "<what it costs if wrong>"}',
+    '{"decision": "proceed" | "retry_higher_tier" | "park" | "fail_spec", "ruling": "<one sentence>", "cost_if_wrong": "<what it costs if wrong>", "recommend": {"option": "approve" | "deny" | "fail", "why": "<one line>", "confidence": "low" | "medium" | "high"}}',
     "```",
+    "",
+    "`recommend` is required for `park`: it is the answer you would give the user, shown with the question.",
     "",
   );
   return lines.join("\n");

@@ -34,7 +34,7 @@ function line(project, event) {
   const s = summary(detail);
   const text = `${event.kind}${s ? ": " + s : ""}`.replace(/\s+/g, " ").trim().slice(0, 300);
   return {
-    ts: event.ts, project, spec: specName(event.spec), kind: event.kind, tier: tier(event), text,
+    ts: event.ts, src: "engine", project, spec: specName(event.spec), kind: event.kind, tier: tier(event), text,
     refs: event.job ? { run: event.job } : {},
   };
 }

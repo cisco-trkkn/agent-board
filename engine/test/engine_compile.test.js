@@ -53,7 +53,13 @@ test("report: reviewer shape", () => {
 test("report: architect shape", () => {
   const ok = { decision: "retry_higher_tier", ruling: "r", cost_if_wrong: "c" };
   assert.deepEqual(report.parse(fence(ok), "architect"), ok);
-  for (const d of ["proceed", "park", "fail_spec"]) assert.ok(report.parse(fence({ ...ok, decision: d }), "architect"));
+  for (const d of ["proceed", "fail_spec"]) assert.ok(report.parse(fence({ ...ok, decision: d }), "architect"));
+  const rec = { option: "approve", why: "w", confidence: "low" };
+  assert.ok(report.parse(fence({ ...ok, decision: "park", recommend: rec }), "architect"));
+  assert.equal(report.parse(fence({ ...ok, decision: "park" }), "architect"), null);
+  for (const bad of [{ ...rec, option: "proceed" }, { ...rec, why: "" }, { ...rec, confidence: "sure" }, "approve"])
+    assert.equal(report.parse(fence({ ...ok, decision: "park", recommend: bad }), "architect"), null);
+  assert.ok(report.parse(fence({ ...ok, decision: "proceed", recommend: rec }), "architect"));
   assert.equal(report.parse(fence({ ...ok, decision: "x" }), "architect"), null);
   assert.equal(report.parse(fence({ decision: "proceed", ruling: "r" }), "architect"), null);
 });
@@ -161,4 +167,10 @@ test("bounce: at most 3 detail lines per failure and the line cap", () => {
   assert.equal(lines[0], "not ok 0 - t0");
 
   assert.deepEqual(bounce.text("", "L").text, "full log: L");
+});
+
+test("architect.build's answer contract shows recommend and says park needs it", () => {
+  const text = require("../lib/engine/architect").build({ kase: "blocked", spec: "s.md", finding: "F", reportPath: "/r" });
+  assert.ok(text.includes('"recommend": {"option": "approve" | "deny" | "fail", "why": "<one line>", "confidence": "low" | "medium" | "high"}'));
+  assert.match(text, /`recommend` is required for `park`/);
 });

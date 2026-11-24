@@ -230,7 +230,8 @@ function start(opts) {
     const t = now();
     const n = db.prepare("SELECT COUNT(*) AS n FROM waits WHERE spec=?").get(spec.id).n;
     const wait = { id: `${spec.id}@${t}#${n + 1}`, spec: spec.id, step, question, options: extra.options || "approve|deny|fail",
-      asked_at: t, answered_at: null, answer: null, note: null };
+      asked_at: t, answered_at: null, answer: null, note: null,
+      kind: "cannot_tell", recommendation: JSON.stringify(policy.ASK_DEFAULTS.cannot_tell) }; // Task 4 passes the real kind
     delete extra.options;
     const command = `tmux-ctl engine signal ${spec.id} approve|deny|fail`;
     emit("awaiting_you", { spec: spec.id, rows: [["waits", wait], ["specs", { ...spec, state: "awaiting_you", updated_at: t }]],
