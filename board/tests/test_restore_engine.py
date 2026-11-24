@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import restore  # noqa: E402
 from test_restore_tick import Base, Sh  # noqa: E402
+import test_restore as tr  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent.parent
 
@@ -98,6 +99,20 @@ class Resume(Base):
         self.run_restore(self.snap(self.project(lead=False), awake={"queue": True, "lid": False, "project": None}))
         self.assertEqual([c for c, _, _ in self.sh.find("awake on")], [["/ctl", "awake", "on", "--queue"]])
 
+    # Mutation: "the awake rule runs only when the snapshot has no awake" -> no fallback call after a failed re-arm.
+    def test_awake_fallback_when_the_snapshot_awake_could_not_be_rearmed(self):
+        self.sh.unfinished["alpha"] = 0
+        awake = {"queue": False, "lid": True, "project": "alpha"}   # a lead-pid hold; the engine-only project has no lead pid
+        res = self.run_restore(self.snap(self.project(lead=False), awake=awake))
+        calls = [c for c, _, _ in self.sh.find("awake on")]
+        self.assertEqual(calls, [["/ctl", "awake", "on", "--queue", "--lid"]])
+        self.assertIn("awake: no lead pid to watch", res["alpha"].get("error", "") + self.log())
+
+    def test_no_awake_fallback_when_the_snapshot_awake_was_rearmed(self):
+        self.sh.unfinished["alpha"] = 0
+        self.run_restore(self.snap(self.project(lead=False), awake={"queue": True, "lid": True, "project": None}))
+        self.assertEqual([c for c, _, _ in self.sh.find("awake on")], [["/ctl", "awake", "on", "--queue", "--lid"]])
+
     def test_no_engine_no_awake(self):
         self.run_restore(self.snap(self.project(lead=False)))
         self.assertEqual(self.sh.find("awake on"), [])
@@ -124,8 +139,29 @@ class Resume(Base):
         self.assertEqual([c[-1] for c, _, _ in self.sh.find("engine start")], ["grp"])
 
 
+class EngineOnlySnapshot(tr.Base):
+    """A session with no claude window but an `engine` window in <project>-bg is in the snapshot, with no lead."""
+
+    # Mutation: "skip every session without a claude window" -> the project is missing from the snapshot.
+    def test_engine_window_without_claude_window_is_a_project_without_lead(self):
+        fake = tr.Fake(sessions=tr.sess(("alpha", "", "/p/alpha", ""), ("alpha-bg", "", "/p/alpha", "1"), ("idle", "", "/p/idle", "")),
+                       panes=tr.panes(("alpha", "zsh", "%1", "10"), ("alpha-bg", "engine", "%2", "11"), ("idle", "zsh", "%3", "12")))
+        snap = self.snap(fake)
+        self.assertEqual([p["name"] for p in snap["projects"]], ["alpha"])
+        p = self.proj(snap, "alpha")
+        self.assertIsNone(p["lead"])
+        self.assertEqual(p["path"], "/p/alpha")
+
+    def test_claude_window_still_gives_its_lead(self):
+        fake = tr.Fake(sessions=tr.sess(("alpha", "", "/p/alpha", ""), ("alpha-bg", "", "/p/alpha", "1")),
+                       panes=tr.panes(("alpha", "claude", "%1", "10"), ("alpha-bg", "engine", "%2", "11")),
+                       ps=tr.ps((10, 1, "zsh"), (20, 10, "claude --model opus")))
+        self.assertIsNotNone(self.proj(self.snap(fake), "alpha")["lead"])
+
+
 class RealSnapshot(unittest.TestCase):
-    """Read-only: the engine selection over the real restore snapshot, with a recorder that executes nothing."""
+    """Read-only: the engine selection over the real restore snapshot, with a recorder that executes nothing.
+    (It drives _resume_engine directly, project by project, not do_restore.)"""
 
     def test_one_status_call_per_existing_project(self):
         snap = restore.load(restore.restore_dir())
@@ -181,9 +217,8 @@ class Scratch(unittest.TestCase):
         subprocess.run(tm + ["new-session", "-d", "-s", "proj", "-c", proj], check=True, env=full)
         subprocess.run(tm + ["new-session", "-d", "-s", "proj-bg", "-c", proj], check=True, env=full)
         subprocess.run(tm + ["set-option", "-t", "=proj-bg:", "@tc_bg", "1"], env=full)
-        os.environ_backup = dict(os.environ)
         cfg = restore.Cfg(tmux=tm[:3], ctl=[str(REPO / "bin" / "tmux-ctl")], dash_ctl=["/usr/bin/true"], orch="/usr/bin/true",
-                          dev="/usr/bin/true", home=root, sleep=lambda s: None)
+                          dev="/usr/bin/true", home=root)
         old = dict(os.environ)
         os.environ.clear()
         os.environ.update(full)

@@ -204,8 +204,8 @@ def _snapshot(run, tmux, status_dir, awake_file, now, pid_alive):
                 or proj.startswith("_web-") or name in SKIP_NAMES or proj in SKIP_NAMES or proj in seen):
             continue
         cw = window_panes(name, "claude")
-        if not cw:
-            continue
+        if not cw and not window_panes(f"{proj}-bg", "engine"):
+            continue   # no lead and no engine: nothing to restore (an engine-only project keeps lead None)
         seen.add(proj)
         lead = None
         for pane_id, pane_pid in cw:
@@ -416,12 +416,13 @@ def do_restore(dir, snap, cfg):
             fails.append(("project", f"{type(e).__name__}: {e}"))
             _log(dir, cfg, f"{name}: project failed: {e}")
     awake = snap.get("awake")
+    rearmed = False
     if awake:
         try:
-            _restore_awake(dir, cfg, awake, snap, opened, shared)
+            rearmed = _restore_awake(dir, cfg, awake, snap, opened, shared)
         except Exception as e:
             shared.append(("awake", f"{type(e).__name__}: {e}"))
-    elif any(r.get("engine") in ENGINE_UP for r in results.values()):
+    if not rearmed and any(r.get("engine") in ENGINE_UP for r in results.values()):
         # no lead pid exists to watch for a queue run: --queue binds the hold to the tmux server (spec section 11)
         _step(dir, cfg, "keep-awake", "awake on", shared, _safe(cfg.sh, list(cfg.ctl) + ["awake", "on", "--queue", "--lid"], cwd=cfg.home))
     for p in snap.get("projects") or []:
@@ -515,11 +516,13 @@ def _restore_awake(dir, cfg, awake, snap, opened, shared):
         if not pid:
             shared.append(("awake", "no lead pid to watch"))
             _log(dir, cfg, "awake: no lead pid to watch")
-            return
+            return False
         args += ["--pid", str(pid)]
     if awake.get("lid"):
         args.append("--lid")
+    n = len(shared)
     _step(dir, cfg, "keep-awake", "awake on", shared, _safe(cfg.sh, args, cwd=cfg.home))
+    return len(shared) == n   # True when the hold was re-armed
 
 
 def _report(dir, cfg, snap, p, res, shared):
