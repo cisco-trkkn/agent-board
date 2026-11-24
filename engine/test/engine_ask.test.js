@@ -39,7 +39,7 @@ function wrap(inner, clock) {
   const extra = [];
   return {
     calls: inner.calls,
-    start: (job) => inner.start(job), close: (h) => inner.close(h), resume: (h, t) => inner.resume(h, t),
+    start: (job) => inner.start(job), close: (h) => inner.close(h), resume: (h, t) => inner.resume(h, t), usage: (h, o) => inner.usage(h, o),
     push: (ev) => extra.push({ due: clock.t, make: () => ev }),
     poll() {
       const out = inner.poll();

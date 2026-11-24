@@ -260,6 +260,46 @@ function start(opts) {
   }
   const cancelTimers = (jobId) => all("SELECT * FROM timers WHERE job=? AND fired_at IS NULL", jobId).map((r) => ["timers", { ...r, fired_at: now() }]);
 
+  // ---- budget (spec 8b) ----
+
+  const capsOf = (spec) => ({ attempts: spec.budget_attempts == null ? config.budget.attempts : spec.budget_attempts,
+    tokens: spec.budget_tokens == null ? config.budget.tokens : spec.budget_tokens });
+  const reachedOf = (spec) => { const c = capsOf(spec); return { attempts: (spec.spent_attempts || 0) >= c.attempts, tokens: (spec.spent_tokens || 0) >= c.tokens }; };
+
+  // The job's tokens at its end: the backend's answer, or null with the reason. A job that never started has none to read.
+  function usageOf(job) {
+    if (job.started_at === null || job.started_at === undefined) return null;
+    if (typeof backend.usage !== "function") return { tokens: null, reason: "the backend reports no usage" };
+    try {
+      const u = backend.usage(handleOf(job), { since: job.started_at });
+      if (u && Number.isInteger(u.tokens)) return { tokens: u.tokens };
+      return { tokens: null, reason: (u && u.reason) || "the backend gave no token count" };
+    } catch (e) {
+      return { tokens: null, reason: `usage failed: ${String((e && e.message) || e)}` };
+    }
+  }
+  // Writes the job's tokens into the rows of its end event: the job row, and the spec row (merged into the one
+  // endNeedsYou already returns). Returns the event fields.
+  function tokenRows(job, rows) {
+    const u = usageOf(job);
+    if (!u) return {};
+    const jr = rows.find((r) => r[0] === "jobs" && r[1].id === job.id);
+    if (jr) jr[1] = { ...jr[1], tokens: u.tokens };
+    if (u.tokens) {
+      const sr = rows.find((r) => r[0] === "specs");
+      if (sr) sr[1] = { ...sr[1], spent_tokens: (sr[1].spent_tokens || 0) + u.tokens };
+      else { const spec = get("specs", job.spec); rows.push(["specs", { ...spec, spent_tokens: (spec.spent_tokens || 0) + u.tokens }]); }
+    }
+    return u.tokens === null ? { tokens: null, tokens_missing: u.reason, lower_bound: true } : { tokens: u.tokens };
+  }
+  // The cap recommendation (8b): approve when the last three completed tasks had no fix round, else fail.
+  function capRecommendation(spec) {
+    const last = all("SELECT * FROM events WHERE spec=? AND kind='task_complete' ORDER BY seq DESC LIMIT 3", spec.id).map((e) => (parse(e.detail) || {}).task);
+    const fixes = all("SELECT * FROM events WHERE spec=? AND kind='fix_round'", spec.id).map((e) => (parse(e.detail) || {}).task);
+    if (last.length === 3 && !last.some((n) => fixes.includes(n))) return policy.SITE_RECS.budget_extend;
+    return policy.SITE_RECS.budget_loop;
+  }
+
   // Arms the job's one deadline timer at `due`; returns the rows to write (the job row carries the timer's id).
   function deadlineRows(job, d, due) {
     const n = (d.dl || 0) + 1;
@@ -354,7 +394,7 @@ function start(opts) {
     const ny = endNeedsYou(job, t);
     const rows = [...cancelTimers(job.id), ["jobs", { ...job, ...ny.fields, state: "failed", ended_at: t, head: gitHead(wtOf(spec)) }], ...ny.rows];
     const proto = { kind: job.kind, task: job.task === null ? undefined : job.task, tier: job.tier, model: job.model };
-    const carry = { ...d, deadline: undefined, dl: undefined, nudged_at: undefined, told_at: undefined, parked: undefined, resumed_at: undefined };
+    const carry = { ...d, deadline: undefined, dl: undefined, nudged_at: undefined, told_at: undefined, parked: undefined, resumed_at: undefined, reserved: undefined };
     let next = null;
     let exhausted = false;
     const after = [];
@@ -374,8 +414,9 @@ function start(opts) {
       rows.push(["timers", { id: `retry:${next.id}`, spec: spec.id, job: next.id, kind: "retry", due_at: t + wait, payload: null, fired_at: null }]);
     }
     if (next) rows.push(["jobs", next]);
+    const spend = tokenRows(job, rows);
     emit("job_failed", { spec: spec.id, job: job.id, rows, task: job.task === null ? undefined : job.task, reason, try: tryN,
-      exhausted, on_exhausted: pol.on_exhausted, retry: next ? next.id : null, text: `${label(job)} failed: ${reason}`, ...contextTokens(job, opts.transcriptRoot) });
+      exhausted, on_exhausted: pol.on_exhausted, retry: next ? next.id : null, text: `${label(job)} failed: ${reason}`, ...spend, ...contextTokens(job, opts.transcriptRoot) });
     for (const f of after) f();
     status.delete(job.id);
   }
@@ -406,7 +447,7 @@ function start(opts) {
     const ny = endNeedsYou(job, t);
     const done = { ...job, ...ny.fields, state: "done", ended_at: t, head: gitHead(wt) };
     const rows = [...cancelTimers(job.id), ["jobs", done], ...ny.rows];
-    const ctx = contextTokens(job, opts.transcriptRoot);
+    const ctx = { ...tokenRows(job, rows), ...contextTokens(job, opts.transcriptRoot) };
     status.delete(job.id);
     if (job.kind === "architect") {
       emit("architect_decision", { spec: spec.id, job: d.target || null, rows, case: d.case, task: d.task === null ? undefined : d.task,
@@ -556,6 +597,7 @@ function start(opts) {
     if (what === "step") return [{ type: "step_retry", key: id }];
     if (what === "exhausted") return [{ type: "retry_job", job: id }];
     if (what === "needs_you") return [{ type: "needs_you_again", job: id }];
+    if (what === "budget") return id === "cap" ? [{ type: "extend_budget" }] : []; // an unknown cost: tokens stay null, the spec goes on
     return []; // integrate: its steps row is still at intent, so it runs again
   }
 
@@ -606,6 +648,11 @@ function start(opts) {
       const what = `${label(job)} failed: ${d.reason}`;
       if (d.on_exhausted === "park") out.push({ type: "park", question: what, step: `core:exhausted:${job.id}`, kind: "architect_park", recommendation: policy.SITE_RECS.exhausted });
       if (d.on_exhausted === "fail_spec") out.push(done(`failed — ${label(job)}: ${d.reason}`));
+    }
+    // 8b: a finished job whose cost cannot be measured parks the spec (only a finished job; a failed attempt is a lower bound)
+    if ((ev.kind === "job_done" || ev.kind === "architect_decision") && d.tokens_missing && !out.some((c) => c.type === "set_state" && c.state === "done")) {
+      const id = ev.kind === "job_done" ? ev.job : d.architect_job;
+      out.push({ type: "park", question: `cost unknown for job ${id}`, step: `core:budget:unknown:${id}`, kind: "budget", recommendation: policy.SITE_RECS.cost_unknown });
     }
     return out;
   }
@@ -661,8 +708,15 @@ function start(opts) {
     } else if (c.type === "retry_job") {
       const old = get("jobs", c.job);
       const job = newJob(spec, { kind: old.kind, task: old.task === null ? undefined : old.task, tier: old.tier, model: old.model },
-        { ...detailOf(old), try: 1, deadline: undefined, dl: undefined, nudged_at: undefined, told_at: undefined });
+        { ...detailOf(old), try: 1, deadline: undefined, dl: undefined, nudged_at: undefined, told_at: undefined, reserved: undefined });
       emit("job_created", { ...base, job: job.id, rows: [["jobs", job]], task: old.task === null ? undefined : old.task, tier: job.tier, retry_of: old.id });
+    } else if (c.type === "extend_budget") {
+      const cur = get("specs", spec.id);
+      const caps = capsOf(cur);
+      const hit = reachedOf(cur);
+      const next = { attempts: hit.attempts ? Math.ceil(caps.attempts * 1.5) : caps.attempts, tokens: hit.tokens ? Math.ceil(caps.tokens * 1.5) : caps.tokens };
+      emit("budget_extended", { ...base, rows: [["specs", { ...cur, budget_attempts: next.attempts, budget_tokens: next.tokens, updated_at: t }]],
+        attempts: next.attempts, tokens: next.tokens, text: `budget extended: attempts ${next.attempts}, tokens ${next.tokens}` });
     } else if (c.type === "needs_you_again") {
       const job = get("jobs", c.job);
       const rows = job && job.state === "running" && job.needs_you_since !== null
@@ -885,6 +939,19 @@ function start(opts) {
     const spec = get("specs", job.spec);
     const wt = wtOf(spec);
     const d = detailOf(job);
+    if (!d.reserved) { // 8b: a job reserves one attempt, once; a job that already did (a crash after the reserve) does not again
+      const hit = reachedOf(spec);
+      if (hit.attempts || hit.tokens) {
+        const c = capsOf(spec);
+        park(spec, `budget reached: attempts ${spec.spent_attempts || 0}/${c.attempts}, tokens ${spec.spent_tokens || 0}/${c.tokens}`, "core:budget:cap",
+          { kind: "budget", options: "approve|fail", recommendation: capRecommendation(spec) });
+        return;
+      }
+      emit("budget_reserve", { spec: spec.id, job: job.id, attempt: job.attempt, rows: [["specs", { ...spec, spent_attempts: (spec.spent_attempts || 0) + 1 }],
+        ["jobs", withDetail(job, { ...d, reserved: true })]], text: `attempt ${(spec.spent_attempts || 0) + 1}/${capsOf(spec).attempts}: ${job.id}` });
+      d.reserved = true; // the rows written below carry the detail on
+      job.detail = JSON.stringify(d);
+    }
     const ready = { ...job, ...jobPaths(spec, job), window: `${slugOf(spec)}·${label(job)}` };
     const text = briefFor(spec, ready, ready.report);
     fs.mkdirSync(path.dirname(ready.brief), { recursive: true });
@@ -1030,6 +1097,10 @@ function start(opts) {
       const row = { position: 0, runner: "engine", integration: "keep", push: 0, batch: null, state: "queued", outcome: null, worktree: repo,
         branch: null, strategy: "spec-driven", backend: "claude-tmux", policy_version: null, policy_hash: null, base: null,
         created_at: t, updated_at: t, ...s };
+      if (row.budget_attempts === undefined || row.budget_attempts === null) row.budget_attempts = config.budget.attempts;
+      if (row.budget_tokens === undefined || row.budget_tokens === null) row.budget_tokens = config.budget.tokens;
+      row.spent_attempts = row.spent_attempts || 0;
+      row.spent_tokens = row.spent_tokens || 0;
       emit("spec_added", { spec: row.id, rows: [["specs", row]], text: row.id });
       flush();
       return get("specs", row.id);

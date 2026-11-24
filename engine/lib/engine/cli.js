@@ -25,7 +25,7 @@ const OK_OUTCOME = /^(merged|mr|kept)/;
 const QUIET = /^(deadline|timer_fired|inbox_.*|job_session|step_intent|step_done)$/;
 const TICK_MS_FAKE = 100;
 
-const VALUE_FLAGS = new Set(["--integration", "--batch", "--project", "--backend", "--note", "--script"]);
+const VALUE_FLAGS = new Set(["--integration", "--batch", "--project", "--backend", "--note", "--script", "--budget-attempts", "--budget-tokens"]);
 const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply"]);
 
 function parseArgs(argv) {
@@ -160,10 +160,16 @@ async function runSpec(eng, specId, io) {
 async function cmdRun(args, io) {
   const p = parseArgs(args);
   if (p.error || p.pos.length !== 1 || !["merge", "mr", "keep"].includes(p.flags.integration)) {
-    io.err(`engine: run: ${p.error || "usage: engine run <spec> --integration merge|mr|keep [--push] [--batch <id>] [--project P] [--backend claude-tmux|fake]"}\n`);
+    io.err(`engine: run: ${p.error || "usage: engine run <spec> --integration merge|mr|keep [--push] [--batch <id>] [--budget-attempts N] [--budget-tokens N] [--project P] [--backend claude-tmux|fake]"}\n`);
     return 2;
   }
   const spec = p.pos[0];
+  const budget = {};
+  for (const [flag, col] of [["budget-attempts", "budget_attempts"], ["budget-tokens", "budget_tokens"]]) {
+    if (p.flags[flag] === undefined) continue;
+    if (!/^[1-9]\d*$/.test(p.flags[flag])) { io.err(`engine: run: --${flag} needs a positive integer, got ${p.flags[flag]}\n`); return 2; }
+    budget[col] = Number(p.flags[flag]);
+  }
   const project = resolveProject(p.flags, io);
   if (!project) return 2;
   const backendKind = p.flags.backend || "claude-tmux";
@@ -194,7 +200,7 @@ async function cmdRun(args, io) {
     if (have) { io.err(`engine: run: ${spec} is already in the database (${have.state}): use engine resume\n`); return 1; }
     eng.addSpec({
       id: spec, plan: found.path, worktree, branch: git(worktree, ["branch", "--show-current"]) || null,
-      integration: p.flags.integration, push: p.flags.push ? 1 : 0, batch: p.flags.batch || null, backend: backendKind,
+      integration: p.flags.integration, push: p.flags.push ? 1 : 0, batch: p.flags.batch || null, backend: backendKind, ...budget,
     });
     if (!eng.db.prepare("SELECT 1 FROM specs WHERE id=?").get(spec)) { io.err(`engine: run: could not insert ${spec}\n`); return 1; }
     // the core runs `metrics start` itself, as the metrics_start step, when the spec starts
@@ -239,6 +245,8 @@ function cmdStatus(args, io) {
     if (!s) { io.err(`engine: status: no such spec ${p.pos[0]}\n`); return 1; }
     io.out(`${s.id}  ${s.state}  ${s.outcome || "-"}`);
     io.out(`  integration ${s.integration}${s.push ? " +push" : ""}  batch ${s.batch || "-"}  branch ${s.branch || "-"}  worktree ${s.worktree || "-"}`);
+    const lower = d.prepare("SELECT 1 FROM jobs WHERE spec=? AND ended_at IS NOT NULL AND started_at IS NOT NULL AND tokens IS NULL LIMIT 1").get(s.id);
+    io.out(`  attempts ${s.spent_attempts || 0}/${s.budget_attempts == null ? "-" : s.budget_attempts} · tokens ${s.spent_tokens || 0}/${s.budget_tokens == null ? "-" : s.budget_tokens}${lower ? " (lower bound)" : ""}`);
     io.out("jobs:");
     for (const j of d.prepare("SELECT * FROM jobs WHERE spec=? ORDER BY rowid").all(s.id)) {
       io.out(`  ${j.id}  ${j.state}  ${j.model}/${j.effort}  attempt ${j.attempt}${j.window ? "  " + j.window : ""}`);

@@ -140,6 +140,25 @@ function commitLedger(ctx, spec, outcome = "") {
   });
 }
 
+// The argv (after tmux-ctl) of `metrics record` for a spec's end: the outcome, its budget spend and the session id -> job
+// kind of its engine jobs, so the metrics side can tell engine jobs from the lead's (Global Constraints). One builder:
+// the parked-failed record of Task 8 calls it too.
+function metricsRecordArgv(ctx, spec, outcome) {
+  const cur = ctx.db.prepare("SELECT * FROM specs WHERE id=?").get(spec.id) || spec;
+  const caps = loadConfig(ctx.repo).budget;
+  const pick = (v, d) => (v === undefined || v === null ? d : v);
+  const jobs = ctx.db.prepare("SELECT session_id, kind, ended_at, started_at, tokens FROM jobs WHERE spec=? ORDER BY rowid").all(spec.id);
+  const engineJobs = {};
+  for (const j of jobs) if (j.session_id) engineJobs[j.session_id] = j.kind;
+  const budget = {
+    attempts: [pick(cur.spent_attempts, 0), pick(cur.budget_attempts, caps.attempts)],
+    tokens: [pick(cur.spent_tokens, 0), pick(cur.budget_tokens, caps.tokens)],
+    lower_bound: jobs.some((j) => j.ended_at !== null && j.started_at !== null && j.tokens === null),
+  };
+  return ["metrics", "record", spec.id, "--batch", String(spec.batch), "--outcome", outcome,
+    "--budget", JSON.stringify(budget), "--engine-jobs", JSON.stringify(engineJobs)];
+}
+
 // commit_ledger, metrics_record (only with a batch; its failure is recorded, never thrown), worktree_remove (only when `removeWorktree`).
 function finalize(ctx, spec, outcome, { removeWorktree = false } = {}) {
   commitLedger(ctx, spec, outcome);
@@ -147,7 +166,7 @@ function finalize(ctx, spec, outcome, { removeWorktree = false } = {}) {
   if (spec.batch != null && spec.batch !== "") {
     try {
       run(ctx, spec, "metrics_record", `metrics_record:${spec.id}`, { spec: spec.id, batch: spec.batch }, () => {
-        must(spawn(ctx, tmuxCtl(ctx), ["metrics", "record", spec.id, "--batch", String(spec.batch), "--outcome", outcome], { cwd: ctx.repo }), "metrics record");
+        must(spawn(ctx, tmuxCtl(ctx), metricsRecordArgv(ctx, spec, outcome), { cwd: ctx.repo }), "metrics record");
         return { spec: spec.id, batch: spec.batch, outcome };
       });
     } catch (_) { /* steps.run already wrote the failed row and its step_failed event */ }
@@ -200,4 +219,4 @@ function revert(ctx, spec) {
   return { outcome: "reverted", merge: sha, revert: r.result.revert };
 }
 
-module.exports = { isFailure, run: runIntegrate, revert, finalize, runTests, liveCheckoutBusy };
+module.exports = { isFailure, run: runIntegrate, revert, finalize, metricsRecordArgv, runTests, liveCheckoutBusy };

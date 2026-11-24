@@ -446,3 +446,95 @@ fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(
     assert.equal(records.length + skipped, fs.readdirSync(dir).filter((f) => f.endsWith(".json")).length);
   });
 }
+
+// ---- usage (Task 5, spec 8b) ----
+if (require.main === module) {
+  const os = require("node:os");
+  const claudeTmux = require("../lib/engine/backend/claude_tmux.js");
+
+  test("fake usage: a {tokens: N} step answers N, {tokens: null} answers null with a reason, no step answers 0", async () => {
+    const b = fake.createBackend({ script: { implement1: [{ tokens: 120 }], implement2: [{ tokens: null }] }, reportDir: os.tmpdir() });
+    const h1 = await b.start({ id: "s:implement1:1", kind: "implement", task: 1 });
+    const h2 = await b.start({ id: "s:implement2:1", kind: "implement", task: 2 });
+    const h3 = await b.start({ id: "s:review1:1", kind: "review", task: 1 });
+    assert.deepEqual(b.usage(h1, { since: 0 }), { tokens: 120 });
+    const u2 = b.usage(h2, { since: 0 });
+    assert.equal(u2.tokens, null);
+    assert.ok(u2.reason);
+    assert.deepEqual(b.usage(h3, { since: 0 }), { tokens: 0 });
+    assert.deepEqual(b.usage({ job: "s:fix1:1" }, { since: 0 }), { tokens: 0 }, "a resumed job has no script");
+  });
+
+  // One transcript line. ts is ISO.
+  const line = (id, u, extra = {}) => JSON.stringify({ type: "assistant", timestamp: extra.ts || "2026-01-01T00:00:10.000Z",
+    message: { id, role: "assistant", model: extra.model || "claude-sonnet-5", usage: u } });
+  const U = (i, o, c, r = 0) => ({ input_tokens: i, output_tokens: o, cache_creation_input_tokens: c, cache_read_input_tokens: r });
+  const SINCE = Date.parse("2026-01-01T00:00:00.000Z") / 1000;
+  function transcript(t, lines, sid = "sess-1") {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "etr-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, "-some-project"));
+    fs.writeFileSync(path.join(root, "-some-project", `${sid}.jsonl`), lines.join("\n") + "\n");
+    return { root, backend: claudeTmux.createBackend({ session: "s", tmuxCtl: "x", statusDir: root, transcriptRoot: root }), handle: { job: "j", session_id: sid } };
+  }
+
+  test("claude-tmux usage: input + output + cache creation, cache reads not counted", (t) => {
+    const x = transcript(t, [line("m1", U(10, 20, 30, 9999)), line("m2", U(1, 2, 3))]);
+    assert.deepEqual(x.backend.usage(x.handle, { since: SINCE }), { tokens: 66 });
+  });
+
+  test("claude-tmux usage: one message id on three lines counts once", (t) => {
+    const x = transcript(t, [line("m1", U(10, 20, 30)), line("m1", U(10, 20, 30)), line("m1", U(10, 20, 30)), line("m2", U(1, 1, 1))]);
+    assert.deepEqual(x.backend.usage(x.handle, { since: SINCE }), { tokens: 63 });
+  });
+
+  test("claude-tmux usage: <synthetic> rows, rows before `since`, and lines without usage are left out", (t) => {
+    const x = transcript(t, [
+      line("m1", U(1, 1, 1)),
+      line("m2", U(100, 100, 100), { model: "<synthetic>" }),
+      line("m3", U(100, 100, 100), { ts: "2025-12-31T23:59:59.000Z" }),
+      JSON.stringify({ type: "user", timestamp: "2026-01-01T00:00:10.000Z", message: { role: "user", content: "hi" } }),
+      "not json",
+    ]);
+    assert.deepEqual(x.backend.usage(x.handle, { since: SINCE }), { tokens: 3 });
+  });
+
+  test("claude-tmux usage: no session id, no file, no matching row -> tokens null with a reason", (t) => {
+    const x = transcript(t, [line("m3", U(5, 5, 5), { ts: "2025-01-01T00:00:00.000Z" })]);
+    for (const [handle, what] of [[{ job: "j" }, /session id/], [{ job: "j", session_id: "other" }, /no transcript/], [x.handle, /no usage rows/]]) {
+      const u = x.backend.usage(handle, { since: SINCE });
+      assert.equal(u.tokens, null);
+      assert.match(u.reason, what);
+    }
+  });
+
+  test("claude-tmux usage: the default root is $CLAUDE_CONFIG_DIR/projects", (t) => {
+    const x = transcript(t, [line("m1", U(1, 1, 1))]);
+    const old = process.env.CLAUDE_CONFIG_DIR;
+    t.after(() => { if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = old; });
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "ecfg-"));
+    t.after(() => fs.rmSync(cfg, { recursive: true, force: true }));
+    fs.symlinkSync(x.root, path.join(cfg, "projects"));
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    const b = claudeTmux.createBackend({ session: "s", tmuxCtl: "x", statusDir: x.root });
+    assert.deepEqual(b.usage(x.handle, { since: SINCE }), { tokens: 3 });
+  });
+
+  // Real state, read-only: the newest transcript under the real ~/.claude/projects.
+  test("claude-tmux usage on the newest real transcript: an integer above 0", (t) => {
+    const root = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects");
+    if (!fs.existsSync(root)) { t.skip(`no ${root} on this machine`); console.log(`# skipped: no ${root}`); return; }
+    const files = [];
+    for (const d of fs.readdirSync(root)) {
+      let names = [];
+      try { names = fs.readdirSync(path.join(root, d)); } catch { continue; }
+      for (const n of names) if (n.endsWith(".jsonl")) { const p = path.join(root, d, n); files.push({ p, m: fs.statSync(p).mtimeMs, sid: n.slice(0, -6) }); }
+    }
+    const withUsage = files.sort((a, b) => b.m - a.m).find((f) => /"usage"/.test(fs.readFileSync(f.p, "utf8")));
+    console.log(`# real transcripts looked at: ${files.length}; newest with usage: ${withUsage ? path.basename(withUsage.p) : "none"}`);
+    if (!withUsage) { t.skip("no real transcript with usage rows"); return; }
+    const b = claudeTmux.createBackend({ session: "s", tmuxCtl: "x", statusDir: root, transcriptRoot: root });
+    const u = b.usage({ job: "j", session_id: withUsage.sid }, { since: 0 });
+    assert.ok(Number.isInteger(u.tokens) && u.tokens > 0, JSON.stringify(u));
+  });
+}

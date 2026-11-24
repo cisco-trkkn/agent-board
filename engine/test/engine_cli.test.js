@@ -452,3 +452,38 @@ test("tmux-ctl engine exports TC_PROJECT from the session's feed key: status rea
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^s1\.md {2}queued {2}- {2}keep$/m);
 });
+
+// ---- budget (Task 5, spec 8b) ----
+
+test("run --budget-attempts/--budget-tokens: stored on the spec; a value that is not a positive integer exits 2 and starts nothing", (t) => {
+  const bad = project(t);
+  for (const v of ["0", "-1", "1.5", "abc", "5x"]) {
+    for (const flag of ["--budget-attempts", "--budget-tokens"]) {
+      const r = bad.runSpec([flag, v]);
+      assert.equal(r.code, 2, `${flag} ${v}: ${r.err}`);
+      assert.match(r.err, new RegExp(`${flag} needs a positive integer`));
+    }
+  }
+  assert.ok(!fs.existsSync(path.join(bad.env.engineDir, "demo.sqlite")), "nothing was created");
+  const p = project(t);
+  const r = p.runSpec(["--budget-attempts", "20", "--budget-tokens", "123456"]);
+  assert.equal(r.code, 0, r.err + r.out);
+  const d = p.open();
+  try {
+    const s = d.prepare("SELECT * FROM specs WHERE id=?").get(SPEC);
+    assert.deepEqual([s.budget_attempts, s.budget_tokens, s.spent_attempts, s.spent_tokens], [20, 123456, 3, 0]);
+  } finally { d.close(); }
+  // finalize passed the spend and the engine jobs to `metrics record`
+  assert.match(p.ctlLog(), /metrics record \S+ --batch b1 --outcome kept spec-demo --budget \{"attempts":\[3,20\],"tokens":\[0,123456\],"lower_bound":false\} --engine-jobs \{/);
+});
+
+test("status <spec> prints attempts a/A · tokens t/T, with (lower bound) once an ended job has null tokens", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  const plain = p.run(["status", SPEC]);
+  assert.match(plain.out, /^  attempts 3\/60 · tokens 0\/5000000$/m);
+  assert.doesNotMatch(plain.out, /lower bound/);
+  const d = p.open();
+  try { d.prepare("UPDATE jobs SET tokens=NULL WHERE rowid=(SELECT MIN(rowid) FROM jobs)").run(); } finally { d.close(); }
+  assert.match(p.run(["status", SPEC]).out, /^  attempts 3\/60 · tokens 0\/5000000 \(lower bound\)$/m);
+});

@@ -41,6 +41,7 @@ function wrap(inner, clock) {
     resumeReports: [],
     start: (job) => inner.start(job),
     close: (h) => inner.close(h),
+    usage: (h, o) => inner.usage(h, o),
     async resume(h, text) {
       const nh = await inner.resume(h, text);
       const m = /Report file: (\S+)/.exec(text);
@@ -131,12 +132,12 @@ test("three-task plan runs from spec_started to done: outcome from integrate, ev
   await h.until(h.done);
   assert.equal(h.spec().outcome, "merged");
   assert.deepEqual(h.integrations, [SPEC]);
-  const perTask = ["job_created", "dispatched", "job_done", "check_requested", "check_result", "green_check",
-    "job_created", "dispatched", "job_done", "review", "task_complete"];
+  const perTask = ["job_created", "budget_reserve", "dispatched", "job_done", "check_requested", "check_result", "green_check",
+    "job_created", "budget_reserve", "dispatched", "job_done", "review", "task_complete"];
   assert.deepEqual(h.kinds(), [
     "spec_added", "spec_started", "check_requested", "stale_result",
     ...perTask, ...perTask, ...perTask,
-    "spec_state", "job_created", "dispatched", "job_done",
+    "spec_state", "job_created", "budget_reserve", "dispatched", "job_done",
     "spec_state", "integrate_requested", "integrated", "spec_done",
   ]);
   const ids = h.jobs().map((j) => j.id);

@@ -20,6 +20,9 @@ const SITE_RECS = {
   live_checkout: { option: "approve", why: "approve retries once the live checkout is clean", confidence: "low" },
   exhausted: { option: "approve", why: "approve runs the job once more", confidence: "low" },
   unknown_case: { option: "fail", why: "the strategy named a case the engine does not know", confidence: "medium" },
+  cost_unknown: { option: "approve", why: "count it as unknown and go on", confidence: "low" },
+  budget_extend: { option: "approve", why: "extend by 50%", confidence: "medium" },
+  budget_loop: { option: "fail", why: "the spec is looping", confidence: "medium" },
   refused: { option: "approve", why: "approve sends the case to the architect once more", confidence: "low" },
 };
 const DEFAULT_BUDGET = { attempts: 60, tokens: 5000000 };
