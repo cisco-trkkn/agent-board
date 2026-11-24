@@ -47,6 +47,19 @@ class DeriveEngineTest(unittest.TestCase):
         ev, _ = self.run_derive(st)
         self.assertNotIn("eng-spec#part-2", {e["spec"] for e in ev})
 
+    def test_lead_turn_clears_mark_and_derive_posts_again(self):
+        ev = [{"src": "engine", "spec": "eng-spec#part-2", "kind": "job_started"},
+              {"src": "engine", "spec": "eng-spec#part-2", "kind": "handed_to_lead"},
+              {"src": "engine", "spec": "job-only", "kind": "job_started"}]
+        st = df.note_engine_specs({}, ev)
+        self.assertEqual(st["engine_specs"], ["job-only"])
+        out, _ = self.run_derive(st)
+        self.assertIn("eng-spec#part-2", {e["spec"] for e in out})   # derived spec_started etc. post again
+        st = df.note_engine_specs(st, [{"src": "engine", "spec": "eng-spec#part-2", "kind": "lead_turn"}])
+        self.assertEqual(st["engine_specs"], ["job-only"])
+        st = df.note_engine_specs(st, [{"src": "engine", "spec": "eng-spec#part-2", "kind": "job_started"}])
+        self.assertEqual(st["engine_specs"], ["job-only", "eng-spec"])
+
     def test_newest_200_kept(self):
         st = df.note_engine_specs({}, [{"src": "engine", "spec": f"s{i}"} for i in range(250)])
         self.assertEqual(len(st["engine_specs"]), 200)

@@ -5,8 +5,10 @@ after the line is no longer waiting in the queue, so a board restart while a lin
 Standard library only; the server passes add_line and pending."""
 import json
 import os
-import re
+import sys
 from pathlib import Path
+
+import artifacts
 
 
 def engine_dir():
@@ -14,8 +16,8 @@ def engine_dir():
 
 
 def _flat(text):
-    """Same flattening as CommentQueue.add_line (artifacts._flat, limit 2000), so waiting text compares equal."""
-    return re.sub(r"\s+", " ", str(text)).strip()[:2000]
+    """The queue's own flattening (artifacts._flat, limit 2000), so waiting text compares equal to what add_line stored."""
+    return artifacts._flat(text, 2000)
 
 
 def _cursor(path):
@@ -38,13 +40,20 @@ def _lines(path):
         try:
             o = json.loads(r)
             seq, text = o["seq"], o["text"]
-            if isinstance(seq, bool) or not isinstance(seq, int) or not isinstance(text, str) or not text.strip():
+            if isinstance(seq, bool) or not isinstance(seq, int) or not isinstance(text, str):
                 raise ValueError("bad line")
         except (ValueError, KeyError, TypeError):
             bad += 1
             continue
         good.append((seq, text))
     return good, bad
+
+
+def _write_cursor(d, cur_path, seq):
+    tmp = cur_path.with_name(cur_path.name + ".next")
+    d.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(str(seq), encoding="utf-8")
+    os.replace(tmp, cur_path)
 
 
 def tick(project, add_line, pending, state, engine_dir=None, dry_run=False):
@@ -65,14 +74,22 @@ def tick(project, add_line, pending, state, engine_dir=None, dry_run=False):
             add_line(text)   # still waiting (add_line dedupes); nothing advances
             return out
         if seq > cursor:
-            tmp = cur_path.with_name(cur_path.name + ".next")
-            d.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(str(seq), encoding="utf-8")
-            os.replace(tmp, cur_path)
+            _write_cursor(d, cur_path, seq)
             cursor = seq
             out["delivered"] = seq
         state["flight"] = None
-    nxt = next(((s, t) for s, t in good if s > cursor), None)
+    nxt = None
+    for s, t in good:
+        if s <= cursor:
+            continue
+        if not _flat(t):   # nothing to type (empty or only control characters): skip it, never retry forever
+            print(f"engine_lines: skipped empty line seq {s} ({project})", file=sys.stderr, flush=True)
+            _write_cursor(d, cur_path, s)
+            cursor = s
+            out["skipped"] = s
+            continue
+        nxt = (s, t)
+        break
     if nxt:
         # the first line above the cursor in file order; seqs are in order, so an out-of-order line is not picked first
         add_line(nxt[1])

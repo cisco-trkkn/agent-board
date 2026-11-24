@@ -97,6 +97,22 @@ class TickTest(Base):
         self.tick(st)
         self.assertEqual(self.cursor(), "1")
 
+    def test_control_characters_match_queue_text(self):
+        self.write((1, "a\x1bb\x00c\x7f"), (2, "next"))
+        st = {}
+        self.tick(st)
+        self.assertEqual(self.pending(), ["a b c"])
+        self.tick(st)   # still waiting: the cursor stays and the next line is not added beside it
+        self.assertIsNone(self.cursor())
+        self.assertEqual(self.pending(), ["a b c"])
+
+    def test_all_control_line_skipped_cursor_advanced(self):
+        self.write((1, "\x1b\x00\x1b"), (2, "next"))
+        r = self.tick({})
+        self.assertEqual(r["skipped"], 1)
+        self.assertEqual(self.cursor(), "1")
+        self.assertEqual(self.pending(), ["next"])
+
     def test_no_file(self):
         self.assertEqual(self.tick({})["lines"], 0)
 

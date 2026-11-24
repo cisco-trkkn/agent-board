@@ -431,15 +431,21 @@ def _failed_run_log(project, now, worktree=None, root=None):
     return {"log_file": str(dest), "log_cmd": cmd or str(r["id"]), "log_exit": r["exit"], "log_where": where, "log_at": at}
 
 
+LEAD_KINDS = ("handed_to_lead", "lead_turn")
+
+
 def note_engine_specs(state, events):
-    """state with the spec names (before `#`) of feed lines carrying src "engine" added to state["engine_specs"], newest 200."""
-    names = [e["spec"].partition("#")[0] for e in events
-             if isinstance(e, dict) and e.get("src") == "engine" and isinstance(e.get("spec"), str) and e["spec"]]
+    """state with state["engine_specs"] (spec names before `#`, newest 200) updated from feed lines carrying src "engine".
+    The latest engine line of a spec wins: a handed_to_lead or lead_turn line clears its mark (the lead runs it now), any other sets it."""
     have = list(state.get("engine_specs") or [])
-    for n in names:
+    for e in events:
+        if not (isinstance(e, dict) and e.get("src") == "engine" and isinstance(e.get("spec"), str) and e["spec"]):
+            continue
+        n = e["spec"].partition("#")[0]
         if n in have:
             have.remove(n)
-        have.append(n)
+        if e.get("kind") not in LEAD_KINDS:
+            have.append(n)
     state = dict(state)
     state["engine_specs"] = have[-200:]
     return state
