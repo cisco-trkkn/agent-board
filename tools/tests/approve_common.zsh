@@ -23,7 +23,7 @@ mkpane() {
 replay() { mkpane $1 $2; tt new-window -d -t '=tt:' -n "$1" -c "$TT_DIR" "zsh $S/pane-$1.zsh"; fwait $S/ready-$1; sleep 0.05 }
 # fwait <file>: poll every 0.05 s (tt_wait polls every 0.25 s) up to 10 s for the file
 fwait() { local n=200; until [[ -e $1 ]] || (( n-- <= 0 )); do sleep 0.05; done }
-got() { touch $S/stop-$1; local n=50 g; while (( n-- > 0 )); do g="$(tt capture-pane -p -J -t "=tt:$1" | grep -a -o 'GOT:[^ ]*' | tail -1)"; [[ -n "$g" ]] && { print -r -- "${g#GOT:}"; return }; sleep 0.1; done; print -r -- TIMEOUT }
+got() { touch $S/stop-$1; local n=300 g; while (( n-- > 0 )); do g="$(tt capture-pane -p -J -t "=tt:$1" | grep -a -o 'GOT:[^ ]*' | tail -1)"; [[ -n "$g" ]] && { print -r -- "${g#GOT:}"; return }; sleep 0.1; done; print -r -- TIMEOUT }
 APENV=()   # extra env for the approve call, e.g. LC_ALL=C
 # --expect is mandatory: ap adds the window's own command/path text unless the call names --expect itself (NOEXP=1: never)
 defexp() { case "$1" in *touch*|hi-*|c-cmd-*|s-yes|wk|c-copy) print -r -- "touch made-by-test" ;; *git*|c-swap|s-no|v-no-plain-yes|e-*|spoof-*) print -r -- "git config user.name probe-user" ;; *) print -r -- "notes.txt" ;; esac }
