@@ -431,6 +431,20 @@ def _failed_run_log(project, now, worktree=None, root=None):
     return {"log_file": str(dest), "log_cmd": cmd or str(r["id"]), "log_exit": r["exit"], "log_where": where, "log_at": at}
 
 
+def note_engine_specs(state, events):
+    """state with the spec names (before `#`) of feed lines carrying src "engine" added to state["engine_specs"], newest 200."""
+    names = [e["spec"].partition("#")[0] for e in events
+             if isinstance(e, dict) and e.get("src") == "engine" and isinstance(e.get("spec"), str) and e["spec"]]
+    have = list(state.get("engine_specs") or [])
+    for n in names:
+        if n in have:
+            have.remove(n)
+        have.append(n)
+    state = dict(state)
+    state["engine_specs"] = have[-200:]
+    return state
+
+
 def derive(project, root, lead_tasks, state, now, list_id=""):
     """(events, new_state). Each event is emitted once: its key goes into state["seen"] (newest 2000 kept).
     The first call on a fresh state (no "primed") records the history already there (completed tasks, ledger lines,
@@ -446,11 +460,15 @@ def derive(project, root, lead_tasks, state, now, list_id=""):
     have = set(seen)
     out = []
 
+    engine_specs = set(st.get("engine_specs") or [])
+
     def emit(key, ev, history=False):
         if key in have:
             return
         have.add(key)
         seen.append(key)
+        if ev.get("spec", "").partition("#")[0] in engine_specs:
+            return   # the engine posts its own lines for a spec it runs
         if not (first and history):
             out.append(ev)
 
@@ -595,10 +613,13 @@ def tick(project, record, root, now, lead_tasks=None, list_id="", live=None, lim
         if "feed_offset" not in st:
             fp = tc_env.feed_path(project)
             st["feed_offset"] = fp.stat().st_size if fp.exists() and not st.get("primed") else 0
+        pre, _ = read_events(project, st["feed_offset"])   # engine lines not yet consumed mark their spec before derive
+        st = note_engine_specs(st, pre)
         events, st = derive(project, root, lead_tasks or [], st, now, list_id)
         for ev in events:
             append_event(project, ev)
         flow, st["feed_offset"] = read_events(project, st["feed_offset"])
+        st = note_engine_specs(st, flow)
         ops = []
         for ev in flow:   # one malformed foreign event is logged and skipped; the offset still moves past it
             try:
