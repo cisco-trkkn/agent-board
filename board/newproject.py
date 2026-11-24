@@ -9,10 +9,12 @@ command center (key np:<name>:<n>), edited after every change. discord_ops dispa
 Seams for tests: _http, _run, _spawn, _clock, _session_exists, _env_fn. Test: tests/test_newproject.py."""
 import contextlib
 import fcntl
+import functools
 import json
 import os
 import re
 import secrets
+import ssl
 import subprocess
 import sys
 import threading
@@ -66,12 +68,24 @@ def _run(argv, stdin=None, timeout=180):
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
+@functools.lru_cache(maxsize=None)
+def _ssl_context():
+    """Default verifying context; python.org builds ship no CA bundle, so load SSL_CERT_FILE or the macOS system bundle."""
+    ctx = ssl.create_default_context()
+    if ctx.cert_store_stats().get("x509_ca", 0) == 0:
+        for cafile in (os.environ.get("SSL_CERT_FILE"), "/etc/ssl/cert.pem"):
+            if cafile and os.path.exists(cafile):
+                ctx.load_verify_locations(cafile=cafile)
+                break
+    return ctx
+
+
 def _http(method, path, token):
     """(status, parsed JSON or None) for a Discord REST call with a bot token. A network failure raises OSError."""
     req = urllib.request.Request(API + path, method=method, headers={
         "Authorization": f"Bot {token}", "User-Agent": "DiscordBot (agent-board, 1)"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=15, context=_ssl_context()) as r:
             return r.status, json.loads(r.read().decode("utf-8") or "null")
     except urllib.error.HTTPError as e:
         return e.code, None
