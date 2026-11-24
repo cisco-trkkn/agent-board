@@ -88,11 +88,12 @@ function drain(db, handle, now) {
 const openWaitFor = (db, spec) =>
   db.prepare("SELECT * FROM waits WHERE spec=? AND answered_at IS NULL ORDER BY asked_at DESC LIMIT 1").get(spec) || null;
 
-function openWait(db, { spec, step, question, options }, now) {
+function openWait(db, { spec, step, question, options, kind, recommendation }, now) {
   const t = nowS(now);
   return tx(db, () => {
     if (openWaitFor(db, spec)) throw new Error(`open wait already exists for ${spec}`);
-    const w = { id: `${spec}@${t}`, spec, step, question, asked_at: t, answered_at: null, answer: null, note: null };
+    const w = { id: `${spec}@${t}`, spec, step, question, asked_at: t, answered_at: null, answer: null, note: null,
+      kind, recommendation: typeof recommendation === "string" ? recommendation : json(recommendation) };
     if (options !== undefined) w.options = options;
     else w.options = "approve|deny|fail";
     put(db, "waits", w);
@@ -116,6 +117,10 @@ function answerWait(db, spec, answer, note, now) {
 function signal(db, spec, answer, note, now) {
   const s = db.prepare("SELECT state FROM specs WHERE id=?").get(spec);
   if (!s || s.state !== "awaiting_you" || !openWaitFor(db, spec)) return { rc: 2, msg: `no open wait for ${spec}` };
+  const w = openWaitFor(db, spec);
+  if (!String(w.options || "approve|deny|fail").split("|").includes(answer)) {
+    return { rc: 2, msg: `${answer} is not an option for ${spec} (${w.options || "approve|deny|fail"})` };
+  }
   insert(db, { source: "user", source_id: crypto.randomUUID(), spec, kind: "signal",
     payload: { answer, note: note === undefined ? null : note } }, now);
   return { rc: 0 };

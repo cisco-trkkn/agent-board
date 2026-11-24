@@ -28,6 +28,45 @@ const logName = (id) => {
   return (m ? `${m[1]}-${m[2]}` : id).replace(/[:/]/g, "_") + ".log";
 };
 
+// The tokens a session used since `since` (seconds): input + output + cache creation of the assistant rows of
+// <root>/*/<sessionId>.jsonl, once per message id (a transcript repeats one message on several lines), without the
+// `<synthetic>` rows. Cache reads are not counted. Read-only; {tokens: null, reason} when it cannot be measured.
+function transcriptUsage(root, sessionId, since) {
+  if (!sessionId) return { tokens: null, reason: "no session id" };
+  let file = null;
+  try {
+    for (const d of fs.readdirSync(root)) {
+      const p = path.join(root, d, `${sessionId}.jsonl`);
+      if (fs.existsSync(p)) { file = p; break; }
+    }
+  } catch { /* no projects directory */ }
+  if (!file) return { tokens: null, reason: `no transcript for session ${sessionId}` };
+  let text;
+  try { text = fs.readFileSync(file, "utf8"); } catch (e) { return { tokens: null, reason: `transcript unreadable: ${e.code || e.message}` }; }
+  const perId = new Map();
+  let anon = 0;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    const m = o && o.message;
+    if (!m || !m.usage || m.model === "<synthetic>" || (o.type && o.type !== "assistant" && m.role !== "assistant")) continue;
+    if (since !== undefined && since !== null) {
+      const ts = Date.parse(o.timestamp);
+      if (!(ts / 1000 >= since)) continue;
+    }
+    const u = m.usage;
+    const n = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    perId.set(m.id || `anon${anon++}`, n); // the same id again is the same message
+  }
+  if (!perId.size) return { tokens: null, reason: `no usage rows in the transcript of session ${sessionId}` };
+  let sum = 0;
+  for (const n of perId.values()) sum += n;
+  return { tokens: sum };
+}
+
+const USAGE_KINDS = new Set(["5-hour", "weekly", "session"]);
+
 function createBackend(opts) {
   const { session, tmuxCtl, statusDir, tmuxArgs = [] } = opts;
   const tmuxBin = opts.tmuxBin || process.env.TC_TMUX_BIN || "tmux";
@@ -66,7 +105,7 @@ function createBackend(opts) {
 
   function register(job, window, pane, minMtime) {
     const handle = { job: job.id, window, pane };
-    entries.push({ handle, job, worktree: job.worktree, minMtime: minMtime || 0, started: false, reportSent: false, lastKey: null, gone: false });
+    entries.push({ handle, job, worktree: job.worktree, minMtime: minMtime || 0, started: false, reportSent: false, limitSent: false, lastKey: null, gone: false });
     return handle;
   }
 
@@ -158,6 +197,16 @@ function createBackend(opts) {
             turnStartedAt: best.turnStartedAt == null ? null : best.turnStartedAt });
         }
       }
+      // Claude's limit message is only in the pane text: look at ready or unknown handles, once per handle.
+      if (!e.limitSent && (!best || best.state === "ready")) {
+        const cap = tmux(["capture-pane", "-p", "-J", "-t", h.pane, "-S", "-40"]);
+        const m = cap.status === 0 ? /^\s*You've hit your (\S+(?: \S+)?) limit/m.exec(cap.stdout) : null;
+        if (m) {
+          e.limitSent = true;
+          out.push({ handle: h, type: "status", state: USAGE_KINDS.has(m[1]) ? "usage_limit" : "model_limit",
+            updatedAt: Math.floor(Date.now() / 1000), tool: null, lastToolAt: null, turnStartedAt: null });
+        }
+      }
       if (!e.reportSent && e.job.report) {
         try {
           const st = fs.statSync(e.job.report);
@@ -172,7 +221,12 @@ function createBackend(opts) {
     return out;
   }
 
-  return { start, close, resume, poll, adopt };
+  function usage(handle, { since } = {}) {
+    const root = opts.transcriptRoot || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || "", ".claude"), "projects");
+    return transcriptUsage(root, handle && handle.session_id, since);
+  }
+
+  return { start, close, resume, poll, adopt, usage };
 }
 
-module.exports = { createBackend, readStatusFiles };
+module.exports = { createBackend, readStatusFiles, transcriptUsage };

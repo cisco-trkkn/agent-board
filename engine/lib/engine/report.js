@@ -14,9 +14,11 @@ function reviewer(o) {
     o.findings.every((f) => isObj(f) && SEVERITIES.includes(f.severity) &&
       Number.isInteger(f.task) && typeof f.text === "string");
 }
+const recommend = (r) => isObj(r) && ["approve", "deny", "fail"].includes(r.option) &&
+  typeof r.why === "string" && r.why.trim() !== "" && ["low", "medium", "high"].includes(r.confidence);
 function architect(o) {
   return ["proceed", "retry_higher_tier", "park", "fail_spec"].includes(o.decision) &&
-    typeof o.ruling === "string" && typeof o.cost_if_wrong === "string";
+    typeof o.ruling === "string" && typeof o.cost_if_wrong === "string" && (o.decision !== "park" || recommend(o.recommend));
 }
 
 const SHAPES = {

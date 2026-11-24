@@ -49,6 +49,9 @@ function setup({ test: testCmd = "true", remoteUrl, integration = "merge", push 
   return { e, g, db, spec, ctx, bare, wt, calls, keys, base };
 }
 
+// The `metrics record` call as the stub logs it: the outcome, then --budget and --engine-jobs in the Global Constraints shape.
+const record = (outcome, budget = '{"attempts":[0,60],"tokens":[0,5000000],"lower_bound":false}', jobs = "{}") =>
+  `tmux-ctl metrics record s1 --batch b1 --outcome ${outcome} --budget ${budget} --engine-jobs ${jobs}`;
 const msgs = (g) => g.git("log", "--format=%B%x00", "main").split("\0");
 
 test("merge: tests before and after, merge commit with trailer, ledger, metrics record, worktree removed", () => {
@@ -62,7 +65,7 @@ test("merge: tests before and after, merge commit with trailer, ledger, metrics 
   assert.ok(msgs(s.g).some((m) => m.split("\n").includes("Engine-Step: commit_ledger:s1")));
   const ledgerFile = path.join(s.g.dir, "docs/superpowers/ledgers/2026-11-23-demo/progress.md");
   assert.match(fs.readFileSync(ledgerFile, "utf8"), /Task 1: dispatched w \(standard, sonnet\)/);
-  assert.deepEqual(s.calls(), ["tmux-ctl metrics record s1 --batch b1 --outcome merged"]);
+  assert.deepEqual(s.calls(), [record("merged")]);
   assert.ok(!fs.existsSync(s.wt));
   assert.ok(s.g.git("branch", "--list", "feat-a").includes("feat-a"));
   assert.deepEqual(s.keys().map((k) => k.state), ["done", "done", "done", "done"]);
@@ -102,7 +105,7 @@ test("live checkout dirty: parked, nothing changed; .claude/ and metrics lines d
   const s = setup();
   fs.writeFileSync(path.join(s.g.dir, "scratch.txt"), "x");
   const r = integrate.run(s.ctx, s.spec);
-  assert.deepEqual(r, { outcome: "parked", question: "live checkout is mid-change" });
+  assert.deepEqual(r, { outcome: "parked", question: "live checkout is mid-change", recommendation: { option: "approve", why: "approve retries once the live checkout is clean", confidence: "low" } });
   assert.deepEqual(s.keys(), []);
   assert.ok(!fs.existsSync(path.join(s.g.dir, "feature.txt")));
   fs.unlinkSync(path.join(s.g.dir, "scratch.txt"));
@@ -144,7 +147,7 @@ test("mr on github.com: push then gh pr create", () => {
   assert.equal(r.outcome, "mr https://example.test/pr/1");
   assert.ok(s.g.git("--git-dir", s.bare, "branch", "--list", "feat-a").includes("feat-a"));
   assert.ok(s.calls().includes("gh pr create --base main --head feat-a --fill"));
-  assert.ok(s.calls().includes("tmux-ctl metrics record s1 --batch b1 --outcome mr https://example.test/pr/1"));
+  assert.ok(s.calls().includes(record("mr https://example.test/pr/1")));
   assert.ok(!fs.existsSync(path.join(s.g.dir, "feature.txt")), "mr does not merge");
   assert.ok(fs.existsSync(s.wt), "mr keeps the worktree");
   assert.equal(s.keys().filter((k) => k.key.startsWith("push:")).length, 1);
@@ -163,6 +166,7 @@ test("mr without push consent: parked, no push, no gh", () => {
   const r = integrate.run(s.ctx, s.spec);
   assert.equal(r.outcome, "parked");
   assert.match(r.question, /no stored consent/);
+  assert.equal(r.recommendation, undefined, "the policy default (stop_class: deny) applies");
   assert.equal(s.g.git("--git-dir", s.bare, "branch", "--list", "feat-a").trim(), "");
   assert.deepEqual(s.calls(), []);
 });
@@ -185,7 +189,7 @@ test("keep: kept <branch>, no merge, no push", () => {
   assert.equal(integrate.run(s.ctx, s.spec).outcome, "kept feat-a");
   assert.ok(!fs.existsSync(path.join(s.g.dir, "feature.txt")));
   assert.equal(s.g.git("--git-dir", s.bare, "branch", "--list", "feat-a").trim(), "");
-  assert.deepEqual(s.calls(), ["tmux-ctl metrics record s1 --batch b1 --outcome kept feat-a"]);
+  assert.deepEqual(s.calls(), [record("kept feat-a")]);
   assert.ok(fs.existsSync(s.wt));
   assert.deepEqual(s.keys().map((k) => k.key.split(":")[0]).sort(), ["commit_ledger", "metrics_record"]);
 });
@@ -297,4 +301,20 @@ test("merge with a batch and a failing metrics record: step failed, outcome reac
   assert.equal(ev.length, 1);
   assert.match(ev[0].detail, /metrics record failed/);
   assert.equal(s.calls().length, 1); // no retry
+});
+
+test("metrics record carries the spec's budget spend, lower_bound from an ended job with null tokens, and the engine jobs by session id", () => {
+  const s = setup({ integration: "keep", push: 0 });
+  const put = (table, row) => dbm.put(s.db, table, row);
+  put("specs", { id: "s1", plan: s.spec.plan, state: "running", integration: "keep", push: 0, batch: "b1", created_at: 1, updated_at: 1,
+    budget_attempts: 9, budget_tokens: 900, spent_attempts: 4, spent_tokens: 250 });
+  const job = (id, kind, extra) => put("jobs", { id, spec: "s1", kind, task: null, tier: "standard", model: "sonnet", effort: "medium", state: "done", attempt: 1,
+    started_at: 1, ended_at: 2, needs_you_total: 0, detail: "{}", ...extra });
+  job("s1:implement1:1", "implement", { session_id: "sess-a", tokens: 100 });
+  job("s1:architect:1", "architect", { session_id: "sess-b", tokens: null });
+  job("s1:review1:1", "review", { tokens: 5 });
+  const argv = integrate.metricsRecordArgv(s.ctx, s.spec, "kept feat-a");
+  assert.deepEqual(argv.slice(0, 7), ["metrics", "record", "s1", "--batch", "b1", "--outcome", "kept feat-a"]);
+  assert.deepEqual(JSON.parse(argv[argv.indexOf("--budget") + 1]), { attempts: [4, 9], tokens: [250, 900], lower_bound: true });
+  assert.deepEqual(JSON.parse(argv[argv.indexOf("--engine-jobs") + 1]), { "sess-a": "implement", "sess-b": "architect" });
 });

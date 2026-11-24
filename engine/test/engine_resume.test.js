@@ -25,7 +25,7 @@ const report = (o) => "notes\n\n```json:status\n" + JSON.stringify(o) + "\n```\n
 const DONE = report({ status: "done", commits: ["abc1234"], concerns: [] });
 const BLOCKED = report({ status: "blocked", commits: [], concerns: ["needs a secret"] });
 const PASS = report({ verdict: "pass", findings: [] });
-const PARK = report({ decision: "park", ruling: "ask the user", cost_if_wrong: "a day" });
+const PARK = report({ decision: "park", ruling: "ask the user", cost_if_wrong: "a day", recommend: { option: "fail", why: "the plan is wrong", confidence: "high" } });
 const worker = (text, at = 0.4) => [{ status: "busy", at: 0.1 }, { report: text, at }, { status: "ready", at: at + 0.2 }];
 const GOOD = { implement1: worker(DONE), review1: worker(PASS), final_review: worker(PASS) };
 
@@ -82,8 +82,15 @@ function project(t, o = {}) {
   repo.git("worktree", "add", "-q", "-b", "spec-demo", wt);
   const ctl = path.join(env.root, "tmux-ctl");
   // o.actDelayS: `metrics start` (the act of the metrics_start step) takes that long, so a kill lands between step_intent and step_done
-  const slow = o.actDelayS ? `[ "$1 $2" = "metrics start" ] && sleep ${o.actDelayS}\n` : "";
-  fs.writeFileSync(ctl, `#!/bin/sh\n${slow}echo fresh\nexit 0\n`, { mode: 0o755 });
+  // The stub logs every call and records a start in a marker file before it sleeps; `metrics has start` answers 1 until
+  // that marker exists, so a start that was lost is redone and one that ran is found done.
+  const slow = o.actDelayS ? `sleep ${o.actDelayS}\n` : "";
+  const log = path.join(env.root, "ctl.log");
+  const marker = path.join(env.root, "started");
+  fs.writeFileSync(ctl, `#!/bin/sh\necho "$@" >> "${log}"\n`
+    + `if [ "$1 $2" = "metrics start" ]; then touch "${marker}"; ${slow}exit 0; fi\n`
+    + `if [ "$1 $2 $3" = "metrics has start" ]; then [ -f "${marker}" ] && exit 0; exit 1; fi\n`
+    + `echo fresh\nexit 0\n`, { mode: 0o755 });
   const scriptFile = path.join(env.root, "script.json");
   fs.writeFileSync(scriptFile, JSON.stringify(o.script || GOOD));
   const childEnv = { ...process.env, HOME: env.root, TC_ENGINE_DIR: env.engineDir, TC_STATE: env.state, TC_PROJECT: "demo", TC_TMUX_CTL: ctl };
@@ -101,6 +108,7 @@ steps.run = (d, desc, ...rest) => { if (String(desc.key).startsWith("metrics_sta
   const runArgs = ["run", SPEC, "--integration", "keep", "--batch", "b1", "--backend", "fake"];
   const p = {
     env, repo, wt, scriptFile, childEnv,
+    starts: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("metrics start ")).length : 0),
     run(args, opts = {}) {
       const r = cp.spawnSync("node", [ENGINE, ...args], { cwd: wt, env: childEnv, encoding: "utf8", timeout: 120000, ...opts });
       return { code: r.status, out: r.stdout, err: r.stderr };
@@ -198,8 +206,7 @@ test("kill at each distinct event kind of a run, then resume: same final state a
         const validOnDisk = atKill.filter((j) => j.state === "running" && j.report && fs.existsSync(j.report)
           && /```json:status/.test(fs.readFileSync(j.report, "utf8")));
 
-        // the metrics start window is read from the kinds at the kill, before resume: resume can write the pair itself
-        const killKinds = p.kinds();
+        const killKinds = p.kinds(); // the events at the kill, before resume writes more
         const r = p.resume();
         assert.equal(r.code, 0, `resume after ${kind}: ${r.err}${r.out}`);
 
@@ -209,14 +216,10 @@ test("kill at each distinct event kind of a run, then resume: same final state a
         }));
         assert.deepEqual(final.spec, refFinal.spec, "same final spec state and outcome");
         assert.deepEqual(final.jobs.map((j) => ({ id: j.id, state: j.state })), refFinal.jobs, "same jobs, same states");
-        // The metrics start (step_intent, step_done right after spec_added) is run by `engine run` itself, outside the
-        // core, and `engine resume` does not redo it: measurement never blocks a spec. A kill that lands between
-        // spec_added and that step, which a loaded machine makes likely, leaves the run without the pair.
-        // A kill between step_intent and step_done is not a loss: resume reconciles the intent row (see the window tests).
-        const lostStart = kind === "spec_added" && !killKinds.includes("step_intent");
+        // The core runs the metrics start itself (the first tick, before spec_started), so a kill at any point leaves it
+        // either done, at intent (reconciled on resume) or not yet started (run by the first tick): the pair is never lost.
         const want = sequence(refKinds);
         assert.deepEqual(want.slice(0, 3), ["spec_added", "step_intent", "step_done"], "the reference starts with the metrics start pair");
-        if (lostStart) want.splice(1, 2);
         // The same holds at the other end: the pane close_window step runs after spec_done, outside the spec's own work. Once
         // spec_done is committed the spec is done and `engine resume` has nothing to resume (cli.js: "nothing to resume"),
         // so a kill before that step's step_done leaves it unfinished and resume does not redo it. Harmless: the window stays
@@ -250,38 +253,45 @@ test("kill at each distinct event kind of a run, then resume: same final state a
   assert.deepEqual(failures, [], `kill points that failed:\n${text}`);
 });
 
-// ---- the metrics start window (run by cli.js after spec_added, outside the core) -----------------------------------
+// ---- the metrics start window (run by the core's first tick, after spec_added) --------------------------------------
+// Mutation for both: the core's metricsStart not called from startQueued (fails the first: no start call after resume), and
+// the check of a metrics_start intent row answering "not_done" always (fails the second: two start calls).
 
-test("kill between spec_added and the metrics start step: resume completes the spec and the lost start is not redone", async (t) => {
+test("kill between spec_added and the metrics start step: resume runs the start, exactly one call", async (t) => {
   const p = project(t, { adopt: true, preDelayMs: 2000 });
   const child = p.spawnRun();
   await until(() => p.kinds().includes("spec_added"), "spec_added");
   child.kill("SIGKILL");
   await child.exited;
   assert.deepEqual(p.kinds(), ["spec_added"], "killed before step_intent");
+  assert.equal(p.starts(), 0, "no start call before the resume");
   const r = p.resume();
   assert.equal(r.code, 0, r.err + r.out);
   assert.match(r.out.trim().split("\n").pop(), /^outcome: kept spec-demo$/);
-  assert.equal(p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM steps WHERE kind='metrics_start'").get().n), 0, "resume never redoes the start");
+  assert.equal(p.starts(), 1, "exactly one metrics start call after the resume");
+  assert.deepEqual(p.kinds().filter((k) => k !== "resumed").slice(0, 3), ["spec_added", "step_intent", "step_done"]);
+  assert.equal(p.peek((d) => d.prepare("SELECT state FROM steps WHERE kind='metrics_start'").get().state), "done");
   assert.equal(p.check().code, 0);
 });
 
-test("kill between step_intent and step_done of the metrics start: resume reconciles the intent row to done", async (t) => {
+test("kill between step_intent and step_done of the metrics start: resume reconciles the intent row to done, no second start", async (t) => {
   const p = project(t, { adopt: true, actDelayS: 2 });
   const child = p.spawnRun();
   await until(() => p.kinds().includes("step_intent"), "step_intent");
+  await until(() => p.starts() === 1, "the start call");
   child.kill("SIGKILL");
   await child.exited;
   assert.deepEqual(p.kinds(), ["spec_added", "step_intent"], "killed inside the act");
   const r = p.resume();
   assert.equal(r.code, 0, r.err + r.out);
   assert.match(r.out.trim().split("\n").pop(), /^outcome: kept spec-demo$/);
-  // the check (`metrics has start`, answered "done" by the stub) closes the row: step_done at position 2, no second intent
+  // the check (`metrics has start`, answered "done" because the start ran) closes the row: step_done at position 2, no second intent
   assert.deepEqual(p.kinds().slice(0, 3), ["spec_added", "step_intent", "step_done"]);
   const row = p.peek((d) => d.prepare("SELECT state, result FROM steps WHERE kind='metrics_start'").all());
   assert.equal(row.length, 1);
   assert.equal(row[0].state, "done");
   assert.equal(JSON.parse(row[0].result).reconciled, true, "closed by reconcile, not by a rerun");
+  assert.equal(p.starts(), 1, "exactly one metrics start call in all");
   assert.equal(p.check().code, 0);
 });
 
@@ -307,7 +317,9 @@ test("without adopt a worker running at the kill gets a second attempt; jobs wit
 
 // ---- signals (acceptance 2) ------------------------------------------------------------------------------------
 
-test("a signal written before the kill and one written after the resume written after the resume are each applied once", async (t) => {
+// Part 2: `engine resume` runs the queue's loop, so it no longer waits on a parked spec nobody has answered: it fails
+// it with its wait kept and exits; the second answer and a second resume finish the spec.
+test("a signal written before the kill and one written after the resume are each applied once", async (t) => {
   const script = {
     implement1: worker(BLOCKED), implement2: worker(BLOCKED),
     architect: worker(PARK), architect1: worker(PARK), architect2: worker(PARK),
@@ -328,15 +340,18 @@ test("a signal written before the kill and one written after the resume written 
   child.kill("SIGKILL");
   await child.exited;
 
-  // resume in the background, wait for it to apply signal one and park again, then write signal two to the live engine
-  const res = cp.spawn("node", [ENGINE, "resume", "--backend", "fake", "--script", sf], { cwd: p.wt, env: p.childEnv, stdio: "ignore" });
-  t.after(() => { try { res.kill("SIGKILL"); } catch (_) { /* gone */ } });
-  const resExit = new Promise((r) => res.once("exit", r));
-  await until(() => p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NOT NULL").get().n >= 1
-    && d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NULL").get().n === 1), "the second park after signal one");
+  // resume applies signal one (whether or not the dead engine had drained it), parks again at the second task, and
+  // with nothing runnable ends: the spec is failed as awaiting you, its wait kept
+  const r1 = p.resume(sf);
+  assert.equal(r1.code, 0, r1.err + r1.out);
+  assert.match(r1.out, /^awaiting you: \S+: /m);
+  assert.equal(p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NOT NULL").get().n), 1, "signal one answered the first wait");
+  assert.equal(p.peek((d) => d.prepare("SELECT COUNT(*) AS n FROM waits WHERE answered_at IS NULL").get().n), 1, "the second park's wait is open");
+  assert.match(p.peek((d) => d.prepare("SELECT state || ' ' || outcome AS s FROM specs").get().s), /^awaiting_you failed — awaiting you: /);
   const s2 = p.run(["signal", SPEC, "approve", "--note", "two"]);
   assert.equal(s2.code, 0, s2.err);
-  assert.equal(await resExit, 0);
+  const r2 = p.resume(sf);
+  assert.equal(r2.code, 0, r2.err + r2.out);
 
   const sig = p.peek((d) => d.prepare("SELECT detail FROM events WHERE kind='signal' ORDER BY seq").all().map((e) => JSON.parse(e.detail).note));
   assert.deepEqual(sig, ["one", "two"], "each signal applied once, in order");

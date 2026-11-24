@@ -363,7 +363,7 @@ class SyntheticTest(Base):
             _, out, _ = self.report()
         ct.assert_called_once_with(self.repo, "B")
         self.assertIn("COMPARE B", out)
-        self.assertEqual(out.rstrip("\n").splitlines()[-1], "STATUS LINE")
+        self.assertEqual(out.rstrip("\n").splitlines()[-2:], ["STATUS LINE", "asks: 0"])   # the asks line ends the report
 
     def test_no_roadmap_no_status_line(self):
         self.batch()

@@ -239,7 +239,7 @@ function onCheck(ctx, d) {
 
 function onIntegrated(ctx, d) {
   if (d.outcome === "tests_red") return [escalate("tests_red_after_merge")];
-  if (d.outcome === "tests_red_before") return [{ type: "park", question: TESTS_RED_BEFORE, step: "integrate" }];
+  if (d.outcome === "tests_red_before") return [{ type: "park", question: TESTS_RED_BEFORE, step: "integrate", kind: "stop_class", site: "tests_red" }];
   return [done(d.outcome)];
 }
 
@@ -315,7 +315,7 @@ function onArchitect(ctx, d, job) {
   if (d.decision === "retry_higher_tier") return out.concat(retryHigher(ctx, d.case, row, job, task));
   if (d.decision === "park") {
     const step = `architect:${d.case}:${task === undefined ? "" : task}:${job === undefined ? "" : job}`;
-    return out.concat([{ type: "park", question: d.ruling, step }]);
+    return out.concat([{ type: "park", question: d.ruling, step, kind: "architect_park", ...(d.recommend ? { recommendation: d.recommend } : {}) }]);
   }
   if (d.decision === "fail_spec") return out.concat([done(`failed — ${d.ruling}`)]);
   return [];

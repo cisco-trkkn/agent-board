@@ -1,5 +1,6 @@
 "use strict";
-// The engine's command line (spec section 5): run, status, events, resume, signal, rebuild.
+// The engine's command line (spec sections 5 and 6): run, status, events, resume, signal, rebuild, and the queue's
+// enqueue, start and done.
 // main(argv, io) resolves to the exit code; io = {out, err, cwd} (defaults: stdout, stderr, process.cwd()).
 const fs = require("node:fs");
 const path = require("node:path");
@@ -14,10 +15,11 @@ const { findPlan, mainRoot } = require("../registry/git");
 const lazy = (name) => new Proxy({}, { get: (_, k) => require(name)[k] });
 const db = lazy("./db");
 const inbox = lazy("./inbox");
-const steps = lazy("./steps");
 const rebuild = lazy("./rebuild");
+const lead = lazy("./lead");
+const queue = lazy("./queue");
 
-const SUBS = ["run", "status", "events", "resume", "signal", "rebuild"];
+const SUBS = ["run", "status", "events", "resume", "signal", "rebuild", "enqueue", "start", "done"];
 const USAGE = `engine: usage: engine <${SUBS.join("|")}> ...\n`;
 const ANSWERS = ["approve", "deny", "fail"];
 const OK_OUTCOME = /^(merged|mr|kept)/;
@@ -26,8 +28,9 @@ const OK_OUTCOME = /^(merged|mr|kept)/;
 const QUIET = /^(deadline|timer_fired|inbox_.*|job_session|step_intent|step_done)$/;
 const TICK_MS_FAKE = 100;
 
-const VALUE_FLAGS = new Set(["--integration", "--batch", "--project", "--backend", "--note", "--script"]);
-const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply"]);
+const VALUE_FLAGS = new Set(["--integration", "--batch", "--project", "--backend", "--note", "--script", "--budget-attempts", "--budget-tokens",
+  "--runner", "--gate", "--worktree", "--outcome"]);
+const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply", "--preflight", "--here", "--unfinished"]);
 
 function parseArgs(argv) {
   const pos = [];
@@ -117,13 +120,13 @@ function notifier(project, out) {
   };
 }
 
-function startCore(ctx, flags, backendKind) {
+function startCore(ctx, flags, backendKind, extra = {}) {
   const core = require("./core");
   const tmuxCtl = tmuxCtlPath();
   const session = process.env.TC_SESSION || "";
   const { backend, tickMs, tmuxArgs } = makeBackend(backendKind, flags, session, tmuxCtl);
   const eng = core.start({
-    project: ctx.project, repo: ctx.repo, backend, tmuxCtl, session, tmuxArgs, tickMs,
+    project: ctx.project, repo: ctx.repo, backend, tmuxCtl, session, tmuxArgs, tickMs, backendKind, ...queue.reportHooks, ...extra,
     notify: notifier(ctx.project, ctx.out),
     onEvent: (e) => { if (!QUIET.test(e.kind)) ctx.out(eventLine(e)); },
   });
@@ -144,6 +147,28 @@ function yourTurn(io, spec, why) {
   return 3;
 }
 
+// --budget-attempts and --budget-tokens as spec columns, or {error}.
+function budgetFlags(flags) {
+  const budget = {};
+  for (const [flag, col] of [["budget-attempts", "budget_attempts"], ["budget-tokens", "budget_tokens"]]) {
+    if (flags[flag] === undefined) continue;
+    if (!/^[1-9]\d*$/.test(flags[flag])) return { error: `--${flag} needs a positive integer, got ${flags[flag]}` };
+    budget[col] = Number(flags[flag]);
+  }
+  return { budget };
+}
+
+// Whether the engine can run the spec from this checkout: {plan} or {why} (spec Error handling).
+function planCheck(worktree, spec) {
+  const found = findPlan(worktree, spec);
+  if (!found) return { why: `no plan names ${spec} on its **Spec:** line` };
+  if (found.ref) return { why: `its plan is on branch ${found.ref}, not in this checkout: run from that worktree` };
+  const tasksFile = path.resolve(worktree, `${found.path}.tasks.json`);
+  const c = compile(fs.existsSync(tasksFile) ? fs.readFileSync(tasksFile, "utf8") : null);
+  if (c.error) return { why: `${found.path}: ${c.error}` };
+  return { plan: found.path };
+}
+
 async function runSpec(eng, specId, io) {
   const stop = () => { eng.stop(); process.exit(130); };
   process.once("SIGINT", stop);
@@ -161,10 +186,12 @@ async function runSpec(eng, specId, io) {
 async function cmdRun(args, io) {
   const p = parseArgs(args);
   if (p.error || p.pos.length !== 1 || !["merge", "mr", "keep"].includes(p.flags.integration)) {
-    io.err(`engine: run: ${p.error || "usage: engine run <spec> --integration merge|mr|keep [--push] [--batch <id>] [--project P] [--backend claude-tmux|fake]"}\n`);
+    io.err(`engine: run: ${p.error || "usage: engine run <spec> --integration merge|mr|keep [--push] [--batch <id>] [--budget-attempts N] [--budget-tokens N] [--project P] [--backend claude-tmux|fake]"}\n`);
     return 2;
   }
   const spec = p.pos[0];
+  const { budget, error } = budgetFlags(p.flags);
+  if (error) { io.err(`engine: run: ${error}\n`); return 2; }
   const project = resolveProject(p.flags, io);
   if (!project) return 2;
   const backendKind = p.flags.backend || "claude-tmux";
@@ -174,12 +201,8 @@ async function cmdRun(args, io) {
   const specFile = spec.split("#")[0];
   if (!fs.existsSync(path.resolve(worktree, specFile))) { io.err(`engine: run: no such spec file: ${specFile}\n`); return 2; }
 
-  const found = findPlan(worktree, spec);
-  if (!found) return yourTurn(io, spec, `no plan names ${spec} on its **Spec:** line`);
-  if (found.ref) return yourTurn(io, spec, `its plan is on branch ${found.ref}, not in this checkout: run from that worktree`);
-  const tasksFile = path.resolve(worktree, `${found.path}.tasks.json`);
-  const c = compile(fs.existsSync(tasksFile) ? fs.readFileSync(tasksFile, "utf8") : null);
-  if (c.error) return yourTurn(io, spec, `${found.path}: ${c.error}`);
+  const found = planCheck(worktree, spec);
+  if (found.why) return yourTurn(io, spec, found.why);
 
   const repo = mainRoot(worktree);
   const eng = startCore({ project, repo, out: io.out }, p.flags, backendKind);
@@ -189,27 +212,16 @@ async function cmdRun(args, io) {
       io.out(`outcome: ${have.outcome}`);
       return OK_OUTCOME.test(String(have.outcome)) ? 0 : 1;
     }
+    // one unfinished spec at a time: a spec in awaiting_you that already has an outcome (the end of a queue) is finished
+    const other = eng.db.prepare("SELECT id, state FROM specs WHERE id!=? AND state!='done' AND NOT (state='awaiting_you' AND outcome IS NOT NULL) ORDER BY position, created_at LIMIT 1").get(spec);
+    if (other) { io.err(`engine: run: ${other.id} is unfinished (${other.state}): use engine resume\n`); return 1; }
     if (have) { io.err(`engine: run: ${spec} is already in the database (${have.state}): use engine resume\n`); return 1; }
     eng.addSpec({
-      id: spec, plan: found.path, worktree, branch: git(worktree, ["branch", "--show-current"]) || null,
-      integration: p.flags.integration, push: p.flags.push ? 1 : 0, batch: p.flags.batch || null, backend: backendKind,
+      id: spec, plan: found.plan, worktree, branch: git(worktree, ["branch", "--show-current"]) || null,
+      integration: p.flags.integration, push: p.flags.push ? 1 : 0, batch: p.flags.batch || null, backend: backendKind, ...budget,
     });
     if (!eng.db.prepare("SELECT 1 FROM specs WHERE id=?").get(spec)) { io.err(`engine: run: could not insert ${spec}\n`); return 1; }
-    if (p.flags.batch) {
-      const tmuxCtl = tmuxCtlPath();
-      // Measurement never fails or blocks a spec: a failed metrics start leaves the step failed (steps.run records
-      // the error and a step_failed event), prints its line, and the run goes on.
-      try {
-        steps.run(eng.db, { key: `metrics_start:${spec}`, spec, kind: "metrics_start", facts: { spec, batch: p.flags.batch } }, () => {
-          const r = cp.spawnSync(tmuxCtl, ["metrics", "start", spec, "--batch", p.flags.batch, "--worktree", worktree],
-            { cwd: repo, encoding: "utf8", timeout: 60000 });
-          if (r.error || r.status !== 0) throw new Error(`metrics start: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
-          return { spec, batch: p.flags.batch };
-        });
-      } catch (e) {
-        io.out(`${hms(Date.now() / 1000)} metrics_failed - ${String((e && e.message) || e).split("\n")[0]}`);
-      }
-    }
+    // the core runs `metrics start` itself, as the metrics_start step, when the spec starts
     return await runSpec(eng, spec, io);
   } finally {
     eng.stop();
@@ -220,17 +232,37 @@ async function cmdRun(args, io) {
 
 function cmdStatus(args, io) {
   const p = parseArgs(args);
-  if (p.error || p.pos.length > 1) { io.err(`engine: status: ${p.error || "usage: engine status [<spec>] | status --waiting"}\n`); return 2; }
+  if (p.error || p.pos.length > 1) { io.err(`engine: status: ${p.error || "usage: engine status [<spec>] | status --waiting | status --unfinished"}\n`); return 2; }
   const project = resolveProject(p.flags, io);
   if (!project) return 2;
+  if (p.flags.unfinished) { // exit 0 and the spec ids when a queue is unfinished, else exit 1 and nothing
+    if (!dbExists(project)) return 1;
+    const u = db.open(project);
+    let ids;
+    try { ids = queue.unfinished(u); } finally { u.close(); }
+    for (const id of ids) io.out(id);
+    return ids.length ? 0 : 1;
+  }
   if (!dbExists(project)) { io.out(p.flags.waiting ? "nothing is waiting" : "no specs"); return 0; }
   const d = db.open(project);
   try {
     if (p.flags.waiting) {
       const rows = d.prepare("SELECT w.*, s.state AS spec_state FROM waits w JOIN specs s ON s.id=w.spec WHERE w.answered_at IS NULL AND s.state='awaiting_you' ORDER BY w.asked_at").all();
-      if (!rows.length) { io.out("nothing is waiting"); return 0; }
+      // a held answer closed its wait (R18): the spec is still parked, with nothing left to answer
+      const held = d.prepare("SELECT s.id, (SELECT answer FROM waits w WHERE w.spec=s.id ORDER BY asked_at DESC, rowid DESC LIMIT 1) AS answer, " +
+        "(SELECT note FROM waits w WHERE w.spec=s.id ORDER BY asked_at DESC, rowid DESC LIMIT 1) AS note FROM specs s " +
+        "WHERE s.state='awaiting_you' AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.spec=s.id AND w.answered_at IS NULL) ORDER BY s.position, s.created_at").all()
+        .filter((h) => h.answer !== null);
+      if (!rows.length && !held.length) { io.out("nothing is waiting"); return 0; }
+      for (const h of held) {
+        io.out(h.id);
+        io.out(`  answer held: ${h.answer}${h.note ? ` (${h.note})` : ""}`);
+      }
       for (const w of rows) {
         io.out(w.spec);
+        let rec = null;
+        try { rec = JSON.parse(w.recommendation); } catch (_) { rec = null; }
+        if (rec) io.out(`  I recommend: ${rec.option} (${rec.confidence}): ${rec.why}`);
         io.out(`  question: ${w.question}`);
         io.out(`  options:  ${w.options}`);
         io.out(`  asked at: ${iso(w.asked_at)}`);
@@ -248,6 +280,8 @@ function cmdStatus(args, io) {
     if (!s) { io.err(`engine: status: no such spec ${p.pos[0]}\n`); return 1; }
     io.out(`${s.id}  ${s.state}  ${s.outcome || "-"}`);
     io.out(`  integration ${s.integration}${s.push ? " +push" : ""}  batch ${s.batch || "-"}  branch ${s.branch || "-"}  worktree ${s.worktree || "-"}`);
+    const lower = d.prepare("SELECT 1 FROM jobs WHERE spec=? AND ended_at IS NOT NULL AND started_at IS NOT NULL AND tokens IS NULL LIMIT 1").get(s.id);
+    io.out(`  attempts ${s.spent_attempts || 0}/${s.budget_attempts == null ? "-" : s.budget_attempts} · tokens ${s.spent_tokens || 0}/${s.budget_tokens == null ? "-" : s.budget_tokens}${lower ? " (lower bound)" : ""}`);
     io.out("jobs:");
     for (const j of d.prepare("SELECT * FROM jobs WHERE spec=? ORDER BY rowid").all(s.id)) {
       io.out(`  ${j.id}  ${j.state}  ${j.model}/${j.effort}  attempt ${j.attempt}${j.window ? "  " + j.window : ""}`);
@@ -276,6 +310,22 @@ function cmdEvents(args, io) {
 
 // ---- resume, signal, rebuild -----------------------------------------------------------------------------------
 
+// The foreground loop of `engine start` and `engine resume`: resume (spec section 9), then tick until nothing is
+// runnable. The lead lines are published after every tick. Resolves to queue.run's code.
+async function runLoop(eng, project) {
+  const stop = () => { eng.stop(); process.exit(130); };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    lead.begin(project, eng.db); // before resume and the first drain: nothing older than this start becomes a lead line
+    await eng.resume();
+    return await queue.run(eng, { project });
+  } finally {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+  }
+}
+
 async function cmdResume(args, io) {
   const p = parseArgs(args);
   if (p.error || p.pos.length) { io.err(`engine: resume: ${p.error || "usage: engine resume [--project P] [--backend claude-tmux|fake]"}\n`); return 2; }
@@ -284,14 +334,33 @@ async function cmdResume(args, io) {
   if (!dbExists(project)) { io.out("nothing to resume"); return 0; }
   const peek = db.open(project);
   let open;
-  try { open = peek.prepare("SELECT id, backend FROM specs WHERE state!='done' ORDER BY position, created_at").all(); } finally { peek.close(); }
-  if (!open.length) { io.out("nothing to resume"); return 0; }
-  const repo = mainRoot(git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd);
-  const eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || open[0].backend || "claude-tmux");
+  let intents;
   try {
-    await eng.resume(); // spec section 9: intent steps, due timers, inbox, policy, then running jobs (the ticks that follow)
-    let rc = 0;
-    for (const s of open) if ((await runSpec(eng, s.id, io)) !== 0) rc = 1;
+    open = peek.prepare("SELECT id, backend FROM specs WHERE state!='done' ORDER BY position, created_at").all();
+    intents = peek.prepare("SELECT COUNT(*) AS n FROM steps WHERE state='intent'").get().n;
+  } finally { peek.close(); }
+  if (!open.length && !intents) { io.out("nothing to resume"); return 0; }
+  const repo = mainRoot(git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd);
+  const eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || (open[0] || {}).backend || "claude-tmux");
+  try {
+    if (!open.length) { // every spec is done, but a step (a close_window) was left at intent: reconcile it and stop
+      await eng.resume();
+      await eng.tick();
+      io.out(`reconciled ${intents} step(s)`);
+      return 0;
+    }
+    // the queue's loop: every runnable spec goes to its outcome; a parked spec nobody answered ends as `failed — awaiting you` with a metrics record, and `engine signal` plus `engine resume` resumes it
+    let rc = await runLoop(eng, project);
+    for (const s of open) {
+      const cur = eng.db.prepare("SELECT state, outcome FROM specs WHERE id=?").get(s.id);
+      if (cur.state === "done") {
+        io.out(`outcome: ${cur.outcome}`);
+        if (!OK_OUTCOME.test(String(cur.outcome))) rc = 1;
+      } else {
+        const w = inbox.openWaitFor(eng.db, s.id);
+        io.out(cur.state === "awaiting_you" && w ? `awaiting you: ${s.id}: ${w.question}` : `${s.id}: ${cur.state}`);
+      }
+    }
     return rc;
   } finally {
     eng.stop();
@@ -315,6 +384,102 @@ function cmdSignal(args, io) {
   } finally { d.close(); }
   io.out(`signalled ${spec}: ${answer}`);
   if (!engineRunning(project)) io.out("no engine is running: tmux-ctl engine resume continues it");
+  return 0;
+}
+
+// ---- the queue: enqueue, start, done (spec section 6) ----------------------------------------------------------
+
+const START_RUNNING = 4; // `engine start` when an engine already runs for the project (R5): not a failure for the caller
+const ENQUEUE_USAGE = "usage: engine enqueue <spec> --runner lead|engine --integration merge|mr|keep [--push] --batch <id> [--gate <id>] [--worktree <path>] [--budget-attempts N] [--budget-tokens N] [--project P]";
+
+// Writes one inbox row and nothing else. A spec the engine cannot run is queued for the lead, never refused: a queue
+// is enqueued unattended, and a refused spec would drop out of it.
+function cmdEnqueue(args, io) {
+  const p = parseArgs(args);
+  const f = p.flags || {};
+  if (p.error || p.pos.length !== 1 || !["lead", "engine"].includes(f.runner) || !["merge", "mr", "keep"].includes(f.integration) || !f.batch) {
+    io.err(`engine: enqueue: ${p.error || ENQUEUE_USAGE}\n`);
+    return 2;
+  }
+  const { budget, error } = budgetFlags(f);
+  if (error) { io.err(`engine: enqueue: ${error}\n`); return 2; }
+  const project = resolveProject(f, io);
+  if (!project) return 2;
+  const spec = p.pos[0];
+  const worktree = git(f.worktree ? path.resolve(io.cwd, f.worktree) : io.cwd, ["rev-parse", "--show-toplevel"]);
+  if (f.worktree && !worktree) { io.err(`engine: enqueue: --worktree ${f.worktree} is not a git checkout\n`); return 2; }
+  let runner = f.runner;
+  let why = null;
+  let plan = null;
+  if (runner === "engine") {
+    if (f.gate) why = "a gated spec runs under the lead";
+    else if (!worktree) why = "not inside a git checkout";
+    else if (!fs.existsSync(path.resolve(worktree, spec.split("#")[0]))) why = `no such spec file: ${spec.split("#")[0]}`;
+    else ({ why = null, plan = null } = planCheck(worktree, spec));
+    if (why) runner = "lead";
+  }
+  const d = db.open(project);
+  try {
+    const have = d.prepare("SELECT state FROM specs WHERE id=?").get(spec);
+    if (have) { io.err(`engine: enqueue: ${spec} is already in the database (${have.state})\n`); return 1; }
+    queue.enqueue(d, spec, { runner, integration: f.integration, push: f.push ? 1 : 0, batch: f.batch, gate: f.gate || null, worktree: worktree || null,
+      branch: (worktree && git(worktree, ["branch", "--show-current"])) || null, plan, ...budget, ...(why ? { reason: why } : {}) }, Date.now() / 1000);
+  } finally { d.close(); }
+  if (why) io.err(`engine: enqueue: ${why}: queued for the lead\n`);
+  io.out(`queued ${spec} (${runner})`);
+  return 0;
+}
+
+// --preflight: 0 when the lock is free and there is something to run (R12: the --unfinished predicate, or a new enqueue
+// row); 4 when an engine already runs (R5: for the caller that is as good as started); 1 with nothing to do.
+function preflight(project, io) {
+  if (engineRunning(project)) { io.err(`engine: start: an engine is already running for ${project}\n`); return START_RUNNING; }
+  let todo = false;
+  if (dbExists(project)) {
+    const d = db.open(project);
+    try { todo = queue.pendingEnqueue(d) > 0 || queue.unfinished(d).length > 0; } finally { d.close(); }
+  }
+  if (!todo) { io.err("engine: start: nothing queued and no unfinished spec\n"); return 1; }
+  return 0;
+}
+
+async function cmdStart(args, io) {
+  const p = parseArgs(args);
+  if (p.error || p.pos.length) { io.err(`engine: start: ${p.error || "usage: engine start [--preflight] [--here] [--project P] [--backend claude-tmux|fake] [--script F]"}\n`); return 2; }
+  const project = resolveProject(p.flags, io);
+  if (!project) return 2;
+  if (p.flags.preflight) return preflight(project, io);
+  const running = () => { io.err(`engine: start: an engine is already running for ${project}\n`); return START_RUNNING; };
+  if (engineRunning(project)) return running();
+  const repo = mainRoot(git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd);
+  let eng;
+  try { eng = startCore({ project, repo, out: io.out }, p.flags, p.flags.backend || "claude-tmux"); } catch (e) {
+    if (/^engine already running/.test(String(e && e.message))) return running(); // another start took the lock in between
+    throw e;
+  }
+  try {
+    const rc = await runLoop(eng, project);
+    io.out(rc === 0 ? "queue finished" : "engine stopped: tmux-ctl engine start continues it");
+    return rc;
+  } finally {
+    eng.stop();
+  }
+}
+
+function cmdDone(args, io) {
+  const p = parseArgs(args);
+  if (p.error || p.pos.length !== 1 || !p.flags.outcome) { io.err(`engine: done: ${p.error || "usage: engine done <spec> --outcome <text>"}\n`); return 2; }
+  const project = resolveProject(p.flags, io);
+  if (!project) return 2;
+  const spec = p.pos[0];
+  if (!dbExists(project)) { io.err(`engine: done: no lead turn open for ${spec}\n`); return 2; }
+  const d = db.open(project);
+  try {
+    const r = queue.done(d, spec, p.flags.outcome, Date.now() / 1000);
+    if (r.rc !== 0) { io.err(`engine: done: ${r.msg}\n`); return r.rc; }
+  } finally { d.close(); }
+  io.out(`done ${spec}: ${p.flags.outcome}`);
+  if (!engineRunning(project)) io.out("no engine is running: tmux-ctl engine start continues the queue");
   return 0;
 }
 
@@ -358,6 +523,9 @@ async function main(argv, io0) {
       case "events": return cmdEvents(rest, io);
       case "resume": return await cmdResume(rest, io);
       case "signal": return cmdSignal(rest, io);
+      case "enqueue": return cmdEnqueue(rest, io);
+      case "start": return await cmdStart(rest, io);
+      case "done": return cmdDone(rest, io);
       default: return cmdRebuild(rest, io);
     }
   } catch (e) {

@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE))
 import tc_env  # noqa: E402
 from paneclass import SHELLS, VERSION_RE, WAITING_RE, WORKING_RE, classify, input_has_text, is_claude_cmd, mod_records, mod_states, tmux_cmd  # noqa: E402,F401
 TMUX = tmux_cmd()   # which tmux server the board shows: bin/_tc_bins.zsh decides (tmux-dash passes TMUX_DASH_TMUX_ARGS)
-import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, restore, usage, worktree_safety  # noqa: E402
+import activity, artifacts, dirs, discord_controls, discord_dialogs, discord_digest, discord_feed, engine_lines, discord_ideas, discord_merge, discord_ops, gitlab_sync, ideas, notify, overview, planview, relay, restore, usage, worktree_safety  # noqa: E402
 from worktree_safety import claude_lock_owner  # noqa: E402,F401
 discord_controls.BIN = BIN   # the controls step runs bin/tmux-ctl (discord_controls.py)
 from urllib.parse import parse_qs, urlsplit  # noqa: E402
@@ -223,6 +223,7 @@ def vendor_file(name):
 
 
 COMMENTS = artifacts.CommentQueue()
+ENGINE_LINE_STATE = {}   # project -> engine_lines in-flight state (memory only: the cursor file is the durable part)
 INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
 NOTIFIER = notify.Notifier()   # TC_NOTIFY=0 turns banners and the events list off
 OVERSEER_SESSION = "overseer"   # the read-only overseer's tmux session: never a project card
@@ -610,6 +611,11 @@ def feed_tick(records, now, live=None):
                                   add_line=COMMENTS.add_line, lead_run=lambda argv: run_script(argv, timeout=120))
         except Exception as e:   # noqa: BLE001 -- a tick error does not skip the controls step, and vice versa
             print(f"tmux-dash: discord controls failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        try:
+            engine_lines.tick(p, lambda text, p=p: COMMENTS.add_line(p, text), lambda p=p: [c["text"] for c in COMMENTS.pending(p) if "text" in c],
+                              ENGINE_LINE_STATE.setdefault(p, {}))
+        except Exception as e:   # noqa: BLE001 -- engine lines never break the other steps
+            print(f"tmux-dash: engine lines failed ({p}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
     if ops_on:
         ops_tick(records, tasks_by_project, now, limits=limits, live=live, lead_sids=lead_sids,
                  lead_info=lead_infos([r["project"] for r in records], lead_sids, lead_pids))

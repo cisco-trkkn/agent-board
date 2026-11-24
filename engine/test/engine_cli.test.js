@@ -14,6 +14,8 @@ const ENGINE = path.resolve(__dirname, "../bin/engine.js");
 const TMUX_CTL = path.resolve(__dirname, "../../bin/tmux-ctl");
 const SPEC = "docs/superpowers/specs/2026-01-01-demo-design.md";
 const PLAN = "docs/superpowers/plans/2026-01-01-demo.md";
+const SPEC_B = "docs/superpowers/specs/2026-01-02-other-design.md";
+const PLAN_B = "docs/superpowers/plans/2026-01-02-other.md";
 
 const report = (o) => "notes\n\n```json:status\n" + JSON.stringify(o) + "\n```\n";
 const DONE = report({ status: "done", commits: ["abc1234"], concerns: [] });
@@ -40,6 +42,11 @@ function project(t, o = {}) {
   w(SPEC, "# Demo\n\n## Decisions\n\n- D1: keep it small.\n");
   w(PLAN, `# Demo plan\n\n**Spec:** ${SPEC}\n`);
   w(`${PLAN}.tasks.json`, JSON.stringify({ tasks: o.tasks || [task()] }));
+  if (o.second) { // a second spec with its plan, for the runs that put one spec beside another
+    w(SPEC_B, "# Other\n\n## Decisions\n\n- D1: keep it small.\n");
+    w(PLAN_B, `# Other plan\n\n**Spec:** ${SPEC_B}\n`);
+    w(`${PLAN_B}.tasks.json`, JSON.stringify({ tasks: [task()] }));
+  }
   repo.git("add", "-A");
   repo.git("commit", "-q", "-m", "spec and plan");
   const wt = fs.mkdtempSync(path.join(os.tmpdir(), "ecli-wt-"));
@@ -81,7 +88,7 @@ test("no subcommand and a bad subcommand print the usage line and exit 2", (t) =
   for (const args of [[], ["bogus"]]) {
     const r = p.run(args);
     assert.equal(r.code, 2);
-    assert.equal(r.err, "engine: usage: engine <run|status|events|resume|signal|rebuild> ...\n");
+    assert.equal(r.err, "engine: usage: engine <run|status|events|resume|signal|rebuild|enqueue|start|done> ...\n");
   }
 });
 
@@ -188,6 +195,30 @@ test("run: an unfinished spec already in the database exits 1 and points at resu
   assert.match(r.err, /use engine resume/);
 });
 
+// Mutation for the next two tests: the unfinished-spec check dropped from cmdRun fails the first (B is inserted).
+test("M5: run B beside an unfinished spec A exits 1 naming A and its state, and inserts nothing", (t) => {
+  const p = project(t, { second: true });
+  const d = p.open();
+  d.prepare("INSERT INTO specs (id, state, integration) VALUES (?, 'running', 'keep')").run(SPEC);
+  d.close();
+  const r = p.run(["run", SPEC_B, "--integration", "keep", "--backend", "fake", "--script", p.scriptFile]);
+  assert.equal(r.code, 1, r.err + r.out);
+  assert.ok(r.err.split("\n").includes(`engine: run: ${SPEC} is unfinished (running): use engine resume`), r.err);
+  const e = p.open();
+  try { assert.equal(e.prepare("SELECT COUNT(*) AS n FROM specs WHERE id=?").get(SPEC_B).n, 0, "B was not inserted"); } finally { e.close(); }
+});
+
+test("M5: a spec in awaiting_you that already has an outcome does not count as unfinished", (t) => {
+  const p = project(t, { second: true });
+  const d = p.open();
+  d.prepare("INSERT INTO specs (id, state, outcome, integration) VALUES (?, 'awaiting_you', 'failed: x', 'keep')").run(SPEC);
+  d.close();
+  const r = p.run(["run", SPEC_B, "--integration", "keep", "--backend", "fake", "--script", p.scriptFile]);
+  assert.doesNotMatch(r.err, /is unfinished/);
+  const e = p.open();
+  try { assert.equal(e.prepare("SELECT COUNT(*) AS n FROM specs WHERE id=?").get(SPEC_B).n, 1, "B was inserted"); } finally { e.close(); }
+});
+
 // ---- status and events -----------------------------------------------------------------------------------------
 
 test("status: no database prints no specs; after a run it lists the spec and, by name, its jobs and last events", (t) => {
@@ -230,7 +261,8 @@ function park(p) {
   const d = p.open();
   db.tx(d, () => {
     db.put(d, "specs", { id: SPEC, state: "awaiting_you", integration: "keep", push: 0, position: 0, runner: "engine", created_at: 1, updated_at: 1 });
-    db.put(d, "waits", { id: `${SPEC}@1#1`, spec: SPEC, step: "integrate", question: "live checkout is mid-change", options: "approve|deny|fail", asked_at: 1700000000, answered_at: null, answer: null, note: null });
+    db.put(d, "waits", { id: `${SPEC}@1#1`, spec: SPEC, step: "integrate", question: "live checkout is mid-change", options: "approve|deny|fail", asked_at: 1700000000, answered_at: null, answer: null, note: null,
+      kind: "stop_class", recommendation: JSON.stringify({ option: "approve", why: "approve retries once the live checkout is clean", confidence: "low" }) });
   });
   d.close();
 }
@@ -242,6 +274,9 @@ test("status --waiting shows question, options, asked at and the exact signal co
   assert.equal(r.code, 0);
   assert.match(r.out, new RegExp(`^${SPEC}$`, "m"));
   assert.match(r.out, /question: live checkout is mid-change/);
+  const lines = r.out.split("\n");
+  assert.equal(lines[lines.indexOf(SPEC) + 1], "  I recommend: approve (low): approve retries once the live checkout is clean", "the recommendation is the first line under the spec id");
+  assert.match(lines[lines.indexOf(SPEC) + 2], /^ {2}question:/);
   assert.match(r.out, /options: {2}approve\|deny\|fail/);
   assert.match(r.out, /asked at: 2023-11-14T22:13:20\.000Z/);
   assert.match(r.out, new RegExp(`answer: {3}tmux-ctl engine signal ${SPEC} approve\\|deny\\|fail`));
@@ -283,9 +318,11 @@ test("resume: nothing unfinished exits 0; a spec whose engine was killed mid-job
   const t0 = Date.now();
   for (;;) {
     if (fs.existsSync(path.join(p.env.engineDir, "demo.sqlite"))) {
-      const d = p.open();
-      const n = d.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state='running'").get().n;
-      d.close();
+      let n = 0;
+      try { // the engine holds a write lock for a moment
+        const d = p.open();
+        try { n = d.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state='running'").get().n; } finally { d.close(); }
+      } catch (_) { n = 0; }
       if (n) break;
     }
     assert.ok(Date.now() - t0 < 20000, "the first engine never started a job");
@@ -308,13 +345,31 @@ test("resume: a finished (failed) spec is not resumed", (t) => {
   assert.equal(p.run(["resume", "--backend", "fake"]).out.trim(), "nothing to resume", "a done spec is not resumed");
 });
 
+// Mutation: cmdResume returns "nothing to resume" before starting the core -> the row stays at intent (fails this test).
+test("resume: every spec done and a close_window row at intent: the core starts, reconciles the row and exits 0", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  const d = p.open();
+  db.put(d, "steps", { key: "close_window:demo:final", spec: SPEC, kind: "close_window", state: "intent", result: JSON.stringify({ pane: "%999999" }), created_at: 1, updated_at: 1 });
+  d.close();
+  // the close_window check lists panes with tmux: point it at a scratch socket directory, never the user's server
+  const tmuxDir = fs.mkdtempSync("/tmp/et-");
+  t.after(() => fs.rmSync(tmuxDir, { recursive: true, force: true }));
+  const r = p.run(["resume", "--backend", "fake"], { env: { TMUX_TMPDIR: tmuxDir } });
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.match(r.out, /reconciled 1 step\(s\)/);
+  const e = p.open();
+  try { assert.equal(e.prepare("SELECT state FROM steps WHERE key='close_window:demo:final'").get().state, "done"); } finally { e.close(); }
+  assert.equal(p.run(["resume", "--backend", "fake"]).out.trim(), "nothing to resume", "no row at intent: nothing to resume");
+});
+
 // ---- metrics start (F1, F2) ------------------------------------------------------------------------------------
 
-test("run: a failing metrics start leaves the step failed, prints its error, and the run still reaches its outcome", (t) => {
+test("run: a failing metrics start leaves the step failed, prints its step_failed line, and the run still reaches its outcome", (t) => {
   const p = project(t, { ctlFail: true });
   const r = p.runSpec();
   assert.equal(r.code, 0, r.err + r.out);
-  assert.match(r.out, /metrics_failed - .*unknown batch b1/);
+  assert.match(r.out, /step_failed - metrics start: .*unknown batch b1/);
   assert.match(r.out.trim().split("\n").pop(), /^outcome: kept spec-demo$/);
   const d = p.open();
   try {
@@ -396,4 +451,39 @@ test("tmux-ctl engine exports TC_PROJECT from the session's feed key: status rea
   const r = cp.spawnSync("zsh", [TMUX_CTL, "engine", "status"], { env, encoding: "utf8", timeout: 30000 });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^s1\.md {2}queued {2}- {2}keep$/m);
+});
+
+// ---- budget (Task 5, spec 8b) ----
+
+test("run --budget-attempts/--budget-tokens: stored on the spec; a value that is not a positive integer exits 2 and starts nothing", (t) => {
+  const bad = project(t);
+  for (const v of ["0", "-1", "1.5", "abc", "5x"]) {
+    for (const flag of ["--budget-attempts", "--budget-tokens"]) {
+      const r = bad.runSpec([flag, v]);
+      assert.equal(r.code, 2, `${flag} ${v}: ${r.err}`);
+      assert.match(r.err, new RegExp(`${flag} needs a positive integer`));
+    }
+  }
+  assert.ok(!fs.existsSync(path.join(bad.env.engineDir, "demo.sqlite")), "nothing was created");
+  const p = project(t);
+  const r = p.runSpec(["--budget-attempts", "20", "--budget-tokens", "123456"]);
+  assert.equal(r.code, 0, r.err + r.out);
+  const d = p.open();
+  try {
+    const s = d.prepare("SELECT * FROM specs WHERE id=?").get(SPEC);
+    assert.deepEqual([s.budget_attempts, s.budget_tokens, s.spent_attempts, s.spent_tokens], [20, 123456, 3, 0]);
+  } finally { d.close(); }
+  // finalize passed the spend and the engine jobs to `metrics record`
+  assert.match(p.ctlLog(), /metrics record \S+ --batch b1 --outcome kept spec-demo --budget \{"attempts":\[3,20\],"tokens":\[0,123456\],"lower_bound":false\} --engine-jobs \{/);
+});
+
+test("status <spec> prints attempts a/A · tokens t/T, with (lower bound) once an ended job has null tokens", (t) => {
+  const p = project(t);
+  assert.equal(p.runSpec().code, 0);
+  const plain = p.run(["status", SPEC]);
+  assert.match(plain.out, /^  attempts 3\/60 · tokens 0\/5000000$/m);
+  assert.doesNotMatch(plain.out, /lower bound/);
+  const d = p.open();
+  try { d.prepare("UPDATE jobs SET tokens=NULL WHERE rowid=(SELECT MIN(rowid) FROM jobs)").run(); } finally { d.close(); }
+  assert.match(p.run(["status", SPEC]).out, /^  attempts 3\/60 · tokens 0\/5000000 \(lower bound\)$/m);
 });

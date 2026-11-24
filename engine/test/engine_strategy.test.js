@@ -475,7 +475,7 @@ test("tests red before the merge park the spec; approve integrates again, deny a
     const h = harness(plan("standard"));
     h.throughTasks();
     h.done("final_review");
-    assert.deepEqual(h.feed("integrated", { outcome: "tests_red_before" }), [{ type: "park", question, step: "integrate" }]);
+    assert.deepEqual(h.feed("integrated", { outcome: "tests_red_before" }), [{ type: "park", question, step: "integrate", kind: "stop_class", site: "tests_red" }]);
     return h;
   };
   assert.deepEqual(mk().feed("signal", { answer: "approve", note: null, step: "integrate" }), [{ type: "request_integrate" }]);
@@ -636,9 +636,10 @@ test("retry_higher_tier is refused when there is no higher tier or no job", () =
 test("architect park parks the spec with the ruling as the question", () => {
   for (const [name, mk] of Object.entries(CASES)) {
     const [h, esc] = mk();
-    assert.deepEqual(h.architect(name, "park", at(esc), "should we drop task 1?", "a day"), [
+    const recommend = { option: "fail", why: "the plan is wrong", confidence: "high" };
+    assert.deepEqual(h.feed("architect_decision", { case: name, decision: "park", ruling: "should we drop task 1?", cost_if_wrong: "a day", recommend, ...at(esc) }), [
       ruling("should we drop task 1?", "a day"),
-      { type: "park", question: "should we drop task 1?", step: `architect:${name}:${esc.task || ""}:${esc.job || ""}` },
+      { type: "park", question: "should we drop task 1?", step: `architect:${name}:${esc.task || ""}:${esc.job || ""}`, kind: "architect_park", recommendation: recommend },
     ], name);
   }
 });

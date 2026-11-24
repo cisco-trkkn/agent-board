@@ -3,14 +3,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 // Scripted backend for tests. script["<kind><task>"] = steps:
-//   {status, tool?, at}  {report: text, at}  {gone: true, at}  {hang: true, at}
+//   {status, tool?, at}  {report: text, at}  {gone: true, at}  {hang: true, at}  {tokens: N|null} (the job's usage)
 // `at` is seconds after start; poll() returns events due by opts.now().
 function createBackend(opts = {}) {
   const script = opts.script || {};
   const now = opts.now || (() => Date.now() / 1000);
   const reportDir = opts.reportDir || ".";
   const calls = [];
-  const jobs = new Map(); // job id -> {reportPath}
+  const jobs = new Map(); // job id -> {reportPath, tokens}
   const pending = []; // {due, order, make}
   let n = 0;
   let order = 0;
@@ -27,10 +27,11 @@ function createBackend(opts = {}) {
     const handle = handleFor(job);
     calls.push({ method: "start", job, handle });
     const rp = reportPath(job);
-    jobs.set(job.id, { reportPath: rp });
     const t0 = now();
     queue(t0, () => ({ handle, type: "started" }));
     const steps = script[`${job.kind}${job.task == null ? "" : job.task}`] || [];
+    const tk = steps.find((s) => Object.prototype.hasOwnProperty.call(s, "tokens"));
+    jobs.set(job.id, { reportPath: rp, tokens: tk ? tk.tokens : 0 }); // a job without a tokens step used none
     for (const s of steps) {
       const due = t0 + (s.at || 0);
       if (s.report !== undefined) {
@@ -70,7 +71,14 @@ function createBackend(opts = {}) {
     return due.map((p) => p.make());
   }
 
-  return { start, close, resume, poll, calls };
+  // usage(handle, {since}) -> {tokens: <int>} | {tokens: null, reason}: the job's scripted `{tokens: N|null}` step.
+  function usage(handle) {
+    const j = jobs.get(handle && handle.job);
+    if (!j) return { tokens: 0 }; // a resumed job plays no script: it used none
+    return j.tokens === null ? { tokens: null, reason: "scripted as unmeasurable" } : { tokens: j.tokens };
+  }
+
+  return { start, close, resume, poll, usage, calls };
 }
 
 module.exports = { createBackend };

@@ -233,6 +233,7 @@ test("feed.publish: tier map, spec name, text, refs", () => {
   };
   for (const [k, t] of Object.entries(tiers)) feed.publish("p", ev(k));
   feed.publish("p", ev("ruling"));
+  assert.equal(feed.line("p", ev("merge")).src, "engine");
   feed.publish("p", ev("job_done", { detail: { text: "x".repeat(400) + "\nmore" }, top: { job: "s:implement1:1" } }));
   const lines = fs.readFileSync(paths.feedPath("p"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
   const n = Object.keys(tiers).length;
@@ -266,6 +267,7 @@ test("feed line parses with board/discord_feed.read_events", () => {
   const evs = JSON.parse(r.stdout);
   assert.equal(evs.length, 1);
   assert.equal(evs[0].tier, "decision");
+  assert.equal(evs[0].src, "engine");
   assert.equal(evs[0].text, "park: which way?");
   assert.equal(evs[0].spec, "2026-11-23-x-design");
 });

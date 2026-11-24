@@ -112,3 +112,13 @@ test("apply: a state='new' inbox row survives", () => {
   d.close();
   assert.deepEqual(rows, [{ source_id: "sig-1", state: "new" }]);
 });
+
+test("check: an open wait without a kind (a part 1 event) replays through putRaw", () => {
+  seed("p");
+  const d = db.open("p");
+  const w = { id: "s1@5", spec: "s1", step: "x", question: "q", options: "approve|deny|fail", asked_at: 5, answered_at: null, answer: null, note: null };
+  db.putRaw(d, "waits", w);
+  db.event(d, { spec: "s1", kind: "wait_opened", rows: [{ table: "waits", row: w }] });
+  d.close();
+  assert.deepEqual(rebuild.check("p"), { rc: 0, diffs: [] });
+});

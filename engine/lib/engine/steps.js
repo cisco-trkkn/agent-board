@@ -119,8 +119,21 @@ const CHECKS = {
   revert: (ctx, row) => engineStepCommit(ctx, row.key),
   commit_report: (ctx, row) => engineStepCommit(ctx, row.key),
   commit_ledger: (ctx, row) => engineStepCommit(ctx, row.key, row.result || {}),
+  // a recorded path that exists was made: the hook is not run again. The real hooks (queue.reportHooks) give no reportPath, so the
+  // facts carry no path, this answers not_done and the idempotent hook runs again; only a test with a reportPath hook gets "done"
+  queue_report(ctx, row) {
+    const f = row.result || {};
+    if (typeof f.path !== "string" || !f.path) return "not_done";
+    try { return fs.existsSync(path.resolve(ctx.repo || ".", f.path)) ? "done" : "not_done"; } catch (_) { return "unknown"; }
+  },
   metrics_start: metricsHas("start"),
   metrics_record: metricsHas("run"),
+  // no check for these (metrics_ask is a never-park kind; artifact, awake_off and registry_report are re-run by the report hook, whose
+  // calls are keyed steps): an unfinished row is unknown
+  metrics_ask: () => "unknown",
+  artifact: () => "unknown",
+  awake_off: () => "unknown",
+  registry_report: () => "unknown",
   push(ctx, row) {
     const f = row.result || {};
     const r = git(ctx.repo || mainRepo(ctx), ["ls-remote", f.remote, f.ref]);
@@ -137,6 +150,11 @@ const CHECKS = {
     return listed.includes(want) ? "not_done" : "done";
   },
 };
+
+// An intent row the check could not decide, for a kind that never blocks a run: failed, with its step_failed event.
+function fail(db, row, error, { now } = {}) {
+  return write(db, row, "failed", { ...(parse(row.result) || row.result || {}), error }, nowOf(now), "step_failed", { error });
+}
 
 // Runs the check of every intent row. Acts on nothing: the caller re-runs `rerun` and parks `park`.
 function reconcile(db, ctx, { now } = {}) {
@@ -160,4 +178,4 @@ function reconcile(db, ctx, { now } = {}) {
   return out;
 }
 
-module.exports = { run, begin, finish, reconcile, CHECKS, getRow };
+module.exports = { run, begin, finish, fail, reconcile, CHECKS, getRow };
