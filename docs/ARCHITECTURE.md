@@ -279,8 +279,17 @@ Keys: `ts` (float epoch seconds), `project`, `spec` (spec basename), `kind`, `ti
 ## Engine
 
 `engine/` (Node >= 22.13, standard library only) runs a planned spec to its outcome with no lead turn in between, and
-runs a queue of specs one at a time (`docs/superpowers/specs/2026-11-10-pcee-engine-design.md`). Command: `tmux-ctl engine <sub>`, a zsh case that runs
-`engine/bin/engine.js` with `TC_PROJECT` (the feed key) and `TC_SESSION` exported; code is in `engine/lib/engine/`.
+runs a queue of specs one at a time (`docs/superpowers/specs/2026-11-10-pcee-engine-design.md`). Command:
+`tmux-ctl engine <sub>`, a zsh case that runs `engine/bin/engine.js` with `TC_PROJECT` (the feed key) and
+`TC_SESSION` exported; code is in `engine/lib/engine/`.
+
+`tmux-ctl engine start` (without `--here`) is what the lead and the restore job run. It first runs
+`engine start --preflight`, then opens a window `engine` in `<project>-bg` that runs `engine start --here`, and appends
+the engine's output to the log `<engine dir>/<project>.log` (the window closes when the engine exits, and the log ends
+with `engine exited rc=<n>`). Outside tmux (the restore job) it needs `--session <name>` and the project's git checkout
+as the cwd. `TC_ENGINE=0` refuses it. Its exit codes: 0 the window is open; 1 the preflight found nothing to run, or
+the engine exited within about 2 s (the log's last lines are printed); 2 refused (`TC_ENGINE=0`, bad usage, a cwd that is
+not the session's checkout); 4 an engine for the project already runs (its window exists).
 
 - **State file.** One SQLite database per project, `~/.local/state/agent-board/engine/<project>.sqlite` (`TC_ENGINE_DIR`
   overrides the directory), WAL mode, opened with `node:sqlite`, plus `<project>.lock` holding the engine's pid (a
@@ -318,8 +327,9 @@ runs a queue of specs one at a time (`docs/superpowers/specs/2026-11-10-pcee-eng
   3 no plan, plan on another branch or compile error (prints `[Engine] your turn: <spec>`); 2 bad usage.
   `signal`: 2 `no open wait for <spec>`. `rebuild --check`: 0 match, 1 differences; `--apply`: 2 `engine lock held`.
   `enqueue`: 0 queued (also when handed to the lead); 1 the spec is already in the database; 2 bad usage.
-  `start`: 0 queue finished; 1 the engine stopped on an error (`--preflight`: nothing queued and no unfinished spec);
-  4 an engine already runs for the project (`--preflight`: 0 when there is something to run). `done`: 2 `no lead turn
+  `engine start --here` (the engine itself): 0 queue finished; 1 the engine stopped on an error (`--preflight`: nothing
+  queued and no unfinished spec); 4 an engine already runs for the project (`--preflight`: 0 when there is something to
+  run). `tmux-ctl engine start` has its own codes, above. `done`: 2 `no lead turn
   open for <spec>`. `status --unfinished`: 0 an unfinished queue (ids on stdout), 1 none.
   Any bad subcommand or option: 2 with a usage line.
 - **Project test command.** `docs/superpowers/engine.json` (`test`, `test_ok` exit codes, `retry` overrides); this
@@ -330,8 +340,9 @@ runs a queue of specs one at a time (`docs/superpowers/specs/2026-11-10-pcee-eng
   spec stays `running` and the engine waits for the lead's `engine done`. A queued engine spec whose plan no longer
   compiles is handed to the lead. A spec the engine parks (`awaiting_you`) does not stop the queue. A spec still parked
   when nothing else is runnable is completed as `failed — awaiting you: <question>`, but its state, wait, worktree and
-  windows stay: `engine signal` later resumes it, and its outcome is recorded again. `engine resume` on a part 1
-  database does not do this: it fails a parked spec as `failed — awaiting you` and does not resume it.
+  windows stay: `engine signal` later resumes it, and its outcome is recorded again. `engine resume` on a parked
+  `engine run` spec marks it `failed — awaiting you` at once and writes a metrics record for it; a later signal plus
+  `engine resume` resumes it.
 - **Typed asks.** Every wait has a `kind` (`stop_class`, `needs_you`, `architect_park`, `policy_change`,
   `cannot_tell`, `user_gate`, `budget`) and a recommendation (`option`, `why`, `confidence`), which `status --waiting`
   prints as `I recommend:`. A wait without a valid kind or recommendation is refused. An open part 1 wait is migrated to
