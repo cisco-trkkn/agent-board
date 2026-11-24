@@ -80,6 +80,7 @@
 #   tmux-ctl scout weekly [--dry-run] [--force] [--retry]  the Sunday pass: evaluate, draft specs, post the digest (--dry-run prints, writes nothing)
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
+#   tmux-ctl project new <name> --init|--clone <url>|--dir <path> | start <name> [--dir <path>]  a new project: its folder (prints it); its dev session and lead (works outside tmux)
 #   tmux-ctl registry|engine <sub> …       plan manifests, graphs, waves; the PCEE engine (engine/, node)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
@@ -119,7 +120,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || "$1" == engine || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || "$1" == project || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || "$1" == engine || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -317,6 +318,11 @@ cmd="$1"; shift 2>/dev/null
 if [[ "$cmd" == discord ]]; then   # no tmux needed
   source "${0:A:h:h}/tools/lib/discord.zsh"
   discord_cmd "$@"; exit $?
+fi
+if [[ "$cmd" == project ]]; then   # no tmux needed: the board runs it (spec 2026-11-23-new-project-remote)
+  _PJ_BIN="${0:A:h}"
+  source "${0:A:h:h}/tools/lib/project.zsh"
+  project_cmd "$@"; exit $?
 fi
 if [[ "$cmd" == gauth ]]; then   # config needs no tmux; the others reach tmux through board/gauth.py
   [[ "$1" == (config|start|status|close) && -n "$2" ]] || die 'usage: tmux-ctl gauth config <project> [--adc|--no-adc] [--impersonate <sa>] [--account <email>] | start|status|close <project>'
@@ -854,7 +860,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,85p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
