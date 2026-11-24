@@ -13,10 +13,11 @@ nodelog="$work/node.log"
 cat > "$work/bin/node" <<STUB
 #!/bin/sh
 echo "ARGV \$*" >> "$nodelog"
+for a in "\$@"; do echo "ARG [\$a]" >> "$nodelog"; done
 echo "ENV TC_PROJECT=\$TC_PROJECT TC_SESSION=\$TC_SESSION TC_ENGINE_DIR=\$TC_ENGINE_DIR" >> "$nodelog"
 case "\$*" in
   *--preflight*) rc=\$(cat "$work/pre_rc" 2>/dev/null || echo 0); [ "\$rc" = 0 ] || echo "nothing to do: stub reason"; exit "\$rc" ;;
-  *) echo "engine output line"; sleep 30 ;;
+  *) [ -f "$work/die_now" ] && { echo "engine died: stub"; exit 3; }; echo "engine output line"; sleep 30 ;;
 esac
 STUB
 chmod +x "$work/bin/node"
@@ -90,5 +91,43 @@ check "engine status: passed to node as is" log_has "engine.js status --project 
 : > "$nodelog"
 run engine start --here --backend fake >/dev/null 2>&1
 check "engine start --here: passed to node, no preflight, no window made" test "$(grep -c -- '--preflight' "$nodelog")" -eq 0 -a "$(grep -c 'engine.js start --here --backend fake' "$nodelog")" -eq 1
+
+
+# a flag value with a space and a quote reaches node as one argument, in the preflight and in the window
+: > "$nodelog"
+tt kill-window -t '=tt-bg:engine'
+odd="$work/a b/it's.json"
+run engine start --script "$odd" >/dev/null 2>&1
+tt_wait 5 log_has "engine.js start --here --script"
+check "quoting: preflight got the odd value as one argument" test "$(grep -cxF "ARG [$odd]" "$nodelog")" -ge 1
+tt_wait 5 test "$(grep -cxF "ARG [$odd]" "$nodelog")" -ge 2
+check "quoting: the window's node got it as one argument too" test "$(grep -cxF "ARG [$odd]" "$nodelog")" -eq 2
+
+# called from a window of <project>-bg: TC_SESSION is the main session, not tt-bg
+tt kill-window -t '=tt-bg:engine'
+: > "$nodelog"
+bgpane="$(tt display -p -t '=tt-bg:shell' '#{pane_id}')"
+( cd "$repo" && env -u AGENT_BOARD_LEAD TMUX_PANE="$bgpane" "$ctl" engine start ) >/dev/null 2>&1; rc=$?
+check "from a -bg pane: returns 0" test $rc -eq 0
+tt_wait 5 log_has "ENV TC_PROJECT=tt TC_SESSION=tt "
+check "from a -bg pane: TC_PROJECT=tt, TC_SESSION=tt (not tt-bg)" log_has "ENV TC_PROJECT=tt TC_SESSION=tt "
+check "from a -bg pane: never TC_SESSION=tt-bg" test -z "$(grep 'TC_SESSION=tt-bg' "$nodelog")"
+
+# an engine that dies at once: no "started", rc 1, the log's last lines shown, "engine exited rc=" in the log
+tt kill-window -t '=tt-bg:engine'
+: > "$work/eng/tt.log"; touch "$work/die_now"
+out="$(run engine start 2>&1)"; rc=$?
+check "engine dies at once: returns 1" test $rc -eq 1
+check "engine dies at once: no 'engine started'" test -z "$(grep 'engine started' <<< "$out")"
+check "engine dies at once: the log's last lines are printed" grep -q 'engine died: stub' <<< "$out"
+check "engine dies at once: the log ends with its exit status" grep -q 'engine exited rc=3' "$work/eng/tt.log"
+print "  (tt-bg has $(nwin tt-bg) windows)"
+rm -f "$work/die_now"
+
+# TMUX unset: the cwd must be inside a git checkout
+mkdir -p "$work/plain"
+out="$(cd "$work/plain" && env -u TMUX -u TMUX_PANE -u TC_SESSION -u AGENT_BOARD_LEAD "$ctl" engine start --session pj 2>&1)"; rc=$?
+check "TMUX unset, cwd outside a git checkout: returns 2" test $rc -eq 2
+check "TMUX unset, cwd outside a git checkout: the usage names the problem" grep -q 'not in one' <<< "$out"
 
 tt_done

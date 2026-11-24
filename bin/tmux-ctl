@@ -804,9 +804,12 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
       done
       if [[ -z "$TMUX" ]]; then   # the restore job's launchd run: the session comes from --session
         [[ -n "$esess" ]] || die "engine start: usage: tmux-ctl engine start --session <name> [engine flags] (outside tmux)"
+        git rev-parse --show-toplevel >/dev/null 2>&1 || die "engine start: usage: run it from inside the project's git checkout (cwd $PWD is not in one): the engine window opens there"
         SESSION="$esess"; MAIN="$esess"
         FEEDKEY="$(t display -p -t "=$SESSION:" '#{?session_group,#{session_group},#{session_name}}' 2>/dev/null)"; FEEDKEY="${FEEDKEY:-$SESSION}"
         BG="$FEEDKEY-bg"
+      elif [[ -n "$(t show-options -qv -t "=$SESSION:" @tc_bg 2>/dev/null)" ]]; then
+        SESSION="${SESSION%-bg}"; MAIN="$SESSION"   # called from a window of <project>-bg: the engine's session is the project's main one
       fi
       [[ "$TC_ENGINE" == 0 ]] && die "engine start: TC_ENGINE=0"
       enode="${commands[node]}"; eis="${0:A:h:h}/engine/bin/engine.js"
@@ -822,8 +825,19 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
       [[ -n "$TC_STATE" ]] && eenv+=(TC_STATE="$TC_STATE")
       ecmd=("$enode" "$eis" start --here "${eargs[@]}")
       eroot="$(git rev-parse --show-toplevel 2>/dev/null)" || eroot="$PWD"
+      elog="$edir/$FEEDKEY.log"
+      # sh syntax (the window's shell is the user's): the group's own `echo` records node's status, so tee cannot hide it
       t new-window -d -t "=$BG:" -n engine -c "$eroot" \
-        "mkdir -p ${(q)edir}; ${(j: :)${(q)eenv[@]}} ${(j: :)${(q)ecmd[@]}} 2>&1 | tee -a ${(q)edir}/${(q)FEEDKEY}.log" || die "engine start: could not open the engine window in $BG"
+        "mkdir -p ${(q)edir}; { ${(j: :)${(q)eenv[@]}} ${(j: :)${(q)ecmd[@]}} 2>&1; echo \"engine exited rc=\$?\" >> ${(q)elog}; } | tee -a ${(q)elog}" || die "engine start: could not open the engine window in $BG"
+      # the window closes when the engine exits: one that is gone within ~2 s means it died at once
+      for (( en = 0; en < 10; en++ )); do
+        sleep 0.2
+        if ! t list-windows -t "=$BG:" -F '#{window_name}' 2>/dev/null | grep -qx engine; then
+          print -u2 "tmux-ctl: engine start: the engine exited at once; last lines of $elog:"
+          tail -n 8 "$elog" >&2 2>/dev/null
+          exit 1
+        fi
+      done
       print "engine started in ${BG}:engine"
       exit 0
     fi
