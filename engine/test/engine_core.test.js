@@ -1246,3 +1246,15 @@ test("M9: an intent step of a measurement or notice kind never parks on resume: 
   assert.equal(o.db.prepare("SELECT state FROM steps WHERE key=?").get("metrics_record:x").state, "intent");
   assert.equal(o.wait(), null);
 });
+
+// Mutation: the NEVER_PARK branch moved after the `!s.spec` skip in resume() -> the row stays at intent (fails this test).
+test("M9 (pre-flight ruling 9): a spec-less awake_off step left at intent is failed on resume, never parked or skipped", async (t) => {
+  const steps = require("../lib/engine/steps");
+  const h = mk(t);
+  steps.begin(h.db, { key: "awake_off:night", kind: "awake_off", facts: {} }, { now: h.clock.t });
+  await h.eng.resume();
+  assert.equal(h.db.prepare("SELECT state FROM steps WHERE key='awake_off:night'").get().state, "failed");
+  assert.equal(h.of("step_failed").length, 1);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM waits").get().n, 0, "nothing parked");
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM steps WHERE state='intent'").get().n, 0, "the done-spec intent count no longer includes it");
+});

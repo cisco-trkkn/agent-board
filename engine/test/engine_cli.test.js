@@ -314,9 +314,11 @@ test("resume: nothing unfinished exits 0; a spec whose engine was killed mid-job
   const t0 = Date.now();
   for (;;) {
     if (fs.existsSync(path.join(p.env.engineDir, "demo.sqlite"))) {
-      const d = p.open();
-      const n = d.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state='running'").get().n;
-      d.close();
+      let n = 0;
+      try { // the engine holds a write lock for a moment
+        const d = p.open();
+        try { n = d.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state='running'").get().n; } finally { d.close(); }
+      } catch (_) { n = 0; }
       if (n) break;
     }
     assert.ok(Date.now() - t0 < 20000, "the first engine never started a job");
