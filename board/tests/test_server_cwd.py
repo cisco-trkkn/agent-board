@@ -29,6 +29,10 @@ class TmuxServerCwdTest(unittest.TestCase):
         self.assertEqual(calls[0], T + ["display", "-p", "#{pid}|#{socket_path}"])
         self.assertEqual(calls[1][1:], ["-a", "-p", "4242", "-d", "cwd", "-Fn"])
 
+    def test_linux_lsof_deleted_suffix_is_stripped(self):   # Linux lsof prints a removed cwd as "/gone/dir (deleted)"
+        run, _ = runner(lsof=(0, "p4242\nfcwd\nn/gone/dir (deleted)\n"))
+        self.assertEqual(restore.tmux_server_cwd(run=run, tmux=T), WARN)
+
     def test_existing_cwd_gives_none(self):   # mutation: drop the isdir check -> the warning is returned
         with tempfile.TemporaryDirectory() as d:
             run, _ = runner(lsof=(0, f"p4242\nfcwd\nn{d}\n"))
