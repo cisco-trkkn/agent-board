@@ -82,3 +82,7 @@ Final fix wave: report in, green (bridge 259/259, board 111 OK, guard ALL PASS),
 Final fix wave: re-review (final-rev): I1, I2, I3, M2 ADDRESSED; no new Critical/Important
 Final: minor (deferred): ARCHITECTURE.md:277 new sentence makes "It then denies" read ambiguously; a user typing the exact relay sentence is not treated as typed (by design)
 Final review: clean after one fix wave (commits 355e05a..9c02a74)
+Finish: all.zsh FAIL 1/232 board/test_discord_ops test_ideas_slash_from_a_project_bridge_goes_through_ops ('a' != '_ops')
+Ruling: the failing test (01c93f3, pre-branch) pinned "/ideas always posts through ops", which spec §4 replaced; code kept, test rewritten to spec §4 (own project, no project, other project refused) — F11 had looked at a different test — if wrong, project-bot /ideas posts in the project channel instead of #command-center
+Finish: fix 418354f (fixideas), re-review ADDRESSED (rerevideas); merged origin/main (c2ce816, tree unchanged)
+Finish: all.zsh rerun FAIL 2/232 test_repo_paths + engine: both pass alone (repo_paths 2/2 runs, engine 445/445) — load flakes; bridge 259/259
