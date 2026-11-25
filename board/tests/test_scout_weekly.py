@@ -142,6 +142,11 @@ class Base(unittest.TestCase):
         self.addCleanup(p.stop)
         for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "TC_SCOUT"):
             os.environ.pop(k, None)
+        # the URL check's test seam, as in the other scout suites: the local server is http on 127.0.0.1; other hosts resolve to a global address
+        for n, v in (("_HTTP_OK_HOSTS", ("127.0.0.1",)), ("_resolve", lambda host: ["93.184.215.14"])):
+            sp = mock.patch.object(scout_sources, n, v)
+            sp.start()
+            self.addCleanup(sp.stop)
         old = tempfile.tempdir
         tempfile.tempdir = None                     # the dry-run temp dir must land under this test's TMPDIR
         self.addCleanup(setattr, tempfile, "tempdir", old)
