@@ -203,6 +203,49 @@ test("engine wake: rc 3 recorded with the log, lock gone, due_at in the future; 
   assert.match(r2.stdout, /^p: 0 due, 0 ran, 0 skipped$/m);
 });
 
+test("engine wake: every pass stamps <engine dir>/wake.last with the time and rc (C1)", () => {
+  const w = world();
+  const stamp = path.join(w.e.engineDir, "wake.last");
+  assert.equal(w.wake().status, 0);
+  assert.match(fs.readFileSync(stamp, "utf8"), /^\d{4}-\d\d-\d\dT[\d:.]+Z rc 0\n$/);
+  // a pass with an unreadable project database exits 1 and stamps rc 1
+  fs.writeFileSync(path.join(w.e.engineDir, "bad.sqlite"), "not a database");
+  const r = w.wake();
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(fs.readFileSync(stamp, "utf8"), / rc 1\n$/);
+});
+
+test("engine wake under launchd's environment (env -i, only the plist's variables) runs the window on the -L socket server, none on the default socket (I1)", () => {
+  const w = world();
+  const db = w.db();
+  addRow(db, "gate", "echo gate; exit 0", nowS() - 30);
+  db.close();
+  const env = { HOME: process.env.HOME, LANG: "en_US.UTF-8", PATH: process.env.PATH, TC_ENGINE_DIR: w.e.engineDir, TC_STATE: w.e.state,
+    TMUX_TMPDIR: w.tmpdir, AGENT_BOARD_TMUX_SOCKET: w.tm.socket, AGENT_BOARD_TMUX_CONF: "/dev/null" };
+  const r = cp.spawnSync("node", [ENGINE, "wake"], { env, encoding: "utf8", timeout: 60000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /^p: 1 due, 1 ran, 0 skipped$/m);
+  // the run's window is gone once its command ended: the session it opened on the scratch server and the rc file show where it ran
+  assert.equal(w.tm.run(["has-session", "-t", "=p-bg"]).status, 0, "no p-bg session on the -L server");
+  const d = w.db();
+  const ran = events(d, "schedule_ran");
+  d.close();
+  assert.equal(ran.length, 1);
+  assert.equal(ran[0].d.rc, 0);
+  assert.match(fs.readFileSync(ran[0].d.log, "utf8"), /gate/);
+  const dflt = cp.spawnSync("tmux", ["-L", "default", "list-sessions"], { env: { PATH: process.env.PATH, TMUX_TMPDIR: w.tmpdir }, encoding: "utf8" });
+  assert.notEqual(dflt.status, 0, `a server appeared on the default socket: ${dflt.stdout}`);
+});
+
+test("tmuxArgsFromEnv: TMUX_DASH_TMUX_ARGS, else $TMUX's server, else the dedicated -L socket", () => {
+  assert.deepEqual(schedule.tmuxArgsFromEnv({ TMUX_DASH_TMUX_ARGS: "-L a -f /dev/null", TMUX: "/x,1,2" }), ["-L", "a", "-f", "/dev/null"]);
+  assert.deepEqual(schedule.tmuxArgsFromEnv({ TMUX: "/x/sock,1,2" }), ["-S", "/x/sock"]);
+  assert.deepEqual(schedule.tmuxArgsFromEnv({ AGENT_BOARD_TMUX_SOCKET: "s1", AGENT_BOARD_TMUX_CONF: "/c" }), ["-L", "s1", "-f", "/c"]);
+  const d = schedule.tmuxArgsFromEnv({});
+  assert.deepEqual(d.slice(0, 3), ["-L", "agent-board", "-f"]);
+  assert.ok(d[3].endsWith("config/tmux.conf"));
+});
+
 test("engine wake: a row due 3 days ago runs once", () => {
   const w = world();
   const db = w.db();

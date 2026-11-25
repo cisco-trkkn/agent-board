@@ -51,7 +51,21 @@ async function run({ io, now, project: only } = {}) {
   let files = [];
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".sqlite")).sort(); } catch (_) { /* no engine dir */ }
   if (only) files = files.filter((f) => path.basename(f, ".sqlite") === only); // `schedule run-now`: one project
-  const tmuxArgs = (process.env.TMUX_DASH_TMUX_ARGS || "").split(/\s+/).filter(Boolean);
+  const tmuxArgs = schedule.tmuxArgsFromEnv(process.env);
+  let rc = 0;
+  try { return (rc = await each(files, tmuxArgs, now, out)); } finally { stamp(rc); }
+}
+
+// C1: every pass leaves `<engine dir>/wake.last` (ISO time and the pass's rc): `wake status` and `schedule migrate` read it.
+function stamp(rc) {
+  try {
+    const dir = paths.engineDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "wake.last"), `${new Date().toISOString()} rc ${rc}\n`);
+  } catch (_) { /* a stamp that cannot be written must not fail the pass */ }
+}
+
+async function each(files, tmuxArgs, now, out) {
   let rc = 0;
   for (const f of files) {
     const project = path.basename(f, ".sqlite");

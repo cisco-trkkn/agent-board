@@ -67,7 +67,11 @@ function tmuxCtlPath() {
 }
 
 function wakePlist() {
-  const env = { PATH: `${home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`, LANG: process.env.LANG || "en_US.UTF-8" };
+  // C1: the node that ran `wake install` leads the PATH (tmux-ctl engine needs node), once
+  const nodeDir = path.dirname(process.execPath);
+  const dirs = [nodeDir, `${home()}/.local/bin`, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+  const env = { PATH: dirs.filter((d, i) => dirs.indexOf(d) === i).join(":"), LANG: process.env.LANG || "en_US.UTF-8",
+    AGENT_BOARD_TMUX_SOCKET: process.env.AGENT_BOARD_TMUX_SOCKET || "agent-board" }; // I1: the server the wake must reach
   if (process.env.TC_STATE) env.TC_STATE = process.env.TC_STATE;
   else if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
   if (process.env.TC_ENGINE_DIR) env.TC_ENGINE_DIR = process.env.TC_ENGINE_DIR;
@@ -99,6 +103,22 @@ function install(io) {
   return 0;
 }
 
+// wake.last: `<ISO time> rc <n>`, written by every `engine wake` pass. -> {iso, rc, mtime} or null.
+function readBeat() {
+  const file = path.join(require("./paths").engineDir(), "wake.last");
+  try {
+    const m = /^(\S+) rc (-?\d+)\s*$/.exec(fs.readFileSync(file, "utf8"));
+    return m ? { iso: m[1], rc: Number(m[2]), mtime: fs.statSync(file).mtimeMs } : null;
+  } catch (_) { return null; }
+}
+function beatSinceInstall() {
+  const hb = readBeat();
+  if (!hb || hb.rc !== 0) return false;
+  let plistMtime = 0;
+  try { plistMtime = fs.statSync(plistPath(WAKE_LABEL)).mtimeMs; } catch (_) { /* no plist file: any stamp counts */ }
+  return hb.mtime > plistMtime;
+}
+
 const pad = (n) => String(n).padStart(2, "0");
 function status(io) {
   if (!isMac()) return macOnly(io);
@@ -121,6 +141,8 @@ function status(io) {
     const t = new Date(best * 1000);
     io.out(`last wake: ${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`);
   }
+  const hb = readBeat();
+  io.out(hb ? `last heartbeat: ${hb.iso} rc ${hb.rc}` : "last heartbeat: none");
   return 0;
 }
 
@@ -152,6 +174,8 @@ function ruleOf(cal) {
 // The plist_remove step's action: unload, then unlink.
 function removeAct(label, file) {
   launchctl(["bootout", `gui/${uid()}/${label}`]);
+  // I2: a bootout that failed leaves the job loaded: keep the plist and fail the step
+  if (labelLoaded(label)) throw new Error(`still loaded`);
   fs.rmSync(file, { force: true });
   return { label, plist: file };
 }
@@ -173,9 +197,14 @@ async function migrate({ dryRun, project, io }) {
   let db = null;
   let schedule = null;
   let steps = null;
+  let failed = false;
   if (!dryRun) {
     if (!labelLoaded(WAKE_LABEL)) {
       io.err("the wake heartbeat is not loaded: run tmux-ctl engine wake install first\n");
+      return 2;
+    }
+    if (!beatSinceInstall()) {
+      io.err("the wake heartbeat has not run since install: check tmux-ctl engine wake status\n");
       return 2;
     }
     schedule = require("./schedule");
@@ -205,11 +234,15 @@ async function migrate({ dryRun, project, io }) {
       const key0 = `plist_remove:${label}`;
       const old = steps.getRow(db, key0);
       const key = old && old.state === "done" ? `${key0}@${Math.floor(Date.now() / 1000)}` : key0;
-      steps.run(db, stepDesc(label, file, key), () => removeAct(label, file));
+      try { steps.run(db, stepDesc(label, file, key), () => removeAct(label, file)); } catch (e) {
+        say(`cannot migrate ${label}: ${String(e.message).split("\n")[0]}`);
+        failed = true;
+        continue;
+      }
       say(added.status === "unchanged" ? `already migrated ${label}` : `migrated ${label} -> ${name} (${r.rule})`);
     }
     say(DIGEST_LINE);
-    return 0;
+    return failed ? 1 : 0;
   } finally { if (db) db.close(); }
 }
 

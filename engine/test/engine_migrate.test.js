@@ -44,7 +44,7 @@ const JOBS = [
 const ENVV = { LANG: "en_US.UTF-8", PATH: "/h/.local/bin:/usr/bin:/bin", TMPDIR: "/var/folders/x/T/" };
 
 // A temp HOME with the fixture plists, a tmux-ctl, a stub launchctl and a temp engine dir.
-function world({ odd = false } = {}) {
+function world({ odd = false, beat = true } = {}) {
   const e = tmpEnv();
   cleanups.push(() => e.restore());
   const home = path.join(e.root, "home");
@@ -70,7 +70,10 @@ function world({ odd = false } = {}) {
   fs.writeFileSync(stub, `#!/bin/sh
 echo "$@" >> "${log}"
 c="$1"
-if [ "$c" = print ]; then [ -e "${ctl}/print-rc" ] && exit "$(cat "${ctl}/print-rc")"; exit 0; fi
+mark="${ctl}/booted-$(echo "$2" | tr / _)"
+if [ "$c" = print ]; then [ -e "${ctl}/print-rc" ] && exit "$(cat "${ctl}/print-rc")"; [ -e "$mark" ] && [ ! -e "${ctl}/loaded-after-bootout" ] && exit 113; exit 0; fi
+if [ "$c" = bootout ]; then : > "$mark"; fi
+if [ "$c" = bootstrap ]; then rm -f "${ctl}/booted-gui_$(id -u)_$(basename "$3" .plist)"; fi
 if [ "$c" = bootstrap ]; then [ -e "${ctl}/bootstrap-rc" ] && { echo "Bootstrap failed: 5: Input/output error" >&2; exit "$(cat "${ctl}/bootstrap-rc")"; }; exit 0; fi
 if [ "$c" = bootout ] && [ -e "${ctl}/kill-on-bootout" ]; then rm -f "${ctl}/kill-on-bootout"; kill -9 $PPID; sleep 1; exit 0; fi
 if [ "$c" = list ]; then [ -e "${ctl}/list-fail" ] && exit 1; [ -e "${ctl}/list-out" ] && cat "${ctl}/list-out"; exit 0; fi
@@ -78,14 +81,24 @@ exit 0
 `, { mode: 0o755 });
   const env = { ...process.env, HOME: home, TC_ENGINE_DIR: e.engineDir, TC_STATE: e.state, TC_PROJECT: "p", AS_LAUNCHCTL: stub, AS_BIN_DIR: path.join(e.root, "bin") };
   delete env.TMUX;
-  return {
-    e, home, la, ctl, log, stub, env,
+  const beatFile = path.join(e.engineDir, "wake.last");
+  const w = {
+    e, home, la, ctl, log, stub, env, beatFile,
+    // the heartbeat's stamp: `<ISO> rc <n>`, its mtime `ageS` seconds from now (negative = in the past)
+    beat(rc = 0, ageS = 0) {
+      fs.mkdirSync(e.engineDir, { recursive: true });
+      fs.writeFileSync(beatFile, `${new Date().toISOString()} rc ${rc}\n`);
+      const t = Date.now() / 1000 + ageS;
+      fs.utimesSync(beatFile, t, t);
+    },
     plist: (label) => path.join(la, `${label}.plist`),
     calls: (re) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter((l) => l && (!re || re.test(l))) : []),
     flag: (n, v = "") => fs.writeFileSync(path.join(ctl, n), String(v)),
     eng(args, extra = {}) { return cp.spawnSync("node", [ENGINE, ...args], { env: { ...env, ...extra }, encoding: "utf8", timeout: 60000 }); },
     db() { return dbm.open("p"); },
   };
+  if (beat) w.beat(0, 0);
+  return w;
 }
 const ok = (project = "p") => assert.equal(rebuild.check(project).rc, 0, JSON.stringify(rebuild.check(project).diffs));
 const rows = (d) => d.prepare("SELECT * FROM timers WHERE kind='schedule' AND fired_at IS NULL ORDER BY id").all().map((r) => ({ id: r.id, ...JSON.parse(r.payload) }));
@@ -117,7 +130,13 @@ test("wake install writes the heartbeat plist, bootouts then bootstraps; a secon
   assert.equal(p.StartInterval, 900);
   assert.equal(p.RunAtLoad, true);
   assert.equal(p.WorkingDirectory, path.resolve(__dirname, "../.."));
-  assert.equal(p.EnvironmentVariables.PATH, `${w.home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`);
+  // C1: the node that ran `wake install` leads the PATH (once), so `tmux-ctl engine` finds node under launchd
+  const nodeDir = path.dirname(process.execPath);
+  const rest = [`${w.home}/.local/bin`, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].filter((d) => d !== nodeDir);
+  assert.equal(p.EnvironmentVariables.PATH, [nodeDir, ...rest].join(":"));
+  assert.equal(p.EnvironmentVariables.PATH.split(":").filter((d) => d === nodeDir).length, 1);
+  // I1: the plist names the tmux server socket the wake must reach
+  assert.equal(p.EnvironmentVariables.AGENT_BOARD_TMUX_SOCKET, "agent-board");
   assert.equal(p.EnvironmentVariables.TC_STATE, w.e.state);
   assert.equal(p.EnvironmentVariables.TC_ENGINE_DIR, w.e.engineDir);
   assert.equal(p.EnvironmentVariables.TMPDIR, undefined);
@@ -138,10 +157,10 @@ test("wake install: a failed bootstrap exits 1 with launchctl's message", D, () 
 });
 
 test("wake status and uninstall", D, () => {
-  const w = world();
+  const w = world({ beat: false });
   let r = w.eng(["wake", "status"]);
   assert.equal(r.status, 0);
-  assert.equal(r.stdout, "loaded\nlast wake: none\n");
+  assert.equal(r.stdout, "loaded\nlast wake: none\nlast heartbeat: none\n");
   w.flag("print-rc", 113);
   assert.equal(w.eng(["wake", "status"]).stdout.split("\n")[0], "not loaded");
   // the newest schedule_due or schedule_ran event over every project database
@@ -150,6 +169,8 @@ test("wake status and uninstall", D, () => {
   d.prepare("INSERT INTO events(spec, job, ts, kind, detail) VALUES (NULL, NULL, ?, 'schedule_due', '{}')").run(1700003600);
   d.prepare("INSERT INTO events(spec, job, ts, kind, detail) VALUES (NULL, NULL, ?, 'other', '{}')").run(1800000000);
   d.close();
+  fs.writeFileSync(path.join(w.e.engineDir, "wake.last"), "2026-11-25T03:30:00.000Z rc 0\n");
+  assert.equal(w.eng(["wake", "status"]).stdout.split("\n")[2], "last heartbeat: 2026-11-25T03:30:00.000Z rc 0");
   const l = w.eng(["wake", "status"]).stdout.split("\n")[1];
   assert.match(l, /^last wake: \d{4}-\d\d-\d\d \d\d:\d\d$/);
   const t = new Date(1700003600 * 1000);
@@ -216,7 +237,7 @@ test("migrate: a second run prints already migrated or not installed and changes
 });
 
 test("migrate: exit 2 and no row when the heartbeat is not loaded; --dry-run skips the check", D, () => {
-  const w = world();
+  const w = world({ beat: false });
   w.flag("print-rc", 113);
   const r = w.eng(["schedule", "migrate"]);
   assert.equal(r.status, 2);
@@ -226,6 +247,46 @@ test("migrate: exit 2 and no row when the heartbeat is not loaded; --dry-run ski
   assert.equal(dry.status, 0, dry.stderr);
   assert.equal(fs.existsSync(path.join(w.e.engineDir, "p.sqlite")), false);
   for (const j of JOBS) assert.equal(fs.existsSync(w.plist(j.label)), true);
+});
+
+test("migrate: refuses (exit 2, no row, no plist removed) unless wake.last is newer than the wake plist and shows rc 0", D, () => {
+  const w = world({ beat: false });
+  assert.equal(w.eng(["wake", "install"]).status, 0);
+  const MSG = /the wake heartbeat has not run since install: check tmux-ctl engine wake status/;
+  const refused = (why) => {
+    const r = w.eng(["schedule", "migrate"]);
+    assert.equal(r.status, 2, `${why}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, MSG, why);
+    for (const j of JOBS) assert.equal(fs.existsSync(w.plist(j.label)), true, why);
+  };
+  refused("no wake.last");
+  w.beat(0, -3600); // older than the plist just written
+  refused("stamp older than the plist");
+  w.beat(2, 60);
+  refused("rc 2");
+  w.beat(0, 60);
+  const r = w.eng(["schedule", "migrate"]);
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  for (const j of JOBS) assert.equal(fs.existsSync(w.plist(j.label)), false);
+  // --dry-run never needs the stamp
+  fs.rmSync(w.beatFile);
+  assert.equal(w.eng(["schedule", "migrate", "--dry-run"]).status, 0);
+});
+
+test("migrate: a bootout that leaves the label loaded fails the step, keeps the plist and says so (I2)", D, () => {
+  const w = world();
+  // the stub's print answers 0 forever (still loaded) once bootout has been called
+  const r = w.eng(["schedule", "migrate"]);
+  assert.equal(r.status, 0);
+  for (const j of JOBS) assert.equal(fs.existsSync(w.plist(j.label)), false, "baseline: the stub unloads");
+  const w2 = world();
+  w2.flag("loaded-after-bootout", "1");
+  const r2 = w2.eng(["schedule", "migrate"]);
+  assert.match(r2.stdout, /cannot migrate com\.user\.agent-board-dream: still loaded/);
+  for (const j of JOBS) assert.equal(fs.existsSync(w2.plist(j.label)), true, `${j.label} plist kept`);
+  const d = w2.db();
+  for (const j of JOBS) assert.notEqual(steps.getRow(d, `plist_remove:${j.label}`).state, "done", j.label);
+  d.close();
 });
 
 test("migrate --dry-run prints the same lines prefixed 'would ' and writes nothing", D, () => {

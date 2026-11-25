@@ -67,6 +67,15 @@ function rm(db, name, now) {
 
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const q = (w) => shellJoin([String(w)]);
+// The tmux server a wake talks to: the rule of bin/_tc_bins.zsh `tc_tmux_resolve` (TMUX_DASH_TMUX_ARGS, else the server
+// of $TMUX, else the dedicated `-L ${AGENT_BOARD_TMUX_SOCKET:-agent-board}` with the repo's config/tmux.conf).
+// AGENT_BOARD_TMUX_CONF overrides the config file (a test seam: a scratch server must not load the real config).
+function tmuxArgsFromEnv(env) {
+  if ((env.TMUX_DASH_TMUX_ARGS || "").trim()) return env.TMUX_DASH_TMUX_ARGS.split(/\s+/).filter(Boolean);
+  if (env.TMUX) return ["-S", String(env.TMUX).split(",")[0]];
+  const conf = env.AGENT_BOARD_TMUX_CONF || path.resolve(__dirname, "../../../config/tmux.conf");
+  return ["-L", env.AGENT_BOARD_TMUX_SOCKET || "agent-board", "-f", conf];
+}
 const tmuxRun = (ctx, args) =>
   cp.spawnSync("tmux", [...(ctx.tmuxArgs || []), ...args], { encoding: "utf8", timeout: 30000, env: { ...process.env, TMUX: "" } });
 
@@ -197,4 +206,4 @@ function finishRuns(db, ctx) {
   return out;
 }
 
-module.exports = { add, list, rm, shellJoin, weeklyUsage, moveDue, handleRow, runIntents, finishRuns, runLine };
+module.exports = { tmuxArgsFromEnv, add, list, rm, shellJoin, weeklyUsage, moveDue, handleRow, runIntents, finishRuns, runLine };
