@@ -59,8 +59,9 @@ function createBackend(opts = {}) {
     queue(now(), () => ({ handle, type: "gone" }));
   }
 
-  async function resume(handle, text) {
-    calls.push({ method: "resume", handle, text });
+  async function resume(handle, text, job) {
+    calls.push({ method: "resume", handle, text, job });
+    if (script.resume_fails) throw new Error("cannot resume");
     return handleFor({ id: handle.job }, handle.window);
   }
 

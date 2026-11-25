@@ -61,11 +61,12 @@ function loadConfig(repo) {
   const file = path.join(repo, "docs/superpowers/engine.json");
   let raw;
   try { raw = fs.readFileSync(file, "utf8"); } catch (e) {
-    if (e.code === "ENOENT") return { test: null, test_ok: [0], retry: {}, budget: { ...DEFAULT_BUDGET }, raw: "{}" };
+    if (e.code === "ENOENT") return { test: null, test_ok: [0], retry: {}, budget: { ...DEFAULT_BUDGET }, holds: [], raw: "{}" };
     throw e;
   }
   const j = JSON.parse(raw);
-  return { test: j.test || null, test_ok: j.test_ok || [0], retry: j.retry || {}, budget: { ...DEFAULT_BUDGET, ...(j.budget || {}) }, raw };
+  if (j.holds !== undefined && !Array.isArray(j.holds)) throw new Error("engine.json holds must be a list");
+  return { holds: j.holds || [], test: j.test || null, test_ok: j.test_ok || [0], retry: j.retry || {}, budget: { ...DEFAULT_BUDGET, ...(j.budget || {}) }, raw };
 }
 
 function retryFor(config, kind) {

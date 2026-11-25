@@ -211,6 +211,32 @@ tmux-ctl scout schedule uninstall
 - **Switches.** `TC_SCOUT=0` in the job's environment, or an empty file `~/.local/state/agent-board/scout/off`, makes every run print `scout: off` and do nothing; remove either to resume. `scout schedule status` prints an `off:` line while one is set.
 - **It runs whatever branch the main checkout holds.** Keep `main` checked out there while the jobs are installed.
 
+### Engine wake heartbeat and schedules (optional)
+
+Scheduled jobs can live as engine schedule rows (`engine/`, spec 14) instead of one LaunchAgent each. A heartbeat LaunchAgent runs `tmux-ctl engine wake` every 900 seconds and runs the rows that are due.
+
+```zsh
+tmux-ctl engine wake install     # writes ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist and loads it
+tmux-ctl engine wake status      # loaded or not loaded, `last wake: <time>`, then `last heartbeat: <time> rc <n>` (or none)
+tmux-ctl engine wake uninstall   # unloads the heartbeat and removes its plist
+tmux-ctl engine schedule migrate --dry-run   # prints one `would migrated <label> -> <name> (<rule>)` line per old plist it would move (and a `not installed` or `cannot migrate` line for the others); writes nothing
+tmux-ctl engine schedule migrate             # moves the dream, discover and scout LaunchAgents into engine schedule rows
+```
+
+`migrate` moves the dream, discover and scout LaunchAgents into engine schedule rows and needs the wake heartbeat loaded first: it refuses with exit 2 (`the wake heartbeat is not loaded: run tmux-ctl engine wake install first`) until `wake install` has loaded it, so no job is left without a runner. It also refuses with exit 2 (`the wake heartbeat has not run since install: check tmux-ctl engine wake status`) unless the heartbeat's stamp `<engine dir>/wake.last` is newer than its plist and shows rc 0: loaded is not the same as running.
+
+Preconditions of the heartbeat (launchd starts it with a bare environment):
+
+- **node >= 22.13 on the heartbeat's PATH.** `wake install` puts the directory of the node that ran it first in the plist's `PATH`. Check: `plutil -extract EnvironmentVariables.PATH raw ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist`, then `env -i HOME=$HOME PATH=<that path> tmux-ctl engine status --project agent-board` exits 0 (without node it prints `node >= 22.13 is required`, exit 2). Reinstall after changing node.
+- **The tmux server the wake uses.** The plist carries `AGENT_BOARD_TMUX_SOCKET` (default `agent-board`), so a wake reaches the dedicated `-L <socket>` server, as `dev` does, and never tmux's default socket. Check: `grep -A1 AGENT_BOARD_TMUX_SOCKET ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist` names the socket your sessions run on (`tmux -L <socket> list-sessions`).
+
+After install and after migrate, run these gates:
+
+- [ ] **G1 (before `schedule migrate`).** After `tmux-ctl engine wake install`: `launchctl print gui/$(id -u)/com.user.agent-board-engine-wake | grep -E 'last exit code|state'`. Expected: `last exit code = 0`. Without node on the PATH it prints 2. `tmux-ctl engine wake status` shows the same as `last heartbeat: <time> rc 0` (`none` until the first pass; `launchctl kickstart gui/$(id -u)/com.user.agent-board-engine-wake` runs one now). Do not migrate on anything else.
+- [ ] **G2 (after `schedule migrate`).** `launchctl list | grep -E 'agent-board-(dream|discover|scout)'`. Expected: no output (count 0). Any line is a job still loaded beside its schedule row: `launchctl bootout gui/$(id -u)/<label>`. (`migrate` itself now keeps the plist and prints `cannot migrate <label>: still loaded` when a bootout fails.)
+- [ ] **G3 (after migrate).** `tmux-ctl engine schedule run-now scout-poll` is not enough (it runs from a pane, where `TMUX_DASH_TMUX_ARGS` is set). Instead add a throwaway row due in a minute (`tmux-ctl engine schedule add gate --rule "every 1m" -- 'echo gate'`), run `launchctl kickstart gui/$(id -u)/com.user.agent-board-engine-wake` after it is due, then: `tmux -L agent-board list-windows -t '=agent-board-bg:' -F '#{window_name}'` and `ls ~/.local/state/agent-board/engine/sched/agent-board/gate-*.rc`. Expected: an rc file holding `0`, and `tmux list-sessions` on the default socket shows no `agent-board-bg`. Then `tmux-ctl engine schedule rm gate`.
+- [ ] **G4.** The morning after: `tmux-ctl engine events --project agent-board | grep -c schedule_ran` is at least 3 (dream 03:30, scout-poll 06:00, discover 07:00), or each is a `schedule_skipped` with a usage reason.
+
 ### Usage tab statusLine (optional)
 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):

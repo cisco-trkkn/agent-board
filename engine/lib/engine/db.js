@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS waits(id TEXT PRIMARY KEY, spec TEXT, step TEXT, ques
 CREATE TABLE IF NOT EXISTS retry_policies(kind TEXT PRIMARY KEY, max_attempts INT, backoff_s TEXT, timeout_min REAL, no_retry_on TEXT, on_exhausted TEXT);
 CREATE TABLE IF NOT EXISTS inbox(id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, source_id TEXT, spec TEXT, job TEXT, kind TEXT,
   payload TEXT, received_at REAL, state TEXT DEFAULT 'new', handled_at REAL, reason TEXT, UNIQUE(source, source_id));
+CREATE TABLE IF NOT EXISTS holds(hold_id TEXT PRIMARY KEY, spec TEXT, job TEXT, call_hash TEXT, tool TEXT, input TEXT, created_at REAL, expires_at REAL, used_at REAL);
 `;
 
 // Columns part 2 added to tables part 1 already created (spec 8a, 8b).
@@ -30,14 +31,17 @@ const ADDED = [["specs", "gate", "TEXT"], ["specs", "budget_attempts", "INT"], [
 
 function migrate(db) {
   for (const [table, col, type] of ADDED) {
-    if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+    if (db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) continue;
+    // another process opening the same database between the check and the ALTER adds the column first: that is the goal met
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch (e) { if (!/duplicate column name/.test(String(e.message))) throw e; }
   }
   // An open part 1 wait has no kind: it becomes a cannot_tell wait with that kind's default, and an event
   // carries the filled row so that a replay (rebuild) reaches the same table.
-  const open = db.prepare("SELECT * FROM waits WHERE answered_at IS NULL AND kind IS NULL").all();
-  if (!open.length) return;
+  if (!db.prepare("SELECT 1 FROM waits WHERE answered_at IS NULL AND kind IS NULL").get()) return;
   const rec = JSON.stringify(policy.ASK_DEFAULTS.cannot_tell);
   tx(db, () => {
+    // read again under the write lock: another process opening the database may have migrated these rows first
+    const open = db.prepare("SELECT * FROM waits WHERE answered_at IS NULL AND kind IS NULL").all();
     for (const w of open) {
       const row = { ...w, kind: "cannot_tell", recommendation: rec };
       putRaw(db, "waits", row);
@@ -50,7 +54,14 @@ function open(project) {
   fs.mkdirSync(path.dirname(paths.dbPath(project)), { recursive: true });
   const db = new DatabaseSync(paths.dbPath(project));
   db.exec("PRAGMA busy_timeout=5000"); // first: the statements below already wait for another connection's lock
-  db.exec("PRAGMA journal_mode=WAL");
+  // The first conversion of a fresh file to WAL fails at once with "database is locked" when another process is doing the
+  // same: the busy handler does not wait for it. The loser tries again until the winner is done (the mode then sticks).
+  for (let n = 0; ; n++) {
+    try { db.exec("PRAGMA journal_mode=WAL"); break; } catch (e) {
+      if (n >= 100 || !/locked|busy/i.test(String(e.message))) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
   db.exec(SCHEMA);
   migrate(db);
   return db;
@@ -97,4 +108,4 @@ function event(db, { spec = null, job = null, kind, rows = [], ts, detailKind, .
   db.prepare("INSERT INTO events (ts, spec, job, kind, detail) VALUES (?,?,?,?,?)").run(t, spec, job, kind, detail);
 }
 
-module.exports = { open, tx, put, putRaw, event };
+module.exports = { SCHEMA, open, tx, put, putRaw, event };
