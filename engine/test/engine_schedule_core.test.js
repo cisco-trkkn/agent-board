@@ -142,11 +142,14 @@ test("a run's end is recorded on a later tick, without blocking the tick", async
 test("the queue's end is not delayed by an open run; the next tick after the end records it", async () => {
   const w = world();
   w.add();
-  w.row("long", "sleep 3");
+  // the run ends when the test says so, not after a wall-clock guess that a loaded machine can outlast
+  const release = path.join(w.wt, "release");
+  w.row("long", `while [ ! -e '${release}' ]; do sleep 0.1; done`);
   await w.until(() => w.q("SELECT 1 FROM specs WHERE id=? AND state='done'", SPEC).length === 1);
   assert.equal(w.events("schedule_started").length, 1);
   assert.equal(w.events("schedule_ran").length, 0, "the run ended before the queue did: make it longer");
   assert.equal(await w.eng.finish(), true, "an open run delayed the end of the queue");
+  fs.writeFileSync(release, "");
   const end = Date.now() + 30000;
   while (Date.now() < end && !w.events("schedule_ran").length) { await sleep(300); await w.step(); }
   assert.equal(w.events("schedule_ran").length, 1);
