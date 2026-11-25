@@ -39,6 +39,11 @@ check "clone failure: git's last stderr line" test "${out#project: clone failed:
 check "clone failure: no folder left"    test ! -e $H/np3
 run $C project new np2 --clone "$TT_DIR/src.git"
 check "clone into an existing folder: exit 1" test $rc = 1
+mkdir -p $H/.np7.cloning; : > $H/.np7.cloning/leftover
+run $C project new np7 --clone "$TT_DIR/src.git"
+check "clone over its own leftovers: exit 0"  test $rc = 0
+check "clone over its own leftovers: cloned"  test "$(git -C $H/np7 log -1 --format=%s)" = first
+check "clone: no temp folder left"            test ! -e $H/.np7.cloning
 
 # --- new --dir
 git init -q -b main $H/np4

@@ -392,6 +392,75 @@ class Resume(Base):
         self.assertEqual(np.on_slash(self.ops, {"name": "np1", "channel_id": "CC", "iid": "I3"}), "already set up")
 
 
+class Corrections(Base):
+    def test_the_form_with_a_failed_clone_takes_the_new_url(self):
+        self.ctl.fail["project new"] = (1, "project: clone failed: fatal: repository 'bad' not found")
+        self.modal(source="clone", target="bad")
+        self.assertEqual(self.steps()["disk"], "failed")
+        del self.ctl.fail["project new"]
+        self.assertEqual(self.modal(source="clone", target="good"), "resumed")
+        self.assertEqual(self.ctl.argvs(("project", "new"))[-1], ["project", "new", "np1", "--clone", "good"])
+        self.assertEqual((self.state()["target"], self.steps()["disk"], self.steps()["bot"]), ("good", "done", "waiting"))
+
+    def test_the_form_can_switch_the_source(self):
+        self.ctl.fail["project new"] = (1, "project: clone failed: x")
+        self.modal(source="clone", target="bad")
+        del self.ctl.fail["project new"]
+        self.modal(source="new")
+        self.assertEqual(self.ctl.argvs(("project", "new"))[-1], ["project", "new", "np1", "--init"])
+        self.assertEqual((self.state()["source"], self.state()["target"]), ("new", ""))
+
+    def test_a_done_disk_step_keeps_its_source(self):
+        self.modal(source="clone", target="u")
+        self.modal(source="clone", target="other")
+        self.assertEqual(self.state()["target"], "u")
+        self.assertEqual(len(self.ctl.argvs(("project", "new"))), 1)
+
+    def test_a_running_disk_step_is_not_replaced(self):
+        with mock.patch.object(np, "_spawn", lambda fn: None):
+            self.modal(source="clone", target="bad")
+        self.assertEqual(self.modal(source="clone", target="good")[:8], "refused:")
+        self.assertEqual(self.state()["target"], "bad")
+
+    def test_a_clone_without_a_url_is_refused(self):
+        self.ctl.fail["project new"] = (1, "project: clone failed: x")
+        self.modal(source="clone", target="bad")
+        self.assertEqual(self.modal(source="clone", target="")[:8], "refused:")
+        self.assertEqual(self.state()["target"], "bad")
+
+
+class DiskTimeout(Base):
+    def test_disk_step_gets_the_clone_sized_timeout_and_other_steps_the_default(self):
+        seen = []
+        orig = self.ctl.__call__
+        def spy(argv, stdin=None, timeout=180):
+            seen.append((str(argv[1:3]) if len(argv) > 2 else "", timeout))
+            return orig(argv, stdin=stdin, timeout=timeout)
+        with mock.patch.object(np, "_run", spy):
+            self.modal(source="clone", target="u")
+        self.assertIn(("['project', 'new']", np.DISK_TIMEOUT_S), seen)
+        self.assertGreater(np.DISK_TIMEOUT_S, 180)
+
+    def test_a_disk_run_is_not_stale_before_its_own_timeout(self):
+        with mock.patch.object(np, "_spawn", lambda fn: None):
+            self.modal(source="clone", target="u")
+        np.tick(self.ops, NOW + np.STALE_RUN_S + 1)
+        self.assertEqual(self.steps()["disk"], "running")
+        np.tick(self.ops, NOW + np.DISK_TIMEOUT_S + np.STALE_RUN_S + 1)
+        self.assertEqual(self.steps()["disk"], "failed")
+
+
+class RunKillsTheGroup(unittest.TestCase):
+    def test_timeout_kills_the_child_of_the_shell(self):
+        import time
+        with tempfile.TemporaryDirectory() as t:
+            marker = Path(t) / "late"
+            rc, out = np._run(["/bin/sh", "-c", f"(sleep 2; touch {marker}) & wait"], timeout=0.3)
+            self.assertEqual((rc, out), (124, "timed out after 0.3s"))
+            time.sleep(2.5)
+            self.assertFalse(marker.exists())
+
+
 class Robustness(Base):
     def test_stale_worker_result_is_dropped(self):
         # mutation: drop the run-id guard in _start.go -> the late result marks disk done
@@ -408,7 +477,7 @@ class Robustness(Base):
     def test_a_running_step_with_no_answer_fails_after_15_minutes(self):
         with mock.patch.object(np, "_spawn", lambda fn: None):
             self.modal()
-        np.tick(self.ops, NOW + np.STALE_RUN_S + 1)
+        np.tick(self.ops, NOW + np.DISK_TIMEOUT_S + np.STALE_RUN_S + 1)
         self.assertEqual(self.state()["steps"]["disk"]["error"], "interrupted; Retry")
 
     def test_token_for_a_setup_not_waiting_is_deleted_unread(self):

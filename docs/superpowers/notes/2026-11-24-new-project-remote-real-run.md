@@ -78,6 +78,27 @@ $ grep -c "$(sed -n 's/^DISCORD_BOT_TOKEN=//p' ~/.local/state/agent-board/discor
 
 Cleanup: pending. The lead's cleanup command (`tmux-ctl discord forget --project scratch`, `tmux kill-session -t '=scratch'` and `'=scratch-bg'`, `rm -rf ~/scratch ~/.local/state/agent-board/newproject/scratch.json ~/.local/state/agent-board/discord/scratch`) was refused by the auto-mode permission check at 00:05Z; it waits for the user. The user deletes `#scratch` and the scratch bot application in the portal.
 
+Cleanup: done 2026-11-25T03:21Z. The user approved it on Discord ("1, i did the discord portion already", message
+1574988209287594097) and deleted `#scratch` and the scratch bot application in the portal; the lead ran the Mac part:
+
+```
+$ tmux-ctl discord forget --project scratch
+discord: token removed for scratch
+forget rc=0
+$ tmux kill-session -t '=scratch'; tmux kill-session -t '=scratch-bg'
+kill-scratch rc=0
+kill-scratch-bg rc=0
+$ rm -rf ~/scratch ~/.local/state/agent-board/newproject/scratch.json ~/.local/state/agent-board/discord/scratch
+rm rc=0
+$ ls -d ~/scratch ~/.local/state/agent-board/newproject/scratch.json ~/.local/state/agent-board/discord/scratch
+ls: …/discord/scratch: No such file or directory
+ls: …/newproject/scratch.json: No such file or directory
+ls: /Users/francisco.ruiz/scratch: No such file or directory
+$ tmux has-session -t '=scratch'; tmux has-session -t '=scratch-bg'
+can't find session: scratch
+can't find session: scratch-bg
+```
+
 ## Hello
 
 `#scratch` (channel 1574937534171975720), messages by the scratch bot, oldest first:
