@@ -75,6 +75,21 @@ def tasks_path(repo):
     return Path(TASKS_OVERRIDE) if TASKS_OVERRIDE else mdir(repo) / "tasks.jsonl"
 
 
+def spawns_path():
+    """spawns.jsonl of claude/hooks/spawn-record.sh: $AGENT_BOARD_SPAWNS, else <agent_base>/spawns.jsonl."""
+    env = os.environ.get("AGENT_BOARD_SPAWNS")
+    return Path(env) if env else tc_env.agent_base() / "spawns.jsonl"
+
+
+def read_spawns(lo, hi):
+    """Spawn rows with a numeric ts in [lo, hi]; [] when the file is missing or unreadable."""
+    try:
+        rows = _read_jsonl(spawns_path())[0]
+    except OSError:
+        return []
+    return [r for r in rows if isinstance(r.get("ts"), (int, float)) and lo <= r["ts"] <= hi]
+
+
 def _read_jsonl(p):
     if not p.exists():
         return [], 0
@@ -946,8 +961,11 @@ def task_lines_for_run(repo, run, conn):
     rows = [r for r in usage._rows(conn, "select * from calls where ts>=? and ts<=? and agent_name is not null", (lo, hi))
             if (r["cwd"] or "") == root or (r["cwd"] or "").startswith(wt_root)
             or any((r["cwd"] or "") == d or (r["cwd"] or "").startswith(d + "/") for d in wt)]
+    leads = metrics_lead.lead_session_ids(usage.root() / slug_of(root), tc_env.lineage_dir() / f"{Path(root).name}.jsonl",
+                                          lo, hi)
     return metrics_tasks.build_task_lines(spec, batch, tasks_text, progress or "", routing, rows, _commit_time(repo), hi,
-                                          plan_text=plan_text)
+                                          plan_text=plan_text, spawns=read_spawns(lo, hi), lead_sessions=leads,
+                                          run_start=lo)
 
 
 def ingest_project(conn, root):
@@ -1273,6 +1291,13 @@ def report_text(repo, batch_id, usage_db=None):
     out += _lead_lines(runs)
     out += _limits_missing_lines(runs, starts)
     out.append("")
+    last_t = {}
+    for d in read_tasks(repo)[0]:
+        if d.get("batch") == batch_id:
+            last_t[(d.get("spec"), d.get("task_id"))] = d
+    nomodel = sorted(f"{_spec_slug(str(sp))}#{tid}" for (sp, tid), d in last_t.items() if d.get("model_source") == "none")
+    if nomodel:
+        out.append(f"tasks without a model: {len(nomodel)} ({', '.join(nomodel)})")
     out.append("Excluded: " + ("; ".join(excluded) if excluded else "none"))
     out.append(f"Malformed log lines: {malformed}")
     out.append("Missing: " + (", ".join(missing) if missing else "none"))
@@ -2086,23 +2111,42 @@ def cmd_runs(repo, args):
 
 
 def cmd_backfill_tasks(repo, args):
-    """Task lines for every run line whose (batch, spec) has none yet. A run whose lines cannot be built is named on stderr."""
+    """Task lines for every run line whose (batch, spec) has none yet; for one that has lines without `model_source`,
+    one re-derived line per such task (model fields only). A run whose lines cannot be built is named on stderr."""
     global TASKS_OVERRIDE
     TASKS_OVERRIDE = args.tasks_log
     try:
-        have = {(d.get("batch"), d.get("spec")) for d in read_tasks(repo)[0]}
+        last = {}
+        for d in read_tasks(repo)[0]:
+            last[(d.get("batch"), d.get("spec"), d.get("task_id"))] = d
+        olds = {}
+        for (b, sp, _), d in last.items():
+            olds.setdefault((b, sp), []).append(d)
         conn = usage.connect(args.usage_db or usage.db_path())
-        specs = tasks = partial = 0
+        specs = tasks = partial = rspecs = rtasks = 0
         try:
             if not args.no_ingest:
                 ingest_project(conn, main_root(repo))
             for key, run in last_runs(read_log(repo)[0]).items():
-                if key in have:
+                stale = [d for d in olds.get(key, []) if "model_source" not in d]
+                if key in olds and not stale:
                     continue
                 try:
                     lines = task_lines_for_run(repo, run, conn)
                 except Exception as e:
                     print(f"metrics: backfill-tasks: skipped {run.get('spec')}: {clean_reason(e, repo)}", file=sys.stderr)
+                    continue
+                if key in olds:   # re-derive: the model fields of the old line change, nothing else
+                    by_id = {t["task_id"]: t for t in lines}
+                    for old in stale:
+                        if old.get("model_used") is not None:
+                            upd = dict(old, model_source="usage")
+                        else:
+                            new = by_id.get(old.get("task_id")) or {}
+                            upd = dict(old, model_used=new.get("model_used"), model_source=new.get("model_source") or "none")
+                        append_task(repo, upd)
+                    rspecs += 1
+                    rtasks += len(stale)
                     continue
                 if not lines:
                     continue
@@ -2114,6 +2158,8 @@ def cmd_backfill_tasks(repo, args):
         finally:
             conn.close()
         print(f"backfilled tasks for {specs} specs ({tasks} tasks, {partial} partial)")
+        if rspecs:
+            print(f"re-derived models for {rspecs} specs ({rtasks} tasks)")
     finally:
         TASKS_OVERRIDE = None
 

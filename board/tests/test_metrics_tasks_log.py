@@ -47,6 +47,7 @@ class Base(unittest.TestCase):
         p = mock.patch.dict(os.environ, {"TC_STATE": str(t / "state"), "USAGE_ROOT": str(t / "proj"), "TC_LINEAGE": str(t / "lin"),
                                          "HOME": str(t / "home")})
         p.start()
+        os.environ.pop("AGENT_BOARD_SPAWNS", None)
         self.addCleanup(p.stop)
         self.repo = r = t / "repo"
         r.mkdir()
@@ -264,6 +265,95 @@ class BackfillTasksTest(Base):
             self.assertIsNone(ABS_VALUE.search(l))
             for root in sorted({tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())} - {"/"}):
                 self.assertNotIn(root, l)
+
+
+def spawn_row(ts, name, model, lead="L1"):
+    return {"ts": int(ts), "lead_session": lead, "name": name, "subagent_type": "general-purpose", "model": model,
+            "tier": None, "reason": None}
+
+
+class SpawnWiringTest(Base):
+    def spawns(self, *rows):
+        p = self.t / "state" / "spawns.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def test_spawns_path_default_and_override(self):
+        self.assertEqual(metrics.spawns_path(), self.t / "state" / "spawns.jsonl")
+        with mock.patch.dict(os.environ, {"AGENT_BOARD_SPAWNS": str(self.t / "x.jsonl")}):
+            self.assertEqual(metrics.spawns_path(), self.t / "x.jsonl")
+
+    def test_record_task_without_rows_takes_the_spawn_model(self):
+        self.row(self.t0 + 50)                     # Task 1 has usage rows; Task 2 has none
+        self.spawns(spawn_row(self.t0 + 150, "w1", "opus"))
+        self.assertEqual(self.record()[0], 0)
+        t = {d["task_id"]: d for d in self.tasks()}
+        self.assertEqual((t[1]["model_used"], t[1]["model_source"]), (SONNET, "usage"))
+        self.assertEqual((t[2]["model_used"], t[2]["model_source"]), ("opus", "spawn"))
+
+    def test_record_without_spawn_file_uses_the_ledger(self):
+        self.row(self.t0 + 50)
+        self.assertEqual(self.record()[0], 0)
+        t = {d["task_id"]: d for d in self.tasks()}
+        self.assertEqual((t[2]["model_used"], t[2]["model_source"]), ("haiku", "ledger"))
+
+    def test_lead_session_rows_preferred(self):
+        self.row(self.t0 + 50)
+        self.spawns(spawn_row(self.t0 + 120, "w1", "opus", lead="L1"), spawn_row(self.t0 + 150, "w1", "fable", lead="L2"))
+        with mock.patch.object(metrics.metrics_lead, "lead_session_ids", return_value={"L1"}):
+            self.assertEqual(self.record()[0], 0)
+        self.assertEqual({d["task_id"]: d for d in self.tasks()}[2]["model_used"], "opus")
+
+
+class RederiveTest(Base):
+    def run_line(self):
+        metrics.append(self.repo, {"kind": "run", "batch": "B", "spec": SPEC, "plan": PLAN, "branch": None,
+                                   "started_at": metrics.utc(self.t0 - 600), "ended_at": metrics.utc(self.now),
+                                   "at": metrics.utc(self.now)})
+
+    def old_lines(self, out):
+        # lines as base 0af42b5 wrote them: no model_source; Task 2 had no rows, so no model
+        base = {"spec": SPEC, "batch": "B", "tier": "standard", "tokens": 5, "usd": 0.1, "partial": False}
+        rows = [dict(base, task_id=1, subject="Task 1: t1", model_used=SONNET),
+                dict(base, task_id=2, subject="Task 2: t2", model_used=None, tokens=None, partial=True)]
+        out.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return rows
+
+    def bf(self, out):
+        return self.cli("backfill-tasks", "--log", str(out), "--usage-db", str(self.db), "--no-ingest")
+
+    def test_rederive_appends_model_fields_only_once(self):
+        # mutation: re-derive keys whose last lines already carry model_source -> the second run appends again
+        self.run_line()
+        out = self.t / "tasks.jsonl"
+        old = self.old_lines(out)
+        rc, o, e = self.bf(out)
+        self.assertEqual((rc, e), (0, ""), e)
+        self.assertEqual(o.splitlines(), ["backfilled tasks for 0 specs (0 tasks, 0 partial)",
+                                          "re-derived models for 1 specs (2 tasks)"])
+        lines = self.tasks(out)
+        self.assertEqual(len(lines), 4)
+        new1, new2 = lines[2], lines[3]
+        self.assertEqual(new1, dict(old[0], model_source="usage"))
+        self.assertEqual(new2, dict(old[1], model_used="haiku", model_source="ledger"))
+        rc, o, e = self.bf(out)
+        self.assertEqual(o.splitlines(), ["backfilled tasks for 0 specs (0 tasks, 0 partial)"])
+        self.assertEqual(len(self.tasks(out)), 4)
+
+
+class ReportNoModelTest(Base):
+    def report(self):
+        return self.cli("report", "B")[1]
+
+    def test_line_when_a_task_has_no_model(self):
+        metrics.append_task(self.repo, {"spec": SPEC, "batch": "B", "task_id": 1, "model_source": "usage"})
+        metrics.append_task(self.repo, {"spec": SPEC, "batch": "B", "task_id": 2, "model_source": "none"})
+        self.assertIn("tasks without a model: 1 (a#2)\n", self.report())
+
+    def test_no_line_otherwise(self):
+        metrics.append_task(self.repo, {"spec": SPEC, "batch": "B", "task_id": 1, "model_source": "none"})
+        metrics.append_task(self.repo, {"spec": SPEC, "batch": "B", "task_id": 1, "model_source": "spawn"})  # last line wins
+        metrics.append_task(self.repo, {"spec": SPEC, "batch": "B", "task_id": 2, "model_used": None})       # old line, no key
+        self.assertNotIn("tasks without a model", self.report())
 
 
 class ReadTasksTest(Base):
