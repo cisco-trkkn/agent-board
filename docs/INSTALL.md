@@ -219,7 +219,7 @@ Scheduled jobs can live as engine schedule rows (`engine/`, spec 14) instead of 
 tmux-ctl engine wake install     # writes ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist and loads it
 tmux-ctl engine wake status      # first line loaded or not loaded, then the last wake
 tmux-ctl engine wake uninstall   # unloads the heartbeat and removes its plist
-tmux-ctl engine schedule migrate --dry-run   # prints the rows that would be added and the plists that would be removed; writes nothing
+tmux-ctl engine schedule migrate --dry-run   # prints one `would migrated <label> -> <name> (<rule>)` line per old plist it would move (and a `not installed` or `cannot migrate` line for the others); writes nothing
 tmux-ctl engine schedule migrate             # moves the dream, discover and scout LaunchAgents into engine schedule rows
 ```
 
