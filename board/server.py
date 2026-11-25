@@ -252,8 +252,8 @@ def send_line(pane, text):
 
 
 def _input_busy(pane):
-    try:
-        return input_has_text(pane_text(pane, 40))
+    try:   # -e keeps the escape sequences: a dimmed suggested prompt is not typed input
+        return input_has_text(_rows(tmux("capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-40")))
     except Exception:
         return True   # cannot tell: hold the comment
 
