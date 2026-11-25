@@ -46,7 +46,7 @@
     {
       "id": 6,
       "subject": "SIL Task 6: Trial assignment and `tmux-ctl improve variants`",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `improve_trials.py` decides which `trial` proposals apply to a spec and, through `tmux-ctl improve variants <spec> --json`, gives the engine what it needs to build that spec's trial briefs, challenger skills and routing.\n\n**Files:**\n- Create: `board/improve_trials.py`, `board/tests/test_improve_trials.py`\n- Modify: `board/improve.py` (subcommand `variants`)\n\n**Acceptance Criteria:**\n- [ ] `in_trial(spec_id, pid)` is the Global Constraints split. Over 100 synthetic spec ids (`docs/superpowers/specs/s{i}.md`) and `P1`, the trial count is between 40 and 60, and two calls agree (stable).\n- [ ] `variants <spec> --json` prints `{\"spec\": \u2026, \"variants\": [{\"id\", \"kind\", \"target\", \u2026}]}` for every proposal in `trial` whose split puts the spec in the trial half:\n  - `procedure|rule|prompt`: `\"overlay\": \"## Trial <id>\\n<changed text>\\n(This replaces the section <section heading> of <target>.)\"`. The changed text is the patched section of the target after `git apply` in a temp copy, and the section is the nearest `#` heading above the first hunk.\n  - `skill`: `\"skill_copy\": {\"from\": \"claude/skills/<skill>\", \"to\": \".superpowers/improve/skills/<skill>@<id>\", \"patch\": \"<patch path>\"}`.\n  - `routing`: `\"routing\": <the patched model-routing.json object>`.\n  - Code Mode (E5): a proposal of kind `routing` whose patch adds `\"codeMode\": true` for the mechanical tier gives `\"env\": {\"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE\": \"1\"}, \"applies_to\": {\"tier\": \"mechanical\", \"kind\": \"implement\"}`.\n- [ ] A spec in no trial prints `{\"spec\": \u2026, \"variants\": []}`. A patch that no longer applies to the main checkout moves the proposal to `rejected` with `stale patch` (error handling; ruling A14: this read command may write that one transition and its one `improve` event) and leaves it out.\n- [ ] The champion files are byte-identical after `variants` runs (sha256 of target before/after in the test).\n\n**Verify:** `python3 -m unittest board.tests.test_improve_trials -v` \u2192 `OK`\n\nPlan: docs/superpowers/plans/2026-11-21-supervised-improvement-loop.md (Task 6). Spec: docs/superpowers/specs/2026-11-16-supervised-improvement-loop-design.md\n\n```json:metadata\n{\"files\": [\"board/improve_trials.py\", \"board/improve.py\", \"board/tests/test_improve_trials.py\"], \"verifyCommand\": \"python3 -m unittest board.tests.test_improve_trials -v\", \"acceptanceCriteria\": [\"hash split stable, 40-60 of 100 in trial\", \"variants JSON: overlay, skill_copy, routing, Code Mode env\", \"no-trial spec prints empty variants; stale patch -> rejected\", \"champion files byte-identical\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         5
@@ -134,5 +134,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-11-25T17:52:42Z"
+  "lastUpdated": "2026-11-25T17:59:55Z"
 }
