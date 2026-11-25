@@ -16,6 +16,11 @@ const paths = require("../lib/engine/paths");
 const ENGINE = path.resolve(__dirname, "../bin/engine.js");
 const DAY = 86400;
 
+// leak check (end of file): the real engine dir, listed before any test runs; the live engine's own files (agent-board.*) are ignored
+const REAL_ENGINE = path.join(process.env.HOME || os.homedir(), ".local/state/agent-board/engine");
+const realList = () => { try { return fs.readdirSync(REAL_ENGINE).filter((n) => !n.startsWith("agent-board.")).sort(); } catch (_) { return []; } };
+const REAL_BEFORE = realList();
+
 const cleanups = [];
 test.after(() => { for (const c of cleanups.reverse()) { try { c(); } catch (_) { /* ignore */ } } });
 
@@ -265,10 +270,32 @@ test("engine wake: an error in one project prints it, the others run, exit 1", (
   assert.match(r.stdout, /^good: 1 due, 1 ran, 0 skipped$/m);
 });
 
-test("leak check: the real tmux server has no session p-bg", () => {
+test("run line: env values reach the command (quotes and spaces); a trailing # comment does not swallow the closing paren", () => {
+  const w = world();
+  const db = w.db();
+  addRow(db, "envr", "echo $FOO", nowS() - 30, { env: { FOO: "a b'c" } });
+  addRow(db, "note", "echo hi # note", nowS() - 30);
+  db.close();
+  const r = w.wake();
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /^p: 2 due, 2 ran, 0 skipped$/m);
+  const d = w.db();
+  const by = Object.fromEntries(events(d, "schedule_ran").map((x) => [x.d.name, x.d]));
+  assert.equal(by.envr.rc, 0);
+  assert.equal(fs.readFileSync(by.envr.log, "utf8").trim(), "a b'c");
+  assert.equal(by.note.rc, 0);
+  assert.equal(fs.readFileSync(by.note.log, "utf8").trim(), "hi");
+  ok();
+  d.close();
+});
+
+test("leak check: the real engine dir gained no file (none named for the test project), and the real tmux server has no session p-bg", () => {
   const env = { ...process.env };
   delete env.TMUX;
   delete env.TMUX_TMPDIR;
   const r = cp.spawnSync("tmux", ["has-session", "-t", "=p-bg"], { env, encoding: "utf8" });
   assert.notEqual(r.status, 0, "a session p-bg exists on the real tmux server");
+  const after = realList();
+  assert.deepEqual(after, REAL_BEFORE, "the real engine dir gained or lost a file");
+  assert.ok(!after.some((n) => /^p[.-]/.test(n) || n === "p-bg"), "a file named for the test project is in the real engine dir");
 });

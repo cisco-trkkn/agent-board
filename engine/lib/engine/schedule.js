@@ -145,7 +145,8 @@ function handleRow(db, row, ctx) {
 // The zsh line a run's window executes.
 function runLine(f) {
   const env = Object.entries(f.env || {}).filter(([k]) => ENV_KEY.test(k)).map(([k, v]) => `export ${k}=${q(v)};`).join(" ");
-  return `( ${env} ${f.command} ) 2>&1 | tee ${q(f.log)}; print -r -- $` + `{pipestatus[1]} > ${q(f.rc_file)}`;
+  // a newline before `)`: a command that ends in a # comment must not swallow it
+  return `( ${env} ${f.command}\n) 2>&1 | tee ${q(f.log)}; print -r -- $` + `{pipestatus[1]} > ${q(f.rc_file)}`;
 }
 
 const parseResult = (r) => { try { return JSON.parse(r); } catch (_) { return {}; } };
