@@ -113,6 +113,13 @@ class HalvesTest(unittest.TestCase):
         tr = [rec(f"t{i}", 100, final_review_crit_imp=2) for i in range(5)]
         self.assertEqual(metrics.compare_halves(tr, c, "final_review_crit_imp_per_spec")["verdict"], "worse")
 
+    def test_count_guardrail_judges_small_halves_and_is_too_early_only_when_empty(self):
+        t = [rec(f"t{i}", 100, red_after_merge=True) for i in range(2)]
+        c = half("c", 100)
+        self.assertEqual(metrics.compare_halves(t, c, "red_after_merge")["verdict"], "worse")
+        self.assertEqual(metrics.compare_halves(t, [], "red_after_merge")["verdict"], "too early")
+        self.assertEqual(metrics.compare_halves([], c, "failed_specs")["verdict"], "too early")
+
     def test_r2_cheaper_but_red_after_merge(self):
         t = [rec(f"t{i}", t_, red_after_merge=i < 3) for i, t_ in enumerate([70, 77, 84, 73, 80])]
         c = half("c", [100, 110, 120, 105, 115])
@@ -135,6 +142,16 @@ class BaselineTest(unittest.TestCase):
         recs = self.base() + half("e", LOW)
         r = metrics.compare_to_baseline(recs, self.CONFIGS, "tokens_per_merged_task")
         self.assertEqual((r["verdict"], r["n_trial"], r["n_control"]), ("better", 5, 5))
+
+    def test_engine_run_baseline_config_record_is_challenger_only(self):
+        # mutation: drop the budget filter on the reference -> n_control becomes 6
+        recs = self.base() + [rec("e0", 100, config="seq")] + half("e", LOW)
+        r = metrics.compare_to_baseline(recs, self.CONFIGS, "tokens_per_merged_task")
+        self.assertEqual((r["n_trial"], r["n_control"]), (6, 5))
+
+    def test_count_guardrail_against_baseline_is_not_too_early_with_few_specs(self):
+        recs = self.base() + [rec(f"e{i}", 100, red_after_merge=True) for i in range(2)]
+        self.assertEqual(metrics.compare_to_baseline(recs, self.CONFIGS, "red_after_merge")["verdict"], "worse")
 
     def test_since_filters_challengers(self):
         recs = self.base() + half("e", LOW)

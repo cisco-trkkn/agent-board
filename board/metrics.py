@@ -1533,7 +1533,7 @@ def quality_veto(chal, base, defects):
 RATIO_METRICS = ("tokens_per_merged_task", "fix_rounds_per_task", "bounces_per_task")
 COUNT_METRICS = ("failed_specs", "red_after_merge", "final_review_crit_imp_per_spec")
 MERGED = ("merged", "mr")
-_EPS = 0.05   # per-spec log values need > 0: fix rounds and bounces are often 0
+_EPS = 0.05   # only feeds permutation_p (log of a zero value); it does not move a verdict. Per-spec log values need > 0: fix rounds and bounces are often 0
 
 
 def _ratio_parts(r, metric):
@@ -1579,7 +1579,7 @@ def compare_halves(trial, control, metric, defects=()):
     nt, nc = len(trial), len(control)
     if metric in COUNT_METRICS:
         tv, cv = _count(trial, metric), _count(control, metric)
-        if nt < 4 or nc < 4:
+        if nt == 0 or nc == 0:   # a count guardrail judges any sample size; only an empty half has nothing to count
             return _verdict_out("too early", None, None, None, nt, nc, tv, cv)
         limit = (cv / nc) * nt + 1
         return _verdict_out("worse" if tv > limit else "equal", None, None, None, nt, nc, tv, cv)
@@ -1617,7 +1617,7 @@ def compare_to_baseline(records, configs, metric, since=None):
     else:
         names = {c.get("id") or c.get("name") for c in configs if (c or {}).get("baseline") is True}
     chal = [r for r in records if r.get("budget") is not None and (not since or (r.get("ended_at") or "") >= since)]
-    ref = [r for r in records if r.get("config") in names]
+    ref = [r for r in records if r.get("config") in names and r.get("budget") is None]   # engine-run records are challengers only
     return compare_halves(chal, ref, metric)
 
 
