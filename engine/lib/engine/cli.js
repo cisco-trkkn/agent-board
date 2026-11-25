@@ -484,7 +484,7 @@ function cmdDone(args, io) {
   return 0;
 }
 
-const SCHEDULE_USAGE = "usage: engine schedule add <name> --rule \"<rule>\" [--skip-if-weekly-usage <0-100|none>] -- <command...> | list | rm <name>";
+const SCHEDULE_USAGE = "usage: engine schedule add <name> --rule \"<rule>\" [--skip-if-weekly-usage <0-100|none>] -- <command...> | list | rm <name> | run-now <name>";
 const lt = (n) => String(n).padStart(2, "0");
 // Local time as YYYY-MM-DD HH:MM.
 function localTime(ts) {
@@ -493,7 +493,7 @@ function localTime(ts) {
 }
 
 // The words after the first `--` are the command, never flags.
-function cmdSchedule(args, io) {
+async function cmdSchedule(args, io) {
   const cut = args.indexOf("--");
   const head = cut < 0 ? args : args.slice(0, cut);
   const words = cut < 0 ? [] : args.slice(cut + 1);
@@ -501,7 +501,7 @@ function cmdSchedule(args, io) {
   const usage = (why) => { io.err(`engine: schedule: ${why || SCHEDULE_USAGE}\n`); return 2; };
   if (p.error) return usage(`${p.error}\n${SCHEDULE_USAGE}`);
   const [verb, name, ...extra] = p.pos;
-  if (!["add", "list", "rm"].includes(verb) || extra.length) return usage();
+  if (!["add", "list", "rm", "run-now"].includes(verb) || extra.length) return usage();
   const project = resolveProject(p.flags, io);
   if (!project) return 2;
   if (verb === "add") {
@@ -532,7 +532,8 @@ function cmdSchedule(args, io) {
   }
   if (words.length) return usage();
   if (verb === "list" && name) return usage();
-  if (verb === "rm" && !name) return usage();
+  if ((verb === "rm" || verb === "run-now") && !name) return usage();
+  if (verb === "run-now") return await runNow(project, name, io);
   if (!dbExists(project)) {
     if (verb === "list") { io.out("no schedules"); return 0; }
     io.err(`engine: schedule: no schedule ${name}\n`);
@@ -550,6 +551,22 @@ function cmdSchedule(args, io) {
     io.out(`removed ${name}`);
     return 0;
   } finally { d.close(); }
+}
+
+// Inserts the run-now row (spec 14). With no engine running the short pass of `engine wake` for this project runs it now
+// and waits like a wake; with one running, its next tick drains the row.
+async function runNow(project, name, io) {
+  if (!dbExists(project)) { io.err(`engine: schedule: no schedule ${name}\n`); return 1; }
+  const d = db.open(project);
+  try {
+    const cur = d.prepare("SELECT * FROM timers WHERE id=? AND kind='schedule'").get(`schedule:${name}`);
+    if (!cur || cur.fired_at !== null) { io.err(`engine: schedule: no schedule ${name}\n`); return 1; }
+    const t = Date.now() / 1000;
+    const payload = { ...JSON.parse(cur.payload), force: true };
+    inbox.insert(d, { source: "schedule", source_id: `${name}@now:${Math.floor(t)}`, kind: "run", payload }, t);
+  } finally { d.close(); }
+  if (engineRunning(project)) { io.out(`queued for the running engine: ${name}`); return 0; }
+  return await require("./wake").run({ io, project });
 }
 
 function cmdRebuild(args, io) {
@@ -595,7 +612,7 @@ async function main(argv, io0) {
       case "enqueue": return cmdEnqueue(rest, io);
       case "start": return await cmdStart(rest, io);
       case "done": return cmdDone(rest, io);
-      case "schedule": return cmdSchedule(rest, io);
+      case "schedule": return await cmdSchedule(rest, io);
       case "wake": return await require("./wake").run({ io });
       default: return cmdRebuild(rest, io);
     }

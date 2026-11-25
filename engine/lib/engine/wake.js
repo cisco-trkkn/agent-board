@@ -45,11 +45,12 @@ async function pass(db, project, ctx, t0) {
   return { ran: ev("schedule_ran"), skipped: ev("schedule_skipped") };
 }
 
-async function run({ io, now } = {}) {
+async function run({ io, now, project: only } = {}) {
   const out = (io && io.out) || ((s) => process.stdout.write(s + "\n"));
   const dir = paths.engineDir();
   let files = [];
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".sqlite")).sort(); } catch (_) { /* no engine dir */ }
+  if (only) files = files.filter((f) => path.basename(f, ".sqlite") === only); // `schedule run-now`: one project
   const tmuxArgs = (process.env.TMUX_DASH_TMUX_ARGS || "").split(/\s+/).filter(Boolean);
   let rc = 0;
   for (const f of files) {

@@ -28,6 +28,7 @@ const feed = require("./feed");
 const realIntegrate = require("./integrate");
 const architect = require("./architect");
 const hold = require("./hold");
+const schedule = require("./schedule");
 const specDriven = require("./strategy/spec_driven");
 
 const TICK_S = 5;
@@ -45,7 +46,7 @@ const INPUTS = ["spec_started", "stale_result", "job_done", "job_failed", "check
 const PK = { specs: "id", jobs: "id", steps: "key", timers: "id", waits: "id", retry_policies: "kind", inbox: "id", holds: "hold_id" };
 const PASS_S = 3600; // an approval's pass is good for one hour from the answer (spec 13)
 const MY_STEPS = ["check", "stale_check", "integrate"];
-const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report", "commit_report", "metrics_record_parked", "queue_report"]; // measurement and notices
+const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report", "commit_report", "metrics_record_parked", "queue_report", "schedule_run"]; // measurement and notices
 const WORKER_KINDS = ["refresh", "implement", "fix", "fix_wave"];
 const RETRY_ALIAS = { fix_wave: "fix", re_review: "final_review" };
 const BLOCKING = ["critical", "important"];
@@ -699,6 +700,7 @@ function start(opts) {
   function handler(row) {
     if (produced) throw STOP; // one undecided input at a time: pump before the next row
     if (row.source === "approval") return onHold(row);
+    if (row.source === "schedule") return schedule.handleRow(db, row, { project, tmuxArgs: opts.tmuxArgs, now: now() });
     if (row.source === "worker") return onWorker(row);
     if (row.source === "timer") return onTimer(row);
     if (row.source === "user") {
@@ -1413,6 +1415,10 @@ function start(opts) {
         await drainAll();
         endHeldWithReport();
         await advance();
+        // scheduled runs are not jobs: their windows open and their ends are recorded here, and neither waits for the command
+        const sctx = { project, tmuxArgs: opts.tmuxArgs, now: now() };
+        schedule.runIntents(db, sctx);
+        schedule.finishRuns(db, sctx);
         await closeWindows();
         await dispatch();
       } catch (e) {
@@ -1460,7 +1466,7 @@ function start(opts) {
     // every job marked running. The ticks that follow fire due timers, drain the inbox and compare the policy.
     async resume() {
       try {
-        const rec = steps.reconcile(db, opts.stepsCtx || { repo, mainRepo: repo, tmuxCtl, session: opts.session, tmuxArgs: opts.tmuxArgs }, { now });
+        const rec = steps.reconcile(db, opts.stepsCtx || { repo, mainRepo: repo, tmuxCtl, session: opts.session, tmuxArgs: opts.tmuxArgs, project }, { now });
         for (const r of rec.rerun) {
           const sp = r.kind === "metrics_start" && r.spec ? get("specs", r.spec) : null;
           if (sp) metricsStart(sp); // the start never ran
