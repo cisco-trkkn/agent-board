@@ -19,14 +19,16 @@ STALL_KINDS = ("teammate_gone", "teammate_silent", "lead_idle", "awake_dropped")
 WATCH_KINDS = STALL_KINDS + ("weekly_pace",)                                       # weekly_pace: alert only
 REALERT_S = 900
 AWAKE_ARGV = ("awake", "on", "--queue", "--lid")
-# Run watch (spec 2026-11-24-run-watch-design.md §b): a run in a `✦` pane past its cap is alerted once; with its CPU time
-# unchanged on FLAT_KILL overviews in a row it is killed by PID (TERM, KILL after KILL_GRACE_S if alive).
+# Run watch (spec 2026-11-24-run-watch-design.md §b): a run in a `✦` pane past its cap is alerted once; with no progress
+# (CPU time not risen and the same PID set) on FLAT_KILL overviews in a row spanning at least FLAT_KILL_S seconds it is
+# killed by PID (TERM, KILL after KILL_GRACE_S if alive).
 CAPS_FILE = Path(__file__).resolve().parent.parent / "docs" / "superpowers" / "run-caps.json"
 DEFAULT_CAPS = {"default_s": 900, "caps": [
     {"match": "node --test", "cap_s": 360}, {"match": "npm test", "cap_s": 360},
     {"match": "unittest discover -s board/tests", "cap_s": 1080},
     {"match": "tools/tests/all.zsh", "cap_s": 1620}, {"match": "tools/tests/run-all.zsh", "cap_s": 1620}]}
 FLAT_KILL = 2
+FLAT_KILL_S = 120
 KILL_GRACE_S = 10
 KILLED_KEEP_S = 3600   # a killed entry never outlives this, settled or not
 _caps_logged = set()
@@ -220,8 +222,9 @@ class Watch:
                 k = f"{r['window']}:{r['pid']}"
                 seen.add(k)
                 st = self.runs.get(k)
-                if st is not None and st.get("cmd") != notify.flat_cmd(r["cmd"], 200):
-                    del self.runs[k]   # the PID was reused by another command in this window: a fresh run
+                if st is not None and (st.get("cmd") != notify.flat_cmd(r["cmd"], 200)
+                                       or r["elapsed_s"] < now - st["first_at"] - 2):   # 2 s: ps rounding
+                    del self.runs[k]   # the PID was reused (another command, or a process younger than the entry): a fresh run
                     st = None
                     changed = True
                 if st is None:
@@ -229,7 +232,7 @@ class Watch:
                     cap = cap_for(r["cmd"], caps)
                     if r["elapsed_s"] <= cap:
                         continue
-                    st = self.runs[k] = {"project": project, "first_at": now, "cpu": r["cpu_s"], "flat_count": 0,
+                    st = self.runs[k] = {"project": project, "first_at": now, "cpu": r["cpu_s"], "flat_count": 0, "flat_since": None,
                                          "pidset": sorted(r["pids"]),
                                          "killed_at": None, "cap_s": cap, "cmd": notify.flat_cmd(r["cmd"], 200)}
                     changed = True
@@ -241,11 +244,13 @@ class Watch:
                     continue
                 if r["cpu_s"] > st["cpu"] or sorted(r["pids"]) != st.get("pidset"):
                     # moving: CPU rose, or the subtree's PIDs changed (a worker exited, so its CPU left the sum)
-                    st.update(cpu=r["cpu_s"], flat_count=0, pidset=sorted(r["pids"]))
+                    st.update(cpu=r["cpu_s"], flat_count=0, flat_since=None, pidset=sorted(r["pids"]))
                 else:
+                    if st.get("flat_since") is None:
+                        st["flat_since"] = now   # also an entry persisted before flat_since existed
                     st["flat_count"] += 1
                 changed = True
-                if st["flat_count"] >= FLAT_KILL:
+                if st["flat_count"] >= FLAT_KILL and now - st["flat_since"] >= FLAT_KILL_S:
                     self._kill(project, k, r, st, now, acts)
         for k in list(self.runs):
             st = self.runs[k]

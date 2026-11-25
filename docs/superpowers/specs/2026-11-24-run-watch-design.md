@@ -61,10 +61,10 @@ and shells whose only child is watched. For each descendant whose elapsed time i
 | --- | --- |
 | first seen past cap | Discord alert `<project>: <name> run past cap: <cmd, 80 chars> (<n> min, cap <c> min)`; record its CPU time |
 | CPU time rose since the previous overview | nothing more ("slow but moving"); keep recording |
-| CPU time unchanged on 2 overviews in a row | `kill <pid>` (TERM, then KILL after 10 s if alive), by PID only, never a pattern; type into the teammate's pane, only while it is at its prompt or busy waiting on that command: `[Watch] killed <cmd> after <n> min, no progress: report to the lead`; nudge the lead (night-watch §3 rules: once, only when ready): `[Watch] killed <name>'s <cmd> after <n> min, no progress: read its report.` |
+| CPU time unchanged (same PID set) on 2 overviews in a row and for at least 120 s | `kill <pid>` (TERM, then KILL after 10 s if alive), by PID only, never a pattern; type into the teammate's pane, only while it is at its prompt or busy waiting on that command: `[Watch] killed <cmd> after <n> min, no progress: report to the lead`; nudge the lead (night-watch §3 rules: once, only when ready): `[Watch] killed <name>'s <cmd> after <n> min, no progress: read its report.` |
 
 One kill per PID. A PID that is gone before the kill → the stall clears. State in `$TC_STATE_DIR/watch.json` beside the
-night watch's (`run_overdue` entries keyed `<window>:<pid>`: `first_at`, `cpu`, `flat_count`, `killed_at`). A board
+night watch's (`run_overdue` entries keyed `<window>:<pid>`: `first_at`, `cpu`, `flat_count`, `flat_since`, `killed_at`). A board
 restart reads it, so a PID is not alerted or killed twice.
 
 **Morning report.** Each kill is one `watch_kill` line appended to `$TC_STATE_DIR/watch/kills.jsonl`
@@ -76,7 +76,7 @@ step-line tests in `tools/tests/test_plugin.zsh`).
 `watch.py` do.
 
 Tests (`board/tests/test_watch_runs.py`): fixed `ps` outputs and a fake clock: under cap → nothing; past cap → one
-alert; CPU rising → no kill; flat twice → one kill of that PID, one teammate line, one lead nudge; a second overview →
+alert; CPU rising → no kill; flat twice and 120 s → one kill of that PID, one teammate line, one lead nudge; a second overview →
 no second kill; queue mode off → nothing; a caps file with a match → its cap; missing caps file → defaults; restart
 from `watch.json` → no repeat. E2E on a scratch tmux server (`-f /dev/null`): a `✦ fake` window running
 `perl -e 'sleep 9999'` with a 1 s cap via a temp caps file and the clock seam, queue-mode task list as in night-watch

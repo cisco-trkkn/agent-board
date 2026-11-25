@@ -272,7 +272,7 @@ confirmation:
   `you have been idle`: continue the queue; `the awake hold dropped`: nothing to do when it ends `ok`, else put the
   line in the morning report.
   `killed <name>'s <cmd> after <n> min`: the board killed that teammate's run.
-  It had run past its cap in `docs/superpowers/run-caps.json`, and its CPU time had not risen, with the same processes, on two overviews in a row.
+  It had run past its cap in `docs/superpowers/run-caps.json`, and its CPU time had not risen, with the same processes, on two overviews in a row and for at least 2 minutes.
   The board sent TERM to the run and its descendants by PID; KILL 10 s later goes only to a PID still in the current ps sample with the same command.
   The pane's root process is never a run.
   The teammate got `[Watch] killed <cmd> …: report to the lead` in its own pane. Read its report and decide the task's next step.

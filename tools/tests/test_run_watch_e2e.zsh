@@ -23,7 +23,7 @@ print -r -- '{"channel": "C1"}' > "$TC_STATE/discord/e2e-rw/bridge.json"
 print -r -- '{"default_s": 900, "caps": [{"match": "sleep 9999", "cap_s": 1}]}' > "$E/caps.json"
 # pane_current_command must read `claude` (a symlink reads as its target): two compiled stand-ins
 printf '#include <unistd.h>\nint main(void){sleep(900);return 0;}\n' > "$E/lead.c"
-printf '#include <stdlib.h>\n#include <unistd.h>\nint main(void){system("/bin/zsh -c '"'"'perl -e \\"sleep 9999\\"; :'"'"'");sleep(900);return 0;}\n' > "$E/mate.c"
+printf '#include <stdlib.h>\n#include <unistd.h>\nint main(void){system("/bin/zsh -c '"'"'source /dev/null /Users/u/.claude/shell-snapshots/snapshot-zsh-1.sh; perl -e \\"sleep 9999\\"; :'"'"'");sleep(900);return 0;}\n' > "$E/mate.c"
 cc -o "$E/lead/claude" "$E/lead.c" && cc -o "$E/mate/claude" "$E/mate.c" || { print "FAIL - cc"; exit 1 }
 tt new-session -d -s e2e-rw -n claude -c "$E" "$E/lead/claude"
 tt new-window -d -t '=e2e-rw:' -n '✦ fake' -c "$E" "$E/mate/claude"
@@ -47,8 +47,9 @@ def fresh_status():   # the lead at its prompt, the teammate busy on its command
 server.NOTIFIER = notify.Notifier(runner=lambda a: None, enabled=False, now=lambda: clock[0])   # default sinks: the discord feed
 server.WATCH = watch.Watch(now=lambda: clock[0], run=lambda argv: "ok", nudge=lambda p, line: server.COMMENTS.add_line(p, line),
                            alert=notify.discord_sink, tell=server.tell_pane)
-def step(dt=10):
-    clock[0] += dt
+watch.FLAT_KILL_S = 3   # the real floor is 120 s; the clock can't drive it: a jump past it reads as a new process (elapsed_s is real ps time)
+def step(dt=None):   # dt None: the clock is real time (before the kill), else it jumps dt seconds
+    clock[0] = time.time() if dt is None else clock[0] + dt
     fresh_status()
     server._state_cache["value"] = None
     ov = server.build_overview(clock[0])
@@ -59,10 +60,13 @@ p = step()
 print("runs", json.dumps([(r["window"], r["cmd"]) for r in p["runs"]], ensure_ascii=False))
 pid = p["runs"][0]["pid"] if p["runs"] else 0
 print("pid", pid)
-step(); step()   # flat once, flat twice: killed
+time.sleep(1.5); step()   # flat once
+time.sleep(1.5); step()   # flat twice, 1.5 s of flat time: under the floor, not killed
+print("early_kill", os.path.exists(tc_env.state_dir() / "watch" / "kills.jsonl"))
+time.sleep(2); step()     # flat 3.5 s: killed
 time.sleep(1)
-step()           # this build types the queued lead nudge
-step()           # 10 s after the TERM: the KILL check
+step(10)         # this build types the queued lead nudge
+step(10)         # 10 s after the TERM: the KILL check
 EOP
 export TMUX_DASH_TOKEN=e2e TMUX_DASH_TMUX_ARGS="-L $TT_SOCK_NAME" TC_DISCORD_ALERTS=1 TC_RUN_CAPS="$E/caps.json"
 MATE="$(tt display -p -t '=e2e-rw:✦ fake' '#{pane_id}')"
@@ -71,6 +75,7 @@ OUT="$(HOME="$E/home" python3 -B "$E/drive.py" "$R/board" "$(tt display -p -t '=
 print -r -- "$OUT"
 PID="$(print -r -- "$OUT" | sed -n 's/^pid //p')"
 check "the run is the perl under the teammate's shell" grep -qxF 'runs [["✦ fake", "perl -e sleep 9999"]]' <<< "$OUT"
+check "no kill under the flat-time floor" grep -qxF 'early_kill False' <<< "$OUT"
 check "the run's process is gone" zsh -c '[[ $1 == <1-> ]] && ! kill -0 $1 2>/dev/null' _ "$PID"
 FEED="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import tc_env; print(tc_env.feed_path("e2e-rw"))' "$R/board")"
 check "discord feed: one run_overdue alert, critical" python3 -c '

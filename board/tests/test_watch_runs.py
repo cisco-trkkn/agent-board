@@ -85,8 +85,15 @@ class SampleTest(unittest.TestCase):
         self.assertEqual(runs(text), [])
 
     def test_a_shell_with_one_child_stands_for_it(self):
-        text = "  500     1  00:10  0:00.00 zsh\n  501   500  00:09  0:00.00 sh -c perl -e 'sleep 9999'; :\n  502   501  00:09  0:00.00 perl -e sleep 9999\n"
+        text = "  500     1  00:10  0:00.00 zsh\n  501   500  00:09  0:00.00 /bin/zsh -c source /u/.claude/shell-snapshots/s.sh && perl -e 'sleep 9999'; :\n  502   501  00:09  0:00.00 perl -e sleep 9999\n"
         self.assertEqual([r["pid"] for r in runs(text)], [502])
+
+    def test_a_claude_helper_shell_and_its_subtree_are_not_runs(self):
+        text = ("  500     1  05:00:00  1:00.00 /x/claude/versions/2.1.331 --agent-name fake\n"
+                "  510   500  05:00:00  0:00.10 /bin/sh /x/start-mcp.sh\n"
+                "  511   510  05:00:00  9:00.00 node server.js\n")
+        # mutation: follow every shell child of claude -> the MCP server is a run, this fails
+        self.assertEqual(runs(text), [])
 
     def test_failing_tmux_gives_no_runs(self):
         def boom(*a, check=False):
@@ -166,9 +173,13 @@ class RunWatchTest(Base):
         self.alive = {700, 701}
         rec = project(runs(ps(etime="10:00")))
         self.step(rec)                # first seen past cap: alert, cpu recorded
-        self.step(rec)                # flat 1
+        self.step(rec)                # flat 1: flat_since
         self.assertEqual(self.kills, [])   # mutation: FLAT_KILL = 1 -> killed here, this fails
-        self.step(rec)                # flat 2: kill
+        self.step(rec)                # flat 2, 10 s of flat time
+        self.assertEqual(self.kills, [])   # mutation: drop the FLAT_KILL_S floor -> killed here, this fails
+        self.step(rec, dt=109)        # 119 s since the first flat overview
+        self.assertEqual(self.kills, [])
+        self.step(rec, dt=1)          # 120 s: kill
         self.assertEqual(self.terms(), [700, 701])
         self.assertEqual(self.tells, [("%9", "[Watch] killed node /usr/local/bin/npm test after 10 min, no progress: report to the lead")])
         self.assertEqual(self.nudges, [("p", "[Watch] killed fake's node /usr/local/bin/npm test after 10 min, no progress: read its report.")])
@@ -184,8 +195,8 @@ class RunWatchTest(Base):
 
     def test_busy_lead_is_nudged_when_ready_and_a_waiting_teammate_is_not_typed_at(self):
         self.alive = {700, 701}
-        for _ in range(3):
-            self.step(project(runs(ps(etime="10:00")), lead_ready=False, mate_state="waiting"))
+        for dt in (10, 10, 120):
+            self.step(project(runs(ps(etime="10:00")), lead_ready=False, mate_state="waiting"), dt=dt)
         self.assertEqual((self.terms(), self.nudges, self.tells), ([700, 701], [], []))
         self.step(project([], mate_state="ready"))   # the run is gone; the teammate is back at its prompt, the lead ready
         self.assertEqual((len(self.nudges), len(self.tells)), (1, 1))
@@ -193,7 +204,7 @@ class RunWatchTest(Base):
     def test_gone_before_the_kill_clears(self):
         rec = project(runs(ps(etime="10:00")))
         self.step(rec); self.step(rec)
-        self.step(rec)                # flat 2, but kill() raises ProcessLookupError (self.alive is empty)
+        self.step(rec, dt=120)        # flat 2 and 120 s, but kill() raises ProcessLookupError (self.alive is empty)
         self.assertEqual((self.kills, self.tells, self.nudges), ([], [], []))
         self.assertEqual(json.loads((self.dir / "watch.json").read_text())["runs"], {})
         self.assertFalse((self.dir / "watch" / "kills.jsonl").exists())
@@ -224,7 +235,7 @@ class RunWatchTest(Base):
         self.assertEqual(set(d["✦ fake:700"]) >= {"first_at", "cpu", "flat_count", "killed_at"}, True)
         self.w = self.watch()         # a board restart: a fresh Watch reads watch.json
         # mutation: start self.runs empty instead of reading watch.json -> a second alert, this fails
-        self.step(rec)
+        self.step(rec, dt=120)
         self.assertEqual((len(self.alerts), self.terms()), (1, [700, 701]))
         self.w = self.watch()
         self.step(rec)
@@ -236,7 +247,7 @@ class FixRound1Test(Base):
     """Review fix round 1: the kill escalation, the pane root and the CPU/PID-set progress rule."""
     def killed(self, rec):
         self.alive = {700, 701}
-        self.step(rec); self.step(rec); self.step(rec)
+        self.step(rec); self.step(rec); self.step(rec, dt=120)
         self.assertEqual(self.terms(), [700, 701])
 
     def kills9(self):
@@ -282,6 +293,42 @@ class FixRound1Test(Base):
         e = json.loads((self.dir / "watch.json").read_text())["runs"]["✦ fake:700"]
         self.assertEqual((self.kills, e["flat_count"], e["cmd"]), ([], 0, "make all"))
 
+    def test_two_flat_overviews_ten_seconds_apart_do_not_kill(self):
+        self.alive = {700, 701}
+        rec = project(runs(ps(etime="10:00")))
+        for _ in range(4):
+            self.step(rec)   # alert, then flat 1, 2, 3 within 30 s
+        self.assertEqual(self.kills, [])   # mutation: kill on flat_count alone -> killed at flat 2, this fails
+
+    def test_progress_resets_the_flat_time(self):
+        self.alive = {700, 701}
+        self.step(project(runs(ps(etime="10:00")))); self.step(project(runs(ps(etime="10:00"))))   # flat_since set
+        self.step(project(runs(ps(etime="10:00", child_cpu="0:09.00"))), dt=200)   # CPU rose: progress
+        e = json.loads((self.dir / "watch.json").read_text())["runs"]["✦ fake:700"]
+        self.assertEqual((e["flat_count"], e.get("flat_since")), (0, None))
+        self.step(project(runs(ps(etime="10:00", child_cpu="0:09.00")))); self.step(project(runs(ps(etime="10:00", child_cpu="0:09.00"))))
+        self.assertEqual(self.kills, [])   # flat 2 again, but only 10 s of flat time
+
+    def test_an_entry_without_flat_since_takes_it_on_its_first_flat_overview(self):
+        self.alive = {700, 701}
+        rec = project(runs(ps(etime="30:00")))
+        self.step(rec); self.step(rec)
+        f = self.dir / "watch.json"
+        d = json.loads(f.read_text()); d["runs"]["✦ fake:700"].pop("flat_since"); f.write_text(json.dumps(d))   # an older watch.json
+        self.w = self.watch()
+        self.step(rec, dt=500)   # flat_count 2 already, but no stored flat time: it starts now
+        self.assertEqual(self.kills, [])
+        self.step(rec, dt=120)
+        self.assertEqual(self.terms(), [700, 701])
+
+    def test_a_persisted_entry_that_cannot_be_this_process_is_a_fresh_run(self):
+        self.alive = {700, 701}
+        self.step(project(runs(ps(etime="10:00")))); self.step(project(runs(ps(etime="10:00"))))   # flat 1
+        self.step(project(runs(ps(etime="10:00"))), dt=3000)   # first seen 3010 s ago, but only 600 s old: another process
+        e = json.loads((self.dir / "watch.json").read_text())["runs"]["✦ fake:700"]
+        # mutation: skip the elapsed check -> flat_count 2 and a kill, no second alert; this fails
+        self.assertEqual((self.kills, e["flat_count"], len(self.alerts)), ([], 0, 2))
+
     def test_killed_entries_are_pruned(self):
         rec = project(runs(ps(etime="10:00")))
         self.killed(rec)
@@ -291,7 +338,7 @@ class FixRound1Test(Base):
         self.assertEqual(json.loads((self.dir / "watch.json").read_text())["runs"], {})
 
     def test_a_killed_entry_is_pruned_one_hour_after_the_kill(self):
-        rec = project(runs(ps(etime="10:00")), lead_ready=False, mate_state="waiting")   # never told, never nudged
+        rec = project(runs(ps(etime="90:00")), lead_ready=False, mate_state="waiting")   # never told, never nudged
         self.killed(rec)
         self.step(rec, dt=3000)
         self.assertIn("✦ fake:700", json.loads((self.dir / "watch.json").read_text())["runs"])

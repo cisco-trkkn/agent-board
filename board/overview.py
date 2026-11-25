@@ -291,14 +291,20 @@ def _is_shell(cmd):
     return _argv0(cmd) in tc_env.SHELLS
 
 
+def _is_bash_tool(cmd):
+    """A shell started by claude's Bash tool: `/bin/zsh -c source …/.claude/shell-snapshots/snapshot-zsh-….sh …`."""
+    return _is_shell(cmd) and " -c " in f" {cmd} " and "/.claude/shell-snapshots/" in cmd
+
+
 def _is_claude(cmd):
     a = _argv0(cmd)
     return a == "claude" or bool(_VERSION_RE.match(a))
 
 
 def run_roots(pid, procs, kids, root=False):
-    """The watched runs under one process (run watch spec §b). A claude process is never a run, and only its shell
-    children (its Bash tool calls) are followed: its MCP servers and helpers (caffeinate) are not runs. A shell with
+    """The watched runs under one process (run watch spec §b). A claude process is never a run, and only its Bash tool
+    shells (a shell with -c and a .claude/shell-snapshots/ path) are followed: its MCP servers, their start scripts and
+    helpers (caffeinate) are not runs, nor is anything under them. A shell with
     exactly one child stands for that child; a shell with no child is an idle prompt, never a run. Anything else is a run.
     The pane's own root process (root=True) is always the claude process, whatever its argv."""
     p = procs.get(pid)
@@ -306,7 +312,7 @@ def run_roots(pid, procs, kids, root=False):
         return []
     ch = kids.get(pid, [])
     if root or _is_claude(p["cmd"]):
-        return [r for c in ch if _is_shell(procs[c]["cmd"]) for r in run_roots(c, procs, kids)]
+        return [r for c in ch if _is_bash_tool(procs[c]["cmd"]) for r in run_roots(c, procs, kids)]
     if _is_shell(p["cmd"]):
         if len(ch) == 1:
             return run_roots(ch[0], procs, kids)
