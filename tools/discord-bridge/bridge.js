@@ -469,6 +469,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (msg.author?.bot || !allowFrom().has(String(msg.author?.id))) return;
     if (t && !newer(msg.id, t.id)) return;
     if (t && L.added) enqueue({ op: 'liveness', message_id: t.id, add: null, remove: L.added, unreact: null });
+    fails = { key: null, n: 0 };
     st.liveness = Object.assign(L, { target: { id: String(msg.id), text: String(msg.content ?? '').trim().slice(0, 200) }, shown: null, added: null, bot_after: [] });
     save();
     const file = path.join(dir, 'last-user-message.json');
@@ -487,7 +488,22 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     enqueue({ op: 'liveness', message_id: L.target.id, add: want, remove: L.added, unreact: null });
   }
 
+  // A permanently failing add (50013 and the like) is tried 3 times through the normal failed path, then given up on:
+  // shown = want, one log line, no throw, so nothing more lands in outbox/failed. Counted per (target, want).
+  const GIVE_UP_AFTER = 3;
+  let fails = { key: null, n: 0 };
   async function opLiveness(op) {
+    const key = `${op.message_id}|${op.add}`;
+    try { await doLiveness(op); if (fails.key === key) fails = { key: null, n: 0 }; } catch (e) {
+      if (!op.add || L.target?.id !== String(op.message_id) || isRetryable(e)) throw e;
+      fails = { key, n: fails.key === key ? fails.n + 1 : 1 };
+      if (fails.n < GIVE_UP_AFTER) throw e;
+      say(`liveness: giving up on ${op.add} for ${op.message_id}: ${snip(e?.message)}`);
+      L.shown = op.add; save();
+      fails = { key: null, n: 0 };
+    }
+  }
+  async function doLiveness(op) {
     const current = () => L.target?.id === String(op.message_id);
     let msg;
     try { msg = await (await home()).messages.fetch(op.message_id); } catch (e) {

@@ -266,3 +266,18 @@ test('an outbox liveness op with unreact removes the named user\'s reaction', as
   await s.tick();
   assert.deepStrictEqual(m.unreacted, [{ emoji: '❓', user: 'U1' }]);
 });
+
+test('a permanently failing react is given up on after 3 attempts: one log line, no more failed files', async () => {
+  const s = setup();
+  s.leadState({ state: 'busy' });
+  const m = s.msg('1001');
+  m.failReact = 100;
+  let attempts = 0; const orig = m.react; m.react = async (e) => { attempts++; return orig(e); };
+  await s.bridge.onMessage(m);
+  for (let i = 0; i < 12; i++) { await s.tick(); await s.tick(); s.clock.t += 10000; s.leadState({ state: 'busy' }); }
+  assert.strictEqual(attempts, 3);
+  assert.strictEqual(s.logs.filter((l) => l.startsWith('liveness: giving up on ⏳ for 1001')).length, 1);
+  const failed = path.join(s.dir, 'outbox', 'failed');
+  const n = fs.existsSync(failed) ? fs.readdirSync(failed).filter((f) => f.endsWith('.json')).length : 0;
+  assert.ok(n <= 3, `failed op files: ${n}`);
+});
