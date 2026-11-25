@@ -73,7 +73,7 @@
     {
       "id": 9,
       "subject": "SIL Task 9: Pick trials (the ranking step)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The tick starts at most two trials at a time, ranked by one mechanical-tier model call over the candidates' evidence; a ranking failure picks nothing that tick.\n\n**Files:**\n- Create: `board/improve_pick.py`, `claude/improve-rank.md`, `board/tests/test_improve_pick.py`\n\n**Acceptance Criteria:**\n- [ ] Candidates: `proposed`, class `low` or `high`, non-null patch, target not already in a `trial`. With 2 trials running, no call is made (mutation: drop the slot check \u2192 a fake `claude` records a call \u2192 test fails).\n- [ ] The call: `[TC_IMPROVE_CLAUDE or \"claude\", \"-p\", \"--model\", <mechanical model from docs/superpowers/model-routing.json>, \"--effort\", \"low\", \"--permission-mode\", \"dontAsk\", \"--output-format\", \"json\"]`, prompt `claude/improve-rank.md` + the candidates (id, kind, target, evidence, linked outcome) + the active outcomes. The prompt asks for a JSON list of ids, best first, and nothing else. Timeout 300 s.\n- [ ] The reply is accepted only when it parses as a list of candidate ids and `usage.output_tokens` \u2264 2000. Then the top `2 - running` start: `trial`, `trial_started_at` now. Anything else (exit \u2260 0, timeout, bad JSON, unknown id, over 2000 tokens) \u2192 one `improve_rank_failed` event, nothing starts.\n- [ ] A fake `claude` script (written by the test into a temp dir) serves each case. No test runs the real `claude`.\n\n**Verify:** `python3 -m unittest board.tests.test_improve_pick -v` \u2192 `OK`\n\nPlan: docs/superpowers/plans/2026-11-21-supervised-improvement-loop.md (Task 9). Spec: docs/superpowers/specs/2026-11-16-supervised-improvement-loop-design.md\n\n```json:metadata\n{\"files\": [\"board/improve_pick.py\", \"claude/improve-rank.md\", \"board/tests/test_improve_pick.py\"], \"verifyCommand\": \"python3 -m unittest board.tests.test_improve_pick -v\", \"acceptanceCriteria\": [\"candidate filter; no call with 2 trials running\", \"argv from model-routing mechanical, effort low, prompt file\", \"accept only a valid id list within 2000 output tokens; else one event, none started\", \"fake claude only\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         8
@@ -134,5 +134,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-11-25T18:37:11Z"
+  "lastUpdated": "2026-11-25T18:41:21Z"
 }
