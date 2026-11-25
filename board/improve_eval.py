@@ -4,7 +4,7 @@ event `{step, counts, tick}` each. Trials are judged by metrics.compare_halves; 
 metrics.compare_to_baseline (rulings A12, A11: no engine-run record is `too early`, never a transition).
 Later tasks plug in through `hooks`, a dict of optional callables (an absent one is skipped; see load_hooks):
   apply(store, pid)            Task 10, after a trial is kept
-  card(kind, payload)          Task 12: kind awaiting_you | breach | achieved
+  card(kind, payload)          Task 12 (improve_discord): kind awaiting_you | breach | achieved
   pick(store, runs, tick_id)   Task 9, returns a counts dict
   digest(store, tick_id)       Task 12, returns a counts dict
 The outcome file is protected: it is never written; `achieved` is one improve_outcome event and one card call.
@@ -26,8 +26,9 @@ SIGNAL = "tokens_per_merged_task"
 GUARDRAILS = ("failed_specs", "red_after_merge", "final_review_crit_imp_per_spec")
 E1_METRICS = ("fix_rounds_per_task", "bounces_per_task")
 NO_SIGNAL_AT = 15
+# Tasks 9, 10 and 12 must expose these module and function names (improve_discord holds both card and digest).
 HOOK_MODULES = (("apply", "improve_apply", "apply"), ("pick", "improve_pick", "pick"),
-                ("digest", "improve_digest", "digest"), ("card", "improve_cards", "card"))
+                ("digest", "improve_discord", "digest"), ("card", "improve_discord", "card"))
 
 
 def load_hooks():
