@@ -179,6 +179,13 @@ class ByTierModelTest(Base):
         self.assertEqual((e["escalation_rate"], e["failure_rate"]), (0.3333, 0.3333))
         self.assertIsNone(s["standard|unknown"]["median_usd"])
 
+
+    def test_model_source_none_is_nomodel_and_old_lines_stay_unknown(self):
+        # mutation: drop the model_source check in _model_key -> "standard|nomodel" is missing
+        tasks = [task("s", 1, model_used=None, model_source="none"), task("s", 2, model_used=None), task("s", 3)]
+        s = self.one([run("s", cur())], tasks)["by_tier_model"]
+        self.assertEqual(set(s), {"standard|nomodel", "standard|unknown", "standard|sonnet"})
+
     def test_previous_window_tasks_are_out(self):
         s = self.one([run("old", prv()), run("new", cur())], [task("old", 1), task("new", 1)])["by_tier_model"]
         self.assertEqual(s["standard|sonnet"]["tasks"], 1)

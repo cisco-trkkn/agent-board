@@ -213,13 +213,19 @@ def _cap(line):
     return line if len(line) <= MAX_LINE else line[:MAX_LINE - 1] + "…"
 
 
+def tier_model_label(key):
+    """A by_tier_model key for readers: the `nomodel` group reads "no model recorded"."""
+    tier, sep, model = str(key).partition("|")
+    return f"{tier}|no model recorded" if sep and model == "nomodel" else str(key)
+
+
 def _flag_lines(flags):
     short = lambda spec: Path(str(spec)).name   # noqa: E731
     out = []
     for r in flags["overpowered"]:
         out.append(f"- overpowered: {short(r['spec'])} task {r['task_id']} {_one_line(r['subject'])} ({r['model_used']}, 0 fix rounds)")
     for r in flags["underpowered"]:
-        out.append(f"- underpowered: {r['tier_model']}: {r['reason']}")
+        out.append(f"- underpowered: {tier_model_label(r['tier_model'])}: {r['reason']}")
     for r in flags["costly_steps"]:
         out.append(f"- costly_steps: {short(r['spec'])} task {r['task_id']} {_one_line(r['subject'])} ${r['usd']}")
     for r in flags["handoffs"]:
