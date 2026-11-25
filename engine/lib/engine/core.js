@@ -10,6 +10,9 @@
 // - Work outside the database that a command asks for is a row first: a `pending` job, or a `steps` row at `intent`
 //   of kind `check`, `stale_check` or `integrate`. The tick acts on those rows, so nothing lives only in memory.
 // - A worker's latest status (heartbeat, tool, turn times) is memory only: it is re-read from the backend.
+// - An approval hold (spec 13) is an `approval` inbox row written by the worker's PreToolUse hook (hold.js). Its drain
+//   marks the job held and parks the spec; the answer is a `signal` like any other, and its commands (the pass row, the
+//   resume job) are pumped like any other, so a crash between them applies only the missing one.
 const fs = require("node:fs");
 const path = require("node:path");
 const cp = require("node:child_process");
@@ -24,6 +27,7 @@ const steps = require("./steps");
 const feed = require("./feed");
 const realIntegrate = require("./integrate");
 const architect = require("./architect");
+const hold = require("./hold");
 const specDriven = require("./strategy/spec_driven");
 
 const TICK_S = 5;
@@ -38,7 +42,8 @@ const USAGE_FALLBACK_S = 3600;
 const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
 
 const INPUTS = ["spec_started", "stale_result", "job_done", "job_failed", "check_result", "architect_decision", "integrated", "signal"];
-const PK = { specs: "id", jobs: "id", steps: "key", timers: "id", waits: "id", retry_policies: "kind", inbox: "id" };
+const PK = { specs: "id", jobs: "id", steps: "key", timers: "id", waits: "id", retry_policies: "kind", inbox: "id", holds: "hold_id" };
+const PASS_S = 3600; // an approval's pass is good for one hour from the answer (spec 13)
 const MY_STEPS = ["check", "stale_check", "integrate"];
 const NEVER_PARK = ["metrics_start", "metrics_record", "metrics_ask", "artifact", "awake_off", "registry_report", "commit_report", "metrics_record_parked", "queue_report"]; // measurement and notices
 const WORKER_KINDS = ["refresh", "implement", "fix", "fix_wave"];
@@ -387,6 +392,7 @@ function start(opts) {
   // A failed attempt (spec 10.2): the job ends, and its retry policy decides what follows. The retry row is written
   // with the failure, so a crash cannot lose it.
   function failAttempt(job, reason0) {
+    if (detailOf(job).held) return endHeld(job, reason0);
     const t = now();
     const d = detailOf(job);
     const pol = retryRow(job.kind);
@@ -435,8 +441,28 @@ function start(opts) {
   }
   const usagePaused = () => !!db.prepare("SELECT 1 FROM timers WHERE kind='usage_reset' AND fired_at IS NULL LIMIT 1").get();
 
+  // Every end of a held job (A5: a valid report, ready, its window gone, any timeout): it is `escalated`, with no
+  // retry, no architect case and no input for the strategy. The answer to its hold starts the job that goes on.
+  function endHeld(job, how) {
+    const t = now();
+    const spec = get("specs", job.spec);
+    const ny = endNeedsYou(job, t);
+    const rows = [...cancelTimers(job.id), ["jobs", { ...job, ...ny.fields, state: "escalated", ended_at: t, head: gitHead(wtOf(spec)) }], ...ny.rows];
+    const spend = tokenRows(job, rows);
+    emit("held_job_ended", { spec: job.spec, job: job.id, rows, hold: detailOf(job).held, how, text: `${label(job)} held: ${how}`,
+      ...spend, ...contextTokens(job, opts.transcriptRoot) });
+    status.delete(job.id);
+  }
+  // A held worker is told to write its report and stop: its window is closed once the report is there, ready or not.
+  function endHeldWithReport() {
+    for (const j of all("SELECT * FROM jobs WHERE state='running' ORDER BY rowid")) {
+      if (detailOf(j).held && validReport(j)) endHeld(j, "report");
+    }
+  }
+
   // A job ended with a valid report.
   function finishJob(job, st) {
+    if (detailOf(job).held) return endHeld(job, "report");
     const t = now();
     const spec = get("specs", job.spec);
     const d = detailOf(job);
@@ -510,6 +536,7 @@ function start(opts) {
       cur = get("jobs", cur.id);
     }
     if (p.state !== "ready") return undefined;
+    if (detailOf(cur).held) { endHeld(cur, validReport(cur) ? "report" : "ready"); return undefined; }
     const st = validReport(cur);
     if (st) { finishJob(cur, st); return undefined; }
     const d = detailOf(cur);
@@ -579,7 +606,10 @@ function start(opts) {
   function writeSignal(spec, wait) {
     const asked = (lastEvent(spec.id, "awaiting_you") || { detail: {} }).detail;
     const rows = [["waits", wait]];
-    if (wait.answer === "approve") rows.push(["specs", { ...spec, state: asked.prev_state || "running", outcome: null, updated_at: now() }]);
+    // a denied hold goes on too (spec 13): the spec leaves the park with the signal itself, as an approve does, so a
+    // crash before the resume job is created cannot hand the turn to another spec
+    const goesOn = wait.answer === "approve" || (wait.answer === "deny" && String(wait.step).startsWith("core:hold:"));
+    if (goesOn) rows.push(["specs", { ...spec, state: asked.prev_state || "running", outcome: null, updated_at: now() }]);
     emit("signal", { spec: spec.id, rows, answer: wait.answer, note: wait.note, step: wait.step, question: wait.question, wait: wait.id, kind: wait.kind,
       recommendation: parse(wait.recommendation), stored: asked.stored, answered_at: wait.answered_at, text: `${wait.answer}: ${wait.question}` });
   }
@@ -642,8 +672,33 @@ function start(opts) {
     return undefined;
   }
 
+  // A drained `approval` row (spec 13): the hook denied a stop-class call of a running job. The job is marked held and
+  // the spec parks with the exact call; what the answer needs (the job and the call) is stored with the park.
+  function onHold(row) {
+    const p = parse(row.payload) || {};
+    const id = p.hold_id || row.source_id;
+    const job = row.job ? get("jobs", row.job) : null;
+    const spec = job ? get("specs", job.spec) : row.spec ? get("specs", row.spec) : null;
+    if (spec && spec.state === "done") return { drop: "spec done" };
+    if (!job || !spec || job.state !== "running") return { drop: "job not running" };
+    const question = hold.question(p.tool, p.input);
+    const d = detailOf(job);
+    // A7: one open question per spec, and one hold per job (its worker was told to stop after the first)
+    const why = d.held ? "job already held" : spec.state === "awaiting_you" || inbox.openWaitFor(db, spec.id) ? "spec already waiting" : null;
+    if (why) {
+      emit("hold_skipped", { spec: spec.id, job: job.id, hold: id, reason: why, question, text: `${why}: ${question}` });
+      return { drop: why };
+    }
+    emit("held", { spec: spec.id, job: job.id, rows: [["jobs", withDetail({ ...job, session_id: p.session_id || job.session_id }, { ...d, held: id })]],
+      hold: id, tool: p.tool, rule: p.rule, call_hash: p.call_hash, text: question });
+    park(spec, question, `core:hold:${id}`, { kind: "stop_class", options: "approve|deny|fail", job: job.id, hold: id,
+      stored: { job: job.id, tool: p.tool, input: p.input === undefined ? null : p.input, call_hash: p.call_hash } });
+    return undefined;
+  }
+
   function handler(row) {
     if (produced) throw STOP; // one undecided input at a time: pump before the next row
+    if (row.source === "approval") return onHold(row);
     if (row.source === "worker") return onWorker(row);
     if (row.source === "timer") return onTimer(row);
     if (row.source === "user") {
@@ -680,6 +735,11 @@ function start(opts) {
   function coreSignal(d) {
     const [, what, ...rest] = String(d.step).split(":");
     const id = rest.join(":");
+    if (what === "hold" && d.answer !== "fail") { // approve: the pass, then the resume; deny: the resume with the note
+      const h = d.stored || {};
+      const resume = { type: "hold_resume", hold: id, job: h.job, answer: d.answer, note: d.note };
+      return d.answer === "approve" ? [{ type: "hold_pass", hold: id, ...h, answered_at: d.answered_at }, resume] : [resume];
+    }
     if (d.answer !== "approve") {
       if (what === "policy") return [done("failed — policy changed")];
       return [done(d.answer === "deny" ? `denied: ${d.question}` : `failed — ${d.note === null || d.note === undefined ? "" : d.note}`)];
@@ -810,6 +870,28 @@ function start(opts) {
       const next = { attempts: hit.attempts ? Math.ceil(caps.attempts * 1.5) : caps.attempts, tokens: hit.tokens ? Math.ceil(caps.tokens * 1.5) : caps.tokens };
       emit("budget_extended", { ...base, rows: [["specs", { ...cur, budget_attempts: next.attempts, budget_tokens: next.tokens, updated_at: t }]],
         attempts: next.attempts, tokens: next.tokens, text: `budget extended: attempts ${next.attempts}, tokens ${next.tokens}` });
+    } else if (c.type === "hold_pass") {
+      // the one-time pass (spec 13): hold.js finds it by call hash and spec, sets used_at and allows the call once
+      const row = { hold_id: c.hold, spec: spec.id, job: c.job === undefined ? null : c.job, call_hash: c.call_hash === undefined ? null : c.call_hash,
+        tool: c.tool === undefined ? null : c.tool, input: JSON.stringify(c.input === undefined ? null : c.input), created_at: t,
+        expires_at: (c.answered_at === undefined || c.answered_at === null ? t : c.answered_at) + PASS_S, used_at: null };
+      emit("hold_pass", { ...base, job: row.job, rows: [["holds", row]], hold: c.hold, expires_at: row.expires_at, text: `approval ${c.hold} granted` });
+    } else if (c.type === "hold_resume") {
+      // the job that goes on after a hold: the held job's kind, task, tier and model. dispatch() resumes the held
+      // session with resume_text, or starts a fresh worker whose brief carries the held call and the answer.
+      const old = c.job ? get("jobs", c.job) : null;
+      if (!old) {
+        emit("hold_resume_skipped", { ...base, hold: c.hold, text: `no held job for approval ${c.hold}` });
+      } else {
+        const note = c.note === null || c.note === undefined || String(c.note).trim() === "" ? "no reason given" : c.note;
+        const text = c.answer === "approve" ? `approval ${c.hold} granted: retry the held call exactly as before`
+          : `denied: ${note}. Continue without it, or report blocked.`;
+        const job = newJob(spec, { kind: old.kind, task: old.task === null ? undefined : old.task, tier: old.tier, model: old.model },
+          { ...detailOf(old), try: 1, deadline: undefined, dl: undefined, nudged_at: undefined, told_at: undefined, reserved: undefined, parked: undefined,
+            resumed_at: undefined, held: undefined, resume_of: old.id, hold: c.hold, hold_answer: c.answer, resume_text: text });
+        emit("job_created", { ...base, job: job.id, rows: [["jobs", job]], task: old.task === null ? undefined : old.task, tier: job.tier,
+          resume_of: old.id, hold: c.hold, hold_answer: c.answer });
+      }
     } else if (c.type === "needs_you_again") {
       const job = get("jobs", c.job);
       const rows = job && job.state === "running" && job.needs_you_since !== null
@@ -983,6 +1065,13 @@ function start(opts) {
       const prev = get("jobs", d.resume_of);
       if (prev) out.push(`Earlier work on this task: brief ${prev.brief}, report ${prev.report}`, "");
     }
+    if (d.hold) { // a fresh worker after a hold whose session could not be resumed (spec 13)
+      const prev = d.resume_of ? get("jobs", d.resume_of) : null;
+      const asked = db.prepare("SELECT question FROM waits WHERE step=? ORDER BY asked_at DESC LIMIT 1").get(`core:hold:${d.hold}`);
+      out.push("## Held call", "", `The earlier worker on this job was stopped at a call that needed the user's approval (${d.hold}).`, "",
+        `Earlier report: ${prev && prev.report ? prev.report : "(none)"}`, `Call: ${asked ? asked.question : "(unknown)"}`,
+        `Answer: ${d.hold_answer === "approve" ? "approved: retry the held call exactly as before" : d.resume_text}`, "");
+    }
     out.push("## Report", "", `Report file: ${reportPath}`, "", "Write your report there. Its last fenced block must be:", "",
       "```json:status", reviewer ? STATUS_SHAPES.reviewer : STATUS_SHAPES.worker, "```", "");
     return out.join("\n");
@@ -1060,11 +1149,14 @@ function start(opts) {
     let how = "start";
     try {
       const prev = d.resume_of ? get("jobs", d.resume_of) : null;
-      if (prev && prev.pane && prev.session_id) { // fix rounds resume the worker's own session when it can be resumed
-        try { handle = await backend.resume(handleOf(prev), text); how = "resume"; } catch (_) { handle = null; }
+      const fresh = { id: ready.id, kind: ready.kind, task: ready.task, model: ready.model, effort: ready.effort,
+        brief: ready.brief, report: ready.report, worktree: wt, window: ready.window };
+      // fix rounds and answered holds resume the worker's own session when it can be resumed; the session is told the
+      // brief, or after a hold the answer alone. The new job goes along (A6): the window gets its ENGINE_JOB.
+      if (prev && prev.pane && prev.session_id) {
+        try { handle = await backend.resume(handleOf(prev), d.hold ? d.resume_text : text, fresh); how = "resume"; } catch (_) { handle = null; }
       }
-      if (!handle) handle = await backend.start({ id: ready.id, kind: ready.kind, task: ready.task, model: ready.model, effort: ready.effort,
-        brief: ready.brief, report: ready.report, worktree: wt, window: ready.window });
+      if (!handle) handle = await backend.start(fresh);
     } catch (e) {
       const t = now();
       const row = get("steps", desc.key);
@@ -1319,6 +1411,7 @@ function start(opts) {
         pollBackend();
         await pumpAll(); // the commands of an input decided last tick come before the next row
         await drainAll();
+        endHeldWithReport();
         await advance();
         await closeWindows();
         await dispatch();
