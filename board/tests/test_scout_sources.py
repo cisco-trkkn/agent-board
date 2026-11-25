@@ -1,5 +1,6 @@
 """scout_sources: sources.json, the sources CLI, the daily poll, #scout requests. Local HTTP server only (127.0.0.1)."""
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -709,19 +710,40 @@ class InstantAddTest(Base):
         self.assertEqual(Handler.edited[0][1]["content"], block("refused: url must start with https://"))
         self.assertEqual((self.names(), calls, self.pending(), self.prompts()), (["scout"], [], {}, {}))
 
-    def test_slash_prompt_outside_scout_is_edited_through_the_outbox(self):
-        self.slash_event()
-        self.fake_fetch()
-        self.assertEqual(ss.discord_confirm("777", ALLOWED, self.now + 5), ("127-blog", "added"))
-        self.assertEqual((Handler.posted, Handler.edited), ([], []))   # no REST call outside #scout
-        self.assertEqual(self.ops()[1], {"op": "ireply", "iid": "I1", "content": block("added: 127-blog (rss)", "A", "B", "C")})
+    def test_slash_prompt_is_edited_by_the_bridge_in_whatever_channel_it_is(self):
+        # mutation: answer through ireply again -> a check mark after the interaction window posts in the home channel
+        for n, chan in enumerate((HOME_CHAN, CHAN)):
+            mid = str(777 + n)
+            self.slash_event(mid=mid, chan=chan, iid=f"I{n}")
+            self.fake_fetch()
+            name = "127-blog" if n == 0 else "127-blog-2"
+            self.assertEqual(ss.discord_confirm(mid, ALLOWED, self.now + 5), (name, "added"))
+            self.assertEqual(self.ops()[-1], {"op": "edit", "key": f"scout-src:{mid}", "text": block(f"added: {name} (rss)", "A", "B", "C")})
+        self.assertEqual((Handler.posted, Handler.edited), ([], []))   # no REST call for a /source prompt
 
-    def test_slash_prompt_inside_scout_is_edited_in_place(self):
-        self.slash_event(chan=CHAN)
+    def test_event_during_the_poll_raises_busy_and_changes_nothing(self):
+        # the daily poll holds sources.lock for its whole run: a bridge event waits LOCK_WAIT, then is left for the next tick
+        self.msg_event()
+        before = tree(self.scout)
+        calls = self.fake_fetch()
+        with open(self.scout / "sources.lock", "a") as held, mock.patch.object(ss, "LOCK_WAIT", 0.05):
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with self.assertRaises(ss.Busy):
+                ss.discord_confirm("9001", ALLOWED, self.now + 5)
+            with self.assertRaises(ss.Busy):
+                self.msg_event(mid="201")
+        self.assertEqual((tree(self.scout), calls, len(Handler.posted), Handler.edited), (before, [], 1, []))
+        self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 6), ("127-blog", "added"))   # the lock is free again
+
+    def test_pending_record_is_gone_before_the_source_is_saved(self):
+        # mutation: save sources.json first -> a crash between the two writes leaves the request pending and the next check mark adds 127-blog-2
+        self.msg_event()
         self.fake_fetch()
-        ss.discord_confirm("777", ALLOWED, self.now + 5)
-        self.assertEqual([m for m, _ in Handler.edited], ["777"])
-        self.assertEqual(len(self.ops()), 1)   # only the prompt went through the outbox
+        with mock.patch.object(ss, "save", side_effect=OSError("disk gone")):
+            with self.assertRaises(OSError):
+                ss.discord_confirm("9001", ALLOWED, self.now + 5)
+        self.assertEqual((self.pending(), self.prompts()), ({}, {}))
+        self.assertIsNone(ss.discord_confirm("9001", ALLOWED, self.now + 6))
 
     def test_titles_are_data_fenced_one_line_each_and_cut(self):
         self.msg_event()

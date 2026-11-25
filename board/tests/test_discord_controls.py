@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -331,6 +332,29 @@ class ScoutSourceRouteTest(Base):
         a = [json.loads(l) for l in (tc_env.discord_dir("p") / "audit.jsonl").read_text().splitlines()]
         self.assertEqual([(x["action"], x["result"]) for x in a], [("click", "ignored")])
 
+    def test_busy_scout_lock_leaves_the_event_for_the_next_tick(self):
+        # mutation: consume a busy event -> a check mark given while the daily poll runs is lost until the next poll
+        fresh = dict(self.REACT, ts=int(time.time() * 1000))
+        (self.d / "events").mkdir(exist_ok=True)
+        (self.d / "events" / "5-a.json").write_text(json.dumps(fresh))
+        with mock.patch.object(dc.scout_sources, "discord_confirm", side_effect=dc.scout_sources.Busy()):
+            dc.step(self.P, self.rec(), 100.0, Runner(), self.add)
+        self.assertEqual(self.shape(), [])
+        self.assertEqual([f.name for f in (self.d / "events").glob("*.json")], ["5-a.json"])
+        with mock.patch.object(dc.scout_sources, "discord_confirm", return_value=("blog", "added")):
+            dc.step(self.P, self.rec(), 101.0, Runner(), self.add)
+        self.assertEqual(self.shape(), [("U1", "scout-source", "blog", "added")])
+        self.assertEqual(list((self.d / "events").glob("*.json")), [])
+
+    def test_busy_event_older_than_the_retry_window_is_dropped(self):
+        old = dict(self.SRC, ts=int((time.time() - dc.EVENT_RETRY_S - 5) * 1000))
+        (self.d / "events").mkdir(exist_ok=True)
+        (self.d / "events" / "5-a.json").write_text(json.dumps(old))
+        with mock.patch.object(dc.scout_sources, "discord_request", side_effect=dc.scout_sources.Busy()):
+            dc.step(self.P, self.rec(), 100.0, Runner(), self.add)
+        self.assertEqual(self.shape(), [("U1", "scout-source", "source: https://a.example/feed", "busy")])
+        self.assertEqual(list((self.d / "events").glob("*.json")), [])
+
     def test_a_failing_handler_never_breaks_the_step(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -387,9 +411,9 @@ class ScoutSourceEndToEndTest(Base):
         self.assertEqual(json.loads((self.d / "scout-prompts.json").read_text()), {})
         row = [s for s in self.ss.load()["sources"] if s["name"] == "cc"][0]
         self.assertEqual((row["kind"], row["url"]), ("github_releases", "https://api.github.com/repos/anthropics/claude-code/releases"))
-        self.assertEqual([(o["op"], o["iid"], o["content"]) for o in self.ops()], [
-            ("ireply", "I1", "```\ncc · github_releases · https://api.github.com/repos/anthropics/claude-code/releases\n```\nreact ✅ to add"),
-            ("ireply", "I1", "```\nadded: cc (github_releases)\nv1\nv2\nv3\n```")])
+        self.assertEqual(self.ops(), [
+            {"op": "ireply", "iid": "I1", "content": "```\ncc · github_releases · https://api.github.com/repos/anthropics/claude-code/releases\n```\nreact ✅ to add"},
+            {"op": "edit", "key": "scout-src:777", "text": "```\nadded: cc (github_releases)\nv1\nv2\nv3\n```"}])
         self.assertEqual([(a["user"], a["action"], a["target"], a["result"]) for a in self.audit()], [
             ("U1", "scout-source", self.URL, "prompted"), ("X", "scout-source", "777", "rejected"),
             ("U1", "scout-source", "cc", "added"), ("U1", "scout-source", "777", "gone")])

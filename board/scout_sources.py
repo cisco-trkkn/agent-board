@@ -42,6 +42,7 @@ HEALTH_FAILURES = 3
 CHECK = "✅"
 PROMPTS_FILE = "scout-prompts.json"   # in the agent-board discord dir: {pending prompt message id: channel id}
 TITLES_SHOWN = 3
+LOCK_WAIT = 2.0   # seconds a bridge event waits for the sources lock, which the daily poll holds for its whole run
 _HTTP_OK_HOSTS = ()  # test seam: hosts whose requested URL may be http
 
 
@@ -70,6 +71,10 @@ class Refusal(Exception):
     pass
 
 
+class Busy(Exception):
+    """The sources lock is held (the daily poll is running): the bridge event is tried again on a later board tick."""
+
+
 def scout_dir():
     env = os.environ.get("TC_SCOUT_DIR")
     return Path(env) if env else Path(os.environ.get("HOME") or str(Path.home())) / ".local" / "state" / "agent-board" / "scout"
@@ -95,11 +100,23 @@ def _read(path, default):
 
 
 @contextlib.contextmanager
-def _lock():
+def _lock(wait=None):
+    """The sources lock. wait=None blocks; wait=<seconds> gives up with Busy, so the board tick never waits out a poll."""
     d = scout_dir()
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "sources.lock", "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        if wait is None:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        else:
+            end = time.monotonic() + wait
+            while True:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= end:
+                        raise Busy("sources lock is held") from None
+                    time.sleep(0.05)
         yield
 
 
@@ -452,7 +469,8 @@ def discord_request(ev, now=None):
     of an allowFrom user -> the audit result. detect() runs here and the answer goes out at once: the prompt
     `<name> · <kind> · <url>` / `react ✅ to add`, recorded as pending under the prompt's message id, or `refused: <reason>`
     with nothing recorded. A #scout message is answered with a REST reply; a /source reply is edited through the bridge
-    (an ireply outbox op), so nothing is posted by REST outside #scout."""
+    (an ireply outbox op), so nothing is posted by REST outside #scout. Busy when the daily poll holds the sources lock:
+    nothing has been done yet and the event can be handled again."""
     now = time.time() if now is None else now
     slash = ev.get("via") == "slash"
     chan, mid, iid = str(ev.get("channel_id") or ""), str(ev.get("message_id") or ""), str(ev.get("iid") or "")
@@ -466,7 +484,7 @@ def discord_request(ev, now=None):
         name, why = request_tail(req[1])
     if not url or not mid.isdigit() or not chan.isdigit() or (slash and not iid):
         return "ignored"
-    with _lock():   # mark the message as answered first, so the poll does not answer it too
+    with _lock(LOCK_WAIT):   # mark the message as answered first, so the poll does not answer it too
         seen = _load_seen()
         if mid in seen["request_msgs"] or mid in seen["requests"] or any(r.get("message_id") == mid for r in seen["requests"].values()):
             return "duplicate"
@@ -537,20 +555,22 @@ def discord_confirm(rid, user, now=None):
     when rid is not pending (a second check mark, a refusal reply, a prompt the poll already took). The source is added
     at once through add_url, fetched once (nothing of that fetch is stored: the next poll treats the source as new), and
     the prompt is edited to `added: <name> (<kind>)` plus the first TITLES_SHOWN titles, or to
-    `added, first fetch failed: <reason>` (the source stays, its health is the poll's business)."""
+    `added, first fetch failed: <reason>` (the source stays, its health is the poll's business). A prompt in #scout is
+    edited by REST; a /source reply is edited by the bridge (an `edit` op keyed scout-src:<message id>, which works in
+    any channel and after the interaction has expired). Busy when the daily poll holds the sources lock: nothing changed."""
     now = time.time() if now is None else now
     rid = str(rid)
-    with _lock():
+    with _lock(LOCK_WAIT):
         seen = _load_seen()
         r = seen["requests"].get(rid)
         if not isinstance(r, dict):
             return None
         st = load()
         row, why_not = _confirm_locked(seen, st, rid, now)
+        _atomic(scout_dir() / "seen.json", seen)   # the pending record goes first (as in poll): a crash here loses the request, never adds it twice
+        _write_prompts(seen)
         if row is not None:
             save(st)
-        _atomic(scout_dir() / "seen.json", seen)
-        _write_prompts(seen)
     if row is None:
         _log(f"scout source: request {r.get('url')} refused: {why_not}", now)
         text, result = _say([f"refused: {why_not}"]), (str(r.get("name") or rid), "refused")
@@ -563,12 +583,11 @@ def discord_confirm(rid, user, now=None):
             reason = str(e) if isinstance(e, scout_fetch.FetchError) else f"{type(e).__name__}: {e}"
             text = _say([f"added, first fetch failed: {reason[:300]}"])
         result = (row["name"], "added")
-    chan = str(r.get("channel") or "")
     try:
-        if r.get("via") == "slash" and chan not in _scout_channels():
-            discord_feed.outbox_write(tc_env.discord_dir(PROJECT), {"op": "ireply", "iid": str(r.get("iid") or ""), "content": text})
-        else:   # REST edits stay inside #scout
-            scout_fetch.edit_message(chan, rid, text)
+        if r.get("via") == "slash":
+            discord_feed.outbox_write(tc_env.discord_dir(PROJECT), {"op": "edit", "key": f"scout-src:{rid}", "text": text})
+        else:   # a REST reply in #scout: REST edits stay inside #scout
+            scout_fetch.edit_message(str(r.get("channel") or ""), rid, text)
     except Exception as e:  # noqa: BLE001
         _reply_failed(f"edit {rid}", e, now)
     return result
