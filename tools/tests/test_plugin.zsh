@@ -81,6 +81,13 @@ d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
 hit = [(e["matcher"], h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/shutdown-record.sh\" --scoped")]
 assert len(hit) == 1 and hit[0][0] == "SendMessage" and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
 PY
+check "hooks.json registers handoff-arm on PostToolUse Write|Edit|MultiEdit, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
+hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/handoff-arm.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] == "Write|Edit|MultiEdit" and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
+PY
+check "handoff-arm.sh is executable" test -x "$P/scripts/handoff-arm.sh"
 check "hooks.json registers lead-stop-guard on Stop (no matcher), --scoped, timeout 10, not async" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["Stop"]
@@ -184,6 +191,8 @@ PY
 O="$R/claude/orchestrator.md"
 check "lead rules: Queue mode bullet" grep -qF -- '- **Queue mode.**' "$O"
 check "lead rules: [Watch] lines come from the night watch, not the user" grep -qF -- '- A line starting `[Watch]` is the night watch of the Agent Board (queue mode only), not the user' "$O"
+check "lead rules: what a [Watch] killed line means" grep -qF -- "  \`killed <name>'s <cmd> after <n> min\`: the board killed that teammate's run" "$O"
+check "morning report: a Seen section from the run watch's kills.jsonl" grep -qF -- '     Add a **Seen** section to the same report: each line of `${TC_STATE:-${TMPDIR%/}/tmux-ctl-$UID}/watch/kills.jsonl`' "$O"
 check "lead rules: queue answers in metadata.queue" grep -qF 'metadata.queue' "$O"
 check "lead rules: queue starts at two or more Plan & run tasks" grep -qF 'two or more pending `Plan & run:` tasks' "$O"
 check "lead rules: morning report path" grep -qF 'docs/superpowers/reports/YYYY-MM-DD-queue.md' "$O"

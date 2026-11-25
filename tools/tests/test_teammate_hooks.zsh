@@ -1,4 +1,5 @@
 source "${0:A:h}/lib.zsh"
+unset AGENT_BOARD_LEAD   # a lead or teammate shell exports it; cases that need it set it per call (${…:+AGENT_BOARD_LEAD=1})
 # teammate-stop.sh (a teammate's Stop writes <state>/teammates/<lead sid>/<name>.json) and teammate-remind.sh (the lead's
 # Stop / PostToolUse remind once per teammate stop). Marker, name and lead session id: docs/superpowers/notes/2026-11-19-teammate-probes.md
 # Probe A (`ps -o args= -p $CLAUDE_PID`: --agent-name, --parent-session-id); lead messages: Probe B (transcript <teammate-message> tags).

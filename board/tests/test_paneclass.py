@@ -389,6 +389,45 @@ class InputTextTest(unittest.TestCase):
         self.assertTrue(paneclass.input_has_text(self.live("half typed message")))
         self.assertFalse(paneclass.input_has_text(self.live('Try "fix the bug"')))
 
+    def esc_rows(self, line):
+        return ["\x1b[2m" + "─" * 60 + "\x1b[0m", line, "─" * 60, "  ⏵⏵ auto mode on"]
+
+    def test_dim_suggestion_is_not_input(self):
+        import paneclass
+        live = "\x1b[39m❯ \x1b[2mwhich project is the scout in?\x1b[0m"
+        self.assertFalse(paneclass.input_has_text(self.esc_rows(live)))
+
+    def test_same_text_not_dim_is_input(self):
+        import paneclass
+        self.assertTrue(paneclass.input_has_text(self.esc_rows("\x1b[39m❯ which project is the scout in?\x1b[0m")))
+        self.assertTrue(paneclass.input_has_text(self.esc_rows("\x1b[2m\x1b[22m❯ \x1b[22mtyped\x1b[0m")))
+
+    def test_typed_text_with_dim_tail_is_input(self):
+        import paneclass
+        self.assertTrue(paneclass.input_has_text(self.esc_rows("❯ half typed\x1b[2m and a suggestion\x1b[0m")))
+
+    def test_extended_colour_params_are_not_dim(self):
+        import paneclass
+        for line in ("\x1b[38;2;200;100;50m❯ typed text\x1b[0m",
+                     "\x1b[38;5;2m❯ typed text\x1b[0m",
+                     "\x1b[48;2;1;2;3m❯ typed\x1b[0m",
+                     "\x1b[38:2::1:2:3m❯ typed\x1b[0m",
+                     "\x1b[38:5:2m❯ typed\x1b[0m"):
+            self.assertTrue(paneclass.input_has_text(self.esc_rows(line)), line)
+
+    def test_extended_colour_then_real_dim_is_not_input(self):
+        import paneclass
+        self.assertFalse(paneclass.input_has_text(self.esc_rows("❯ \x1b[38;5;245;2mwhich project\x1b[0m")))
+
+    def test_zero_padded_reset_clears_dim(self):
+        import paneclass
+        self.assertTrue(paneclass.input_has_text(self.esc_rows("❯ \x1b[2mab\x1b[00mcd")))
+
+    def test_escaped_empty_and_try_placeholder(self):
+        import paneclass
+        self.assertFalse(paneclass.input_has_text(self.esc_rows("\x1b[39m❯ \x1b[0m")))
+        self.assertFalse(paneclass.input_has_text(self.esc_rows('❯ \x1b[2mTry "fix the bug"\x1b[0m')))
+
     def test_many_agents_below_the_input(self):
         import paneclass
         self.assertTrue(paneclass.input_has_text(self.live("half typed", extra_agents=12)))

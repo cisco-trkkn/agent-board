@@ -76,13 +76,48 @@ def mod_states(now=None, d=None):
     return {p: MOD_STATES[r["state"]] for p, r in mod_records(now, d).items()}
 
 
+SGR_RE = re.compile(r"\x1b\[([0-9;:]*)m")
+ANSI_RE = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]")
+
+
+def _plain_and_dim(row):
+    """(row without escape sequences, per-character 'drawn dim' flags). Dim is SGR 2, cleared by 0 or 22."""
+    plain, dim, on, pos = [], [], False, 0
+    for m in ANSI_RE.finditer(row):
+        for ch in row[pos:m.start()]:
+            plain.append(ch)
+            dim.append(on)
+        pos = m.end()
+        sgr = SGR_RE.fullmatch(m.group())
+        if sgr:
+            params, i = sgr.group(1).split(";"), 0
+            while i < len(params):
+                head = params[i].split(":")[0]
+                i += 1
+                code = int(head) if head.isdigit() else 0
+                if code in (38, 48, 58):   # extended colour: its parameters are not SGR codes
+                    if ":" not in params[i - 1] and i < len(params):   # `;` form: 5;n or 2;r;g;b follow
+                        i += 2 if params[i] == "5" else 4
+                elif code in (0, 22):
+                    on = False
+                elif code == 2:
+                    on = True
+    for ch in row[pos:]:
+        plain.append(ch)
+        dim.append(on)
+    return "".join(plain), dim
+
+
 def input_has_text(rows):
     """True when Claude's input line holds text the user typed.
 
     Claude Code 2.1.x draws `❯ <text>` on the line right after a full-width `─` rule (an agent list may sit
     below); older versions draw `│ > <text> │` in a box. Scans the last ~30 rows for the lowest such line.
+    Rows may carry escape sequences (capture-pane -e): text drawn entirely dim is Claude's suggested prompt, not input.
     """
-    tail = rows[-30:]
+    tail = [_plain_and_dim(r) for r in rows[-30:]]
+    dims = [d for _, d in tail]
+    tail = [t for t, _ in tail]
     for n in range(len(tail) - 1, -1, -1):
         m = INPUT_RE.match(tail[n])
         if not m:
@@ -93,6 +128,8 @@ def input_has_text(rows):
         txt = m.group(1)
         if MENU_RE.match(txt):   # a numbered permission menu, not typing
             continue
+        if txt and all(dims[n][i] for i in range(m.start(1), m.end(1)) if not tail[n][i].isspace()):
+            return False   # a dimmed suggested prompt (Claude Code 2.1.330)
         return bool(txt) and not txt.startswith('Try "')   # the greyed placeholder is not input
     return False
 
