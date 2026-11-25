@@ -131,6 +131,42 @@ class Transcript(Base):
         s = self.state()
         self.assertEqual((s["last_read_text"], s["last_read_message_id"]), ("two", "m2"))
 
+    def grow_past_tail(self, f):
+        with open(f, "a") as fh:
+            fh.write(json.dumps({"type": "assistant", "pad": "y" * (lead_state.TAIL + 10)}) + "\n")
+
+    def test_read_carried_when_it_slides_out_of_the_tail(self):   # mutation: drop the carry -> None
+        f = self.transcript([chan("deploy it?", "m1")])
+        self.tick([rec()])
+        self.grow_past_tail(f)
+        self.tick([rec()], now=NOW + 10)
+        s = self.state()
+        self.assertEqual((s["last_read_text"], s["last_read_message_id"]), ("deploy it?", "m1"))
+
+    def test_cache_carries_the_read_without_a_state_file(self):   # mutation: drop the cache carry -> (None, None, 0)
+        f = self.transcript([chan("deploy it?", "m1")])
+        self.assertEqual(lead_state.transcript_info(str(f))[:2], ("deploy it?", "m1"))
+        self.grow_past_tail(f)
+        self.assertEqual(lead_state.transcript_info(str(f))[:2], ("deploy it?", "m1"))
+
+    def test_read_carried_from_the_previous_file_without_a_cache(self):   # mutation: drop the prev fallback -> None
+        f = self.transcript([chan("deploy it?", "m1")])
+        self.tick([rec()])
+        self.grow_past_tail(f)
+        lead_state._cache.clear()   # a board restart
+        self.tick([rec()], now=NOW + 10)
+        s = self.state()
+        self.assertEqual((s["last_read_text"], s["last_read_message_id"]), ("deploy it?", "m1"))
+
+    def test_a_newer_row_in_the_tail_replaces_the_carried_read(self):   # mutation: carry over a tail match -> "old"
+        f = self.transcript([chan("old", "m1")])
+        self.tick([rec()])
+        with open(f, "a") as fh:
+            fh.write(json.dumps(chan("new", "m2")) + "\n")
+        self.tick([rec()], now=NOW + 10)
+        s = self.state()
+        self.assertEqual((s["last_read_text"], s["last_read_message_id"]), ("new", "m2"))
+
     def test_text_cut_to_200(self):
         self.transcript([chan("x" * 300)])
         self.tick([rec()])

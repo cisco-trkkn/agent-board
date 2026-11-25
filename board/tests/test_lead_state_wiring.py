@@ -75,6 +75,12 @@ class Payload(unittest.TestCase):
 
 class Wiring(unittest.TestCase):
     """lead_state_tick's holder_of / sid_of, through the kwargs it hands lead_state.tick."""
+    def setUp(self):
+        p = mock.patch.dict(os.environ)
+        p.start()
+        self.addCleanup(p.stop)
+        os.environ.pop("TC_LEAD_STATE", None)
+
     def kwargs(self):
         with mock.patch.object(server.lead_state, "tick") as t:
             server.lead_state_tick([], 1.0)

@@ -85,6 +85,7 @@ def transcript_info(path):
     hit = _cache.get(path)
     if hit and hit[0] == key:
         return hit[1]
+    carried = hit[1][:2] if hit else (None, None)   # the last read of an earlier tail of this same file
     text = mid = None
     pending = []   # queued prompt contents, FIFO
     try:
@@ -117,6 +118,8 @@ def transcript_info(path):
                 text = m.group(2).strip()[:READ_MAX]
                 mm = _MID.search(m.group(1))
                 mid = mm.group(1) if mm else None
+    if text is None:   # no channel row in this tail (the read slid out of the window): carry the earlier one forward
+        text, mid = carried
     info = (text, mid, sum(1 for c in pending if f'<channel source="{CHANNEL}"' in c))
     _cache[path] = (key, info)
     return info
@@ -148,6 +151,8 @@ def compute(rec, holder, info, prev, now):
     state, reason = classify(rec, holder)
     since = prev.get("since") if prev and prev.get("state") == state and isinstance(prev.get("since"), str) else iso(now)
     text, mid, queued = info
+    if text is None and prev:   # no cache entry (board restart) and none in the tail: the file's own last read
+        text, mid = prev.get("last_read_text"), prev.get("last_read_message_id")
     return {"at": iso(now), "state": state, "since": since, "tool": lead_tool(rec) if state == "busy" else None,
             "queued": queued, "last_read_text": text, "last_read_message_id": mid, "holder": bool(holder),
             "reason": reason, "window": "claude"}
