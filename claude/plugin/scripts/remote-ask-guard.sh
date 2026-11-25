@@ -5,6 +5,9 @@
 #        -> deny, "ask the lead with SendMessage; the user is not at your window"
 #   2. AGENT_BOARD_LEAD=1 with its own marker <state>/remote/<session id>
 #        -> deny, "the user is remote: ask in Discord as a numbered list with the reply tool"
+#   2b. AGENT_BOARD_LEAD=1 with no marker of its own, when the project's discord dir (DISCORD_STATE_DIR, else the tmux session of
+#        TMUX_PANE under <TC_STATE or ~/.local/state/agent-board>/discord/) holds last-user-message.json within 43200 s and no typed
+#        prompt (origin.kind "human") in the lead's transcript is newer than its ts -> deny, same text as 2. Never writes the marker.
 #   3. no role and any marker under <state>/remote/ with mtime within 43200 s (12 h)
 #        -> deny, "the user is remote: write the question as plain text and end your turn; it reaches Discord as a Needs you item"
 # Otherwise exit 0, no output. Deny = exit 2 with the text on stderr. Any error fails open.
@@ -13,7 +16,8 @@
 # guard reads payload.transcript_path and takes the last non-sidechain, non-meta-without-origin "user" row that is not a tool result.
 # origin {kind: channel, server: plugin:discord:discord} -> the lead is remote: write/touch the marker. origin.kind "human" (a prompt
 # typed at the terminal; real rows: {"origin": {"kind": "human"}, "promptSource": "typed", "turnOrigin": "human"}) -> remove the marker.
-# Every other user row leaves it: teammate messages are rows with no origin whose text starts "Another Claude session sent a message:\n
+# The relay's startup prompt (origin human, text "Read <doc> and continue from where the previous session left off.") is not typed: it leaves the marker
+# and does not count as a newer typed prompt in 2b. Every other user row leaves it: teammate messages are rows with no origin whose text starts "Another Claude session sent a message:\n
 # <teammate-message" (17 of 17 in the real lead transcript 78659598), task notifications carry origin.kind "task-notification". Unreadable
 # transcript: change nothing, the marker file decides. (Deviation from spec §3's letter, F14: teammate/task/cross-session prompts keep
 # the marker.) Cost: the marker is only refreshed when a dialog is attempted.
@@ -31,6 +35,7 @@
 input=$(cat) || exit 0
 HOOK_PAYLOAD="$input" exec python3 -I - <<'PY'
 import json, os, re, subprocess, sys, time
+from datetime import datetime
 TM = "ask the lead with SendMessage; the user is not at your window"
 LEAD = "the user is remote: ask in Discord as a numbered list with the reply tool"
 PEER = "the user is remote: write the question as plain text and end your turn; it reaches Discord as a Needs you item"
@@ -86,6 +91,72 @@ def last_user_row(path):
         return r
     return None
 
+STARTUP = re.compile(r"^Read \S.* and continue from where the previous session left off\.$")
+
+def is_startup_prompt(r):
+    """The relay's startup prompt (board/relay.py prompt_for) arrives as an origin-human row; it is not a typed prompt."""
+    c = (r.get("message") or {}).get("content")
+    if isinstance(c, list):
+        c = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+    return isinstance(c, str) and STARTUP.match(c.strip()) is not None
+
+def discord_dir():
+    dd = env.get("DISCORD_STATE_DIR")
+    if dd:
+        return dd
+    pane, tmux = env.get("TMUX_PANE"), env.get("TMUX")
+    if not (pane and tmux):
+        return None
+    tb = env.get("TC_TMUX") or os.path.join(env.get("HOME", ""), ".local/bin/tmux")
+    if not os.access(tb, os.X_OK):
+        tb = "tmux"
+    def q(fmt):
+        return subprocess.run([tb, "-S", tmux.split(",")[0], "display", "-p", "-t", pane, fmt],
+                              capture_output=True, text=True, timeout=3).stdout.strip()
+    name = q("#{?session_group,#{session_group},#{session_name}}")
+    if name.endswith("-bg"):
+        name = name[:-3]
+    if not name:
+        return None
+    base = env.get("TC_STATE") or os.path.join(env.get("HOME", ""), ".local/state/agent-board")
+    return os.path.join(base, "discord", name)
+
+def _ts(s):
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+def recent_remote(tp, ddir, now):
+    """True when the bridge saw the user within 12 h and no typed terminal prompt in the transcript is newer."""
+    try:
+        if not ddir:
+            return False
+        with open(os.path.join(ddir, "last-user-message.json")) as f:
+            ts = _ts(json.load(f).get("ts"))
+        if ts is None or now - ts > 43200:
+            return False
+        if isinstance(tp, str) and tp:
+            with open(tp, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 4 * 1024 * 1024))
+                data = f.read().decode("utf-8", "replace")
+            for line in data.splitlines():
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(r, dict) or r.get("type") != "user" or r.get("isSidechain"):
+                    continue
+                if (r.get("origin") or {}).get("kind") == "human" and not is_startup_prompt(r):
+                    t = _ts(r.get("timestamp"))
+                    if t is not None and t > ts:
+                        return False
+        return True
+    except Exception:
+        return False
+
 try:
     d = json.loads(env["HOOK_PAYLOAD"])
     if d.get("tool_name") != "AskUserQuestion":
@@ -113,12 +184,14 @@ try:
                     with open(marker, "a"):
                         pass
                     os.utime(marker, None)
-                elif o.get("kind") == "human":   # positive evidence of a typed prompt; every other row leaves the marker
+                elif o.get("kind") == "human" and not is_startup_prompt(r):   # positive evidence of a typed prompt; every other row (the relay startup prompt too) leaves the marker
                     try:
                         os.remove(marker)
                     except FileNotFoundError:
                         pass
         if marker and os.path.exists(marker):
+            deny(LEAD)
+        if recent_remote(tp, discord_dir(), time.time()):
             deny(LEAD)
         sys.exit(0)
     now = time.time()
