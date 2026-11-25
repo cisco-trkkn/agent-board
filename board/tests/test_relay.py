@@ -575,6 +575,215 @@ class RestartLeadTest(unittest.TestCase):
         self.assertIn("did not start", str(cm.exception))
 
 
+def put_session(home, name, sid, pane="%5", started=0, updated=None):
+    d = Path(home) / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(json.dumps({"sessionId": sid, "tmux": f"proj:@1.{pane}", "startedAt": started,
+                                                "updatedAt": started if updated is None else updated}))
+
+
+def put_marker(state, sid):
+    (Path(state) / "remote").mkdir(parents=True, exist_ok=True)
+    (Path(state) / "remote" / sid).write_text("1\n")
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+class SessionStartedAfterTest(unittest.TestCase):
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, True)
+
+    def test_newest_entry_of_the_pane_started_after_t0(self):
+        put_session(self.home, "a", "S1", started=10_000)
+        put_session(self.home, "b", "S2", started=20_000)
+        put_session(self.home, "c", "S3", pane="%6", started=30_000)
+        self.assertEqual(relay.session_started_after("%5", self.home, 5_000), "S2")
+
+    def test_one_second_of_slack_before_t0(self):
+        put_session(self.home, "a", "S1", started=9_500)
+        self.assertEqual(relay.session_started_after("%5", self.home, 10_000), "S1")
+
+    def test_older_entry_of_the_old_session_is_not_the_successor(self):   # mutation: drop the startedAt filter -> returns OLD
+        put_session(self.home, "a", "OLD", started=1_000, updated=99_000)
+        self.assertEqual(relay.session_started_after("%5", self.home, 50_000), "")
+
+    def test_pane_id_must_match_whole(self):
+        put_session(self.home, "a", "S1", pane="%15", started=20_000)
+        self.assertEqual(relay.session_started_after("%5", self.home, 0), "")
+
+    def test_missing_or_broken_files_give_empty(self):
+        self.assertEqual(relay.session_started_after("%5", self.home, 0), "")
+        (Path(self.home) / "sessions").mkdir()
+        (Path(self.home) / "sessions" / "x.json").write_text("{nope")
+        self.assertEqual(relay.session_started_after("%5", self.home, 0), "")
+
+
+class AwaitNewSessionTest(unittest.TestCase):
+    def test_polls_int_cap_over_poll_times_with_the_callers_sleep(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        sleeps = []
+        self.assertEqual(relay.await_new_session("%5", home, 0, sleep=sleeps.append), "")
+        self.assertEqual(len(sleeps), 30)
+        self.assertEqual(set(sleeps), {1.0})
+
+    def test_returns_as_soon_as_the_entry_appears(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            if len(sleeps) == 3:
+                put_session(home, "n", "NEW", started=10_000)
+        self.assertEqual(relay.await_new_session("%5", home, 0, sleep=sleep), "NEW")
+        self.assertEqual(len(sleeps), 3)
+
+
+class CarryRemoteTest(unittest.TestCase):
+    def setUp(self):
+        self.state = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.state, True)
+
+    def new(self, sid):
+        return Path(self.state) / "remote" / sid
+
+    def test_copies_when_old_exists_and_new_does_not(self):
+        put_marker(self.state, "old-1")
+        self.assertTrue(relay.carry_remote(self.state, "old-1", "new_2"))
+        self.assertEqual(self.new("new_2").read_text(), "1\n")
+        self.assertTrue(self.new("old-1").exists())
+
+    def test_no_old_marker_copies_nothing(self):
+        (Path(self.state) / "remote").mkdir()
+        self.assertFalse(relay.carry_remote(self.state, "old", "new"))
+        self.assertFalse(self.new("new").exists())
+
+    def test_same_id_copies_nothing(self):
+        put_marker(self.state, "same")
+        self.assertFalse(relay.carry_remote(self.state, "same", "same"))
+
+    def test_existing_new_marker_is_kept(self):
+        put_marker(self.state, "old")
+        self.new("new").write_text("keep\n")
+        self.assertFalse(relay.carry_remote(self.state, "old", "new"))
+        self.assertEqual(self.new("new").read_text(), "keep\n")
+
+    def test_ids_must_be_plain(self):
+        put_marker(self.state, "old")
+        for bad in ("../x", "a/b", "", "a b"):
+            self.assertFalse(relay.carry_remote(self.state, "old", bad), bad)
+            self.assertFalse(relay.carry_remote(self.state, bad, "new"), bad)
+        self.assertFalse((Path(self.state) / "x").exists())
+
+    def test_oserror_returns_false(self):
+        put_marker(self.state, "old")
+        with mock.patch.object(shutil, "copy2", side_effect=OSError("disk")):
+            self.assertFalse(relay.carry_remote(self.state, "old", "new"))
+
+
+class RelayCarriesRemoteTest(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.home, self.state, self.lin = self.d / "home", self.d / "state", self.d / "lin"
+        self.home.mkdir()
+        self.state.mkdir()
+        env = mock.patch.dict(os.environ, {"TC_LINEAGE": str(self.lin), "TC_STATE": str(self.state)})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def run_relay(self, old_id="OLD", new_after_sleeps=6, new_id="NEW"):
+        n = [0]
+
+        def sleep(s):
+            n[0] += 1
+            if new_id and n[0] == new_after_sleeps:
+                put_session(self.home, "new", new_id, started=now_ms() + 5_000)
+        err = io.StringIO()
+        with statuses("idle", "idle", "ready", "ready"), redirect_stderr(err):
+            msg = relay.relay(FakeTmux(), "proj", "/d.md", str(self.state), old_id, sleep=sleep, home=str(self.home))
+        return msg, err.getvalue()
+
+    def test_marker_copied_to_the_successor(self):
+        put_session(self.home, "old", "OLD", started=1_000)
+        put_marker(self.state, "OLD")
+        msg, err = self.run_relay()
+        self.assertEqual((self.state / "remote" / "NEW").read_text(), "1\n")
+        self.assertIn("relay: remote marker carried to NEW", err)
+        self.assertIn("relayed", msg)
+        rec = json.loads((self.lin / "proj.jsonl").read_text().splitlines()[0])
+        self.assertEqual(rec["old_session_id"], "OLD")
+
+    def test_old_id_read_from_the_pane_when_not_given(self):
+        put_session(self.home, "old", "OLD", started=1_000)
+        put_marker(self.state, "OLD")
+        self.run_relay(old_id="")
+        self.assertTrue((self.state / "remote" / "NEW").exists())
+
+    def test_no_old_marker_copies_nothing(self):
+        put_session(self.home, "old", "OLD", started=1_000)
+        _, err = self.run_relay()
+        self.assertFalse((self.state / "remote" / "NEW").exists())
+        self.assertNotIn("remote marker", err)
+
+    def test_new_id_equal_to_old_copies_nothing(self):
+        put_marker(self.state, "OLD")
+        _, err = self.run_relay(new_id="OLD")
+        self.assertEqual(os.listdir(self.state / "remote"), ["OLD"])
+        self.assertNotIn("remote marker", err)
+
+    def test_no_session_entry_within_the_cap_still_relays(self):
+        put_marker(self.state, "OLD")
+        msg, err = self.run_relay(new_id=None)
+        self.assertIn("relayed", msg)
+        self.assertEqual(os.listdir(self.state / "remote"), ["OLD"])
+        self.assertTrue((self.lin / "proj.jsonl").exists())
+
+
+class RestartLeadCarriesRemoteTest(unittest.TestCase):
+    setUp_base, run_restart, tmux = RestartLeadTest.setUp, RestartLeadTest.run_restart, RestartLeadTest.tmux
+
+    def setUp(self):
+        self.setUp_base()
+        env = mock.patch.dict(os.environ, {"TC_STATE": str(self.d / "state")})
+        env.start()
+        self.addCleanup(env.stop)
+        put_session(self.d / "home", "old", "OLD", started=1_000)
+        put_marker(self.d / "state", "OLD")
+
+    def marker(self, sid):
+        return self.d / "state" / "remote" / sid
+
+    def sleep_writing(self, sid):
+        def sleep(s):
+            put_session(self.d / "home", "new", sid, started=now_ms() + 5_000)
+        return sleep
+
+    def test_doc_mode_copies_the_marker(self):
+        self.run_restart(self.tmux(), sleep=self.sleep_writing("NEW"))
+        self.assertTrue(self.marker("NEW").exists())
+
+    def test_resume_keeping_the_same_id_copies_nothing(self):
+        def sleep(s):
+            put_session(self.d / "home", "old", "OLD", started=now_ms() + 5_000)
+        self.run_restart(self.tmux(), resume=True, sleep=sleep)
+        self.assertEqual(os.listdir(self.d / "state" / "remote"), ["OLD"])
+
+    def test_no_old_marker_copies_nothing(self):
+        self.marker("OLD").unlink()
+        self.run_restart(self.tmux(), sleep=self.sleep_writing("NEW"))
+        self.assertFalse(self.marker("NEW").exists())
+
+    def test_no_session_entry_within_the_cap_still_restarts(self):
+        out = self.run_restart(self.tmux())
+        self.assertEqual(out["pane"], "%5")
+        self.assertEqual(os.listdir(self.d / "state" / "remote"), ["OLD"])
+
+
 class FolderGoneRefusalTest(unittest.TestCase):
     """A gone, non-git start path: relay and lead-restart refuse before any respawn (spec restart-recovery §5)."""
     def setUp(self):
