@@ -1,7 +1,7 @@
 'use strict';
 // Slash commands and idea/new-spec forms, shared by the ops bridge and the project bridges.
 // Exports: payload(ops, project), handle(i, ctx), inboxText(data), fence(text) (escapes ``` for code blocks), SOURCE_PROJECT.
-// handle(i, ctx) gets the bridge's ctx: {dir, ops, views, allowFrom, writeEvent, now, say, snip, answer}.
+// handle(i, ctx) gets the bridge's ctx: {dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, keep, notePrompt}.
 const path = require('node:path');
 
 const REPLY_MAX = 2000;
@@ -151,6 +151,7 @@ async function handleCommand(i, ctx) {
       try { await i.editReply({ content: 'Could not set up the prompt; run /source again.', allowedMentions: ctx.NO_MENTIONS }); } catch { /* nothing more to say */ }
       return;
     }
+    ctx.notePrompt(mid, i.channelId); // the result after the ✅ is an edit op on this reply
     event({ type: 'source', via: 'slash', url: url.slice(0, SOURCE_URL_MAX), name: String(i.options?.getString?.('name') ?? '').trim().slice(0, SOURCE_NAME_MAX), iid: String(i.id), channel_id: String(i.channelId), message_id: mid });
     return;
   }

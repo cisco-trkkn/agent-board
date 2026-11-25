@@ -78,6 +78,21 @@ test('/source from an allowed user: a public deferred reply and one source event
   assert.deepStrictEqual(s.client.callsOf('send'), []);
 });
 
+test('the result of a /source prompt is an edit of that reply, in its own channel, long after the interaction expired and across a bridge restart', async () => {
+  // Mutation: drop ctx.notePrompt in the /source branch -> the edit op finds no message and nothing is edited.
+  const s = setup();
+  const reply = s.client._makeMessage('C9', { content: 'thinking' }); // the interaction's own reply, as a fetchable message
+  await s.bridge.onInteraction(sourceCmd({ channelId: 'C9', replyId: reply.id }));
+  assert.deepStrictEqual(s.state().source_prompts, { [`scout-src:${reply.id}`]: { id: reply.id, channel: 'C9' } });
+  s.clock.t += 60 * 60 * 1000;
+  const again = createBridge({ dir: s.dir, client: s.client, log: () => {}, now: () => s.clock.t, sleep: async () => {} }); // a restarted bridge: the kept interaction is gone
+  s.put({ op: 'edit', key: `scout-src:${reply.id}`, text: '```\nadded: x (rss)\nT1\n```' });
+  await again.tick();
+  assert.deepStrictEqual(s.client.callsOf('edit').map((c) => [c.target, c.payload.content]), [[reply.id, '```\nadded: x (rss)\nT1\n```']]);
+  assert.ok(s.client.callsOf('fetchChannel').some((c) => c.target === 'C9'));
+  assert.deepStrictEqual(s.client.callsOf('send'), []); // nothing lands in the home channel
+});
+
 test('/source without a name sends an empty name', async () => {
   const s = setup();
   await s.bridge.onInteraction(sourceCmd());
@@ -217,11 +232,18 @@ test('a /source reply in the home channel never counts as the lead\'s answer', a
   await s.bridge.tick();
   assert.deepStrictEqual(s.client.callsOf('send'), []);
   assert.deepStrictEqual(s.state().liveness.bot_after, []);
-  // 15 minutes later the interaction has expired: the board's edit falls back to a post, which is the bridge's own
-  s.clock.t += 15 * 60 * 1000;
-  s.put({ op: 'ireply', iid: 'iid-s', content: 'added: x (rss)' });
+  // the result after the ✅ is an edit of that reply: still nothing sent, nothing counted
+  s.client.messages.set('1002', Object.assign(s.client._makeMessage('C1', { content: 'prompt' }), { id: '1002' }));
+  s.put({ op: 'edit', key: 'scout-src:1002', text: 'added: x (rss)' });
   await s.bridge.tick();
-  const sent = [...s.client.messages.values()].filter((m) => m.payload?.content === 'added: x (rss)');
+  assert.deepStrictEqual(s.client.callsOf('edit').map((c) => c.payload.content), ['added: x (rss)']);
+  assert.deepStrictEqual(s.client.callsOf('send'), []);
+  assert.deepStrictEqual(s.state().liveness.bot_after, []);
+  // a prompt that arrives after the interaction expired (15 minutes) falls back to a post, which is the bridge's own
+  s.clock.t += 15 * 60 * 1000;
+  s.put({ op: 'ireply', iid: 'iid-s', content: 'late prompt' });
+  await s.bridge.tick();
+  const sent = [...s.client.messages.values()].filter((m) => m.payload?.content === 'late prompt');
   assert.strictEqual(sent.length, 1);
   await s.bridge.onMessage(fakeMessage({ id: sent[0].id, authorId: 'BOT', authorBot: true, channelId: 'C1' }));
   const st = s.state();

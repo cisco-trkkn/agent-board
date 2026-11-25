@@ -71,6 +71,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   let unreactWarned = false;
   st.liveness ||= { target: null, shown: null, added: null, bot_after: [] };
   st.own_sent ||= [];
+  st.source_prompts ||= {}; // 'scout-src:<message id>' -> {id, channel}: the /source replies, so an edit op reaches them in any channel
 
   // Every log line: token replaced by ***, bodies cut to 80 chars.
   const say = (msg) => {
@@ -351,7 +352,9 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     let cleared = false;
     for (const [mid, k] of Object.entries(st.reply_armed)) if (k === key) { delete st.reply_armed[mid]; cleared = true; }   // an edited or answered dialog takes no reply
     if (cleared) save();
-    const where = [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')], [st.dialogs, () => (ops ? chan('approvals') : home())]].find(([m]) => m[key]);
+    const sp = Object.hasOwn(st.source_prompts, key) ? st.source_prompts[key] : null; // a /source reply lives in the channel the command ran in
+    const where = sp ? [{ [key]: sp.id }, () => client.channels.fetch(sp.channel)]
+      : [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')], [st.dialogs, () => (ops ? chan('approvals') : home())]].find(([m]) => m[key]);
     if (!where) { say(`edit ${snip(key)}: no message`); return; }
     const ch = await where[1]();
     try {
@@ -921,7 +924,11 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   }
   const dropTokenFile = (name) => { try { fs.rmSync(path.join(dir, 'np-token', path.basename(String(name))), { force: true }); } catch { /* gone */ } };
 
-  const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), commandCenter: () => (ops ? cfg().command_center ?? null : null), writeTokenFile, dropTokenFile, opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
+  // /source: remember the interaction's reply (kept on disk, unlike the interaction itself), so the board's later
+  // `edit` op with key scout-src:<message id> changes that message in place.
+  const notePrompt = (mid, channel) => { st.source_prompts[`scout-src:${mid}`] = { id: String(mid), channel: String(channel) }; trim(st.source_prompts, PROMPTS_KEEP); save(); };
+
+  const ctx = { dir, ops, notePrompt, homeChannel: () => (ops ? null : cfg().channel), commandCenter: () => (ops ? cfg().command_center ?? null : null), writeTokenFile, dropTokenFile, opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
   return { ctx, tick, watchTick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 
