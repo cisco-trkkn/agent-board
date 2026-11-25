@@ -23,10 +23,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add the script dir
 import activity as activity_mod  # noqa: E402
-import artifacts, planview, usage  # noqa: E402
+import artifacts, planview, tc_env, usage  # noqa: E402
 
 RECORD_KEYS = ("project", "path", "attached", "plan", "needs_you", "last_run", "lead", "artifacts", "epoch", "alerts", "spend_today",
-               "queue", "owned", "awake", "pace", "agents")
+               "queue", "owned", "awake", "pace", "runs", "agents")
 PLAN_RUN = "Plan & run:"
 WEEK_S = 7 * 86400
 NOT_TEAMMATES = ("team-lead",)   # an owner the lead gives itself has no ✦ window
@@ -254,7 +254,113 @@ def weekly_pace(limits, now):
     return {"used": round(used, 1), "elapsed": round(elapsed, 1)}
 
 
-def record(s, live, now, *, home, state_dir, tmux, th, spend, activity, mods=None, limits=None, pid_alive=_pid_alive):
+PS_ARGV = ("ps", "-ax", "-ww", "-o", "pid=,ppid=,etime=,time=,command=")   # one call per overview (run watch)
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+")   # the real claude binary is .../claude/versions/<x.y.z>
+
+
+def _dur(s):
+    """A ps etime/time value in seconds: [[dd-]hh:]mm:ss[.cc] (macOS time is also mmm:ss.cc). None when unreadable."""
+    try:
+        days, _, rest = s.rpartition("-")
+        secs = 0.0
+        for f in rest.split(":"):
+            secs = secs * 60 + float(f)
+        return int(days or 0) * 86400 + secs
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_ps(text):
+    """`ps -ax -o pid=,ppid=,etime=,time=,command=` -> {pid: {ppid, elapsed_s, cpu_s, cmd}}; unreadable lines are skipped."""
+    out = {}
+    for line in str(text or "").splitlines():
+        f = line.split(None, 4)
+        if len(f) < 5 or not f[0].isdigit() or not f[1].isdigit():
+            continue
+        el, cpu = _dur(f[2]), _dur(f[3])
+        if el is not None and cpu is not None:
+            out[int(f[0])] = {"ppid": int(f[1]), "elapsed_s": int(el), "cpu_s": round(cpu, 2), "cmd": f[4]}
+    return out
+
+
+def _argv0(cmd):
+    return os.path.basename(cmd.split(None, 1)[0]) if str(cmd).strip() else ""
+
+
+def _is_shell(cmd):
+    return _argv0(cmd) in tc_env.SHELLS
+
+
+def _is_claude(cmd):
+    a = _argv0(cmd)
+    return a == "claude" or bool(_VERSION_RE.match(a))
+
+
+def run_roots(pid, procs, kids):
+    """The watched runs under one process (run watch spec §b). A claude process is never a run, and only its shell
+    children (its Bash tool calls) are followed: its MCP servers and helpers (caffeinate) are not runs. A shell with
+    exactly one child stands for that child; a shell with no child is an idle prompt, never a run. Anything else is a run."""
+    p = procs.get(pid)
+    if not p:
+        return []
+    ch = kids.get(pid, [])
+    if _is_claude(p["cmd"]):
+        return [r for c in ch if _is_shell(procs[c]["cmd"]) for r in run_roots(c, procs, kids)]
+    if _is_shell(p["cmd"]):
+        if len(ch) == 1:
+            return run_roots(ch[0], procs, kids)
+        if not ch:
+            return []
+    return [pid]
+
+
+def _subtree(pid, kids):
+    out, todo = [], [pid]
+    while todo:
+        q = todo.pop(0)
+        out.append(q)
+        todo.extend(kids.get(q, []))
+    return out
+
+
+def pane_runs(name, tmux, procs):
+    """One entry per watched run in the project's `✦ <name>` panes: {window, pane, pid, cmd, elapsed_s, cpu_s, pids}.
+    cpu_s is the CPU time of the run and all its descendants; pids lists them, the run first. [] when tmux fails."""
+    try:
+        rows = tmux("list-panes", "-s", "-t", f"={name}", "-F", "#{window_name}\t#{pane_id}\t#{pane_pid}")
+    except Exception:   # noqa: BLE001 - a failing tmux leaves the field empty
+        return []
+    kids = {}
+    for pid in sorted(procs):
+        if procs[pid]["ppid"] != pid:
+            kids.setdefault(procs[pid]["ppid"], []).append(pid)
+    out = []
+    for line in str(rows).splitlines():
+        f = line.split("\t")
+        if len(f) != 3 or not f[0].startswith("✦ ") or not f[2].isdigit():
+            continue
+        for r in run_roots(int(f[2]), procs, kids):
+            pids = _subtree(r, kids)
+            out.append({"window": f[0], "pane": f[1], "pid": r, "cmd": procs[r]["cmd"], "elapsed_s": procs[r]["elapsed_s"],
+                        "cpu_s": round(sum(procs[q]["cpu_s"] for q in pids), 2), "pids": pids})
+    return out
+
+
+def _once(ps):
+    """ps() -> text, called at most once per overview build and parsed; {} when it fails."""
+    box = []
+
+    def get():
+        if not box:
+            try:
+                box.append(parse_ps(ps()))
+            except Exception:   # noqa: BLE001
+                box.append({})
+        return box[0]
+    return get
+
+
+def record(s, live, now, *, home, state_dir, tmux, th, spend, activity, mods=None, limits=None, pid_alive=_pid_alive, ps=None):
     name = s["name"]
     root = s.get("path")
     try:
@@ -272,13 +378,16 @@ def record(s, live, now, *, home, state_dir, tmux, th, spend, activity, mods=Non
             "lead": lead_state(s, (activity or {}).get(name), now, mods), "artifacts": arts, "epoch": epoch,
             "alerts": project_alerts(s, live, spent, th) + agent_alerts(s, mods, now, th), "spend_today": spent,
             "queue": queue, "owned": owned_tasks(name, view, tmux, mods, now) if queue else [],
-            "awake": awake_live(state_dir, pid_alive), "pace": weekly_pace(limits, now), "agents": agents(s, mods, now)}
+            "awake": awake_live(state_dir, pid_alive), "pace": weekly_pace(limits, now),
+            "runs": pane_runs(name, tmux, ps()) if (queue and ps) else [], "agents": agents(s, mods, now)}
 
 
-def build(sessions, live, now, *, home, state_dir, tmux, th=None, spend=None, activity=None, mods=None, limits=None, pid_alive=_pid_alive):
+def build(sessions, live, now, *, home, state_dir, tmux, th=None, spend=None, activity=None, mods=None, limits=None, pid_alive=_pid_alive,
+          ps=None):
     th = th if th is not None else usage.DEFAULT_ALERTS
+    sample = _once(ps) if ps else None
     projects = [record(s, live or [], now, home=home, state_dir=state_dir, tmux=tmux, th=th, spend=spend, activity=activity, mods=mods,
-                       limits=limits, pid_alive=pid_alive)
+                       limits=limits, pid_alive=pid_alive, ps=sample)
                 for s in sessions if not s["name"].startswith("_web-") and s["name"] != "overseer"]
     return {"generated": now, "projects": projects}
 

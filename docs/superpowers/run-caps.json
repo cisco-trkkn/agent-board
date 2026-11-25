@@ -1,0 +1,7 @@
+{"default_s": 900,
+ "caps": [
+   {"match": "node --test", "cap_s": 360},
+   {"match": "npm test", "cap_s": 360},
+   {"match": "unittest discover -s board/tests", "cap_s": 1080},
+   {"match": "tools/tests/all.zsh", "cap_s": 1620},
+   {"match": "tools/tests/run-all.zsh", "cap_s": 1620}]}

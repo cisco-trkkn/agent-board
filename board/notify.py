@@ -12,7 +12,7 @@ import time
 from collections import deque
 
 KINDS = ("needs_you", "plan_done", "test_failed", "lead_idle", "context", "usage", "failing", "stuck",
-         "teammate_gone", "teammate_silent", "awake_dropped", "weekly_pace")
+         "teammate_gone", "teammate_silent", "awake_dropped", "weekly_pace", "run_overdue")
 RATE_S = 300      # at most one event of a kind per project in this window
 IDLE_S = 900      # a lead idle this long with open tasks is event 4
 USAGE_KINDS = ("burn", "total", "day_total")
@@ -77,6 +77,18 @@ def _watch_conditions(p, add, queue_before):
     if pace and pace["used"] - pace["elapsed"] > PACE_MARGIN:
         add(name, "weekly_pace", "seven_day", f"{name}: weekly usage ahead of pace",
             f"weekly usage {pace['used']:g}% with {pace['elapsed']:g}% of the week gone")
+
+
+def run_overdue_text(name, cmd, elapsed_s, cap_s):
+    """The run watch's first alert text (spec 2026-11-24-run-watch-design.md §b); board/watch.py sends it itself, with
+    title = project, so the feed line reads `<project>: <name> run past cap: …`. Not a condition: the notifier's
+    one-event-per-kind-per-RATE_S rule would drop a second overdue run of the same project."""
+    return f"{name} run past cap: {flat_cmd(cmd, 80)} ({int(elapsed_s) // 60} min, cap {int(cap_s) // 60} min)"
+
+
+def flat_cmd(cmd, n):
+    """A command line on one line (whitespace runs collapsed), cut to n characters."""
+    return " ".join(str(cmd).split())[:n]
 
 
 def _esc(s):
