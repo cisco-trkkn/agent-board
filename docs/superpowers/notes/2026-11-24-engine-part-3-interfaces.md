@@ -1,0 +1,20 @@
+# Engine part 3 interfaces for the supervised improvement loop (2026-11-24)
+
+The supervised improvement loop's Task 1 (`docs/superpowers/plans/2026-11-21-supervised-improvement-loop.md` on branch
+`supervised-improvement-loop`) checks rows 3, 10 and 11 of its interface table against the built code. This note gives
+each row's file:line on branch `pcee-engine-part-3`, read with `grep -n` on that tree, and each place where the built
+code differs from the loop plan's wording. Line numbers are as of commit `ec228c8`; re-run `grep -n` after any edit.
+
+| Its row | Interface | Where (file:line) | Difference from its wording |
+| --- | --- | --- | --- |
+| 3 | `inbox` source `schedule`, `source_id` `<name>@<due_at>` | `engine/lib/engine/core.js:703` (drain dispatches `source === "schedule"` to `schedule.handleRow`); `engine/lib/engine/schedule.js:101` (the row written for a due timer, `` `${p.name}@${cur.due_at}` ``); `engine/lib/engine/cli.js:573` (`run-now`, `` `${name}@now:${epoch}` ``); `engine/lib/engine/schedule.js:120` (`handleRow`), `:117` (`nameOf`, the `source_id` before `@` when `name` is absent) | `due_at` is epoch seconds, as written in the timers row. `run-now` rows use `<name>@now:<epoch>`, not `<name>@<due_at>`. A row from another writer needs only `{"command"}` in its payload (`schedule.js:123` returns `no command` without it). |
+| 10 | `engine.json` key `holds`; the default hold list; `engine/bin/hold.js`; `claude/hooks/engine-hold.sh` | `engine/lib/engine/policy.js:68-69` (`holds` must be a list; returned as `holds: j.holds \|\| []`); `engine/lib/engine/hold.js:13` (`DEFAULT_HOLDS`); `engine/lib/engine/hold.js:28` (`rulesFor`, defaults then config rules, `config:<index>` ids); `engine/bin/hold.js` (the hook entry point); `claude/hooks/engine-hold.sh` is a symlink to `claude/plugin/scripts/engine-hold.sh`, registered in `claude/plugin/hooks/hooks.json:23` | `tool` is a regex over the whole tool name (`^(?:<tool>)$`, so `Write\|Edit` works). A path pattern is tested against the absolute path and the path relative to `ENGINE_WORKTREE`. The defaults are the `DEFAULT_HOLDS` array (`hold.js:13`), and `engine.json` `holds` adds to them; there is no switch-off for a default in this part (A3). The loop's Task 11 extends `DEFAULT_HOLDS`, not a separate list. |
+| 11 | `tmux-ctl engine schedule add\|list\|rm\|run-now` and `engine wake` | `engine/lib/engine/cli.js:496` (`cmdSchedule`, verbs dispatched at `:504`); `cli.js:573` (`run-now` row); `cli.js:579` (`cmdWake`, no argument runs a wake pass); `engine/lib/engine/schedule.js:27` (`add`), `:51` (`list`), `:57` (`rm`); `engine/lib/engine/launchd.js:83` (`install`), `:103` (`status`), `:127` (`uninstall`), `:169` (`migrate`) | `schedule add` is idempotent for an identical row: `schedule.js:37` returns `unchanged` when the rule and command match (A9); a different rule or command exits 1 `schedule <name> exists: rm it first`. `wake install\|status\|uninstall` manage the heartbeat LaunchAgent (`launchd.js:10`, label `com.user.agent-board-engine-wake`). `migrate` refuses unless the heartbeat is loaded (`launchd.js:177`, exit 2). |
+
+## Payload contract of a schedule row from another writer
+
+From the Global Constraints of the part 3 plan (`docs/superpowers/plans/2026-11-24-pcee-engine-part-3.md`), quoted:
+
+> **The `schedule` inbox row:** `source` `schedule`, `source_id` `<name>@<due_at>` (the occurrence that came due, epoch seconds as written in the row) or `<name>@now:<epoch seconds>` for `run-now`, `kind` `run`, `spec` null, `payload` the schedule's payload plus `"force": true` for `run-now`. Any writer may insert such a row with at least `{"command"}`; a missing `name` is the `source_id` before `@` (the supervised improvement loop's post-report row relies on this).
+
+Checked against the code: `handleRow` (`engine/lib/engine/schedule.js:120`) reads `command` from the payload and returns `no command` when it is missing or blank (`:123`); the name comes from `nameOf` (`:117`), which is the payload's `name` or else the `source_id` before `@`. An inserted row with no `name` therefore runs under the name taken from its `source_id`.

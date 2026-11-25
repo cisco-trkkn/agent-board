@@ -211,6 +211,20 @@ tmux-ctl scout schedule uninstall
 - **Switches.** `TC_SCOUT=0` in the job's environment, or an empty file `~/.local/state/agent-board/scout/off`, makes every run print `scout: off` and do nothing; remove either to resume. `scout schedule status` prints an `off:` line while one is set.
 - **It runs whatever branch the main checkout holds.** Keep `main` checked out there while the jobs are installed.
 
+### Engine wake heartbeat and schedules (optional)
+
+Scheduled jobs can live as engine schedule rows (`engine/`, spec 14) instead of one LaunchAgent each. A heartbeat LaunchAgent runs `tmux-ctl engine wake` every 900 seconds and runs the rows that are due.
+
+```zsh
+tmux-ctl engine wake install     # writes ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist and loads it
+tmux-ctl engine wake status      # first line loaded or not loaded, then the last wake
+tmux-ctl engine wake uninstall   # unloads the heartbeat and removes its plist
+tmux-ctl engine schedule migrate --dry-run   # prints the rows that would be added and the plists that would be removed; writes nothing
+tmux-ctl engine schedule migrate             # moves the dream, discover and scout LaunchAgents into engine schedule rows
+```
+
+`migrate` moves the dream, discover and scout LaunchAgents into engine schedule rows and needs the wake heartbeat loaded first: it refuses with exit 2 (`the wake heartbeat is not loaded: run tmux-ctl engine wake install first`) until `wake install` has loaded it, so no job is left without a runner.
+
 ### Usage tab statusLine (optional)
 
 The Activity drawer's Usage tab reads context %, model, effort and the 5-hour and weekly plan-limit figures from Claude Code itself when a session runs the agent-board statusLine. Without it the tab falls back to figures re-derived from transcripts. The statusLine is a user-global setting, so the install does not write it; add it to `~/.claude/settings.json` yourself (back the file up first):
