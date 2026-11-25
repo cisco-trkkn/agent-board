@@ -113,9 +113,15 @@ function configFor(worktree) {
 
 // `handle` is an open database or null (then it is opened here, after a rule matched, from env).
 function decide(handle, hookInput, env, now) {
-  if (!env.ENGINE_JOB) return { decision: "none" };
+  if (!env.ENGINE_JOB || !env.ENGINE_DIR) return { decision: "none" };
   const worktree = env.ENGINE_WORKTREE || (hookInput && hookInput.cwd) || process.cwd();
-  const rule = match(rulesFor(configFor(worktree)), hookInput, worktree);
+  let rules;
+  try { rules = rulesFor(configFor(worktree)); } catch (e) {
+    // a bad config rule must not switch the defaults off
+    process.stderr.write(`engine hold: ${e.message}; using the default holds\n`);
+    rules = rulesFor({ holds: [] });
+  }
+  const rule = match(rules, hookInput, worktree);
   if (!rule) return { decision: "none" };
   let d = handle;
   try {

@@ -268,6 +268,35 @@ test("decide: config holds come from the main checkout of the worktree (real git
   } finally { repo.cleanup(); e.restore(); }
 });
 
+test("decide: a bad config rule falls back to the default holds (stderr line, deny, none)", () => {
+  const e = tmpEnv();
+  const repo = gitRepo();
+  try {
+    fs.mkdirSync(path.join(repo.dir, "docs/superpowers"), { recursive: true });
+    fs.writeFileSync(path.join(repo.dir, "docs/superpowers/engine.json"),
+      JSON.stringify({ holds: [{ tool: "Bash", pattern: "(", outside_worktree: false }] }));
+    const wt = path.join(e.root, "wt-bad");
+    repo.git("worktree", "add", "-q", "-b", "bad", wt);
+    const d = db.open("p");
+    seed(d, "jobs", { id: "J", spec: "S", state: "running" }, "S");
+    const env = { PATH: process.env.PATH, ENGINE_JOB: "J", ENGINE_PROJECT: "p", ENGINE_DIR: e.engineDir, ENGINE_WORKTREE: wt };
+    const input = (command) => JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: wt, session_id: "s" });
+    const push = runBin(env, input("git push"));
+    assert.equal(push.status, 0);
+    const o = JSON.parse(push.stdout).hookSpecificOutput;
+    assert.equal(o.permissionDecision, "deny");
+    assert.match(o.permissionDecisionReason, /^held for approval [0-9a-f-]{36}:/);
+    assert.match(push.stderr, /^engine hold: bad hold rule 0: .+; using the default holds\n/);
+    const status = runBin(env, input("git status"));
+    assert.equal(status.stdout, "");
+    d.close();
+  } finally { repo.cleanup(); e.restore(); }
+});
+
+test("decide: an unset ENGINE_DIR is none", () => {
+  assert.deepEqual(hold.decide(null, { tool_name: "Bash", tool_input: { command: "git push" }, cwd: "/" }, { ENGINE_JOB: "J" }, 1), { decision: "none" });
+});
+
 // ---- the process
 function runBin(env, stdin) {
   const clean = { PATH: process.env.PATH, HOME: process.env.HOME };
