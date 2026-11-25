@@ -155,14 +155,14 @@ function removeAct(label, file) {
   fs.rmSync(file, { force: true });
   return { label, plist: file };
 }
-const stepDesc = (label, file) => ({ key: `plist_remove:${label}`, spec: null, kind: "plist_remove", facts: { label, plist: file } });
+const stepDesc = (label, file, key) => ({ key: key || `plist_remove:${label}`, spec: null, kind: "plist_remove", facts: { label, plist: file } });
 
 // Reruns a plist_remove step reconcile found not done. -> true when it finished.
 function rerunPlistRemove(db, row) {
   const steps = require("./steps");
   const f = row.result || {};
   if (!f.label || !f.plist) return false;
-  steps.run(db, { ...stepDesc(f.label, f.plist) }, () => removeAct(f.label, f.plist));
+  steps.run(db, stepDesc(f.label, f.plist, row.key), () => removeAct(f.label, f.plist));
   return true;
 }
 
@@ -201,7 +201,11 @@ async function migrate({ dryRun, project, io }) {
         continue;
       }
       // the row is written before the plist goes: a kill between the intent and the unlink loses nothing
-      steps.run(db, stepDesc(label, file), () => removeAct(label, file));
+      // a done step of an earlier migrate is not reused when the plist is back (reinstalled): that removal is a new step
+      const key0 = `plist_remove:${label}`;
+      const old = steps.getRow(db, key0);
+      const key = old && old.state === "done" ? `${key0}@${Math.floor(Date.now() / 1000)}` : key0;
+      steps.run(db, stepDesc(label, file, key), () => removeAct(label, file));
       say(added.status === "unchanged" ? `already migrated ${label}` : `migrated ${label} -> ${name} (${r.rule})`);
     }
     say(DIGEST_LINE);

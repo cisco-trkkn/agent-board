@@ -1470,6 +1470,7 @@ function start(opts) {
         for (const r of rec.rerun) {
           const sp = r.kind === "metrics_start" && r.spec ? get("specs", r.spec) : null;
           if (sp) metricsStart(sp); // the start never ran
+          if (r.kind === "plist_remove") require("./launchd").rerunPlistRemove(db, r); // the unlink never ran
         }
         for (const p of rec.park) {
           const s = get("steps", p.key);

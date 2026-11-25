@@ -240,7 +240,7 @@ test("migrate --dry-run prints the same lines prefixed 'would ' and writes nothi
   for (const j of JOBS) assert.equal(fs.existsSync(w.plist(j.label)), true);
 });
 
-test("migrate: a kill between the plist_remove intent and the unlink keeps the row; the rerun runs once", D, () => {
+test("migrate: a kill between the plist_remove intent and the unlink keeps the row; the rerun runs once", D, async () => {
   const w = world();
   w.flag("kill-on-bootout");
   const r = w.eng(["schedule", "migrate"]);
@@ -254,14 +254,10 @@ test("migrate: a kill between the plist_remove intent and the unlink keeps the r
   assert.equal(fs.existsSync(w.plist(label)), true);
   const n0 = w.calls(new RegExp(`^bootout gui/\\d+/${label}$`)).length;
   assert.equal(n0, 1);
-  // resume's reconcile: the check finds the plist still there, so the step is a rerun
-  const d2 = w.db();
-  const rec = withEnv(w, () => steps.reconcile(d2, {}));
-  assert.deepEqual(rec.rerun.map((x) => x.key), [first[0].key]);
-  assert.deepEqual(rec.park, []);
-  const done = withEnv(w, () => launchd.rerunPlistRemove(d2, rec.rerun[0]));
-  assert.equal(done, true);
-  d2.close();
+  // resume's reconcile (core.resume, as `engine start` and `engine wake` reach it) finds the plist still there and reruns the step once
+  const core = require("../lib/engine/core");
+  const eng = withEnv(w, () => core.start({ project: "p", repo: w.home, backend: require("../lib/engine/backend/fake").createBackend({ script: {} }), tmuxCtl: "true", session: "x", tickMs: 100 }));
+  try { await withEnv(w, () => eng.resume()); } finally { eng.stop(); }
   assert.equal(fs.existsSync(w.plist(label)), false);
   assert.equal(w.calls(new RegExp(`^bootout gui/\\d+/${label}$`)).length, n0 + 1);
   // and a second migrate finishes the other labels, never touching this one again
@@ -282,6 +278,22 @@ test("migrate: a plist whose row is identical prints already migrated and still 
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes("already migrated com.user.agent-board-dream\n"), r.stdout);
   assert.equal(fs.existsSync(w.plist("com.user.agent-board-dream")), false);
+  ok();
+});
+
+test("migrate: a reinstalled plist is removed again and there is still one row", D, () => {
+  const w = world();
+  assert.equal(w.eng(["schedule", "migrate"]).status, 0);
+  const j = JOBS[0];
+  fs.writeFileSync(w.plist(j.label), launchd.plistXml({ Label: j.label, ProgramArguments: j.args, StartCalendarInterval: j.cal, WorkingDirectory: "/h/agent-board", EnvironmentVariables: ENVV }));
+  const r = w.eng(["schedule", "migrate"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes(`already migrated ${j.label}\n`), r.stdout);
+  assert.equal(fs.existsSync(w.plist(j.label)), false);
+  assert.equal(w.calls(new RegExp(`^bootout gui/\\d+/${j.label}$`)).length, 2);
+  const d = w.db();
+  assert.equal(rows(d).filter((x) => x.name === j.name).length, 1);
+  d.close();
   ok();
 });
 
