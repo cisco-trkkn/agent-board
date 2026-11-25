@@ -85,11 +85,11 @@ the run failed for a setup reason of mine.** The resume brief now reads:
 The resumed worker wrote `p3real-spec_implement1_2.md` (status `done`, commit `76559615...`). Even so, job 2 ended
 `heartbeat_timeout` at 10:19:25. Cause: my scratch tmux server had no `TC_STATE`, so the worker's agent-status mod wrote
 its status file to the real `$TMPDIR/tmux-ctl-503/agent-status/` and the engine (reading `$TC_STATE/agent-status`)
-never saw a status for the pane. (This setup bug also explains the first run's heartbeat timeouts, not only the report
+never saw a status for the pane. (This setup bug may explain the first run's heartbeat timeouts, not only the report
 path; the report-path failure there stands on its own.) A `TC_STATE` set only in the engine's window is not enough: the
 tmux server's global environment has to carry `TC_STATE` and `TC_ENGINE_DIR` (`tmux set-environment -g`), as part 2's
 note says. I killed the engine and the worker by pid, removed the one leaked status file of my own session
-(`126b5025-....json`) from the real `$TMPDIR/tmux-ctl-503/agent-status/`, and reran.
+(`126b5025-....json`) from the real `$TMPDIR/tmux-ctl-503/agent-status/`, and reran. Other stale agent-status files from the scratch runs may remain in the real `$TMPDIR/tmux-ctl-$UID/agent-status/`.
 
 **Rerun 2 (head 86695f3, `TC_STATE` and `TC_ENGINE_DIR` set with `set-environment -g`): pass.**
 Hold `51a9e458-195d-4eae-9759-a337d52d4392` on a call that named only `/tmp/p3r.nl0EgR/origin.git`; `approve` (rc 0, as
