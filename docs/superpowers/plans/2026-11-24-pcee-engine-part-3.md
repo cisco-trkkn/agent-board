@@ -14,7 +14,8 @@ Sections 13 (approval holds) and 14 (schedules) as written, pulled forward by re
 
 ```json:manifest
 {"spec": "docs/superpowers/specs/2026-11-10-pcee-engine-design.md#part-3",
- "base": "1d6d988a170f21dd40e79b2a468e9ce0dc12fed6",
+ "base": "01bfb7af0687b2e9fb44b303852b2b04ace9bb7f",
+ "refreshed_from": {"base": "1d6d988a170f21dd40e79b2a468e9ce0dc12fed6", "stale_paths": ["bin/tmux-ctl", "docs/ARCHITECTURE.md", "docs/INSTALL.md", "tools/tests/test_plugin.zsh"]},
  "depends_on": [{"spec": "docs/superpowers/specs/2026-11-10-pcee-engine-design.md#part-2", "kind": "hard"}],
  "writes": [
   {"path": "engine/lib/engine/hold.js", "mode": "create"},
@@ -106,7 +107,7 @@ Every task respects these. Reviewers check against them and against spec section
 - **Weekly usage:** the newest file under `<stateDir>/statusline/*.json` (by its `received_at`) that has `rate_limits.seven_day.used_percentage`; none: unknown, and the run goes ahead with `usage: null` in its event.
 - **A run:** a window `sched·<name>` in session `<project>-bg` (created when absent: `new-session -d -s <project>-bg -n shell -c <cwd>`, then `set-option -t =<project>-bg: @tc_bg 1`, the same mark `ensure_bg` in `bin/tmux-ctl` sets), running `zsh -c` on `( <env assignments> <command> ) 2>&1 | tee <log>; print -r -- ${pipestatus[1]} > <rc>`, in `cwd`. Files: `<engineDir>/sched/<project>/<name>-<run key>.log` and `.rc`, with `<run key>` the `source_id` after `@` with `:` replaced by `-`. tmux is called with `TMUX_DASH_TMUX_ARGS` split on spaces as leading arguments (the seam the CLI already uses), and with `TMUX` removed from the environment. Events: `schedule_skipped {name, reason, usage}`, `schedule_started {name, key, window, rc_file, log}`, `schedule_ran {name, key, rc, log}`. A run is a `steps` row kind `schedule_run`, key `schedule_run:<source_id>`, `spec` null.
 - **The heartbeat:** launchd label `com.user.agent-board-engine-wake`, `ProgramArguments` `[<tmux-ctl>, "engine", "wake"]`, `StartInterval` 900, `RunAtLoad` true, `WorkingDirectory` the checkout root, `EnvironmentVariables` `PATH` (`<home>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`), `LANG`, and `TC_STATE`, else `TMPDIR`, when set (the scout plist's rule, `board/scout_schedule.py` `plist_text`), plus `TC_ENGINE_DIR` when set. The tmux-ctl path: `~/.local/bin/tmux-ctl` when executable, else `<checkout>/bin/tmux-ctl`.
-- **`bin/tmux-ctl`'s help** prints `sed -n '2,85p'` and nine suites pin it: no task adds a header line. `engine)` already exists and `engine` already works outside tmux (line 122), so `engine wake` from launchd needs no new exemption.
+- **`bin/tmux-ctl`'s help** prints `sed -n '2,86p'` and nine suites pin it: no task adds a header line. `engine)` already exists and `engine` already works outside tmux (line 123), so `engine wake` from launchd needs no new exemption.
 - **Commits.** Conventional commits with scope (`feat(engine): …`, `feat(hooks): …`, `feat(tmux-ctl): …`, `docs(engine): …`); end every commit message with the attribution trailer your harness specifies. Stage only your own paths (`git add <paths>`, commit with `-- <paths>`). Nothing is pushed and no PR is opened by this plan.
 
 **User decisions (already made):**
@@ -243,7 +244,7 @@ exec node --no-warnings "$repo/engine/bin/hold.js"
 
   Then `ln -s ../plugin/scripts/engine-hold.sh claude/hooks/engine-hold.sh` and `chmod +x claude/plugin/scripts/engine-hold.sh`.
 - [ ] `hooks.json`: insert the entry first under `PreToolUse`.
-- [ ] `bin/tmux-ctl`, in `agent)`, just before `line=…` (line 594 at base): `eenv=""; [[ -n "$ENGINE_JOB" ]] && eenv=" ENGINE_JOB=${(q)ENGINE_JOB} ENGINE_PROJECT=${(q)ENGINE_PROJECT} ENGINE_DIR=${(q)ENGINE_DIR} ENGINE_WORKTREE=${(q)ENGINE_WORKTREE}"`, and in `line=` replace `AGENT_BOARD_REPO=${(q)AB_REPO} $cmd` with `AGENT_BOARD_REPO=${(q)AB_REPO}${eenv} $cmd`. Plan author's run of this snippet in zsh (2026-11-24): with `ENGINE_JOB` empty the line ends `AGENT_BOARD_REPO=/a\ b/repo claude -x` (unchanged); with it set, `AGENT_BOARD_REPO=/a\ b/repo ENGINE_JOB=s:implement1:1 ENGINE_PROJECT=p ENGINE_DIR=/e\ d ENGINE_WORKTREE=/w claude -x`. (Not a `${line/…/…}` substitution: its pattern is a glob, and a repo path with glob characters would not match.)
+- [ ] `bin/tmux-ctl`, in `agent)`, just before `line=…` (line 600 at base): `eenv=""; [[ -n "$ENGINE_JOB" ]] && eenv=" ENGINE_JOB=${(q)ENGINE_JOB} ENGINE_PROJECT=${(q)ENGINE_PROJECT} ENGINE_DIR=${(q)ENGINE_DIR} ENGINE_WORKTREE=${(q)ENGINE_WORKTREE}"`, and in `line=` replace `AGENT_BOARD_REPO=${(q)AB_REPO} $cmd` with `AGENT_BOARD_REPO=${(q)AB_REPO}${eenv} $cmd`. Plan author's run of this snippet in zsh (2026-11-24): with `ENGINE_JOB` empty the line ends `AGENT_BOARD_REPO=/a\ b/repo claude -x` (unchanged); with it set, `AGENT_BOARD_REPO=/a\ b/repo ENGINE_JOB=s:implement1:1 ENGINE_PROJECT=p ENGINE_DIR=/e\ d ENGINE_WORKTREE=/w claude -x`. (Not a `${line/…/…}` substitution: its pattern is a glob, and a repo path with glob characters would not match.)
 - [ ] `claude_tmux.js`, `fake.js`, `cli.js` per the criteria.
 - [ ] Run the Verify command: all pass. Commit `feat(hooks): engine-hold hook entry and the engine worker environment`.
 
