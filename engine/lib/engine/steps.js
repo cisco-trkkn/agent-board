@@ -109,6 +109,14 @@ const CHECKS = {
     if (l.unknown) return "unknown";
     return l.lines.includes(f.pane) ? "not_done" : "done";
   },
+  // the run finished (its rc file exists) or its window is still open in <project>-bg
+  schedule_run(ctx, row) {
+    const f = row.result || {};
+    try { if (f.rc_file && fs.existsSync(f.rc_file)) return "done"; } catch (_) { return "unknown"; }
+    const l = tmuxList(ctx, ["list-windows", "-t", `=${ctx.project}-bg:`, "-F", "#{window_name}"]);
+    if (l.unknown) return "unknown";
+    return f.window && l.lines.includes(f.window) ? "done" : "not_done";
+  },
   merge(ctx, row) {
     const f = row.result || {};
     const r = git(mainRepo(ctx), ["merge-base", "--is-ancestor", f.branch, f.target || target(ctx)]);
@@ -157,10 +165,11 @@ function fail(db, row, error, { now } = {}) {
 }
 
 // Runs the check of every intent row. Acts on nothing: the caller re-runs `rerun` and parks `park`.
-function reconcile(db, ctx, { now } = {}) {
+function reconcile(db, ctx, { now, only } = {}) {
   const out = { rerun: [], park: [] };
   for (const raw of db.prepare("SELECT * FROM steps WHERE state='intent' ORDER BY created_at, key").all()) {
     const row = hydrate(raw);
+    if (only && !only(row)) continue;
     let verdict = "unknown";
     try {
       const check = CHECKS[row.kind];
@@ -178,4 +187,6 @@ function reconcile(db, ctx, { now } = {}) {
   return out;
 }
 
-module.exports = { run, begin, finish, fail, reconcile, CHECKS, getRow };
+const listWindows = (ctx, session) => tmuxList(ctx, ["list-windows", "-t", `=${session}:`, "-F", "#{window_name}"]);
+
+module.exports = { listWindows, run, begin, finish, fail, reconcile, CHECKS, getRow };

@@ -271,3 +271,27 @@ test("feed line parses with board/discord_feed.read_events", () => {
   assert.equal(evs[0].text, "park: which way?");
   assert.equal(evs[0].spec, "2026-11-23-x-design");
 });
+
+test("schedule_run check: rc file exists or window open is done; neither is not_done; no server is not_done", () => {
+  const { e } = env();
+  const tm = scratchTmux();
+  cleanups.push(() => tm.kill());
+  tm.run(["new-session", "-d", "-s", "keep"]);
+  const sock = tm.run(["display-message", "-p", "#{socket_path}"]).stdout.trim();
+  const old = process.env.TMUX_TMPDIR;
+  process.env.TMUX_TMPDIR = path.dirname(path.dirname(sock));
+  try {
+    const ctx = { project: "p", tmuxArgs: ["-L", tm.socket, "-f", "/dev/null"] };
+    const rc = path.join(e.root, "x.rc");
+    const row = (r) => ({ key: "schedule_run:a@1", kind: "schedule_run", result: { name: "a", window: "sched·a", rc_file: rc, ...r } });
+    assert.equal(steps.CHECKS.schedule_run(ctx, row()), "not_done");
+    tm.run(["new-session", "-d", "-s", "p-bg", "-n", "sched·a", "sleep 20"]);
+    assert.equal(steps.CHECKS.schedule_run(ctx, row()), "done");
+    tm.run(["kill-session", "-t", "=p-bg"]);
+    assert.equal(steps.CHECKS.schedule_run(ctx, row()), "not_done");
+    fs.writeFileSync(rc, "0\n");
+    assert.equal(steps.CHECKS.schedule_run(ctx, row()), "done");
+    fs.rmSync(rc);
+    assert.equal(steps.CHECKS.schedule_run({ ...ctx, tmuxArgs: ["-L", tm.socket, "-f", "/dev/null"], project: "p" }, row({ window: undefined })), "not_done");
+  } finally { if (old === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = old; }
+});

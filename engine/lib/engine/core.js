@@ -1524,4 +1524,4 @@ function start(opts) {
   return E;
 }
 
-module.exports = { start, contextTokens, fixStats, tapReset, TICK_S, HEARTBEAT_S, NO_PROGRESS_S, NUDGE_GRACE_S, TOOL_LIMIT_S, NEEDS_YOU_PARK_S };
+module.exports = { start, takeLock, contextTokens, fixStats, tapReset, TICK_S, HEARTBEAT_S, NO_PROGRESS_S, NUDGE_GRACE_S, TOOL_LIMIT_S, NEEDS_YOU_PARK_S };

@@ -22,6 +22,7 @@ const schedule = lazy("./schedule");
 
 const SUBS = ["run", "status", "events", "resume", "signal", "rebuild", "enqueue", "start", "done", "schedule"];
 const USAGE = `engine: usage: engine <${SUBS.join("|")}> ...\n`;
+// `wake` is run by launchd, not typed: it stays out of the pinned usage line (Task 8 adds wake install|status|uninstall)
 const ANSWERS = ["approve", "deny", "fail"];
 const OK_OUTCOME = /^(merged|mr|kept)/;
 // Bookkeeping events the foreground printer hides: three deadline re-arms per job every two minutes, timer and inbox
@@ -583,7 +584,7 @@ async function main(argv, io0) {
     ...(io0 || {}),
   };
   const sub = argv[0];
-  if (!SUBS.includes(sub)) { io.err(USAGE); return 2; }
+  if (!SUBS.includes(sub) && sub !== "wake") { io.err(USAGE); return 2; }
   const rest = argv.slice(1);
   try {
     switch (sub) {
@@ -596,6 +597,7 @@ async function main(argv, io0) {
       case "start": return await cmdStart(rest, io);
       case "done": return cmdDone(rest, io);
       case "schedule": return cmdSchedule(rest, io);
+      case "wake": return await require("./wake").run({ io });
       default: return cmdRebuild(rest, io);
     }
   } catch (e) {

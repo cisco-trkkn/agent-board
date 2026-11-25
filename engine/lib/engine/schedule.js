@@ -1,8 +1,14 @@
 "use strict";
 // Schedule rows (spec section 14): a schedule is a `timers` row of kind `schedule`, id `schedule:<name>`.
 // `inbox.moveDueTimers` never fires them; the wake runner (later tasks) does.
+const fs = require("node:fs");
+const path = require("node:path");
+const cp = require("node:child_process");
 const { tx, put, event } = require("./db");
 const rules = require("./schedule_rules");
+const inbox = require("./inbox");
+const steps = require("./steps");
+const paths = require("./paths");
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_WORD = /^[A-Za-z0-9_./:=@%+-]+$/;
@@ -57,4 +63,137 @@ function rm(db, name, now) {
   });
 }
 
-module.exports = { add, list, rm, shellJoin };
+// ---- the runner (Task 6) ---------------------------------------------------------------------------------------
+
+const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const q = (w) => shellJoin([String(w)]);
+const tmuxRun = (ctx, args) =>
+  cp.spawnSync("tmux", [...(ctx.tmuxArgs || []), ...args], { encoding: "utf8", timeout: 30000, env: { ...process.env, TMUX: "" } });
+
+// Newest statusline tap's seven_day percentage, or null when there is none.
+function weeklyUsage() {
+  const dir = path.join(paths.stateDir(), "statusline");
+  let best = null;
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith(".json")); } catch (_) { return null; }
+  for (const n of names) {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(dir, n), "utf8"));
+      const pct = j && j.rate_limits && j.rate_limits.seven_day && j.rate_limits.seven_day.used_percentage;
+      if (typeof pct !== "number") continue;
+      const at = Number(j.received_at) || 0;
+      if (!best || at > best.at) best = { at, pct };
+    } catch (_) { /* unreadable tap */ }
+  }
+  return best ? best.pct : null;
+}
+
+// Each active row due at `now` moves to its next occurrence, with one `schedule` inbox row and a schedule_due event. -> count.
+function moveDue(db, now) {
+  const due = db.prepare("SELECT * FROM timers WHERE kind='schedule' AND fired_at IS NULL AND due_at <= ? ORDER BY due_at, id").all(now);
+  let n = 0;
+  for (const t of due) {
+    tx(db, () => {
+      const cur = db.prepare("SELECT * FROM timers WHERE id=?").get(t.id);
+      if (!cur || cur.fired_at !== null || cur.due_at > now) return;
+      const p = payloadOf(cur);
+      const row = put(db, "timers", { ...cur, due_at: rules.nextAfter(p.rule, now, cur.due_at) });
+      const source_id = `${p.name}@${cur.due_at}`;
+      inbox.insert(db, { source: "schedule", source_id, kind: "run", payload: p }, now);
+      const irow = db.prepare("SELECT * FROM inbox WHERE source='schedule' AND source_id=?").get(source_id);
+      event(db, { kind: "schedule_due", ts: now, name: p.name, rows: [{ table: "timers", row }, { table: "inbox", row: irow }] });
+      n++;
+    });
+  }
+  return n;
+}
+
+const rowPayload = (row) => {
+  let p = null;
+  try { p = JSON.parse(row.payload); } catch (_) { return {}; }
+  return p && typeof p === "object" ? p : {};
+};
+const runKey = (source_id) => String(source_id).slice(String(source_id).indexOf("@") + 1).replace(/:/g, "-");
+const nameOf = (row, p) => p.name || String(row.source_id).split("@")[0];
+
+// Runs inside the drain's tx: a skip is one event, a run is a `schedule_run` step at intent (written like steps.begin, without its own tx).
+function handleRow(db, row, ctx) {
+  const t = ctx.now !== undefined ? ctx.now : Date.now() / 1000;
+  const p = rowPayload(row);
+  if (typeof p.command !== "string" || !p.command.trim()) return { drop: "no command" };
+  const name = nameOf(row, p);
+  const usage = weeklyUsage();
+  const limit = p.skip_if_weekly_usage;
+  if (!p.force && typeof limit === "number" && usage !== null && usage >= limit) {
+    event(db, { kind: "schedule_skipped", ts: t, name, reason: `weekly usage ${usage}% >= ${limit}%`, usage });
+    return undefined;
+  }
+  const window = `sched·${name}`;
+  const l = steps.listWindows(ctx, `${ctx.project}-bg`);
+  if (!l.unknown && l.lines.includes(window)) {
+    event(db, { kind: "schedule_skipped", ts: t, name, reason: "still running", usage });
+    return undefined;
+  }
+  const base = path.join(paths.engineDir(), "sched", ctx.project, `${name}-${runKey(row.source_id)}`);
+  const facts = { name, command: p.command, cwd: p.cwd || process.cwd(), env: p.env || {}, window, rc_file: `${base}.rc`, log: `${base}.log` };
+  const key = `schedule_run:${row.source_id}`;
+  const srow = put(db, "steps", { key, spec: null, kind: "schedule_run", state: "intent", result: JSON.stringify(facts), created_at: t, updated_at: t });
+  event(db, { kind: "step_intent", ts: t, rows: [{ table: "steps", row: srow }], key, step_kind: "schedule_run", usage });
+  return undefined;
+}
+
+// The zsh line a run's window executes.
+function runLine(f) {
+  const env = Object.entries(f.env || {}).filter(([k]) => ENV_KEY.test(k)).map(([k, v]) => `export ${k}=${q(v)};`).join(" ");
+  return `( ${env} ${f.command} ) 2>&1 | tee ${q(f.log)}; print -r -- $` + `{pipestatus[1]} > ${q(f.rc_file)}`;
+}
+
+const parseResult = (r) => { try { return JSON.parse(r); } catch (_) { return {}; } };
+
+// Opens the window of every `schedule_run` step at intent. -> the keys it started.
+function runIntents(db, ctx) {
+  const started = [];
+  const bg = `${ctx.project}-bg`;
+  for (const srow of db.prepare("SELECT * FROM steps WHERE kind='schedule_run' AND state='intent' ORDER BY created_at, key").all()) {
+    const f = parseResult(srow.result);
+    const desc = { key: srow.key, spec: null, kind: "schedule_run" };
+    const t = ctx.now !== undefined ? ctx.now : Date.now() / 1000;
+    try {
+      fs.mkdirSync(path.dirname(f.log), { recursive: true });
+      if (tmuxRun(ctx, ["has-session", "-t", `=${bg}`]).status !== 0) {
+        const r = tmuxRun(ctx, ["new-session", "-d", "-s", bg, "-n", "shell", "-c", f.cwd]);
+        if (r.status !== 0) throw new Error(`new-session: ${(r.stderr || "").trim()}`);
+        tmuxRun(ctx, ["set-option", "-t", `=${bg}:`, "@tc_bg", "1"]);
+      }
+      const r = tmuxRun(ctx, ["new-window", "-d", "-t", `=${bg}:`, "-n", f.window, "-c", f.cwd, "zsh", "-c", runLine(f)]);
+      if (r.status !== 0) throw new Error(`new-window: ${(r.stderr || "").trim()}`);
+    } catch (e) {
+      steps.fail(db, srow, String(e.message || e), { now: t });
+      continue;
+    }
+    steps.finish(db, desc, { ...f, started_at: t }, { now: t });
+    tx(db, () => event(db, { kind: "schedule_started", ts: t, name: f.name, key: srow.key, window: f.window, rc_file: f.rc_file, log: f.log }));
+    started.push(srow.key);
+  }
+  return started;
+}
+
+// One `schedule_ran` for each done run whose rc file exists. -> the keys it recorded.
+function finishRuns(db, ctx) {
+  const out = [];
+  for (const srow of db.prepare("SELECT * FROM steps WHERE kind='schedule_run' AND state='done' ORDER BY created_at, key").all()) {
+    const f = parseResult(srow.result);
+    if (!f.rc_file) continue;
+    if (db.prepare("SELECT 1 FROM events WHERE kind='schedule_ran' AND json_extract(detail,'$.key')=?").get(srow.key)) continue;
+    let text;
+    try { text = fs.readFileSync(f.rc_file, "utf8"); } catch (_) { continue; }
+    const rc = parseInt(text.trim(), 10);
+    if (!Number.isInteger(rc)) continue;
+    const t = ctx.now !== undefined ? ctx.now : Date.now() / 1000;
+    tx(db, () => event(db, { kind: "schedule_ran", ts: t, name: f.name, key: srow.key, rc, log: f.log }));
+    out.push(srow.key);
+  }
+  return out;
+}
+
+module.exports = { add, list, rm, shellJoin, weeklyUsage, moveDue, handleRow, runIntents, finishRuns, runLine };
