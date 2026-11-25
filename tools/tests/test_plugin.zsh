@@ -43,6 +43,13 @@ check "plugin.json description names agent-status" zsh -c 'python3 -c "import js
 check "plugin.json description names team-band" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF team-band' _ "$P/.claude-plugin/plugin.json"
 check "plugin.json description names usage-gauges" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF usage-gauges' _ "$P/.claude-plugin/plugin.json"
 check "plugin.json description names the kill-guard, bash-mirror and artifact-register mods" zsh -c 'python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"description\"])" "$1" | grep -qF "kill-guard, bash-mirror and artifact-register mods"' _ "$P/.claude-plugin/plugin.json"
+check "hooks.json registers engine-hold first under PreToolUse: matcher *, --scoped, timeout 10" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+want = {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/engine-hold.sh\" --scoped", "timeout": 10}]}
+assert d[0] == want, d[0]
+assert len([h for e in d for h in e["hooks"] if "engine-hold" in h["command"]]) == 1
+PY
 check "hooks.json registers sdd-call-guard on PreToolUse Agent, --scoped, timeout 10" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]

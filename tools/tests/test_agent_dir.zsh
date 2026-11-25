@@ -48,6 +48,13 @@ check "TC_AGENT_CMD replaces claude ..."     grep -qF 'echo FAKECMD' <<< "$line"
 check "TC_AGENT_CMD: no claude --model left" test -z "$(grep -F 'claude --model' <<< "$line")"
 check "TC_AGENT_CMD: env prefix kept"        grep -qF 'TC_ROLE=worker' <<< "$line"
 
+out="$(ENGINE_JOB=s:implement1:1 ENGINE_PROJECT=p ENGINE_DIR="$work/e d" ENGINE_WORKTREE="$work/wt" dry "$new" agent w7 --dir "$work/wt" --brief "$brief")"
+line="$(grep '^DRYRUN line:' <<< "$out")"
+check "ENGINE_JOB set: line carries the four ENGINE_ variables after AGENT_BOARD_REPO" zsh -c '[[ $1 == *"AGENT_BOARD_REPO="*" ENGINE_JOB=s:implement1:1 ENGINE_PROJECT=p ENGINE_DIR="*" ENGINE_WORKTREE="*" claude "* ]]' _ "$line"
+out="$(ENGINE_JOB=s:implement1:2 ENGINE_PROJECT=p ENGINE_DIR="$work/e" ENGINE_WORKTREE="$work/wt" dry "$new" agent w8 --dir "$work/wt" --resume sess-9 --brief "$brief")"
+line="$(grep '^DRYRUN line:' <<< "$out")"
+check "ENGINE_JOB set with --resume: line has --resume and ENGINE_JOB=" test -n "$(grep -F -- '--resume sess-9' <<< "$line")" -a -n "$(grep -F 'ENGINE_JOB=s:implement1:2' <<< "$line")"
+check "ENGINE_JOB unset: no ENGINE_ in the line" test -z "$(dry "$new" agent w9 --dir "$work/wt" --brief "$brief" | grep '^DRYRUN line:' | grep -F ENGINE_)"
 check "agent usage header line documents --dir" grep -qxF '#   tmux-ctl agent <name> [--force] [--dir WT [--resume ID]] [--model M] [--effort E] <task> | --brief FILE' "$new"
 out="$(dry "$new" agent 'my-spec-p1·implement3' --dir "$work/wt" --brief "$brief")"; rc=$?
 check "--dir: window name <slug>·<kind><task> accepted" test $rc -eq 0 -a -n "$(grep -F 'DRYRUN line:' <<< "$out")"

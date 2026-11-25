@@ -18,8 +18,9 @@ const inbox = lazy("./inbox");
 const rebuild = lazy("./rebuild");
 const lead = lazy("./lead");
 const queue = lazy("./queue");
+const schedule = lazy("./schedule");
 
-const SUBS = ["run", "status", "events", "resume", "signal", "rebuild", "enqueue", "start", "done"];
+const SUBS = ["run", "status", "events", "resume", "signal", "rebuild", "enqueue", "start", "done", "schedule", "wake"];
 const USAGE = `engine: usage: engine <${SUBS.join("|")}> ...\n`;
 const ANSWERS = ["approve", "deny", "fail"];
 const OK_OUTCOME = /^(merged|mr|kept)/;
@@ -29,8 +30,8 @@ const QUIET = /^(deadline|timer_fired|inbox_.*|job_session|step_intent|step_done
 const TICK_MS_FAKE = 100;
 
 const VALUE_FLAGS = new Set(["--integration", "--batch", "--project", "--backend", "--note", "--script", "--budget-attempts", "--budget-tokens",
-  "--runner", "--gate", "--worktree", "--outcome"]);
-const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply", "--preflight", "--here", "--unfinished"]);
+  "--runner", "--gate", "--worktree", "--outcome", "--rule", "--skip-if-weekly-usage"]);
+const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply", "--preflight", "--here", "--unfinished", "--dry-run"]);
 
 function parseArgs(argv) {
   const pos = [];
@@ -96,7 +97,7 @@ const tmuxCtlPath = () => process.env.TC_TMUX_CTL || path.resolve(__dirname, "..
 
 // ---- backend and core ------------------------------------------------------------------------------------------
 
-function makeBackend(kind, flags, session, tmuxCtl) {
+function makeBackend(kind, flags, session, tmuxCtl, project) {
   if (kind === "fake") {
     let script = {};
     if (flags.script) script = JSON.parse(fs.readFileSync(flags.script, "utf8"));
@@ -105,7 +106,7 @@ function makeBackend(kind, flags, session, tmuxCtl) {
   if (kind === "claude-tmux") {
     if (!session) throw Object.assign(new Error("run it from a tmux session (TC_SESSION is not set)"), { usage: true });
     const tmuxArgs = (process.env.TMUX_DASH_TMUX_ARGS || "").split(/\s+/).filter(Boolean);
-    const backend = require("./backend/claude_tmux").createBackend({ session, tmuxCtl, statusDir: paths.statusDir(), tmuxArgs });
+    const backend = require("./backend/claude_tmux").createBackend({ session, tmuxCtl, statusDir: paths.statusDir(), tmuxArgs, project });
     return { backend, tmuxArgs };
   }
   throw Object.assign(new Error(`unknown backend ${kind} (claude-tmux|fake)`), { usage: true });
@@ -124,7 +125,7 @@ function startCore(ctx, flags, backendKind, extra = {}) {
   const core = require("./core");
   const tmuxCtl = tmuxCtlPath();
   const session = process.env.TC_SESSION || "";
-  const { backend, tickMs, tmuxArgs } = makeBackend(backendKind, flags, session, tmuxCtl);
+  const { backend, tickMs, tmuxArgs } = makeBackend(backendKind, flags, session, tmuxCtl, ctx.project);
   const eng = core.start({
     project: ctx.project, repo: ctx.repo, backend, tmuxCtl, session, tmuxArgs, tickMs, backendKind, ...queue.reportHooks, ...extra,
     notify: notifier(ctx.project, ctx.out),
@@ -483,6 +484,105 @@ function cmdDone(args, io) {
   return 0;
 }
 
+const SCHEDULE_USAGE = "usage: engine schedule add <name> --rule \"<rule>\" [--skip-if-weekly-usage <0-100|none>] -- <command...> | list | rm <name> | run-now <name> | migrate [--dry-run]";
+const lt = (n) => String(n).padStart(2, "0");
+// Local time as YYYY-MM-DD HH:MM.
+function localTime(ts) {
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${lt(d.getMonth() + 1)}-${lt(d.getDate())} ${lt(d.getHours())}:${lt(d.getMinutes())}`;
+}
+
+// The words after the first `--` are the command, never flags.
+async function cmdSchedule(args, io) {
+  const cut = args.indexOf("--");
+  const head = cut < 0 ? args : args.slice(0, cut);
+  const words = cut < 0 ? [] : args.slice(cut + 1);
+  const p = parseArgs(head);
+  const usage = (why) => { io.err(`engine: schedule: ${why || SCHEDULE_USAGE}\n`); return 2; };
+  if (p.error) return usage(`${p.error}\n${SCHEDULE_USAGE}`);
+  const [verb, name, ...extra] = p.pos;
+  if (!["add", "list", "rm", "run-now", "migrate"].includes(verb) || extra.length) return usage();
+  if (verb === "migrate") {
+    if (name || words.length) return usage();
+    const dry = !!p.flags["dry-run"];
+    const project = dry ? (p.flags.project || process.env.TC_PROJECT || null) : resolveProject(p.flags, io);
+    if (!dry && !project) return 2;
+    return await require("./launchd").migrate({ dryRun: dry, project, io });
+  }
+  const project = resolveProject(p.flags, io);
+  if (!project) return 2;
+  if (verb === "add") {
+    const f = p.flags;
+    if (!name || !f.rule || !words.length || !words.join("").length) return usage();
+    let skip = 85;
+    if (f["skip-if-weekly-usage"] !== undefined) {
+      const v = f["skip-if-weekly-usage"];
+      if (v === "none") skip = null;
+      else if (/^\d+$/.test(v) && Number(v) <= 100) skip = Number(v);
+      else return usage();
+    }
+    const command = words.length === 1 ? words[0] : schedule.shellJoin(words);
+    const cwd = git(io.cwd, ["rev-parse", "--show-toplevel"]) || io.cwd;
+    const d = db.open(project);
+    try {
+      const now = Date.now() / 1000;
+      let r;
+      try { r = schedule.add(d, { name, rule: f.rule, command, skip_if_weekly_usage: skip, cwd }, now); } catch (e) {
+        if (e.code === "bad_input") return usage(`${e.message}\n${SCHEDULE_USAGE}`);
+        io.err(`engine: schedule: ${e.message}\n`);
+        return 1;
+      }
+      if (r.status === "unchanged") io.out(`unchanged ${name}`);
+      else io.out(`added ${name}: ${f.rule.trim()}, next ${localTime(r.due_at)}`);
+      return 0;
+    } finally { d.close(); }
+  }
+  if (words.length) return usage();
+  if (verb === "list" && name) return usage();
+  if ((verb === "rm" || verb === "run-now") && !name) return usage();
+  if (verb === "run-now") return await runNow(project, name, io);
+  if (!dbExists(project)) {
+    if (verb === "list") { io.out("no schedules"); return 0; }
+    io.err(`engine: schedule: no schedule ${name}\n`);
+    return 1;
+  }
+  const d = db.open(project);
+  try {
+    if (verb === "list") {
+      const rows = schedule.list(d);
+      if (!rows.length) io.out("no schedules");
+      for (const r of rows) io.out(`${r.name}  ${r.rule}  next ${localTime(r.due_at)}  ${r.command}`);
+      return 0;
+    }
+    try { schedule.rm(d, name, Date.now() / 1000); } catch (e) { io.err(`engine: schedule: ${e.message}\n`); return 1; }
+    io.out(`removed ${name}`);
+    return 0;
+  } finally { d.close(); }
+}
+
+// Inserts the run-now row (spec 14). With no engine running the short pass of `engine wake` for this project runs it now
+// and waits like a wake; with one running, its next tick drains the row.
+async function runNow(project, name, io) {
+  if (!dbExists(project)) { io.err(`engine: schedule: no schedule ${name}\n`); return 1; }
+  const d = db.open(project);
+  try {
+    const cur = d.prepare("SELECT * FROM timers WHERE id=? AND kind='schedule'").get(`schedule:${name}`);
+    if (!cur || cur.fired_at !== null) { io.err(`engine: schedule: no schedule ${name}\n`); return 1; }
+    const t = Date.now() / 1000;
+    const payload = { ...JSON.parse(cur.payload), force: true };
+    inbox.insert(d, { source: "schedule", source_id: `${name}@now:${Math.floor(t)}`, kind: "run", payload }, t);
+  } finally { d.close(); }
+  if (engineRunning(project)) { io.out(`queued for the running engine: ${name}`); return 0; }
+  return await require("./wake").run({ io, project });
+}
+
+async function cmdWake(args, io) {
+  if (!args.length) return await require("./wake").run({ io });
+  const sub = args[0];
+  if (args.length > 1 || !["install", "status", "uninstall"].includes(sub)) { io.err("engine: wake: usage: engine wake [install|status|uninstall]\n"); return 2; }
+  return require("./launchd")[sub](io);
+}
+
 function cmdRebuild(args, io) {
   const p = parseArgs(args);
   if (p.error || p.pos.length || !!p.flags.check === !!p.flags.apply) {
@@ -526,6 +626,8 @@ async function main(argv, io0) {
       case "enqueue": return cmdEnqueue(rest, io);
       case "start": return await cmdStart(rest, io);
       case "done": return cmdDone(rest, io);
+      case "schedule": return await cmdSchedule(rest, io);
+      case "wake": return await cmdWake(rest, io);
       default: return cmdRebuild(rest, io);
     }
   } catch (e) {

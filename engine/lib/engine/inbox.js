@@ -23,7 +23,7 @@ const inboxRow = (db, source, source_id) => db.prepare("SELECT * FROM inbox WHER
 // Move every due, unfired timer into the inbox: one tx per timer, with its event. Oldest due first.
 function moveDueTimers(db, now) {
   const t = nowS(now);
-  const due = db.prepare("SELECT * FROM timers WHERE fired_at IS NULL AND due_at <= ? ORDER BY due_at, id").all(t);
+  const due = db.prepare("SELECT * FROM timers WHERE fired_at IS NULL AND kind != 'schedule' AND due_at <= ? ORDER BY due_at, id").all(t);
   let n = 0;
   for (const timer of due) {
     tx(db, () => {
@@ -63,25 +63,30 @@ function workerRows(db, events, now) {
   return out;
 }
 
-// Handle every `new` row, oldest first (by id). `handle(row, db)` runs INSIDE the drain's tx for that row, so it may
-// call put/event too. It returns undefined, or {drop: "<reason>"} to mark the row dropped. A throw rolls back that row
-// only (it stays `new`), stops the drain and is rethrown. Returns the number of rows handled.
-function drain(db, handle, now) {
+// Handle every `new` row, oldest first (by id); with `{source}`, only that source's rows. `handle(row, db)` runs INSIDE the
+// drain's tx for that row, so it may call put/event too. It returns undefined, or {drop: "<reason>"} to mark the row dropped.
+// The row is re-read inside the tx and skipped unless it is still `new`: another process may have handled it since the id was
+// chosen. A throw rolls back that row only (it stays `new`), stops the drain and is rethrown. Returns the number of rows handled.
+function drain(db, handle, now, { source } = {}) {
   const t = nowS(now);
   let n = 0;
   for (;;) {
-    const next = db.prepare("SELECT id FROM inbox WHERE state='new' ORDER BY id LIMIT 1").get();
+    const next = source === undefined
+      ? db.prepare("SELECT id FROM inbox WHERE state='new' ORDER BY id LIMIT 1").get()
+      : db.prepare("SELECT id FROM inbox WHERE state='new' AND source=? ORDER BY id LIMIT 1").get(source);
     if (!next) return n;
-    tx(db, () => {
+    const handled = tx(db, () => {
       const r = db.prepare("SELECT * FROM inbox WHERE id=?").get(next.id);
+      if (!r || r.state !== "new") return false;
       const res = handle(r, db);
       const drop = res && res.drop ? String(res.drop) : null;
       db.prepare("UPDATE inbox SET state=?, handled_at=?, reason=? WHERE id=?").run(drop ? "dropped" : "done", t, drop, r.id);
       const done = db.prepare("SELECT * FROM inbox WHERE id=?").get(r.id);
       event(db, { spec: r.spec, job: r.job, kind: `inbox_${r.source}`, ts: t,
         rows: [{ table: "inbox", row: done }], payload: parse(r.payload), source_id: r.source_id });
+      return true;
     });
-    n++;
+    if (handled) n++;
   }
 }
 

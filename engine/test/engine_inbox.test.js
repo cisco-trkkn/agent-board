@@ -227,3 +227,15 @@ test("signal refuses an answer that is not among the open wait's options", () =>
     assert.deepEqual(inbox.signal(f.db, "s", "fail", null, 3), { rc: 0 });
   } finally { f.done(); }
 });
+
+test("moveDueTimers never fires a schedule row (drop the kind filter and it is fired)", () => {
+  const f = fresh();
+  try {
+    dbm.put(f.db, "timers", { id: "schedule:x", spec: null, job: null, kind: "schedule", due_at: 100, payload: '{"name":"x"}', fired_at: null });
+    dbm.put(f.db, "timers", { id: "r1", spec: "s", job: "j", kind: "retry", due_at: 100, payload: null, fired_at: null });
+    assert.equal(inbox.moveDueTimers(f.db, 200), 1);
+    assert.equal(row(f.db, "SELECT fired_at FROM timers WHERE id='schedule:x'").fired_at, null);
+    assert.equal(row(f.db, "SELECT fired_at FROM timers WHERE id='r1'").fired_at, 200);
+    assert.deepEqual(f.db.prepare("SELECT source_id FROM inbox").all().map((r) => r.source_id), ["r1@100"]);
+  } finally { f.done(); }
+});

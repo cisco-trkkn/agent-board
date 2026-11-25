@@ -135,6 +135,16 @@ if (require.main === module) {
     assert.deepEqual(ctx.backend.calls.map((c) => c.method), ["start", "resume", "close"]);
   });
 
+  test("fake: resume records the job; resume_fails makes it throw", async () => {
+    const b = fake.createBackend({ script: {} });
+    const h = await b.start({ id: "s:implement1:1", kind: "implement", task: 1 });
+    await b.resume(h, "t", { id: "s:implement1:2" });
+    assert.deepEqual(b.calls.find((c) => c.method === "resume").job, { id: "s:implement1:2" });
+    const f = fake.createBackend({ script: { resume_fails: true } });
+    const h2 = await f.start({ id: "s:implement1:1", kind: "implement", task: 1 });
+    await assert.rejects(() => f.resume(h2, "t", {}), /cannot resume/);
+  });
+
   test("fake: gone and hang steps", async (t) => {
     const env = tmpEnv(); t.after(() => env.restore());
     let clock = 0;
@@ -287,6 +297,27 @@ fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(
     const briefArg = lines[1].split(" --brief ")[1];
     assert.equal(fs.readFileSync(briefArg, "utf8"), "fix the findings");
     assert.notEqual(next.window, h.window);
+  });
+
+  // The logging tmux-ctl stub also logs the four ENGINE_ variables of its env.
+  test("claude-tmux: start and resume pass the new job's ENGINE_ variables", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root); t.after(() => ctx.cleanup());
+    const envLog = path.join(env.root, "env.log");
+    const ctl2 = path.join(env.root, "ctl2.sh");
+    fs.writeFileSync(ctl2, `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$ENGINE_JOB" "$ENGINE_PROJECT" "$ENGINE_DIR" "$ENGINE_WORKTREE" >> ${JSON.stringify(envLog)}\nexec ${JSON.stringify(path.join(REPO, "bin/tmux-ctl"))} "$@"\n`, { mode: 0o755 });
+    const sock = ctx.tmux.run(["display", "-p", "#{socket_path}"]).stdout.trim();
+    const b = claudeTmux.createBackend({ session: "eng", tmuxCtl: ctl2, statusDir: paths.statusDir(), project: "proj",
+      tmuxArgs: ["-L", ctx.tmux.socket, "-f", "/dev/null"],
+      env: { TMUX_TMPDIR: path.dirname(path.dirname(sock)),
+        TC_AGENT_CMD: `FAKE_PANE=$TMUX_PANE ${process.execPath} ${WORKER} ${ctx.report} ${path.join(paths.statusDir(), "fake.json")} noreport` } });
+    const h = await b.start(ctx.job({}));
+    const job2 = ctx.job({ id: "myspec-p1:implement1:2", attempt: 2 });
+    await b.resume(h, "again", job2);
+    const lines = fs.readFileSync(envLog, "utf8").trim().split("\n");
+    assert.equal(lines[0], `myspec-p1:implement1:1|proj|${paths.engineDir()}|${path.resolve(ctx.worktree)}`);
+    // mutation "launch with e.job on resume": the second line would carry the old id
+    assert.equal(lines[1], `myspec-p1:implement1:2|proj|${paths.engineDir()}|${path.resolve(ctx.worktree)}`);
   });
 
   test("claude-tmux: close saves the pane's last lines to <workspace>/logs/<job>-<attempt>.log, then the pane is gone", async (t) => {
