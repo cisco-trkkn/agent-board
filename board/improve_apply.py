@@ -538,6 +538,8 @@ def sweep_drafts(store, repo=None):
         try:
             draft(store, row["id"], repo)
             _count(counts, "drafted")
+            import improve_discord   # the drafted card (never raises); a late import: improve_discord imports this module
+            improve_discord.card("drafted", {"id": row["id"], "project": store.project})
         except Exception:  # noqa: BLE001  (one bad row never ends the tick's sweep)
             _count(counts, "error")
     return counts

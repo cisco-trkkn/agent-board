@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -145,6 +146,12 @@ def cmd_tick(a, store, project):
     print(f"drafts {json.dumps(improve_apply.sweep_drafts(store))}")
 
 
+def cmd_click(a, project):
+    """`click <act> <id>`: what the Discord button does, for a card that fell back to a command."""
+    import improve_discord
+    print(improve_discord.click(project, "cli", f"ab:improve:{a.act}:{project}:{a.id}", time.time()))
+
+
 def cmd_revert(a, store):
     try:
         sha = improve_apply.revert(store, a.id)
@@ -195,6 +202,7 @@ def parser():
     s = sub.add_parser("variants"); s.add_argument("spec"); s.add_argument("--json", action="store_true")
     sub.add_parser("tick")
     s = sub.add_parser("revert"); s.add_argument("id")
+    s = sub.add_parser("click"); s.add_argument("act", choices=("promote", "reject", "extend", "approve", "revert")); s.add_argument("id")
     s = sub.add_parser("outcome"); o = s.add_subparsers(dest="osub", required=True)
     o = o.add_parser("status"); o.add_argument("id", nargs="?")
     s = sub.add_parser("schedule"); o = s.add_subparsers(dest="ssub", required=True)
@@ -211,6 +219,9 @@ def main(argv):
         project = project_name(a.project)
         if a.sub == "schedule":   # no store: the engine makes its database on the first schedule
             cmd_schedule(a, project)
+            return 0
+        if a.sub == "click":
+            cmd_click(a, project)
             return 0
         store = improve_store.Store(project)
         {"list": lambda: cmd_list(a, store), "show": lambda: cmd_show(a, store), "propose": lambda: cmd_propose(a, store, project),
