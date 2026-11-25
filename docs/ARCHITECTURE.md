@@ -267,16 +267,16 @@ The home channel shows whether the lead has read the newest message from an allo
 | --- | --- |
 | ⚠️ | `lead-state.json` is `down`, or stale (`at` more than 180 s old), or unreadable |
 | 🙋 | `state` is `needs_you` |
-| ✅ | the lead answered: a bot message in the home channel, newer than the target, that the bridge did not send itself (`st.own_sent`) and that is not an interaction response |
-| 👀 | the lead read the message: `last_read_message_id` is its id, or `last_read_text` equals its first 200 characters |
+| ✅ | the lead answered: a bot message in the home channel, newer than the target, that the bridge did not send itself (`st.own_sent`), that is not an interaction response and that is not a system message (pin or thread notices: `msg.system`, or a type other than Default and Reply) |
+| 👀 | the lead read the message: `last_read_message_id` is its id, or `last_read_text` equals its first 200 characters. A message that arrived mid-turn counts too: the transcript records it as a `queued_command` attachment row (origin channel, Discord plugin), not as a user row, and `lead_state` reads the `<channel>` tag from both |
 | ⏳ | `state` is `busy` |
 | 📨 | none of the above (posted, lead not yet busy) |
 
 An allowlisted user's ❓ on a home-channel message gets one status line (outbox `op: liveness_reply`), and the ❓ is removed. Removing it needs the bot's Manage Messages permission; without it the bridge logs one line and the reply still posts. A repeat from the same user on the same message within 10 s is dropped. The lines are `busy 6m26s: <tool>; <n> message(s) queued` (no `: <tool>` when the tool is null), `ready since HH:MM`, `needs you: a dialog is waiting in claude`, `down: <reason> since HH:MM`, and `no lead state (board not running?)` when the file is missing or stale.
 
-The remote-ask guard (`claude/plugin/scripts/remote-ask-guard.sh`, rule 2b) treats a lead that has no remote marker of its own as remote when `last-user-message.json` is at most 12 h old (43200 s) and no typed prompt in the lead's transcript is newer than its `ts`. It then denies `AskUserQuestion` and never writes the marker. The project's discord dir comes from `DISCORD_STATE_DIR`, else from the tmux session of `TMUX_PANE`; any error fails open.
+The remote-ask guard (`claude/plugin/scripts/remote-ask-guard.sh`, rule 2b) treats a lead that has no remote marker of its own as remote when `last-user-message.json` is at most 12 h old (43200 s) and no typed prompt in the lead's transcript is newer than its `ts`. The relay's startup prompt (`Read <doc> and continue from where the previous session left off.`, from `relay.prompt_for`) arrives as an `origin: human` row but does not count as typed, in this rule or when the guard decides whether to clear the marker. It then denies `AskUserQuestion` and never writes the marker. The project's discord dir comes from `DISCORD_STATE_DIR`, else from the tmux session of `TMUX_PANE`; any error fails open.
 
-The remote marker is `<state>/remote/<session id>`. When the lead's session id changes, `board/relay.py` copies the old marker to the successor's id once the new session has started (`carry_to_successor`, called by `relay` and by `restart_lead` for `tmux-ctl lead-restart`). It copies only when both ids are plain and differ, the old marker exists and the new one does not; the old marker stays.
+The remote marker is `<state>/remote/<session id>`, where `<state>` is the tmux-ctl state directory (`TC_STATE`), a different base from the discord dir above. When the lead's session id changes, `board/relay.py` copies the old marker to the successor's id once the new session has started (`carry_to_successor`, called by `relay` and by `restart_lead` for `tmux-ctl lead-restart`). It copies only when both ids are plain and differ, the old marker exists and the new one does not; the old marker stays.
 
 ## Ideas inbox
 
