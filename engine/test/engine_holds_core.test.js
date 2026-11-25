@@ -29,6 +29,13 @@ const HOLD_BIN = path.join(__dirname, "..", "bin", "hold.js");
 const HELD = "demo:implement1:1";
 const RESUMED = "demo:implement1:2";
 const APPROVE_TEXT = (id) => `approval ${id} granted: retry the held call exactly as before`;
+// what a resumed session receives: the fixed sentence, then the report contract of the NEW job (same wording as a fresh brief)
+const REPORT_LINES = (report) => ["## Report", "", `Report file: ${report}`, "", "Write your report there. Its last fenced block must be:"];
+const assertResumeText = (text, sentence, report) => {
+  assert.ok(text.startsWith(sentence + "\n"), `starts with the exact sentence: ${text}`);
+  for (const l of REPORT_LINES(report)) assert.ok(text.includes(l), `names the new job's report (${l}): ${text}`);
+  assert.ok(text.includes("json:status"), text);
+};
 
 const report = (o) => "notes\n\n```json:status\n" + JSON.stringify(o) + "\n```\n";
 const DONE = report({ status: "done", commits: ["abc1234"], concerns: [] });
@@ -345,7 +352,8 @@ test("approve: one pass row, one resume of the held session with the exact text 
   const resumes = h.calls("resume");
   assert.equal(resumes.length, 1);
   assert.equal(resumes[0].handle.session_id, session);
-  assert.equal(resumes[0].text, APPROVE_TEXT(id));
+  assertResumeText(resumes[0].text, APPROVE_TEXT(id), fresh.report);
+  assert.notEqual(fresh.report, h.job(HELD).report);
   assert.equal(resumes[0].job.id, RESUMED);
   assert.equal(resumes[0].job.report, fresh.report);
   assert.deepEqual(h.calls("start").map((c) => c.job.id), [HELD]);
@@ -418,7 +426,7 @@ test("deny with a note: no pass, the session is resumed with the note and the sp
   assert.equal(h.q("SELECT COUNT(*) AS n FROM holds")[0].n, 0);
   const resumes = h.calls("resume");
   assert.equal(resumes.length, 1);
-  assert.equal(resumes[0].text, "denied: use a PR. Continue without it, or report blocked.");
+  assertResumeText(resumes[0].text, "denied: use a PR. Continue without it, or report blocked.", h.job(RESUMED).report);
   assert.equal(resumes[0].handle.session_id, h.job(HELD).session_id);
   assert.equal(resumes[0].job.id, RESUMED);
   assert.equal(h.detail(RESUMED).hold_answer, "deny");
@@ -432,7 +440,7 @@ test("deny without a note says no reason given", async (t) => {
   await stopWorker(h, HELD, id);
   h.signal("deny");
   await h.until(() => h.running(RESUMED));
-  assert.equal(h.calls("resume")[0].text, "denied: no reason given. Continue without it, or report blocked.");
+  assertResumeText(h.calls("resume")[0].text, "denied: no reason given. Continue without it, or report blocked.", h.job(RESUMED).report);
   assert.equal(h.spec().state, "running");
   h.check();
 });
@@ -589,7 +597,7 @@ for (const n of [0, 1, 2, 3]) {
     assert.deepEqual(h.q("SELECT id FROM jobs ORDER BY rowid").map((j) => j.id), [HELD, RESUMED]);
     const resumes = h.calls("resume");
     assert.equal(resumes.length, 1);
-    assert.equal(resumes[0].text, APPROVE_TEXT(id));
+    assertResumeText(resumes[0].text, APPROVE_TEXT(id), h.job(RESUMED).report);
     assert.equal(resumes[0].job.id, RESUMED);
     assert.equal(h.of("signal").length, 1);
     assert.equal(h.eng.halted, null);

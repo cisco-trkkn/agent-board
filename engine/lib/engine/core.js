@@ -1074,9 +1074,14 @@ function start(opts) {
         `Earlier report: ${prev && prev.report ? prev.report : "(none)"}`, `Call: ${asked ? asked.question : "(unknown)"}`,
         `Answer: ${d.hold_answer === "approve" ? "approved: retry the held call exactly as before" : d.resume_text}`, "");
     }
-    out.push("## Report", "", `Report file: ${reportPath}`, "", "Write your report there. Its last fenced block must be:", "",
-      "```json:status", reviewer ? STATUS_SHAPES.reviewer : STATUS_SHAPES.worker, "```", "");
+    out.push(reportSection(reportPath, reviewer));
     return out.join("\n");
+  }
+
+  // The report contract of one job: the fresh brief and every resume text of that job say it in these words.
+  function reportSection(reportPath, reviewer) {
+    return ["## Report", "", `Report file: ${reportPath}`, "", "Write your report there. Its last fenced block must be:", "",
+      "```json:status", reviewer ? STATUS_SHAPES.reviewer : STATUS_SHAPES.worker, "```", ""].join("\n");
   }
 
   function architectBrief(spec, job, d, reportPath) {
@@ -1156,7 +1161,7 @@ function start(opts) {
       // fix rounds and answered holds resume the worker's own session when it can be resumed; the session is told the
       // brief, or after a hold the answer alone. The new job goes along (A6): the window gets its ENGINE_JOB.
       if (prev && prev.pane && prev.session_id) {
-        try { handle = await backend.resume(handleOf(prev), d.hold ? d.resume_text : text, fresh); how = "resume"; } catch (_) { handle = null; }
+        try { handle = await backend.resume(handleOf(prev), d.hold ? `${d.resume_text}\n\n${reportSection(ready.report, ["review", "re_review", "final_review"].includes(job.kind))}` : text, fresh); how = "resume"; } catch (_) { handle = null; }
       }
       if (!handle) handle = await backend.start(fresh);
     } catch (e) {
