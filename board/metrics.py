@@ -233,6 +233,7 @@ LEAD_FIELDS = ("lead_context_peak", "lead_handoffs", "post_handoff_tokens", "rer
 
 def cmd_start(repo, args):
     wt = rel_worktree(repo, args.worktree) if args.worktree else None
+    variants = [v for v in (args.variants or "").split(",") if v.strip()]
     if not any(d.get("kind") == "batch" and d.get("batch") == args.batch for d in read_log(repo)[0]):
         raise MetricsError(f"unknown batch {args.batch}")
     now = time.time()
@@ -246,6 +247,7 @@ def cmd_start(repo, args):
         rec["missing_reason"] = {"limits": REASON_START}
     if wt:
         rec["worktree"] = wt
+    rec["variants"] = [v.strip() for v in variants]
     append(repo, rec)
 
 
@@ -258,7 +260,7 @@ def cmd_defect(repo, args):
 EXCLUDED = "docs/superpowers/"
 OUTCOMES = ("merged", "mr", "kept", "failed")
 RESERVED = ("lock_wait_s", "lock_wait_cause", "repair_runs", "integration_s", "integration_tokens")
-LEDGER_KEYS = ("bounces", "fix_rounds", "final_findings", "fix_wave", "rulings", "parked")
+LEDGER_KEYS = ("bounces", "fix_rounds", "final_findings", "fix_wave", "rulings", "parked", "red_after_merge", "final_review_crit_imp")
 
 
 def _git_try(repo, *args):
@@ -349,6 +351,13 @@ def ledger_fields(progress, final_review):
         elif active and l.startswith("- "):
             n += 1
     out["final_findings"] = n
+    out["red_after_merge"] = any(l.strip() == "Merge: tests red after the merge" for l in lines)
+    last = None
+    for l in lines:
+        m = re.match(r"Final review: (\d+) critical/important finding\(s\)", l)
+        if m:
+            last = int(m.group(1))
+    out["final_review_crit_imp"] = last if last is not None else n
     return out
 
 
@@ -497,6 +506,8 @@ def build_record_static(repo, spec, batch, outcome, now, branch=None, plan=None,
             rec[k] = None
             missing.append(k)
 
+    if start:   # a record with no start line (backfill, derived window) carries no variants key
+        rec["variants"] = list(start.get("variants") or [])
     rec["started_at"] = start["at"] if start else None
     if not start:
         missing.append("started_at")
@@ -1368,6 +1379,7 @@ def _parser():
     st.add_argument("spec")
     st.add_argument("--batch", required=True)
     st.add_argument("--worktree")
+    st.add_argument("--variants")
     df = sp.add_parser("defect", parents=[common])
     df.add_argument("spec")
     df.add_argument("what")
@@ -1514,6 +1526,99 @@ def quality_veto(chal, base, defects):
         holds = holds or over
         lines.append(f"{k} {c[k]} (baseline rate {rate:.2f} x {len(chal)} + 1 = {limit:.2f}) {'over' if over else 'ok'}")
     return holds, lines
+
+
+# ---- compare_halves, compare_to_baseline (supervised improvement loop) -------------------------------------------
+
+RATIO_METRICS = ("tokens_per_merged_task", "fix_rounds_per_task", "bounces_per_task")
+COUNT_METRICS = ("failed_specs", "red_after_merge", "final_review_crit_imp_per_spec")
+MERGED = ("merged", "mr")
+_EPS = 0.05   # per-spec log values need > 0: fix rounds and bounces are often 0
+
+
+def _ratio_parts(r, metric):
+    """(numerator, denominator) of one spec for a ratio metric."""
+    tasks = r.get("tasks") or 0
+    if metric == "tokens_per_merged_task":
+        return (r.get("tokens") or {}).get("total") or 0, tasks if r.get("outcome") in MERGED else 0
+    return r.get("fix_rounds" if metric == "fix_rounds_per_task" else "bounces") or 0, tasks
+
+
+def _ratio_value(rs, metric):
+    num = sum(_ratio_parts(r, metric)[0] for r in rs)
+    den = sum(_ratio_parts(r, metric)[1] for r in rs)
+    return num / den if den else (float("inf") if num else 0.0)
+
+
+def _spec_values(rs, metric):
+    out = []
+    for r in rs:
+        num, den = _ratio_parts(r, metric)
+        if r.get("outcome") in MERGED and den:
+            out.append(num / den + (_EPS if metric != "tokens_per_merged_task" else 0))
+    return out
+
+
+def _count(rs, metric):
+    if metric == "failed_specs":
+        return sum(1 for r in rs if r.get("outcome") == "failed")
+    if metric == "red_after_merge":
+        return sum(1 for r in rs if r.get("red_after_merge"))
+    return sum(r.get("final_review_crit_imp") or 0 for r in rs)
+
+
+def _verdict_out(verdict, index, pb, pw, nt, nc, tv, cv):
+    return {"verdict": verdict, "index": index, "p_better": pb, "p_worse": pw, "n_trial": nt, "n_control": nc,
+            "trial_value": tv, "control_value": cv}
+
+
+def compare_halves(trial, control, metric, defects=()):
+    """Verdict of a trial half against its control half. Ratio metrics: too early / better / equal / worse. Count
+    guardrails: worse when the trial count is above the control rate x trial spec count + 1 (the quality_veto inequality),
+    else equal. `defects` is accepted for the quality_veto call shape and unused: these counts come from the run records."""
+    nt, nc = len(trial), len(control)
+    if metric in COUNT_METRICS:
+        tv, cv = _count(trial, metric), _count(control, metric)
+        if nt < 4 or nc < 4:
+            return _verdict_out("too early", None, None, None, nt, nc, tv, cv)
+        limit = (cv / nc) * nt + 1
+        return _verdict_out("worse" if tv > limit else "equal", None, None, None, nt, nc, tv, cv)
+    if metric not in RATIO_METRICS:
+        raise MetricsError(f"unknown metric {metric}")
+    tv, cv = _ratio_value(trial, metric), _ratio_value(control, metric)
+    if nt < 4 or nc < 4:
+        return _verdict_out("too early", None, None, None, nt, nc, tv, cv)
+    if cv == 0:
+        index = 1.0 if tv == 0 else float("inf")
+    elif tv == float("inf"):
+        index = float("inf")
+    else:
+        index = tv / cv
+    tvals, cvals = _spec_values(trial, metric), _spec_values(control, metric)
+    pb = pw = None
+    if tvals and cvals:
+        pb = permutation_p(tvals, cvals, "max")[0]
+        pw = permutation_p(tvals, cvals, "min")[0]
+    trial_den = sum(_ratio_parts(r, metric)[1] for r in trial)
+    if index < 1 and pb is not None and pb < 0.10:
+        verdict = "better"
+    elif index > 1 and ((pw is not None and pw < 0.10) or trial_den == 0):
+        verdict = "worse"
+    else:
+        verdict = "equal"
+    return _verdict_out(verdict, index, pb, pw, nt, nc, tv, cv)
+
+
+def compare_to_baseline(records, configs, metric, since=None):
+    """compare_halves with the pooled engine-run records (non-null `budget`) ended at or after `since` as the challenger and
+    the records of configurations flagged baseline as the reference. `configs`: {name: config dict} or a list of config dicts."""
+    if isinstance(configs, dict):
+        names = {n for n, c in configs.items() if (c or {}).get("baseline") is True}
+    else:
+        names = {c.get("id") or c.get("name") for c in configs if (c or {}).get("baseline") is True}
+    chal = [r for r in records if r.get("budget") is not None and (not since or (r.get("ended_at") or "") >= since)]
+    ref = [r for r in records if r.get("config") in names]
+    return compare_halves(chal, ref, metric)
 
 
 def _config_of(repo, cache, name):
