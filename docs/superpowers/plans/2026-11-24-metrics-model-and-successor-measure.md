@@ -2,6 +2,8 @@
 
 One run on this machine, 2026-11-24, read-only against real state: the usage index opened with `--no-ingest`, the tasks log a scratch copy (`/tmp/claude-503/t6.bn77Uj/tasks.jsonl`), nothing under `~/.local/state`, `~/.claude/projects` or `docs/superpowers/metrics/` changed.
 
+Code under test: branch `metrics-model-and-successor` at `01e3fa4` (the timings and the backfill both started from it, before the fix wave `d02908a` landed; that wave only changed `read_spawns` to tolerate invalid bytes, the review-dispatch sentence in the SDD extras skill and two tests, so it does not affect these numbers).
+
 ## Lineage timing
 
 Base code is the main checkout's `board/` (`git diff --quiet 0af42b5 -- board/metrics_lead.py` printed `same`). Real state: lineage `~/.local/state/agent-board/lineage/agent-board.jsonl`, transcripts `~/.claude/projects/-Users-francisco-ruiz-agent-board`.
