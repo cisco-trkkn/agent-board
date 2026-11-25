@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const cp = require("node:child_process");
 const { tx, put, event } = require("./db");
+const launchd = require("./launchd");
 
 const nowOf = (now) => (typeof now === "function" ? now() : typeof now === "number" ? now : Date.now() / 1000);
 const parse = (s) => {
@@ -116,6 +117,15 @@ const CHECKS = {
     const l = tmuxList(ctx, ["list-windows", "-t", `=${ctx.project}-bg:`, "-F", "#{window_name}"]);
     if (l.unknown) return "unknown";
     return f.window && l.lines.includes(f.window) ? "done" : "not_done";
+  },
+  // done when the plist is gone and launchctl list no longer prints the label
+  plist_remove(ctx, row) {
+    const f = row.result || {};
+    if (!f.label || !f.plist) return "unknown";
+    try { if (fs.existsSync(f.plist)) return "not_done"; } catch (_) { return "unknown"; }
+    const r = launchd.launchctl(["list"]);
+    if (r.status !== 0) return "unknown";
+    return r.stdout.split("\n").some((l) => l.trim().split(/\s+/).pop() === f.label) ? "not_done" : "done";
   },
   merge(ctx, row) {
     const f = row.result || {};

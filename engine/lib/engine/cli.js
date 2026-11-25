@@ -31,7 +31,7 @@ const TICK_MS_FAKE = 100;
 
 const VALUE_FLAGS = new Set(["--integration", "--batch", "--project", "--backend", "--note", "--script", "--budget-attempts", "--budget-tokens",
   "--runner", "--gate", "--worktree", "--outcome", "--rule", "--skip-if-weekly-usage"]);
-const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply", "--preflight", "--here", "--unfinished"]);
+const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply", "--preflight", "--here", "--unfinished", "--dry-run"]);
 
 function parseArgs(argv) {
   const pos = [];
@@ -484,7 +484,7 @@ function cmdDone(args, io) {
   return 0;
 }
 
-const SCHEDULE_USAGE = "usage: engine schedule add <name> --rule \"<rule>\" [--skip-if-weekly-usage <0-100|none>] -- <command...> | list | rm <name> | run-now <name>";
+const SCHEDULE_USAGE = "usage: engine schedule add <name> --rule \"<rule>\" [--skip-if-weekly-usage <0-100|none>] -- <command...> | list | rm <name> | run-now <name> | migrate [--dry-run]";
 const lt = (n) => String(n).padStart(2, "0");
 // Local time as YYYY-MM-DD HH:MM.
 function localTime(ts) {
@@ -501,7 +501,14 @@ async function cmdSchedule(args, io) {
   const usage = (why) => { io.err(`engine: schedule: ${why || SCHEDULE_USAGE}\n`); return 2; };
   if (p.error) return usage(`${p.error}\n${SCHEDULE_USAGE}`);
   const [verb, name, ...extra] = p.pos;
-  if (!["add", "list", "rm", "run-now"].includes(verb) || extra.length) return usage();
+  if (!["add", "list", "rm", "run-now", "migrate"].includes(verb) || extra.length) return usage();
+  if (verb === "migrate") {
+    if (name || words.length) return usage();
+    const dry = !!p.flags["dry-run"];
+    const project = dry ? (p.flags.project || process.env.TC_PROJECT || null) : resolveProject(p.flags, io);
+    if (!dry && !project) return 2;
+    return await require("./launchd").migrate({ dryRun: dry, project, io });
+  }
   const project = resolveProject(p.flags, io);
   if (!project) return 2;
   if (verb === "add") {
@@ -569,6 +576,13 @@ async function runNow(project, name, io) {
   return await require("./wake").run({ io, project });
 }
 
+async function cmdWake(args, io) {
+  if (!args.length) return await require("./wake").run({ io });
+  const sub = args[0];
+  if (args.length > 1 || !["install", "status", "uninstall"].includes(sub)) { io.err("engine: wake: usage: engine wake [install|status|uninstall]\n"); return 2; }
+  return require("./launchd")[sub](io);
+}
+
 function cmdRebuild(args, io) {
   const p = parseArgs(args);
   if (p.error || p.pos.length || !!p.flags.check === !!p.flags.apply) {
@@ -613,7 +627,7 @@ async function main(argv, io0) {
       case "start": return await cmdStart(rest, io);
       case "done": return cmdDone(rest, io);
       case "schedule": return await cmdSchedule(rest, io);
-      case "wake": return await require("./wake").run({ io });
+      case "wake": return await cmdWake(rest, io);
       default: return cmdRebuild(rest, io);
     }
   } catch (e) {
