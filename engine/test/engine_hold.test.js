@@ -83,6 +83,21 @@ test("rm and write paths against the worktree", () => {
   } finally { e.restore(); }
 });
 
+test("I3: rm -r forms with $HOME, quotes and split flags are held; the in-worktree look-alikes are not", () => {
+  const { e, wt } = world();
+  try {
+    for (const c of ['rm -rf $HOME/foo', 'rm -rf "$HOME/foo"', 'rm -r "/tmp/a b"', 'rm -f -r /tmp/x', 'rm -rf ${TMPDIR}x', 'rm -rf `pwd`/x',
+      'rm -rf "unbalanced', "rm -fr ~/x", 'rm --recursive /tmp/x', 'rm -v -f -R "/tmp/a b"']) {
+      assert.equal((heldBy(bash(c, wt), wt) || {}).id, "rm_recursive_outside", c);
+    }
+    for (const c of ["rm -f -r build", 'rm -rf "a b"', "rm -rf 'sub dir/x'", "rm -f a.txt", "rm -f -v a.txt"]) {
+      assert.equal(heldBy(bash(c, wt), wt), null, c);
+    }
+    // a quoted ; does not end the words: the outside path after it is still read
+    assert.equal(heldBy(bash('rm -rf "a;b" /tmp/x', wt), wt).id, "rm_recursive_outside");
+  } finally { e.restore(); }
+});
+
 test("a worktree path through a symlinked parent is not outside", () => {
   const { e, wt } = world();
   try {
@@ -293,8 +308,15 @@ test("decide: a bad config rule falls back to the default holds (stderr line, de
   } finally { repo.cleanup(); e.restore(); }
 });
 
-test("decide: an unset ENGINE_DIR is none", () => {
-  assert.deepEqual(hold.decide(null, { tool_name: "Bash", tool_input: { command: "git push" }, cwd: "/" }, { ENGINE_JOB: "J" }, 1), { decision: "none" });
+test("decide: no ENGINE_JOB is none; ENGINE_JOB without ENGINE_DIR denies a matched call and leaves others alone (fail closed)", () => {
+  const push = { tool_name: "Bash", tool_input: { command: "git push" }, cwd: "/" };
+  assert.deepEqual(hold.decide(null, push, {}, 1), { decision: "none" });
+  assert.deepEqual(hold.decide(null, push, { ENGINE_DIR: "/x" }, 1), { decision: "none" });
+  const r = hold.decide(null, push, { ENGINE_JOB: "J" }, 1);
+  assert.equal(r.decision, "deny");
+  assert.equal(r.reason, "engine hold: ENGINE_DIR not set for job J");
+  assert.equal(hold.decide(null, push, { ENGINE_JOB: "J", ENGINE_DIR: "" }, 1).decision, "deny");
+  assert.deepEqual(hold.decide(null, { tool_name: "Bash", tool_input: { command: "git status" }, cwd: "/" }, { ENGINE_JOB: "J" }, 1), { decision: "none" });
 });
 
 // ---- the process

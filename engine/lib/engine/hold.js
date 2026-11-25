@@ -16,7 +16,7 @@ const DEFAULT_HOLDS = [
   { id: "git_branch_force_delete", tool: "Bash", outside_worktree: false,
     pattern: GIT + "branch\\b(?=[^;&|]*\\s(?:-[a-zA-Z]*D[a-zA-Z]*|--delete\\s+--force|--force\\s+--delete|-d\\s+--force|-f\\s+-d|-df|-fd)(?:\\s|$))" },
   { id: "git_clean", tool: "Bash", pattern: GIT + "clean\\b", outside_worktree: false },
-  { id: "rm_recursive_outside", tool: "Bash", pattern: LEAD + "rm\\s+(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\\b", outside_worktree: true },
+  { id: "rm_recursive_outside", tool: "Bash", pattern: LEAD + "rm\\s+(?:(?:-[a-zA-Z]+|--[a-z-]+)\\s+)*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\\s|$)", outside_worktree: true },
   { id: "write_outside", tool: "Write|Edit|MultiEdit|NotebookEdit", pattern: ".*", outside_worktree: true },
   { id: "pr_merge", tool: "Bash", pattern: LEAD + "(?:glab\\s+mr\\s+merge|gh\\s+pr\\s+merge)\\b", outside_worktree: false },
 ];
@@ -54,15 +54,36 @@ const isOutside = (p, worktree) => {
 
 const callPath = (input) => (input && (input.file_path || input.notebook_path || input.path)) || null;
 
-const unquote = (w) => (w.length >= 2 && /^["']/.test(w) && w[w.length - 1] === w[0] ? w.slice(1, -1) : w);
-
+// The words of the command after the rule's match, up to the first unquoted `;`, `|`, `&&` or newline: quote-aware
+// (a quoted word with spaces is one word). A word that cannot be resolved here (it holds `$` or a backtick, or a quote
+// is left open) is `unsafe`: the caller treats it as outside the worktree (one approval; fails closed).
 function bashWords(command, m) {
-  let tail = command.slice(m.index + m[0].length);
-  const cut = tail.search(/;|&&|\|\||\||\n/);
-  if (cut >= 0) tail = tail.slice(0, cut);
-  return tail.split(/\s+/).filter((w) => w && !w.startsWith("-")).map(unquote).map((w) => {
-    if (w === "~" || w.startsWith("~/")) return path.join(process.env.HOME || "", w.slice(1));
-    return w;
+  const s = command.slice(m.index + m[0].length);
+  const words = [];
+  let cur = null;
+  let q = null;
+  let unsafe = false;
+  const push = () => {
+    if (cur !== null) words.push({ raw: cur.raw, text: cur.text, unsafe: unsafe || q !== null });
+    cur = null; unsafe = false;
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q === null && (c === ";" || c === "|" || c === "\n" || (c === "&" && s[i + 1] === "&"))) break;
+    if (q === null && /\s/.test(c)) { push(); continue; }
+    if (cur === null) cur = { raw: "", text: "" };
+    if (cur.raw === "" && q === null) cur.raw = c;
+    if (q === null && (c === "'" || c === '"')) { q = c; continue; }
+    if (q !== null && c === q) { q = null; continue; }
+    if (c === "\\" && q !== "'" && i + 1 < s.length) { cur.text += s[++i]; continue; }
+    if (c === "$" || c === "`") unsafe = true;
+    cur.text += c;
+  }
+  push();
+  return words.filter((w) => !w.raw.startsWith("-")).map((w) => {
+    let t = w.text;
+    if (t === "~" || t.startsWith("~/")) t = path.join(process.env.HOME || "", t.slice(1));
+    return { text: t, unsafe: w.unsafe };
   });
 }
 
@@ -76,7 +97,7 @@ function match(rules, { tool_name, tool_input, cwd }, worktree) {
       const command = typeof input.command === "string" ? input.command : "";
       const m = r.pattern.exec(command);
       if (!m) continue;
-      if (r.outside && !bashWords(command, m).some((w) => isOutside(path.resolve(base, w), worktree))) continue;
+      if (r.outside && !bashWords(command, m).some((w) => w.unsafe || isOutside(path.resolve(base, w.text), worktree))) continue;
       return r;
     }
     const p = callPath(input);
@@ -113,7 +134,7 @@ function configFor(worktree) {
 
 // `handle` is an open database or null (then it is opened here, after a rule matched, from env).
 function decide(handle, hookInput, env, now) {
-  if (!env.ENGINE_JOB || !env.ENGINE_DIR) return { decision: "none" };
+  if (!env.ENGINE_JOB) return { decision: "none" };
   const worktree = env.ENGINE_WORKTREE || (hookInput && hookInput.cwd) || process.cwd();
   let rules;
   try { rules = rulesFor(configFor(worktree)); } catch (e) {
@@ -123,6 +144,8 @@ function decide(handle, hookInput, env, now) {
   }
   const rule = match(rules, hookInput, worktree);
   if (!rule) return { decision: "none" };
+  // fail closed: a held call cannot be recorded without the engine dir
+  if (!env.ENGINE_DIR) return { decision: "deny", reason: `engine hold: ENGINE_DIR not set for job ${env.ENGINE_JOB}` };
   let d = handle;
   try {
     const t = now !== undefined ? now : Date.now() / 1000;
