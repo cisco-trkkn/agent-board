@@ -21,6 +21,35 @@ FRONT = """--- a/s/SKILL.md
  ---
 """
 CMD = PROSE.replace("+Read the plan and its spec first.", "+$ tmux-ctl run tests")
+# target file for PROSE: its hunk starts at old line 3, with no frontmatter and no fence
+TARGET_PROSE = "a\nb\n## Procedure\nRead the plan first.\nMore prose.\n"
+# review probe 1: frontmatter edit in a hunk at -3; the opening --- is at line 1, outside the hunk
+FM_MID = """--- a/claude/skills/x/SKILL.md
++++ b/claude/skills/x/SKILL.md
+@@ -3,3 +3,3 @@
+-description: old
++description: new trigger
+ ---
+ more
+"""
+TARGET_FM = "---\nname: x\ndescription: old\n---\nmore\n"
+# review probe 2: new file whose frontmatter is added (@@ -0,0)
+FM_NEW = """--- /dev/null
++++ b/claude/skills/x/SKILL.md
+@@ -0,0 +1,4 @@
++---
++name: x
++description: y
++---
+"""
+# review probe 3: edit inside a fence, with no fence marker in the hunk
+FENCE_BODY = "intro\n```\nbar baz\n```\n"
+FENCE_EDIT = """--- a/claude/skills/x/SKILL.md
++++ b/claude/skills/x/SKILL.md
+@@ -3,1 +3,1 @@
+-bar baz
++bar qux
+"""
 
 
 class T(unittest.TestCase):
@@ -61,13 +90,28 @@ class T(unittest.TestCase):
         self.assertEqual(C.derive("procedure", "board/metrics.py", PROSE), "protected")   # target first
         self.assertEqual(C.derive("permission", "claude/skills/x/SKILL.md", PROSE), "protected")
         self.assertEqual(C.derive("memory", "claude/skills/x/SKILL.md", None), "observation")
-        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", PROSE), "low")
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", PROSE, target_text=TARGET_PROSE), "low")
         for k in ["skill", "rule", "prompt", "routing", "spec", "retire"]:
             self.assertEqual(C.derive(k, "claude/skills/x/SKILL.md", PROSE), "high", k)
 
     def test_prose_only(self):  # mutation: prose_only returns True -> fails
         for p in [FENCE, FRONT, CMD, None]:
             self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", p), "high")
+
+    def test_mid_file_hunk_without_target_is_high(self):  # mutation: drop the start-line-1 rule -> fails
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", PROSE), "high")
+
+    def test_frontmatter_mid_file_hunk_is_high(self):  # review probe 1: frontmatter edit in a hunk at -3
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", FM_MID, target_text=TARGET_FM), "high")
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", FM_MID), "high")
+
+    def test_new_file_frontmatter_is_high(self):  # review probe 2: @@ -0,0 adds a frontmatter block
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", FM_NEW, target_text=""), "high")
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", FM_NEW), "high")
+
+    def test_fence_edit_without_marker_is_high(self):  # review probe 3: edit inside a fence, no marker in the hunk
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", FENCE_EDIT, target_text=FENCE_BODY), "high")
+        self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", FENCE_EDIT), "high")
 
     def test_dream_never_low(self):  # mutation: ignore source -> fails
         self.assertEqual(C.derive("procedure", "claude/skills/x/SKILL.md", PROSE, source="dream"), "high")

@@ -56,54 +56,96 @@ def is_protected(target, patch=None, tmux_ctl_src=None):
     return False
 
 
-def prose_only(patch):
-    """True when every changed line of the patch is prose (spec §3)."""
+class _Target:
+    """The target file at the patch's base: its leading frontmatter span and its fence state."""
+
+    def __init__(self, text):
+        lines = text.splitlines()
+        self.k = 0                      # last line of a leading "---" block; 0 when there is none
+        if lines and lines[0].strip() == "---":
+            self.k = next((i for i in range(2, len(lines) + 1) if lines[i - 1].strip() == "---"), float("inf"))
+        self.fences = []                # fences[n-1]: fence open before old line n
+        state = False
+        for line in lines:
+            self.fences.append(state)
+            if line.lstrip().startswith("```"):
+                state = not state
+        self.fences.append(state)
+
+    def in_fence(self, n):
+        return self.fences[min(n, len(self.fences)) - 1]
+
+
+def prose_only(patch, target_text=None):
+    """True when every changed line of the patch is prose (spec §3).
+
+    With target_text, the fence state and the leading frontmatter span are read from the target file at each
+    changed line's old-side position. Without it, only hunks that start at line 1 (or a new-file hunk, @@ -0,0)
+    can be prose-only, and their fence and frontmatter state come from the patch's own lines.
+    """
     if not patch:
         return False
-    fence = front = False
-    first = leading = False
+    tgt = None if target_text is None else _Target(target_text)
+    fence = front = first = leading = patch_mode = False
+    cursor = 0                          # old-side line number of the next context or removed line
     for line in patch.splitlines():
         if line.startswith("@@"):
             m = HUNK.match(line)
+            if not m:
+                return False
+            s = int(m.group(1))
+            if tgt is None and s not in (0, 1):
+                return False
+            patch_mode = tgt is None or s == 0
+            cursor = s
             first = True
-            leading = bool(m) and int(m.group(1)) == 1   # frontmatter only counts at the top of the file
-            front = False
+            leading = s in (0, 1)
+            front = fence = False
             continue
         if line.startswith(FILE_HEADERS):
             continue
         sign = line[:1]
-        changed = sign in ("+", "-")                      # "" (empty line) is context, not a change
+        changed = sign in ("+", "-")    # "" (empty line) is context, not a change
         body = line[1:] if sign in ("+", "-", " ") else line
-        if first and leading and body.strip() == "---":
-            front = True
+        at = cursor                     # old line of this line; for "+", the old line it goes before
+        if sign != "+":
+            cursor += 1
+        if patch_mode:
+            if first and leading and body.strip() == "---":
+                front = True
+                first = False
+                if changed:
+                    return False
+                continue
             first = False
-            if changed:
+            if front:
+                if body.strip() == "---":
+                    front = False
+                if changed:
+                    return False
+                continue
+            if body.lstrip().startswith("```"):
+                if changed:
+                    return False
+                fence = not fence
+                continue
+            if changed and (fence or body.startswith(("$ ", "    ", "`", "tmux-ctl "))):
                 return False
-            continue
-        first = False
-        if front:
-            if body.strip() == "---":
-                front = False
-            if changed:
+        elif changed:
+            if at <= tgt.k or tgt.in_fence(at):
                 return False
-            continue
-        if body.lstrip().startswith("```"):
-            if changed:
+            if body.lstrip().startswith(("```", "$ ", "    ", "`", "tmux-ctl ")):
                 return False
-            fence = not fence
-            continue
-        if changed and (fence or body.startswith(("$ ", "    ", "`", "tmux-ctl "))):
-            return False
     return True
 
 
-def derive(kind, target, patch, source=None, tmux_ctl_src=None):
+def derive(kind, target, patch, source=None, tmux_ctl_src=None, target_text=None):
     if target and is_protected(target, patch, tmux_ctl_src):
         return "protected"
     if kind == "permission":
         return "protected"
     if kind == "memory":
         return "observation"
-    if kind == "procedure" and prose_only(patch) and source not in ("dream", "observer"):
+    if kind == "procedure" and prose_only(patch, target_text) and source not in ("dream", "observer"):
         return "low"
     return "high"
