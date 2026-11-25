@@ -235,7 +235,10 @@ def _retire(wt, row):
     if not file or Path(file).is_absolute() or ".." in Path(file).parts or not src.exists():
         raise _Stale(f"no {file}")
     if heading:
-        lines = src.read_bytes().decode().split("\n")
+        try:
+            lines = src.read_bytes().decode().split("\n")
+        except UnicodeDecodeError:
+            raise _Stale(f"{file} is not UTF-8")
         span = _section(lines, heading)
         if not span:
             raise _Stale(f"no heading {heading}")
@@ -325,7 +328,23 @@ def _keep_retired_copy(repo, row, sha):
 def apply(store, pid, repo=None):
     """Land a kept or promoted proposal on main as one `improve(<kind>): <id> <title>` commit.
     -> "applied" | "waiting" (the live checkout is mid-change: state unchanged, one improve_waiting event; the next tick
-    retries) | "stale" | "skipped" (not kept or promoted, or class protected) | "refused: <why>" (the engine's refusal)."""
+    retries) | "stale" | "skipped" (not kept or promoted, or class protected) | "refused: <why>" (the engine's refusal,
+    or any error here).
+    It never raises: the tick calls it right after the `kept` transition, and an exception there would end the tick
+    before its other trials, the outcomes, the pick and the digest. An error is `refused: <ErrorType>: <text>` with one
+    improve_refused event; the row is left as it is, so the next tick's sweep tries again."""
+    try:
+        return _apply(store, pid, repo)
+    except Exception as e:  # noqa: BLE001
+        why = f"{type(e).__name__}: {e}"
+        try:
+            _event(store, "improve_refused", {"proposal": pid, "why": why})
+        except Exception:  # noqa: BLE001
+            pass
+        return f"refused: {why}"
+
+
+def _apply(store, pid, repo=None):
     repo = repo or repo_root()
     row = _row(store, pid)
     if row["state"] not in ("kept", "promoted") or row["class"] == "protected":
@@ -505,7 +524,7 @@ def sweep_apply(store, repo=None):
             continue
         try:
             _count(counts, apply(store, row["id"], repo).split(":")[0])
-        except (ApplyError, improve_store.ImproveError):
+        except Exception:  # noqa: BLE001  (apply itself never raises)
             _count(counts, "error")
     return counts
 
@@ -519,6 +538,6 @@ def sweep_drafts(store, repo=None):
         try:
             draft(store, row["id"], repo)
             _count(counts, "drafted")
-        except (ApplyError, improve_store.ImproveError):
+        except Exception:  # noqa: BLE001  (one bad row never ends the tick's sweep)
             _count(counts, "error")
     return counts

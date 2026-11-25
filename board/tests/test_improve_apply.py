@@ -114,8 +114,7 @@ class ApplyTest(Base):
         pid = self.kept()
         before = self.head()
         with mock.patch.object(A, "_record", side_effect=RuntimeError("crash")):
-            with self.assertRaises(RuntimeError):
-                A.apply(self.s, pid)
+            self.assertEqual(A.apply(self.s, pid), "refused: RuntimeError: crash")   # apply never raises
         self.assertEqual(self.count(before), 1)
         self.assertIsNone(self.s.get(pid)["commit_sha"])
         head = self.head()
@@ -424,6 +423,87 @@ class DraftTest(Base):
         with self.assertRaises(A.ApplyError) as cm:
             A.approve_draft(self.s, adapter, add_done=lambda *a: done.append(a))
         self.assertEqual(str(cm.exception), "not a protected draft")
+
+
+OTHER = "--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-o\n+p\n"
+
+
+class NeverRaisesTest(Base):
+    def test_apply_returns_refused_with_one_event_and_the_row_unchanged_when_the_build_fails(self):
+        # mutation: apply without the catch -> OSError leaves apply
+        pid = self.kept()
+        before, row = self.head(), self.s.get(pid)
+        with mock.patch.object(A, "_build", side_effect=OSError("disk full")):
+            self.assertEqual(A.apply(self.s, pid), "refused: OSError: disk full")
+        self.assertEqual((self.head(), self.s.get(pid)), (before, row))
+        ev = self.events("improve_refused")
+        self.assertEqual([(e["proposal"], e["why"]) for e in ev], [(pid, "OSError: disk full")])
+        self.assertEqual(A.sweep_apply(self.s), {"applied": 1})   # the next tick's sweep retries it
+        self.assertEqual(self.count(before), 1)
+
+    def test_apply_of_an_unknown_proposal_and_a_failing_git_are_refused_not_raised(self):
+        self.assertEqual(A.apply(self.s, "P99"), "refused: ApplyError: no proposal P99")
+        pid = self.kept()
+        with mock.patch.dict(os.environ, {"TC_IMPROVE_REPO": str(self.tmp / "no-such-repo")}):
+            self.assertRegex(A.apply(self.s, pid), r"^refused: ")
+        self.assertEqual(self.s.get(pid)["state"], "kept")
+
+    def test_retire_of_a_section_in_a_file_that_is_not_utf8_is_stale(self):
+        # mutation: decode without the catch -> UnicodeDecodeError (as `refused`), the row stays kept and every sweep retries it
+        (self.repo / "docs/latin.md").write_bytes(b"# T\n\n## Old rule\n\ncaf\xe9\n")
+        self.git("add", "docs/latin.md")
+        self.git("commit", "-q", "-m", "latin")
+        pid = self.kept(patch=None, target="docs/latin.md#Old rule", kind="retire")
+        before = self.head()
+        self.assertEqual(A.apply(self.s, pid), "stale")
+        self.assertEqual((self.head(), self.s.get(pid)["state"], self.s.get(pid)["reason"]), (before, "rejected", "stale patch"))
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_the_tick_finishes_the_other_proposals_and_its_later_steps_when_one_apply_fails(self):
+        # mutation: apply without the catch -> the tick dies in the hook after the first `kept`: the second trial is never judged
+        import improve_eval as E
+        import improve_trials as T
+        first = self.s.insert("manual", "procedure", "docs/foo.md", PROSE, EV, title="First")
+        second = self.s.insert("manual", "procedure", "other.txt", OTHER, EV, title="Second")
+        runs = []
+        for pid, pre in ((first, "a"), (second, "b")):
+            self.s.transition(pid, "trial", "go", trial_started_at=1.0, trial_len=5)
+            t, c, i = [], [], 0
+            while len(t) < 5 or len(c) < 5:
+                sp = f"{pre}{i}"
+                i += 1
+                (t if T.in_trial(sp, pid) else c).append(sp)
+            runs += [F.run(sp, budget=1, variants=[pid], tokens={"total": 500}) for sp in t[:5]]
+            runs += [F.run(sp, budget=1, tokens={"total": 1000}) for sp in c[:5]]
+        before, real, later = self.head(), A._build, []
+
+        def build(repo, project, branch, make):
+            if branch == f"improve/{first}":
+                raise OSError("disk full")
+            return real(repo, project, branch, make)
+        hooks = {"apply": A.apply, "pick": lambda *a: later.append("pick") or [], "digest": lambda *a: later.append("digest") or {}}
+        with mock.patch.object(A, "_build", side_effect=build):
+            out = E.tick(self.s, "proj", runs, [], configs={"base": {"baseline": True}}, hooks=hooks, adapters=lambda *a, **k: {})
+        self.assertEqual(out["trials"]["kept"], 2, out)
+        self.assertEqual([self.s.get(p)["state"] for p in (first, second)], ["kept", "kept"])
+        self.assertEqual(later, ["pick", "digest"])
+        self.assertIsNone(self.s.get(first)["commit_sha"])
+        self.assertEqual(self.s.get(second)["commit_sha"], self.head())
+        self.assertEqual(self.count(before), 1)
+        self.assertEqual([e["proposal"] for e in self.events("improve_refused")], [first])
+
+    def test_sweep_drafts_counts_an_unexpected_error_and_goes_on(self):
+        one = self.s.insert("manual", "rule", "claude/orchestrator.md", ORCH, EV, title="One")
+        two = self.s.insert("manual", "rule", "claude/worker.md", ORCH.replace("orchestrator", "worker"), EV, title="Two")
+        real = A._build
+
+        def build(repo, project, branch, make):
+            if branch == f"improve/{one}":
+                raise OSError("disk full")
+            return real(repo, project, branch, make)
+        with mock.patch.object(A, "_build", side_effect=build):
+            self.assertEqual(A.sweep_drafts(self.s), {"error": 1, "drafted": 1})
+        self.assertEqual([self.s.get(p)["state"] for p in (one, two)], ["proposed", "drafted"])
 
 
 class SweepWaitingTest(Base):
