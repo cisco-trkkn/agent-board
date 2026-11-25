@@ -38,6 +38,18 @@ def project_name(arg=None):
     return Path(r.stdout.strip()).parent.name
 
 
+def loop_project():
+    """The one project the loop runs for (spec: "Out of scope: Outcomes beyond agent-board itself"): the name of the
+    main checkout this code lands commits in (improve_apply.repo_root), or TC_IMPROVE_PROJECT (tests).
+    Engine side: engine/lib/improve.js isLoopRepo."""
+    if os.environ.get("TC_IMPROVE_PROJECT"):
+        return os.environ["TC_IMPROVE_PROJECT"]
+    try:
+        return improve_apply.repo_root().name
+    except (improve_apply.ApplyError, OSError) as e:
+        raise Fail(f"cannot tell the loop's project: {e}")
+
+
 def cmd_list(a, store):
     rows = store.list(a.state)
     if a.json:
@@ -272,6 +284,10 @@ def main(argv):
         return 1 if e.code else 0
     try:
         project = project_name(a.project)
+        if project != loop_project():   # the one check every entry passes: no store, no engine call, no adapter
+            print(f"improve: {a.sub}: not the loop's project")
+            return 0
+        os.environ["TC_PROJECT"] = project   # cards and the tmux-ctl calls below read it: --project beats a stale value
         if a.sub == "schedule":   # no store: the engine makes its database on the first schedule
             cmd_schedule(a, project)
             return 0

@@ -28,7 +28,7 @@ def fake_claude(d, reply_text=None, exit_code=0, tokens=50, raw=None, sleep=0):
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp, self.state, self.bin = tempfile.mkdtemp(), tempfile.mkdtemp(), tempfile.mkdtemp()
-        env = mock.patch.dict(os.environ, {"TC_ENGINE_DIR": self.tmp, "TC_STATE": self.state, "TC_OBSERVER_DIR": self.state})
+        env = mock.patch.dict(os.environ, {"TC_IMPROVE_PROJECT": "proj", "TC_ENGINE_DIR": self.tmp, "TC_STATE": self.state, "TC_OBSERVER_DIR": self.state})
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(lambda: [shutil.rmtree(d, ignore_errors=True) for d in (self.tmp, self.state, self.bin)])

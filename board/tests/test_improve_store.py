@@ -164,8 +164,8 @@ class RebuildTest(Base):
 
 
 class CliTest(Base):
-    def cli(self, *a, ok=True):
-        env = dict(os.environ, TC_PROJECT="proj")
+    def cli(self, *a, ok=True, extra=None):
+        env = dict(os.environ, TC_PROJECT="proj", TC_IMPROVE_PROJECT="proj", **(extra or {}))
         r = subprocess.run([sys.executable, "-I", str(REPO / "board/improve.py"), *a], capture_output=True, text=True, env=env, cwd=REPO)
         if ok:
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -200,7 +200,7 @@ class CliTest(Base):
         run = Path(ctx) / "dream" / "proj" / "20261125-0300" / "out"
         run.mkdir(parents=True)
         (run / "report.json").write_text(json.dumps({"proposals": [{"kind": "observer", "text": "x"}]}))
-        env = dict(os.environ, TC_PROJECT="proj", TC_CONTEXT_DIR=ctx)
+        env = dict(os.environ, TC_PROJECT="proj", TC_IMPROVE_PROJECT="proj", TC_CONTEXT_DIR=ctx)
         r = subprocess.run([sys.executable, "-I", str(REPO / "board/improve.py"), "propose", "--kind", "procedure",
                             "--target", "docs/x.md", "--patch", self.patchfile(), "--from-dream", "20261125-0300:0"],
                            capture_output=True, text=True, env=env, cwd=REPO)
@@ -219,10 +219,71 @@ class CliTest(Base):
         self.assertEqual(self.cli("outcome", "status", "O9", ok=False).returncode, 1)
 
     def test_no_db(self):
-        env = dict(os.environ, TC_PROJECT="other")
+        env = dict(os.environ, TC_PROJECT="other", TC_IMPROVE_PROJECT="other")
         r = subprocess.run([sys.executable, "-I", str(REPO / "board/improve.py"), "list"], capture_output=True, text=True, env=env, cwd=REPO)
         self.assertEqual(r.returncode, 1)
         self.assertIn("improve: no engine database at", r.stderr)
+
+
+class LoopProjectTest(Base):
+    """Final review I1: the loop is agent-board's own. Any other project gets one line and exit 0, before any store,
+    engine call or adapter."""
+    SUBS = (["list"], ["show", "P1"], ["propose", "--kind", "rule", "--target", "t", "--patch", "/nonexistent"],
+            ["variants", "specX", "--json"], ["tick"], ["adapters", "--dry-run"], ["revert", "P1"], ["click", "promote", "P1"],
+            ["outcome", "status"], ["schedule", "install"])
+
+    def run_cli(self, *a, **env):
+        base = {k: v for k, v in os.environ.items() if k not in ("TC_PROJECT", "TC_IMPROVE_PROJECT", "TC_IMPROVE_REPO")}
+        # a tmux-ctl that fails loudly: a refused command must never reach the engine
+        return subprocess.run([sys.executable, "-I", str(REPO / "board/improve.py"), *a], capture_output=True, text=True,
+                              env=dict(base, TC_TMUX_CTL="/nonexistent/tmux-ctl", **env), cwd=REPO)
+
+    def test_every_subcommand_refuses_another_project(self):
+        before = sorted(os.listdir(self.tmp))
+        for sub in self.SUBS:
+            for how in ("env", "flag"):
+                with self.subTest(sub=sub, how=how):
+                    if how == "env":
+                        r = self.run_cli(*sub, TC_PROJECT="second-brain", TC_IMPROVE_PROJECT="proj")
+                    else:
+                        r = self.run_cli("--project", "second-brain", *sub, TC_PROJECT="proj", TC_IMPROVE_PROJECT="proj")
+                    self.assertEqual((r.returncode, r.stdout, r.stderr), (0, f"improve: {sub[0]}: not the loop's project\n", ""))
+        self.assertEqual(sorted(os.listdir(self.tmp)), before, "no database of the other project was made or opened")
+        self.assertEqual(self.s.list(), [])
+
+    def test_the_loops_project_is_the_main_checkout_of_this_code(self):
+        # unpatched: git names the main checkout, also from a linked worktree
+        import improve
+        common = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True).stdout.strip()
+        with mock.patch.dict(os.environ):
+            os.environ.pop("TC_IMPROVE_PROJECT", None); os.environ.pop("TC_IMPROVE_REPO", None)
+            self.assertEqual(improve.loop_project(), Path(common).parent.name)
+        name = Path(common).parent.name
+        F.engine_db(self.tmp, name) if name != "proj" else None
+        r = self.run_cli("list", TC_PROJECT=name)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+        r = self.run_cli("list", TC_PROJECT="proj")
+        self.assertEqual(r.stdout, "improve: list: not the loop's project\n")
+
+    def test_tc_improve_repo_names_the_project_in_tests(self):
+        repo = Path(self.tmp) / "proj"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        r = self.run_cli("list", TC_PROJECT="proj", TC_IMPROVE_REPO=str(repo))
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+        r = self.run_cli("list", TC_PROJECT="other", TC_IMPROVE_REPO=str(repo))
+        self.assertEqual(r.stdout, "improve: list: not the loop's project\n")
+        r = self.run_cli("list", TC_PROJECT="proj", TC_IMPROVE_REPO=str(repo / "nope"))
+        self.assertEqual(r.returncode, 1)
+        self.assertRegex(r.stderr, r"^improve: list: cannot tell the loop's project: ")
+
+    def test_project_flag_beats_a_stale_tc_project_for_everything_downstream(self):
+        import improve
+        seen = []
+        with mock.patch.dict(os.environ, {"TC_PROJECT": "stale", "TC_IMPROVE_PROJECT": "proj"}), \
+                mock.patch.object(improve, "cmd_list", lambda a, store: seen.append((os.environ["TC_PROJECT"], store.project))):
+            self.assertEqual(improve.main(["--project", "proj", "list"]), 0)
+        self.assertEqual(seen, [("proj", "proj")])
 
 
 if __name__ == "__main__":

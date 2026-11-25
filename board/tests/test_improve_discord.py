@@ -23,7 +23,7 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        env = mock.patch.dict(os.environ, {"TC_ENGINE_DIR": self.tmp + "/eng", "TC_STATE": self.tmp + "/state",
+        env = mock.patch.dict(os.environ, {"TC_IMPROVE_PROJECT": "proj", "TC_ENGINE_DIR": self.tmp + "/eng", "TC_STATE": self.tmp + "/state",
                                            "TC_OBSERVER_DIR": self.tmp + "/state", "TC_PROJECT": "proj"})
         env.start()
         self.addCleanup(env.stop)

@@ -26,7 +26,7 @@ def w(p, text):
 class Base(unittest.TestCase):
     def setUp(self):
         self.d = {k: tempfile.mkdtemp() for k in ("engine", "state", "obs", "ctx", "scout")}
-        self.env = mock.patch.dict(os.environ, {"TC_ENGINE_DIR": self.d["engine"], "TC_STATE": self.d["state"],
+        self.env = mock.patch.dict(os.environ, {"TC_IMPROVE_PROJECT": "proj", "TC_ENGINE_DIR": self.d["engine"], "TC_STATE": self.d["state"],
                                                 "TC_OBSERVER_DIR": self.d["obs"], "TC_CONTEXT_DIR": self.d["ctx"],
                                                 "TC_SCOUT_DIR": self.d["scout"]})
         self.env.start()

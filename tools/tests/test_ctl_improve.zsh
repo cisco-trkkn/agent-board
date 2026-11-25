@@ -3,6 +3,7 @@ source "${0:A:h}/lib.zsh"
 C="${TC_CTL:-$TT_REPO/bin/tmux-ctl}"
 T="$(mktemp -d "${TMPDIR:-/tmp}/ctlimp.XXXXXX")"; T="${T:A}"
 export TC_ENGINE_DIR="$T/engine" TC_STATE="$T/state" TC_PROJECT=proj
+export TC_IMPROVE_PROJECT=proj   # the loop runs for one project only (board/improve.py loop_project)
 mkdir -p "$TC_ENGINE_DIR"
 python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, spec TEXT, job TEXT, kind TEXT, detail TEXT)"); c.commit()' "$TC_ENGINE_DIR/proj.sqlite"
 print -r -- $'--- a/claude/x.md\n+++ b/claude/x.md\n@@ -1,1 +1,1 @@\n-a\n+b' > "$T/p.diff"
@@ -20,6 +21,7 @@ check "propose without evidence exits 1" test $rc -eq 1
 check "outcome status says too early" zsh -c 'env -u TMUX "$1" improve outcome status | grep -q "O1 too early"' _ "$C"
 # inside tmux, without TC_PROJECT, the project is the session's (FEEDKEY): it opens tt.sqlite, not another database
 unset TC_PROJECT
+export TC_IMPROVE_PROJECT=tt
 tt_setup
 export TC_ENGINE_DIR="$T/engine2"; mkdir -p "$TC_ENGINE_DIR"
 python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, spec TEXT, job TEXT, kind TEXT, detail TEXT)"); c.commit()' "$TC_ENGINE_DIR/tt.sqlite"

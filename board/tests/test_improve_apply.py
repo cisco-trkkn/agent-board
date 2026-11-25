@@ -36,7 +36,7 @@ class Base(unittest.TestCase):
                         f'  engine) exec node "{CODE}/engine/bin/engine.js" "$@" ;;\n'
                         f'  improve) exec python3 -I "{CODE}/board/improve.py" "$@" ;;\nesac\nexit 64\n')
         stub.chmod(0o755)
-        env = mock.patch.dict(os.environ, {"TC_ENGINE_DIR": str(eng), "TC_STATE": str(state), "TC_OBSERVER_DIR": str(state),
+        env = mock.patch.dict(os.environ, {"TC_IMPROVE_PROJECT": "proj", "TC_ENGINE_DIR": str(eng), "TC_STATE": str(state), "TC_OBSERVER_DIR": str(state),
                                            "TC_IMPROVE_REPO": str(self.repo), "TC_TMUX_CTL": str(stub), "TC_PROJECT": "proj"})
         env.start()
         self.addCleanup(env.stop)

@@ -10,6 +10,7 @@ const steps = require("./steps");
 const db_ = require("./db");
 const integrate = require("./integrate");
 const inbox = require("./inbox");
+const improve = require("../improve");
 
 const REPORT_DIR = "docs/superpowers/reports";
 const METRICS_FILES = ["docs/superpowers/metrics/runs.jsonl", "docs/superpowers/metrics/tasks.jsonl"];
@@ -213,10 +214,11 @@ function write(ctx) {
   call(ctx, q, "artifact", `artifact:${seq}:${rel}`, ["artifact", abs]);
   // The improvement loop's tick after a committed report (improve plan Task 11): one `schedule` row per report date, drained
   // like any schedule row (schedule.handleRow; its name is `improve`). An uncommitted report writes none, and
-  // TC_IMPROVE_TICK=0 turns the row off (the engine tests' seam, engine/test/engine_helpers.js tmpEnv).
-  if (envOf(ctx).TC_IMPROVE_TICK !== "0" && ctx.db.prepare("SELECT 1 FROM steps WHERE key=? AND state='done'").get(`commit_report:${rel}`)) {
+  // TC_IMPROVE_TICK=0 turns the row off (the engine tests' seam, engine/test/engine_helpers.js tmpEnv). Only the loop's own
+  // repo gets the row (improve.isLoopRepo): another project's queue never schedules a tick.
+  if (envOf(ctx).TC_IMPROVE_TICK !== "0" && improve.isLoopRepo(ctx.repo, envOf(ctx)) && ctx.db.prepare("SELECT 1 FROM steps WHERE key=? AND state='done'").get(`commit_report:${rel}`)) {
     inbox.insert(ctx.db, { source: "schedule", source_id: `improve@${dateOf(q, ctx.now)}`, kind: "run",
-      payload: { command: "tmux-ctl improve tick", skip_if_weekly_usage: 85 } }, typeof ctx.now === "function" ? ctx.now() : undefined);
+      payload: { command: "tmux-ctl improve tick", skip_if_weekly_usage: 85, cwd: ctx.repo } }, typeof ctx.now === "function" ? ctx.now() : undefined);
   }
   // A queue with a lead-run spec or a `keep` spec (what an `ask` answer enqueues with) has merge requests or rulings still to
   // post: the Mac must stay awake until the lead hears `queue finished`, and the lead's rule ends with `tmux-ctl awake off`.

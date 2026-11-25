@@ -53,6 +53,12 @@ function mk(t, o = {}) {
   const repo = gitRepo();
   const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(repo.dir, rel)), { recursive: true }); fs.writeFileSync(path.join(repo.dir, rel), text); };
   put(".gitignore", ".superpowers/\n");
+  // the loop's repo (improve.isLoopRepo) is this scratch checkout, unless o.notLoop: then it is some other project's
+  if (!o.notLoop) put("docs/superpowers/improve/protected.txt", "docs/superpowers/improve/**\n");
+  const oldLoop = process.env.TC_IMPROVE_REPO;
+  process.env.TC_IMPROVE_REPO = repo.dir;
+  const oldProj = process.env.TC_IMPROVE_PROJECT;
+  process.env.TC_IMPROVE_PROJECT = "demo"; // the real board/improve.py (o.realImprove) runs for the loop's project only
   put(SKILL, SKILL_TEXT);
   put("docs/superpowers/model-routing.json", JSON.stringify(ROUTING));
   for (const [spec, plan] of [[SPEC_A, PLAN_A], [SPEC_B, PLAN_B]]) {
@@ -115,6 +121,8 @@ function mk(t, o = {}) {
   t.after(() => {
     eng.stop();
     if (oldObs === undefined) delete process.env.TC_OBSERVER_DIR; else process.env.TC_OBSERVER_DIR = oldObs;
+    if (oldLoop === undefined) delete process.env.TC_IMPROVE_REPO; else process.env.TC_IMPROVE_REPO = oldLoop;
+    if (oldProj === undefined) delete process.env.TC_IMPROVE_PROJECT; else process.env.TC_IMPROVE_PROJECT = oldProj;
     env.restore();
     repo.cleanup();
   });
@@ -284,6 +292,17 @@ test("improve variants exiting 1: the spec runs with no variants and one improve
   assert.doesNotMatch(h.brief(SPEC_A, "implement"), /## Trial/);
   assert.equal(h.metricsStart(SPEC_A).includes("--variants"), false);
   assert.equal(h.ctl().filter((x) => x[0] === "improve").length, 1);
+});
+
+// The loop is agent-board's own (final review I1): another project's engine never asks for variants.
+test("a spec of a repo that is not the loop's repo gets no variants call and no trial", async (t) => {
+  const h = mk(t, { variants: { [SPEC_A]: [P1] }, notLoop: true });
+  await h.run([SPEC_A]);
+  assert.equal(h.spec(SPEC_A).outcome, "merged");
+  assert.deepEqual(h.ctl().filter((x) => x[0] === "improve"), []);
+  assert.equal(h.events("improve_variants").length, 0);
+  assert.equal(h.events("improve_variants_error").length, 0);
+  assert.doesNotMatch(h.brief(SPEC_A, "implement"), /## Trial/);
 });
 
 test("a lead-run spec gets no variants call and no trial", async (t) => {

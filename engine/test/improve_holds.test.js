@@ -202,7 +202,7 @@ for (const tool of ["Edit", "MultiEdit"]) {
 function ctlWorld(t) {
   const env = tmpEnv();
   t.after(() => env.restore());
-  const base = { ...process.env, TC_ENGINE_DIR: env.engineDir, TC_STATE: env.state, TC_PROJECT: PROJECT,
+  const base = { ...process.env, TC_ENGINE_DIR: env.engineDir, TC_STATE: env.state, TC_PROJECT: PROJECT, TC_IMPROVE_PROJECT: PROJECT,
     TMUX_TMPDIR: env.root, TMUX_DASH_TMUX_ARGS: "-L impt-none -f /dev/null" };
   for (const k of ["TMUX", "TMUX_PANE", "TC_SESSION", "TC_TMUX_CTL"]) delete base[k];
   return { env, run: (...args) => cp.spawnSync(path.join(REPO, "bin/tmux-ctl"), args, { cwd: REPO, env: base, encoding: "utf8", timeout: 60000 }) };
@@ -263,7 +263,10 @@ function reportWorld(o = {}) {
   if (!o.tickOff) delete process.env.TC_IMPROVE_TICK;
   const repo = gitRepo();
   // the scratch server: its socket dir is the TMUX_TMPDIR the engine's own tmux calls see, so the cleanup finds it
-  const old = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, PATH: process.env.PATH };
+  const old = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, PATH: process.env.PATH, TC_IMPROVE_REPO: process.env.TC_IMPROVE_REPO };
+  // the loop's repo (improve.isLoopRepo): this scratch checkout with its protected.txt, unless the test says otherwise
+  process.env.TC_IMPROVE_REPO = o.loopRepo || repo.dir;
+  if (!o.noProtected) write(repo.dir, PROTECTED_REL, "docs/superpowers/improve/**\n");
   const tmp = fs.mkdtempSync("/tmp/ih-");
   process.env.TMUX_TMPDIR = tmp;
   const tmuxArgs = ["-L", `ih${process.pid}${Math.random().toString(36).slice(2, 7)}`, "-f", "/dev/null"];
@@ -311,7 +314,7 @@ test("a committed report inserts one schedule row improve@<date>; a second write
   let rows = w.q(SCHED);
   assert.equal(rows.length, 1);
   assert.deepEqual([rows[0].source, rows[0].source_id, rows[0].kind, rows[0].state], ["schedule", "improve@2026-01-01", "run", "new"]);
-  assert.deepEqual(JSON.parse(rows[0].payload), { command: "tmux-ctl improve tick", skip_if_weekly_usage: 85 });
+  assert.deepEqual(JSON.parse(rows[0].payload), { command: "tmux-ctl improve tick", skip_if_weekly_usage: 85, cwd: w.repo.dir });
   w.clock.t += 300; // later the same day: the hook runs again
   assert.equal(w.write(), REPORT);
   rows = w.q(SCHED);
@@ -328,6 +331,41 @@ test("an uncommitted report writes no row", () => {
   assert.equal(w.commits().length, 0);
   assert.equal(w.q("SELECT 1 FROM events WHERE kind='report_uncommitted'").length, 1);
   assert.deepEqual(w.q(SCHED), []);
+});
+
+// The loop is agent-board's own (final review I1): another project's queue schedules no tick.
+test("a committed report for a repo without protected.txt writes no row", () => {
+  const w = reportWorld({ noProtected: true });
+  assert.equal(w.write(), REPORT);
+  assert.equal(w.commits().length, 1);
+  assert.deepEqual(w.q(SCHED), []);
+});
+
+test("a committed report for a repo that is not the loop's repo writes no row, protected.txt or not", (t) => {
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "iph-"));
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  write(other, PROTECTED_REL, "x\n");
+  const w = reportWorld({ loopRepo: other });
+  assert.equal(w.write(), REPORT);
+  assert.equal(w.commits().length, 1);
+  assert.deepEqual(w.q(SCHED), []);
+});
+
+test("isLoopRepo: the main checkout of this code by default; TC_IMPROVE_REPO for tests; a symlinked path is the same repo", (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "iph-")));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  write(dir, PROTECTED_REL, "x\n");
+  fs.symlinkSync(dir, `${dir}-link`);
+  t.after(() => fs.rmSync(`${dir}-link`, { force: true }));
+  assert.equal(improve.isLoopRepo(dir, { TC_IMPROVE_REPO: dir }), true);
+  assert.equal(improve.isLoopRepo(`${dir}-link`, { TC_IMPROVE_REPO: dir }), true);
+  assert.equal(improve.isLoopRepo(dir, {}), false, "a scratch repo is not this code's checkout");
+  assert.equal(improve.isLoopRepo(path.join(dir, "nope"), { TC_IMPROVE_REPO: path.join(dir, "nope") }), false);
+  // unpatched: git names the main checkout of this code, also from a linked worktree
+  const common = cp.spawnSync("git", ["-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+  const main = path.dirname(common);
+  assert.equal(improve.loopRepo({}), fs.realpathSync(main));
+  assert.equal(improve.isLoopRepo(main, {}), fs.existsSync(path.join(main, PROTECTED_REL)));
 });
 
 // The switch engine_helpers.tmpEnv sets: without it every engine test that restarts an engine after a committed report

@@ -1241,7 +1241,9 @@ function start(opts) {
   // The trials of an engine-run spec, asked once when it starts: `tmux-ctl improve variants <spec> --json`. The answer
   // is kept in one improve_variants event (none for a spec in no trial), which the briefs, the routing, the job env and
   // metrics start read. A failing call is one improve_variants_error event and the spec runs with no variants.
+  // Only the loop's own repo is asked (improve.isLoopRepo): a spec of any other project runs with no variants.
   function loadVariants(spec) {
+    if (!improve.isLoopRepo(repo, env)) return;
     if (lastEvent(spec.id, "improve_variants") || lastEvent(spec.id, "improve_variants_error")) return;
     const r = improve.fetch({ tmuxCtl, spec: spec.id, cwd: repo, env: { ...env, TC_PROJECT: project } });
     if (r.error) { emit("improve_variants_error", { spec: spec.id, error: r.error, text: r.error }); return; }

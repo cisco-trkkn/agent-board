@@ -42,7 +42,7 @@ class SplitTest(unittest.TestCase):
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp, self.state, self.repo = tempfile.mkdtemp(), tempfile.mkdtemp(), tempfile.mkdtemp()
-        self.env = mock.patch.dict(os.environ, {"TC_ENGINE_DIR": self.tmp, "TC_STATE": self.state, "TC_OBSERVER_DIR": self.state})
+        self.env = mock.patch.dict(os.environ, {"TC_IMPROVE_PROJECT": "proj", "TC_ENGINE_DIR": self.tmp, "TC_STATE": self.state, "TC_OBSERVER_DIR": self.state})
         self.env.start()
         F.engine_db(self.tmp)
         self.s = S.Store("proj")

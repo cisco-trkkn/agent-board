@@ -28,6 +28,30 @@ function fetch({ tmuxCtl, spec, cwd, env }) {
   return { variants: doc.variants.filter((v) => v && typeof v === "object" && typeof v.id === "string") };
 }
 
+// ---- the loop's repo ------------------------------------------------------------------------------------------------
+// The loop improves agent-board itself and nothing else (spec: "Out of scope: Outcomes beyond agent-board itself"): its
+// repo is the main checkout this code belongs to (TC_IMPROVE_REPO in tests, as board/improve_apply.py repo_root).
+// The engine of any other project schedules no tick and asks for no variants. Python side: board/improve.py loop_project.
+let ownRepo; // the main checkout of this code, asked of git once
+function loopRepo(env = process.env) {
+  let dir = env.TC_IMPROVE_REPO;
+  if (!dir) {
+    if (ownRepo === undefined) {
+      const r = cp.spawnSync("git", ["-C", __dirname, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" });
+      const common = r.status === 0 ? r.stdout.trim() : "";
+      ownRepo = path.basename(common) === ".git" ? path.dirname(common) : path.resolve(__dirname, "../..");
+    }
+    dir = ownRepo;
+  }
+  try { return fs.realpathSync(dir); } catch (_) { return null; }
+}
+
+function isLoopRepo(repo, env = process.env) {
+  let real;
+  try { real = fs.realpathSync(repo); } catch (_) { return false; }
+  return real === loopRepo(env) && fs.existsSync(path.join(real, "docs/superpowers/improve/protected.txt"));
+}
+
 // ---- the protected set (spec section 6) ----------------------------------------------------------------------------
 // The same rule as board/improve_class.py is_protected; docs/superpowers/improve/glob-vectors.json holds both to it.
 
@@ -198,4 +222,4 @@ function envFor(variants, job) {
   return env;
 }
 
-module.exports = { fetch, apply, skillCopy, overlay, routing, envFor, ids, isProtected, protectedGlobs, protectedHolds, hunksOf, improveRange };
+module.exports = { loopRepo, isLoopRepo, fetch, apply, skillCopy, overlay, routing, envFor, ids, isProtected, protectedGlobs, protectedHolds, hunksOf, improveRange };
