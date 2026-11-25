@@ -463,6 +463,8 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     const t = L.target;
     if (msg.author?.id === client.user?.id) {
       if (!t || !newer(msg.id, t.id) || msg.interactionMetadata || msg.interaction) return;
+      // pin notices, thread-created notices and the like are not the lead's answer: only Default (0) and Reply (19) count
+      if (msg.system || (msg.type !== undefined && msg.type !== 0 && msg.type !== 19)) return;
       if (!L.bot_after.includes(String(msg.id))) { L.bot_after.push(String(msg.id)); L.bot_after.splice(0, Math.max(0, L.bot_after.length - BOT_AFTER_KEEP)); save(); }
       return;
     }

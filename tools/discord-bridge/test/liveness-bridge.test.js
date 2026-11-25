@@ -178,6 +178,23 @@ test('the bridge\'s own post is not the lead\'s answer; neither is an interactio
   assert.deepStrictEqual(mine(m), ['⏳']);
 });
 
+test('a bot system message (pin notice type 6, thread created type 18, system flag) is not the lead\'s answer', async () => {
+  const s = setup();
+  s.leadState({ state: 'busy' });
+  const m = s.msg('1001');
+  await s.bridge.onMessage(m); await s.tick(); await s.tick();
+  for (const [id, o] of [['1500', { type: 6 }], ['1501', { type: 18 }], ['1502', { system: true, type: 0 }]]) {
+    const sys = fakeMessage({ id, authorId: 'BOT', authorBot: true }); Object.assign(sys, o);
+    await s.bridge.onMessage(sys);
+  }
+  s.leadState({ state: 'ready' }); await s.settle();
+  assert.ok(!mine(m).includes('✅'), `got ${mine(m)}`);
+  const reply = fakeMessage({ id: '1600', authorId: 'BOT', authorBot: true }); reply.type = 19;   // a real reply still answers
+  await s.bridge.onMessage(reply);
+  s.leadState({ state: 'ready', since: iso(s.clock.t + 1) }); await s.settle();
+  assert.deepStrictEqual(mine(m), ['✅']);
+});
+
 test('a watch post (board down) after the target leaves the target at its non-✅ reaction', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dblw-'));
   const hb = path.join(root, 'heartbeat');
