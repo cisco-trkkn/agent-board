@@ -81,6 +81,7 @@
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
 #   tmux-ctl project new <name> --init|--clone <url>|--dir <path> | start <name> [--dir <path>]  a new project: its folder (prints it); its dev session and lead (works outside tmux)
+#   tmux-ctl improve outcome status|list|show|propose|revert|tick   the supervised improvement loop (board/improve.py)
 #   tmux-ctl registry|engine <sub> …       plan manifests, graphs, waves; the PCEE engine (engine/, node)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
@@ -869,7 +870,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,87p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac
