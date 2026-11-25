@@ -44,10 +44,15 @@ _pj_new() {
     clone)
       dir="$HOME/$name"
       [[ -e "$dir" ]] && { print -u2 "project: $dir exists"; return 1 }
-      if ! err="$(git clone -q -- "$val" "$dir" 2>&1 >/dev/null)"; then
+      # clone into a temp folder, then rename: a killed or timed-out clone leaves only the temp folder, which a retry clears
+      local tmp="$HOME/.$name.cloning"
+      rm -rf -- "$tmp"
+      if ! err="$(git clone -q -- "$val" "$tmp" 2>&1 >/dev/null)"; then
+        rm -rf -- "$tmp"
         local -a lines=("${(@f)err}")
         print -u2 -r -- "project: clone failed: ${lines[-1]:-git clone exited non-zero}"; return 1
       fi
+      mv -- "$tmp" "$dir" || { rm -rf -- "$tmp"; print -u2 "project: could not move the clone to $dir"; return 1 }
       print -r -- "$dir" ;;
     dir)
       dir="${val:A}"

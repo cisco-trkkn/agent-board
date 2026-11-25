@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import ssl
 import subprocess
 import sys
@@ -35,6 +36,7 @@ PERMS = sum(1 << b for b in (10, 11, 38, 35, 51, 16, 6, 15))   # 225210905143200
 INTENT_FLAGS = (1 << 18) | (1 << 19)   # GATEWAY_MESSAGE_CONTENT | GATEWAY_MESSAGE_CONTENT_LIMITED
 POLL_S = 10
 JOIN_TIMEOUT_S = 1800
+DISK_TIMEOUT_S = 1800      # a clone can be slow: the disk step gets its own, much longer, tmux-ctl timeout
 STALE_RUN_S = 900          # a running step whose worker or bridge answer never came (board restart, lost op)
 TOKEN_FILE_TTL_S = 600     # a one-shot token file no event claimed is deleted after this
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$")
@@ -60,12 +62,19 @@ def _spawn(fn):
 def _run(argv, stdin=None, timeout=180):
     """(rc, combined output). A timeout or a missing binary is rc 124 / 127 with a one-line reason."""
     try:
-        r = subprocess.run([str(a) for a in argv], input=stdin, capture_output=True, text=True, timeout=timeout, env=_env_fn())
-    except subprocess.TimeoutExpired:
-        return 124, f"timed out after {timeout}s"
+        # own process group: on a timeout the whole tree (zsh and the git clone under it) dies, not only the shell
+        p = subprocess.Popen([str(a) for a in argv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=_env_fn(), start_new_session=True)
     except OSError as e:
         return 127, type(e).__name__
-    return r.returncode, (r.stdout + r.stderr).strip()
+    try:
+        out, err = p.communicate(input=stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(p.pid, signal.SIGKILL)
+        p.communicate()
+        return 124, f"timed out after {timeout}s"
+    return p.returncode, (out + err).strip()
 
 
 @functools.lru_cache(maxsize=None)
@@ -294,7 +303,7 @@ def on_modal(d, ev):
         return "refused: not the command center"
     st = load(name)
     if st is not None:
-        return _resume(d, st, iid)
+        return _resume(d, st, iid, source, target)
     why = _refusal(name, source, target)
     if why:
         _ireply(d, iid, why)
@@ -312,12 +321,43 @@ def on_modal(d, ev):
     return "started"
 
 
-def _resume(d, st, iid):
+def _correct(st, source, target):
+    """The form named an unfinished setup whose disk step is not done: its source and target replace the saved ones
+    (a mistyped URL is fixed from the phone). Returns (changed, refusal)."""
+    if _step(st, "disk")["state"] == "done" or not source or (source, target) == (st["source"], st.get("target") or ""):
+        return False, None
+    if source not in ("new", "clone", "folder"):
+        return False, "Source must be new, clone or folder."
+    if source != "new" and not target:
+        return False, f"Source {source} needs a {'git URL' if source == 'clone' else 'path'}."
+    if _step(st, "disk")["state"] == "running":
+        return False, "The project folder is still being made; wait for it to finish or fail, then submit again."
+    if source == "folder":
+        p = Path(os.path.expanduser(target)).resolve()
+        rc, top = _run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], timeout=20)
+        if not p.is_dir() or rc != 0 or Path(top.strip()).resolve() != p:
+            return False, f"{target} is not a git work tree."
+        if p.name != st["name"]:
+            return False, f"The folder is named {p.name}, not {st['name']}: the dev session takes the folder's name."
+    return True, None
+
+
+def _resume(d, st, iid, source="", target=""):
     if st.get("done"):
         _ireply(d, iid, f"{st['name']} is already set up.")
         return "already set up"
-    with _locked(st["name"]):
-        st = load(st["name"])
+    name = st["name"]
+    changed, why = _correct(st, source, target)
+    if why:
+        _ireply(d, iid, why)
+        return f"refused: {why}"[:80]
+    with _locked(name):
+        st = load(name)
+        if changed and _step(st, "disk")["state"] != "running":
+            st["source"], st["target"], st["dir"] = source, (target if source != "new" else ""), None
+            _set(st, "disk", "pending")
+        else:
+            changed = False
         old = st["card"]
         st["n"] = int(st.get("n") or 1) + 1
         st["card"] = f"np:{st['name']}:{st['n']}"
@@ -326,6 +366,8 @@ def _resume(d, st, iid):
     discord_feed.outbox_write(d, {"op": "edit", "key": old, "text": f"{text}\n(moved to a new card below)"[:2000], "rows": []})
     _post_card(d, st)
     _ireply(d, iid, f"Resumed {st['name']}: the setup card is below.")
+    if changed:
+        _advance(d, name)
     return "resumed"
 
 
@@ -431,8 +473,8 @@ def _start(d, name, s, fn, payload=None):
     _spawn(go)
 
 
-def _ctl(*args, stdin=None):
-    rc, out = _run([TMUX_CTL, *args], stdin=stdin)
+def _ctl(*args, stdin=None, timeout=180):
+    rc, out = _run([TMUX_CTL, *args], stdin=stdin, timeout=timeout)
     if rc != 0:
         raise StepFailed(_last_line(out) or f"tmux-ctl {args[0]} exited {rc}")
     return out
@@ -440,7 +482,7 @@ def _ctl(*args, stdin=None):
 
 def _do_disk(st, _):
     flag = {"new": ["--init"], "clone": ["--clone", st["target"]], "folder": ["--dir", os.path.expanduser(st["target"])]}[st["source"]]
-    out = _ctl("project", "new", st["name"], *flag)
+    out = _ctl("project", "new", st["name"], *flag, timeout=DISK_TIMEOUT_S)
     return {"dir": _last_line(out)}
 
 
@@ -659,7 +701,8 @@ def tick(d, now):
             st = load(name)
             for s in STEPS:
                 step = _step(st, s)
-                if step["state"] == "running" and now - float(step.get("at") or 0) > STALE_RUN_S:
+                limit = DISK_TIMEOUT_S + STALE_RUN_S if s == "disk" else STALE_RUN_S
+                if step["state"] == "running" and now - float(step.get("at") or 0) > limit:
                     _set(st, s, "failed", "no answer from the ops bridge; Retry" if s == "channel" else "interrupted; Retry")
                     changed = stale = True
             j = st.get("join") or {}
