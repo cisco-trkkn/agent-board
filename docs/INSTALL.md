@@ -227,7 +227,7 @@ tmux-ctl engine schedule migrate             # moves the dream, discover and sco
 
 Preconditions of the heartbeat (launchd starts it with a bare environment):
 
-- **node >= 22.13 on the heartbeat's PATH.** `wake install` puts the directory of the node that ran it first in the plist's `PATH`. Check: `plutil -extract EnvironmentVariables.PATH raw ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist`, then `env -i HOME=$HOME PATH=<that path> tmux-ctl engine status` exits 0 (without node it prints `node >= 22.13 is required`, exit 2). Reinstall after changing node.
+- **node >= 22.13 on the heartbeat's PATH.** `wake install` puts the directory of the node that ran it first in the plist's `PATH`. Check: `plutil -extract EnvironmentVariables.PATH raw ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist`, then `env -i HOME=$HOME PATH=<that path> tmux-ctl engine status --project agent-board` exits 0 (without node it prints `node >= 22.13 is required`, exit 2). Reinstall after changing node.
 - **The tmux server the wake uses.** The plist carries `AGENT_BOARD_TMUX_SOCKET` (default `agent-board`), so a wake reaches the dedicated `-L <socket>` server, as `dev` does, and never tmux's default socket. Check: `grep -A1 AGENT_BOARD_TMUX_SOCKET ~/Library/LaunchAgents/com.user.agent-board-engine-wake.plist` names the socket your sessions run on (`tmux -L <socket> list-sessions`).
 
 After install and after migrate, run these gates:
