@@ -978,11 +978,12 @@ of the engine-run specs, keeps or reverts low ones by the metrics decision rule 
 - [ ] After the queue's specs ran: `tmux-ctl improve show <id>` lists the trial and control specs by the hash split. At least one trial spec's brief file under `<worktree>/.superpowers/engine/` contains `## Trial <id>` (captured with `grep -l`), and at least one control spec's does not.
 - [ ] The run records of those specs carry `variants` (`tmux-ctl metrics runs <batch> --json`).
 - [ ] The post-report tick's verdict for the proposal (`kept`, `reverted`, `awaiting_you` or `trial: <n>/5 specs`) is shown in the NEXT morning report's `## Improve` section (`docs/superpowers/reports/<date>-queue.md`, Task 11), or, before that report exists, by `tmux-ctl improve list` and the tick's `improve` event (lead ruling A18: the tick runs after the report that triggers it).
+- [ ] The first real tick's pick step ran the real restricted ranking call: its `improve_step` event shows `pick` with `started` ≥ 1, or one `improve_rank_failed` event with the reason (final review I4).
 
 **Verify:** `tmux-ctl improve show <id>` → trial and control specs listed, state and verdict line recorded as evidence
 
 ```json:metadata
-{"files": [], "verifyCommand": "tmux-ctl improve show <id>", "acceptanceCriteria": ["real dream-report proposal filed; class shown; lead asks user for low via user source", "trial spec brief has the Trial block, a control brief does not", "run records carry variants", "tick verdict in the next morning report's Improve section, or improve list + the tick's event"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"]}
+{"files": [], "verifyCommand": "tmux-ctl improve show <id>", "acceptanceCriteria": ["real dream-report proposal filed; class shown; lead asks user for low via user source", "trial spec brief has the Trial block, a control brief does not", "run records carry variants", "tick verdict in the next morning report's Improve section, or improve list + the tick's event", "first real tick: pick started >= 1 or one improve_rank_failed"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"]}
 ```
 
 ---
