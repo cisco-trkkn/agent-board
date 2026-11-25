@@ -97,7 +97,7 @@ class RecordGatingTest(unittest.TestCase):
         r = self.rec(view(task(1, "Plan & run: d.md", "in_progress", queue=True), task(2, "Task 2: x", "in_progress", owner="fake")), calls)
         self.assertTrue(r["queue"])
         self.assertEqual(len(r["owned"]), 1)
-        self.assertEqual(tuple(r)[-5:], ("queue", "owned", "awake", "pace", "agents"))
+        self.assertEqual(tuple(r)[-6:], ("queue", "owned", "awake", "pace", "runs", "agents"))
 
 
 class AwakeTest(unittest.TestCase):
@@ -140,7 +140,7 @@ class PlanviewQueueFlagTest(unittest.TestCase):
 
 class RecordKeysTest(unittest.TestCase):
     def test_new_keys_sit_before_agents(self):
-        self.assertEqual(overview.RECORD_KEYS[-5:], ("queue", "owned", "awake", "pace", "agents"))
+        self.assertEqual(overview.RECORD_KEYS[-6:], ("queue", "owned", "awake", "pace", "runs", "agents"))
 
 
 if __name__ == "__main__":

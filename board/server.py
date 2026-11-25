@@ -231,7 +231,8 @@ INDEXER = None   # usage.Indexer, set only when run as a script (see __main__)
 NOTIFIER = notify.Notifier()   # TC_NOTIFY=0 turns banners and the events list off
 WATCH = watch.Watch(run=lambda argv: run_script([TMUX_CTL, *argv], timeout=30),   # the night watch; TC_WATCH=0 turns it off
                     nudge=lambda project, line: COMMENTS.add_line(project, line),
-                    alert=None if os.environ.get("TC_DISCORD_ALERTS") == "0" else notify.discord_sink)
+                    alert=None if os.environ.get("TC_DISCORD_ALERTS") == "0" else notify.discord_sink,
+                    tell=lambda pane, line: tell_pane(pane, line))
 OVERSEER_SESSION = "overseer"   # the read-only overseer's tmux session: never a project card
 TERMINAL_SESSION = os.environ.get("TC_TERMINAL_SESSION", "main")   # the session new terminals attach to: no card unless Claude runs in it; "" shows it always
 OVERVIEW_EVERY = 10   # seconds between overview builds (the notifier thread) and the cache life of /api/overview
@@ -256,6 +257,19 @@ def _input_busy(pane):
         return input_has_text(_rows(tmux("capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-40")))
     except Exception:
         return True   # cannot tell: hold the comment
+
+
+def tell_pane(pane, line):
+    """The run watch's teammate line: typed into <pane> (text + Enter) unless text sits in its input; False = held."""
+    if _input_busy(pane):
+        return False
+    send_line(pane, line)
+    return True
+
+
+def ps_text():
+    """One process sample for the run watch (overview.PS_ARGV), called at most once per overview build."""
+    return subprocess.run(list(overview.PS_ARGV), capture_output=True, text=True, timeout=10).stdout
 
 
 def deliver_comments(sessions):
@@ -684,7 +698,8 @@ def build_overview(now=None, limits=None):
     if limits is None:
         limits = read_limits(now)
     return overview.build(st["sessions"], live, now, home=HOME / ".claude", state_dir=tc_env.state_dir(), tmux=tmux, th=th,
-                          spend=lambda repo: spend_today(repo, now), activity=window_activity(), mods=mod_records(now), limits=limits)
+                          spend=lambda repo: spend_today(repo, now), activity=window_activity(), mods=mod_records(now), limits=limits,
+                          ps=ps_text)
 
 
 def observe_overview(ov):
