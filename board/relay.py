@@ -360,6 +360,8 @@ def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, h
         root = os.path.realpath(session_root(tmux, sess))
     except FolderGone as e:
         raise LeadRestartError(str(e)) from None
+    home = home or default_home()
+    state = state or default_state()
     if resume:
         sid = session_for_pane(pane, home, state)
         if not sid:
@@ -372,8 +374,6 @@ def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, h
         if not os.path.isfile(d):
             raise LeadRestartError(f"no handoff doc '{d}'")
         args, what = shlex.quote(prompt_for(d)), f"doc {os.path.basename(d)}"
-    home = home or default_home()
-    state = state or default_state()
     old_id = session_for_pane(pane, home, state)
     t0_ms = int(time.time() * 1000)
     if win == "claude-next":

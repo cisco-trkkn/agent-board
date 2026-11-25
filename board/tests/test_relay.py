@@ -529,6 +529,14 @@ class RestartLeadTest(unittest.TestCase):
         self.assertIn(" --resume SID1; exec", self.respawn_cmd(t)[6])
         self.assertEqual(out["what"], "resume SID1")
 
+    def test_resume_defaults_home_and_state_when_not_given(self):
+        (self.d / "home" / "sessions" / "a.json").write_text(json.dumps({"sessionId": "SID1", "tmux": "proj:@1.%5", "updatedAt": 5}))
+        t = self.tmux()
+        with mock.patch.object(relay, "default_home", return_value=str(self.d / "home")), \
+                mock.patch.object(relay, "default_state", return_value=str(self.d / "state")):
+            out = relay.restart_lead(t, "proj", resume=True, handoffs=str(self.d / "handoffs"), sleep=lambda s: None)
+        self.assertEqual(out["what"], "resume SID1")
+
     def test_resume_without_id_changes_nothing(self):
         t = self.tmux("claude-next")
         with self.assertRaises(relay.LeadRestartError) as cm:
