@@ -120,7 +120,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || "$1" == project || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || "$1" == engine || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || "$1" == project || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || "$1" == engine || "$1" == improve || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, engine, improve, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -856,6 +856,9 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     export TC_PROJECT="$FEEDKEY"
     [[ -n "$SESSION" ]] && export TC_SESSION="$SESSION"
     exec node "${0:A:h:h}/engine/bin/engine.js" "$@" ;;
+
+  improve)
+    source "${0:A:h:h}/tools/lib/improve.zsh"; improve_main "${0:A:h:h}" "$@" ;;
 
   metrics)
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
