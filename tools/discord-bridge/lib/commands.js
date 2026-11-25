@@ -29,7 +29,7 @@ const FORMS = {
 };
 
 function payload(ops) {
-  return Object.keys(DESCRIPTIONS).filter((name) => ops || (name !== 'ideas' && name !== 'new-project')).map((name) => { // /ideas posts in the ops channel and /new-project runs in the command center: project bots register neither
+  return Object.keys(DESCRIPTIONS).filter((name) => ops || name !== 'new-project').map((name) => { // /new-project runs in the command center: project bots do not register it
     const c = { name, description: DESCRIPTIONS[name], type: 1 };
     if (name === 'new-project') {
       c.options = [{ name: 'name', description: 'Resume the unfinished setup of this project', type: 3, max_length: PROJECT_MAX, required: false }];
@@ -102,7 +102,7 @@ async function handleCommand(i, ctx) {
   // a project bot defaults to its own project only in its home channel (or a thread of it); elsewhere it acts like the ops bot
   const homeId = ctx.ops ? null : ctx.homeChannel?.();
   const inHome = !ctx.ops && !!homeId && (i.channelId === homeId || i.channel?.parentId === homeId); // an unknown home channel means no default
-  const project = name === 'ideas' ? given : (given || (inHome ? own : null)); // /ideas covers every project unless one is given (R2)
+  const project = name === 'ideas' ? (ctx.ops ? given : own) : (given || (inHome ? own : null)); // /ideas: the ops bot covers every project unless one is given (R2); a project bot covers only its own
 
   if (name === 'new-project') {
     if (!ctx.ops) { await ctx.answer(i, 'Use /new-project on the ops bot.'); return; }
@@ -134,6 +134,7 @@ async function handleCommand(i, ctx) {
     return;
   }
   if (NEEDS_PROJECT.has(name) && !project) { await ctx.answer(i, 'Pick a project.'); return; }
+  if (name === 'ideas' && !ctx.ops && given && given !== own) { await ctx.answer(i, `/ideas here covers only ${own}; use the ops bot for ${given}`); return; }
   if (crossDenied(ctx, project, user)) {
     await ctx.answer(i, `Not allowed for ${project}.`);
     event({ type: 'rejected', what, project });

@@ -47,11 +47,11 @@ test('payload: 8 chat-input commands; project option required per mode', () => {
   const names = ['status', 'queue', 'pause', 'resume', 'idea', 'new-spec', 'ideas', 'approvals', 'tasks', 'lead', 'gauth', 'new-project'];
   const o = commands.payload(true), p = commands.payload(false);
   assert.deepStrictEqual(o.map((c) => c.name), names);
-  assert.deepStrictEqual(p.map((c) => c.name), names.filter((n) => n !== 'ideas' && n !== 'new-project')); // project bots register neither /ideas nor /new-project
+  assert.deepStrictEqual(p.map((c) => c.name), names.filter((n) => n !== 'new-project')); // project bots register /ideas but not /new-project
   assert.ok(o.every((c) => c.type === 1));
   const req = (list) => Object.fromEntries(list.map((c) => [c.name, c.options?.find((x) => x.name === 'project')?.required ?? null]));
   assert.deepStrictEqual(req(o), { status: false, queue: false, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true, 'new-project': null });
-  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, approvals: null, tasks: false, lead: false, gauth: false });
+  assert.deepStrictEqual(req(p), { status: false, queue: false, pause: false, resume: false, idea: false, 'new-spec': false, ideas: false, approvals: null, tasks: false, lead: false, gauth: false });
   const act = o.find((c) => c.name === 'lead').options.find((x) => x.name === 'action');
   assert.deepStrictEqual([act.type, act.required, act.choices.map((c) => c.value)], [3, true, ['status', 'restart', 'handoff']]);
   assert.ok(o.every((c) => (c.options || []).every((x) => x.type === 3)));
@@ -275,11 +275,18 @@ test('/ideas with no project: ephemeral ack, slash event with project null and b
   assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'ideas', project: null, bridge: '_ops', user: 'U1' }]);
 });
 
-test('/ideas with no project in a project channel takes no default project (R2)', async () => {
+test('/ideas on a project bot covers its own project in any channel', async () => {
   const s = setup({ ops: false });
   const i = await s.run(fakeCommand({ name: 'ideas' }));
   assert.strictEqual(i.replies[0].content, ACK);
-  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'ideas', project: null, bridge: 'myproj', user: 'U1' }]);
+  assert.deepStrictEqual(evShape(s), [{ type: 'slash', command: 'ideas', project: 'myproj', bridge: 'myproj', user: 'U1' }]);
+});
+
+test('/ideas on a project bot refuses another project in one line and writes no event', async () => {
+  const s = setup({ ops: false });
+  const i = await s.run(fakeCommand({ name: 'ideas', options: { project: 'other' } }));
+  assert.strictEqual(i.replies[0].content, '/ideas here covers only myproj; use the ops bot for other');
+  assert.strictEqual(s.events().length, 0);
 });
 
 test('/ideas <project> writes that project; an unknown one is answered and writes no event', async () => {
