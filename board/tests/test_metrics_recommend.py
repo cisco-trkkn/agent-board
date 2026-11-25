@@ -6,7 +6,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent.parent
 CHECKOUT = HERE.parent
 sys.path.insert(0, str(HERE))
-import metrics, metrics_analyze, metrics_recommend  # noqa: E402
+import analytics_post, metrics, metrics_analyze, metrics_recommend  # noqa: E402
 
 FAKE = Path(__file__).resolve().parent / "fixtures" / "fake_claude_recommend.sh"
 STATS = {"trends": {"median_usd_per_spec": {"current": 3.46, "previous": 4.0, "change": -0.54},
@@ -399,6 +399,26 @@ class PromptTest(unittest.TestCase):
                        "never recommend editing the orchestrator", "its own prompt", "next week", "stats.json", "exact values",
                        "exactly three", "must also appear in that item's evidence", "evidence", "expected_effect", "title", "change", "risk"):
             self.assertIn(phrase, text, phrase)
+
+
+class NoModelLabelTest(unittest.TestCase):
+    def flags(self, key):
+        return {"overpowered": [], "costly_steps": [], "handoffs": [],
+                "underpowered": [{"tier_model": key, "tasks": 6, "median_fix_rounds": 2.0, "escalation_rate": 0.0,
+                                  "reason": "median fix rounds 2.0 over 6 tasks"}],
+                "forecast": {"median_precision": None, "median_recall": None, "below_half": []}}
+
+    def test_terminal_and_discord_say_no_model_recorded(self):
+        self.assertEqual(metrics_recommend._flag_lines(self.flags("standard|nomodel")),
+                         ["- underpowered: standard|no model recorded: median fix rounds 2.0 over 6 tasks"])
+        rows = analytics_post._flag_rows(self.flags("standard|nomodel"))
+        esc = analytics_post.escape   # Discord text escapes markdown characters, `|` included
+        self.assertEqual([r[2] for r in rows],
+                         [f"underpowered: {esc('standard|no model recorded')}: {esc('median fix rounds 2.0 over 6 tasks')}"])
+
+    def test_other_keys_unchanged(self):
+        self.assertEqual(metrics_recommend._flag_lines(self.flags("standard|sonnet")),
+                         ["- underpowered: standard|sonnet: median fix rounds 2.0 over 6 tasks"])
 
 
 if __name__ == "__main__":

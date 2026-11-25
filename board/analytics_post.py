@@ -107,7 +107,7 @@ def _flag_rows(flags):
         out.append((r.get("project"), r.get("spec"), f"overpowered: {short(r['spec'])} task {r['task_id']} "
                     f"{escape(_cap(r['subject'], 80))} ({escape(r['model_used'])}, 0 fix rounds)"))
     for r in flags["underpowered"]:
-        out.append((r.get("project"), None, f"underpowered: {escape(r['tier_model'])}: {escape(_cap(r['reason'], 100))}"))
+        out.append((r.get("project"), None, f"underpowered: {escape(metrics_recommend.tier_model_label(r['tier_model']))}: {escape(_cap(r['reason'], 100))}"))
     for r in flags["costly_steps"][:3]:
         out.append((r.get("project"), r.get("spec"), f"costly_steps: {short(r['spec'])} task {r['task_id']} "
                     f"{escape(_cap(r['subject'], 80))} ${r['usd']}"))

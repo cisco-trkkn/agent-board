@@ -57,6 +57,13 @@ def family(model):
     return next((f for f in FAMILIES if f in m), None)
 
 
+def _model_key(t):
+    """by_tier_model model part: `nomodel` when the record says no source named a model, else the family or `unknown`."""
+    if t.get("model_source") == "none":
+        return "nomodel"
+    return family(t.get("model_used")) or "unknown"
+
+
 def _nums(vals):
     return [v for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)]
 
@@ -147,7 +154,7 @@ def analyze(projects, since_ts, now, tasks_log=None, source="args"):
 
     groups = {}
     for name, t in cur_tasks:
-        groups.setdefault(f"{t.get('tier') or 'unspecified'}|{family(t.get('model_used')) or 'unknown'}", []).append(t)
+        groups.setdefault(f"{t.get('tier') or 'unspecified'}|{_model_key(t)}", []).append(t)
     by_tier_model, raw_rates = {}, {}
     for key in sorted(groups):
         ts = groups[key]

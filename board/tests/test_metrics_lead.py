@@ -4,6 +4,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +33,7 @@ def bash(c):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        ml.cache_clear()
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tdir = os.path.join(self.d, "tr")
@@ -181,6 +183,119 @@ class TestSuccessor(Base):
     def test_message_content_blocks(self):
         self.transcript("blk", [self.user(LO + 1, [{"type": "text", "text": f"Read the-doc.md and {PHRASE}"}])])
         self.assertEqual(os.path.basename(ml.successor(self.tdir, self.LINE)), "blk.jsonl")
+
+
+import glob as _glob
+
+
+def reference_successor(tdir, line):
+    """metrics_lead.successor at base 0af42b5, cache-free: the behaviour the cached version must keep."""
+    try:
+        base = os.path.basename(str(line.get("doc") or ""))
+        old = str(line.get("old_session_id") or "")
+        if not base:
+            return None
+        best = None
+        for p in sorted(_glob.glob(os.path.join(_glob.escape(tdir), "*.jsonl"))):
+            if os.path.basename(p)[:-6] == old:
+                continue
+            head = ml._lines(p, ml.HEAD_LINES)
+            if not any(d.get("type") == "user" and "agentName" not in d and base in (t := ml._text(d)) and ml.PHRASE in t
+                       for d in head):
+                continue
+            first = next((e for e in (ml.ctxsize._epoch(d.get("timestamp")) for d in head) if e is not None), float("inf"))
+            if best is None or first < best[0]:
+                best = (first, p)
+        return best[1] if best else None
+    except Exception:
+        return None
+
+
+class TestSuccessorCache(Base):
+    LINES = [{"ts": LO, "old_session_id": "old", "doc": "/h/the-doc.md"},
+             {"ts": LO, "old_session_id": "early", "doc": "/h/the-doc.md"},
+             {"ts": LO, "old_session_id": "x", "doc": "/h/other.md"},
+             {"ts": LO, "old_session_id": "x", "doc": "/h/none.md"},
+             {"ts": LO, "old_session_id": "x", "doc": ""},
+             {"ts": LO, "old_session_id": "old"}]
+
+    def fixture(self):
+        self.transcript("mate", [self.user(LO - 1, f"Read the-doc.md and {PHRASE}", agentName="w1")])
+        self.transcript("chat", [self.user(LO, "please look at the-doc.md today")])
+        self.successor_of("old", "/h/the-doc.md", LO - 100, [])
+        self.successor_of("late", "/h/the-doc.md", LO + 50, [])
+        self.successor_of("early", "/h/the-doc.md", LO + 10, [])
+        self.transcript("blk", [self.user(LO + 1, [{"type": "text", "text": f"Read other.md and {PHRASE}"}])])
+        # first timestamp comes from a line before the PHRASE line
+        self.transcript("pre", [{"type": "summary", "timestamp": iso(LO + 5)}, self.user(LO + 90, f"Read other.md and {PHRASE}")])
+
+    def same(self):
+        for line in self.LINES:
+            self.assertEqual(ml.successor(self.tdir, line), reference_successor(self.tdir, line), line)
+
+    def counting(self, attr):
+        real, calls = getattr(ml, attr), []
+
+        def wrap(*a, **k):
+            calls.append(a[0])
+            return real(*a, **k)
+        p = unittest.mock.patch.object(ml, attr, wrap)
+        p.start()
+        self.addCleanup(p.stop)
+        return calls
+
+    def test_parity_with_reference_and_after_a_change(self):
+        self.fixture()
+        self.same()
+        self.same()   # served from the caches
+        p = os.path.join(self.tdir, "late.jsonl")
+        with open(p, "w") as f:
+            f.write(json.dumps(self.user(LO + 1, f"Read the-doc.md and {PHRASE}")) + "\n")
+        os.utime(p, (LO + 999, LO + 999))
+        self.same()
+        self.assertEqual(os.path.basename(ml.successor(self.tdir, self.LINES[0])), "late.jsonl")
+
+    def test_each_file_opened_once_and_only_the_changed_one_reopened(self):
+        self.fixture()
+        opens = self.counting("_open")
+        for line in self.LINES[:3] * 2:
+            ml.successor(self.tdir, line)
+        names = sorted(os.path.basename(p) for p in opens)
+        self.assertEqual(names, sorted(os.path.basename(p) for p in _glob.glob(os.path.join(self.tdir, "*.jsonl"))))
+        p = os.path.join(self.tdir, "chat.jsonl")
+        with open(p, "a") as f:
+            f.write(json.dumps(self.user(LO + 2, "more")) + "\n")
+        os.utime(p, (LO + 999, LO + 999))
+        del opens[:]
+        ml.successor(self.tdir, self.LINES[0])
+        self.assertEqual([os.path.basename(p) for p in opens], ["chat.jsonl"])
+
+    def test_lines_without_phrase_are_never_parsed(self):
+        # mutation: parse every head line (drop the raw PHRASE pre-filter) -> this test fails
+        for i in range(5):
+            self.transcript(f"plain{i}", [self.user(LO + i, "the-doc.md but no handoff words"), self.turn(LO + i + 1)])
+        loads = self.counting("_loads")
+        self.assertIsNone(ml.successor(self.tdir, self.LINES[0]))
+        self.assertEqual(loads, [])
+
+    def test_deleted_successor_drops_out(self):
+        # mutation: key _RESULTS without the dir signature -> the second assertion fails
+        self.fixture()
+        self.assertEqual(os.path.basename(ml.successor(self.tdir, self.LINES[0])), "early.jsonl")
+        os.remove(os.path.join(self.tdir, "early.jsonl"))
+        self.assertEqual(os.path.basename(ml.successor(self.tdir, self.LINES[0])), "late.jsonl")
+
+
+class TestLeadSessionIds(Base):
+    def test_ids_of_old_and_successor_sessions(self):
+        self.transcript("old", [self.turn(LO + 1)])
+        self.successor_of("new", "/h/d.md", LO + 20, [self.turn(LO + 30)])
+        self.lineage((LO + 10, "old", "/h/d.md"))
+        self.assertEqual(ml.lead_session_ids(self.tdir, self.lin, LO, HI), {"old", "new"})
+
+    def test_error_gives_empty_set(self):
+        self.assertEqual(ml.lead_session_ids(self.tdir, os.path.join(self.d, "missing.jsonl"), LO, HI), set())
+        self.assertEqual(ml.lead_session_ids(None, None, "x", HI), set())
 
 
 class TestPostHandoffTokens(Base):

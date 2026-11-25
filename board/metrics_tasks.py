@@ -9,7 +9,8 @@ import metrics
 import usage
 
 TASK = re.compile(r"^Task (\d+): (.*)$")
-DISPATCH = re.compile(r"^(?:fix round \d+(?:/\d+)? )?dispatched (?:to )?(?:fresh )?([A-Za-z0-9_-]+)(?: \((haiku|sonnet|opus|fable|inherit)\b)?")
+DISPATCH = re.compile(r"^(?:fix round \d+(?:/\d+)? )?dispatched (?:to )?(?:fresh )?([A-Za-z0-9_-]+)"
+                      r"(?: \((?:(?:mechanical|standard|frontier)\s*[,/]\s*)?(haiku|sonnet|opus|fable|inherit)\b)?")
 REVIEW = re.compile(r"review dispatched (?:to )?([A-Za-z0-9_-]+)")
 FIX = re.compile(r"fix round (\d+)")
 COMMITS = re.compile(r"commits (.*)")
@@ -19,7 +20,7 @@ REVIEW_RESULT = re.compile(r"^(?:scoped )?(?:re-)?review(?! dispatched)")
 SEVERITY = re.compile(r"(?:(\d+) )?(Critical|Important)\b")
 FAMILIES = ("haiku", "sonnet", "opus", "fable")
 TOKEN_COLS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
-KEYS = ("spec", "batch", "task_id", "subject", "tier", "model_mapped", "model_used", "escalated", "owner",
+KEYS = ("spec", "batch", "task_id", "subject", "tier", "model_mapped", "model_used", "model_source", "escalated", "owner",
         "started_at", "ended_at", "active_s", "tokens", "usd", "review_tokens", "review_usd", "fix_rounds",
         "findings", "review_rounds", "outcome", "code_in_steps", "partial", "context_tokens", "missing")
 
@@ -159,8 +160,28 @@ def _pick(tasks, ts):
     return tasks[-1][1]
 
 
-def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_time, run_end, prices=None, plan_text=None):
-    """One dict per plan task. commit_time: sha -> epoch int or None. run_end: epoch int or None (the fallback end)."""
+def _spawn_model(spawns, owner, lo, until, leads):
+    """Model of the newest spawn row named `owner` with lo <= ts <= until whose model family() maps, preferring rows of
+    the lead sessions `leads`; None when there is none."""
+    if not owner or not spawns:
+        return None
+    c = [s for s in spawns if isinstance(s, dict) and s.get("name") == owner and isinstance(s.get("ts"), (int, float))
+         and (lo is None or s["ts"] >= lo) and s["ts"] <= until and family(s.get("model"))]
+    pref = [s for s in c if s.get("lead_session") in (leads or ())]
+    pick = max(pref or c, key=lambda s: s["ts"], default=None)
+    return pick["model"] if pick else None
+
+
+def _ledger_model(led):
+    """The last dispatch model of the task that family() maps, else None."""
+    return next((m for m in reversed(led["dispatch_models"]) if family(m)), None)
+
+
+def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_time, run_end, prices=None, plan_text=None,
+                     spawns=None, lead_sessions=None, run_start=None):
+    """One dict per plan task. commit_time: sha -> epoch int or None. run_end: epoch int or None (the fallback end).
+    spawns: spawns.jsonl rows; lead_sessions: the spec's lead session ids; run_start: epoch of the run start
+    (spawn rows before it are other runs')."""
     prices = prices if prices is not None else usage.load_prices()
     plan = json.loads(tasks_text)
     plan = plan["tasks"] if isinstance(plan, dict) else plan
@@ -223,7 +244,15 @@ def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_ti
         per_model = {}
         for r in rs:
             per_model[r["model"]] = per_model.get(r["model"], 0) + _tokens(r)
-        used = max(per_model, key=per_model.get) if per_model else None
+        owner = led["owners"][-1] if led["owners"] else None
+        if per_model:
+            used, source = max(per_model, key=per_model.get), "usage"
+        else:
+            used = _spawn_model(spawns, owner, run_start, end_of(n), lead_sessions)
+            source = "spawn" if used else None
+            if not used:
+                used = _ledger_model(led)
+                source = "ledger" if used else "none"
         mf = family(mapped)
         fams = {family(m) for m in led["dispatch_models"]} | {family(used)}
         fams.discard(None)
@@ -232,9 +261,9 @@ def build_task_lines(spec, batch, tasks_text, progress, routing, rows, commit_ti
         ctx = usage.context_tokens(max(main, key=lambda r: r["ts"])) if main else None
         out.append({
             "spec": spec, "batch": batch, "task_id": n, "subject": pt.get("subject"),
-            "tier": tier, "model_mapped": mapped, "model_used": used,
+            "tier": tier, "model_mapped": mapped, "model_used": used, "model_source": source,
             "escalated": bool(mf and any(f != mf for f in fams)),
-            "owner": led["owners"][-1] if led["owners"] else None,
+            "owner": owner,
             "started_at": metrics.utc(min(r["ts"] for r in rs)) if rs else None,
             "ended_at": metrics.utc(max(r["ts"] for r in rs)) if rs else None,
             "active_s": 60 * len(mins), "tokens": tokens, "usd": usd,

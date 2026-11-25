@@ -61,6 +61,70 @@ def _text(d):
     return ""
 
 
+_open = open          # seam: tests count file opens
+_loads = json.loads   # seam: tests count JSON parses
+_HEADS = {}           # tdir -> {path: ((mtime_ns, size), phrase_dicts, first_epoch)}
+_RESULTS = {}         # (tdir, doc basename, old session id) -> (dir signature, path or None)
+_PHRASE_B = PHRASE.encode()
+
+
+def cache_clear():
+    _HEADS.clear()
+    _RESULTS.clear()
+
+
+def _head_entry(p):
+    """(phrase_dicts, first_epoch) of a transcript head. Only lines whose raw bytes hold PHRASE are parsed for
+    matching; the first epoch (base rule: first timestamp of any head line) is read only when such a line exists."""
+    raws = []
+    try:
+        with _open(p, "rb") as f:
+            for i, raw in enumerate(f):
+                if i >= HEAD_LINES:
+                    break
+                raws.append(raw)
+    except OSError:
+        return [], float("inf")
+
+    def parse(raw):
+        try:
+            d = _loads(raw.decode("utf-8", "replace"))
+        except (ValueError, RecursionError):
+            return None
+        return d if isinstance(d, dict) else None
+    hits = [d for d in (parse(r) for r in raws if _PHRASE_B in r) if d is not None]
+    if not hits:
+        return [], float("inf")
+    first = float("inf")
+    for raw in raws:
+        d = parse(raw)
+        e = ctxsize._epoch(d.get("timestamp")) if d is not None else None
+        if e is not None:
+            first = e
+            break
+    return hits, first
+
+
+def _heads(tdir):
+    """The dir's cached heads, refreshed for new or changed files, removed files dropped. Returns (heads, signature)."""
+    cache = _HEADS.setdefault(tdir, {})
+    seen, sig = set(), []
+    for p in sorted(glob.glob(os.path.join(glob.escape(tdir), "*.jsonl"))):
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        key = (st.st_mtime_ns, st.st_size)
+        seen.add(p)
+        sig.append((p, key))
+        if p not in cache or cache[p][0] != key:
+            hits, first = _head_entry(p)
+            cache[p] = (key, hits, first)
+    for p in [p for p in cache if p not in seen]:
+        del cache[p]
+    return cache, tuple(sig)
+
+
 def successor(tdir, line):
     """Path of the line's successor transcript, or None (Metric definitions: successor)."""
     try:
@@ -68,18 +132,25 @@ def successor(tdir, line):
         old = str(line.get("old_session_id") or "")
         if not base:
             return None
+        tdir = str(tdir)
+        heads, sig = _heads(tdir)
+        rkey = (tdir, base, old)
+        got = _RESULTS.get(rkey)
+        if got and got[0] == sig:
+            return got[1]
         best = None
-        for p in sorted(glob.glob(os.path.join(glob.escape(tdir), "*.jsonl"))):
+        for p in sorted(heads):
             if os.path.basename(p)[:-6] == old:
                 continue
-            head = _lines(p, HEAD_LINES)
+            _, hits, first = heads[p]
             if not any(d.get("type") == "user" and "agentName" not in d and base in (t := _text(d)) and PHRASE in t
-                       for d in head):
+                       for d in hits):
                 continue
-            first = next((e for e in (ctxsize._epoch(d.get("timestamp")) for d in head) if e is not None), float("inf"))
             if best is None or first < best[0]:
                 best = (first, p)
-        return best[1] if best else None
+        out = best[1] if best else None
+        _RESULTS[rkey] = (sig, out)
+        return out
     except Exception:
         return None
 
@@ -148,6 +219,14 @@ def _lead_sessions(tdir, lines, lo, hi):
     if before:
         paths.append(successor(tdir, before[-1]))
     return {p for p in paths if p and os.path.isfile(p)}
+
+
+def lead_session_ids(tdir, lineage_file, lo, hi):
+    """Session ids of the lead sessions of [lo, hi] (old sessions and successors of the lineage lines); set() on error."""
+    try:
+        return {os.path.basename(p)[:-6] for p in _lead_sessions(str(tdir), lineage(lineage_file), float(lo), float(hi))}
+    except Exception:
+        return set()
 
 
 def _fields(tdir, lineage_file, lo, hi, prev_end):
