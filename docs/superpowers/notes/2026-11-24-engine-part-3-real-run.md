@@ -63,13 +63,47 @@ After approve:
 
 ### Carried from Task 3: where does the resumed worker write its report?
 
-**Fail.** The resumed worker was told only the approval text. It wrote its report to the OLD job's path
-`.../reports/p3real-spec_implement1_1.md` (it said "The report at ...implement1_1.md now says done"), but the engine
-waited on the new job's path `...implement1_2.md`, which never appeared. Result: job 2 `job_failed ... heartbeat_timeout`
-at 10:04:09 (2 min), retry job 3 (`-r2`, also a resume; the worker said the task was already done and did nothing)
-`heartbeat_timeout` at 10:06:42, then `escalated p3real-spec:architect:1 failed_twice` and a Fable architect was
-dispatched. The run was stopped there (engine killed by pid) to avoid the architect cost; the spec never reached an outcome.
-The push itself happened once and worked. A fix: put the new job's report path into the resume text.
+**First run (head 6aeffdc): fail on the report path.** The resumed worker was told only the approval text. It wrote its
+report to the OLD job's path `.../reports/p3real-spec_implement1_1.md` (it said "The report at ...implement1_1.md now
+says done"); the new job's path `...implement1_2.md` never appeared. Job 2 ended `job_failed ... heartbeat_timeout`
+at 10:04:09, retry job 3 (`-r2`, also a resume; the worker said the task was already done) at 10:06:42, then
+`escalated p3real-spec:architect:1 failed_twice` and a Fable architect was dispatched. The run was stopped there
+(engine killed by pid). The push itself happened once and worked.
+
+**Rerun 1 (head 86695f3, the fix "a hold resume text names the new job's report path"): the report path is fixed, but
+the run failed for a setup reason of mine.** The resume brief now reads:
+
+    approval 24852d59-8a14-4b3c-a9b3-9c1ed721808e granted: retry the held call exactly as before
+
+    ## Report
+
+    Report file: /Users/francisco.ruiz/agent-board/.claude/worktrees/p3real-clone/.superpowers/engine/reports/p3real-spec_implement1_2.md
+
+    Write your report there. Its last fenced block must be:
+    ...
+
+The resumed worker wrote `p3real-spec_implement1_2.md` (status `done`, commit `76559615...`). Even so, job 2 ended
+`heartbeat_timeout` at 10:19:25. Cause: my scratch tmux server had no `TC_STATE`, so the worker's agent-status mod wrote
+its status file to the real `$TMPDIR/tmux-ctl-503/agent-status/` and the engine (reading `$TC_STATE/agent-status`)
+never saw a status for the pane. (This setup bug also explains the first run's heartbeat timeouts, not only the report
+path; the report-path failure there stands on its own.) A `TC_STATE` set only in the engine's window is not enough: the
+tmux server's global environment has to carry `TC_STATE` and `TC_ENGINE_DIR` (`tmux set-environment -g`), as part 2's
+note says. I killed the engine and the worker by pid, removed the one leaked status file of my own session
+(`126b5025-....json`) from the real `$TMPDIR/tmux-ctl-503/agent-status/`, and reran.
+
+**Rerun 2 (head 86695f3, `TC_STATE` and `TC_ENGINE_DIR` set with `set-environment -g`): pass.**
+Hold `51a9e458-195d-4eae-9759-a337d52d4392` on a call that named only `/tmp/p3r.nl0EgR/origin.git`; `approve` (rc 0, as
+its own command); the resume brief is the text above, with report file `..._implement1_2.md`. Events:
+`hold_pass`, `job_created implement1:2`, `dispatched ... implement1-r1`, `hold_pass_used`. Job
+`p3real-spec:implement1:2` ended `done` (not `heartbeat_timeout`); the worker's final message said "The report is at
+...implement1_2.md. It supersedes the earlier _1 report". Then `review1` (Sonnet) `pass`, `final_review` (Fable) `pass`,
+`integrated - kept p3real-work`, `spec_done - kept p3real-work`, `outcome: kept p3real-work`, `run rc=0`. The spec's
+final state is `done` with outcome `kept p3real-work`; the remote has
+`1b3ce8d76dd6304835f07ddb72b70a868f837beb refs/heads/p3real-work`; the `holds` row has `used_at` 1795620199.235.
+`engine rebuild --check --project p3real`: `replay matches the live tables`, rc 0. The worker made no second push, so
+"held again" was not exercised in either run. The pane text the resumed session received is the resume brief above (the
+saved pane log starts after the received text had scrolled off, so the brief file is what is quoted).
+Integration ran the project's full test command for about 9 minutes before `integrated`.
 
 ## The schedule part
 
@@ -105,21 +139,27 @@ Events (`events` table): `schedule_added`, `schedule_due`, `schedule_started` (w
 
 ## Cleanup
 
-- Engine stopped by pid (77394); the architect `claude` (pid 13721) and the earlier workers (55084, 55455, 73461) killed
+- First run: engine stopped by pid (77394); the architect `claude` (pid 13721) and the earlier workers (55084, 55455, 73461) killed
   by pid; then `tmux -L p3real kill-server`, and `list-sessions` answered
   `no server running on /private/tmp/p3r.wPhhwD/tt/tmux-503/p3real`. `ps -p` on all recorded pids: none alive; no `claude`
   process naming `p3real` remained.
 - `git -C /Users/francisco.ruiz/agent-board worktree remove --force .../worktrees/p3real-clone`: rc 0, no output.
 - `git -C /Users/francisco.ruiz/agent-board branch -D p3real-work`: `Deleted branch p3real-work (was 7a4852b).`
+- Reruns: engine and workers killed by pid (36100 and 71616 in rerun 1; in rerun 2 the engine exited on its own with rc 0 and
+  no pane child was left), `kill-server` then `list-sessions`: `no server running on /private/tmp/p3r.nl0EgR/tt/tmux-503/p3real`;
+  `git worktree remove --force` rc 0 and `Deleted branch p3real-work (was 2f002e5).`; `ps` shows 0 leftover `claude`
+  or `engine.js run` processes; `~/Library/LaunchAgents` listing unchanged.
 - `/tmp/p3r.*` removed; nothing was pushed to GitHub; the real engine dir and the real tmux server were not touched.
 
 ## Result
 
-Partial pass. Passed: the real hook held a real Haiku worker's `git push` with the deny reason `held for approval <id>`;
-`status --waiting` showed the exact call, `approve|deny|fail` and `I recommend: deny (medium)`; `approve` opened
-`implement1-r1`, the push reached the bare remote once, the pass was used, `rebuild --check` rc 0; a real `engine wake`
-ran the due row in `p3real-bg` with `schedule_ran` rc 0 and `real-wake` as the log's first line; the migrate dry run left
-`~/Library/LaunchAgents` unchanged. Failed: (1) Task 3's carried check: the resumed worker wrote its report to the old
-job's path, so the resumed job hit `heartbeat_timeout` and the spec escalated to an architect instead of finishing;
-(2) a fresh untrusted folder leaves a worker at the trust dialog (worked around with a worktree of the trusted repo);
-(3) "second push held again" was not exercised.
+Pass, after one fix and one setup correction. Passed: the real hook held a real Haiku worker's `git push` with the deny
+reason `held for approval <id>`; `status --waiting` showed the exact call, `approve|deny|fail` and
+`I recommend: deny (medium)`; `approve` opened `implement1-r1`, the push reached the bare remote once, the pass was used,
+`rebuild --check` rc 0; a real `engine wake` ran the due row in `p3real-bg` with `schedule_ran` rc 0 and `real-wake` as
+the log's first line; the migrate dry run left `~/Library/LaunchAgents` unchanged. Task 3's carried check failed on the
+first run (the resumed worker wrote the old job's report path) and passes at 86695f3: the resumed job wrote its own
+report, ended `done`, and the spec finished `kept p3real-work`. Findings: (1) a fresh untrusted folder leaves a worker at
+the trust dialog until the heartbeat fails (worked around with a worktree of the trusted repo); (2) a real run's tmux server
+needs `TC_STATE` and `TC_ENGINE_DIR` in its global environment, or the worker's status files go to the real
+`$TMPDIR/tmux-ctl-503/agent-status`; (3) "second push held again" was not exercised.
