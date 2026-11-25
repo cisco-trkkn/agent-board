@@ -18,5 +18,12 @@ err="$(env -u TMUX $C improve propose --kind rule --target t --patch "$T/p.diff"
 check "propose without evidence is one error line, exit 1" zsh -c '[[ $1 == "improve: propose: no deterministic evidence" ]]' _ "$err"
 check "propose without evidence exits 1" test $rc -eq 1
 check "outcome status says too early" zsh -c 'env -u TMUX "$1" improve outcome status | grep -q "O1 too early"' _ "$C"
+# inside tmux, without TC_PROJECT, the project is the session's (FEEDKEY): it opens tt.sqlite, not another database
+unset TC_PROJECT
+tt_setup
+export TC_ENGINE_DIR="$T/engine2"; mkdir -p "$TC_ENGINE_DIR"
+python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, spec TEXT, job TEXT, kind TEXT, detail TEXT)"); c.commit()' "$TC_ENGINE_DIR/tt.sqlite"
+$C improve propose --kind rule --target claude/x.md --patch "$T/p.diff" --evidence '[{"type":"run","ref":"r1"}]' >/dev/null 2>&1
+check "inside tmux, improve resolves the project from the session and writes tt.sqlite" zsh -c 'sqlite3 "$1" "select count(*) from proposals" | grep -qx 1' _ "$TC_ENGINE_DIR/tt.sqlite"
 rm -rf "$T"
 tt_done

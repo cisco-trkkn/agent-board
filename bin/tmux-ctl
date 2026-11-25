@@ -858,6 +858,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     exec node "${0:A:h:h}/engine/bin/engine.js" "$@" ;;
 
   improve)
+    [[ -n "$TC_PROJECT" || -z "$TMUX" ]] || export TC_PROJECT="$FEEDKEY"   # inside tmux the project is the session's, as for engine)
     source "${0:A:h:h}/tools/lib/improve.zsh"; improve_main "${0:A:h:h}" "$@" ;;
 
   metrics)
