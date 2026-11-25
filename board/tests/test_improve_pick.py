@@ -100,8 +100,10 @@ class Call(Base):
         routing = json.loads(REAL_ROUTING.read_text())
         P.pick(self.s, [], 1, outcomes=[{"id": "cheaper", "state": "active", "title": "Cut tokens"}])
         argv = (Path(self.bin) / "argv").read_text().split("\n")[:-1]
-        self.assertEqual(argv, ["-p", "--model", routing["mechanical"], "--effort", "low", "--permission-mode", "dontAsk",
-                                "--output-format", "json"])
+        # no tool, no MCP server, no skill, no saved session (final review I4; dream.run_model is the model for the form)
+        self.assertEqual(argv, ["-p", "--model", routing["mechanical"], "--effort", "low", "--restricted", "--tools", "",
+                                "--permission-mode", "dontAsk", "--strict-mcp-config", "--disable-slash-commands",
+                                "--no-session-persistence", "--output-format", "json"])
         stdin = (Path(self.bin) / "stdin").read_text()
         self.assertTrue(stdin.startswith((P.REPO / "claude" / "improve-rank.md").read_text()))
         self.assertIn("cheaper", stdin)

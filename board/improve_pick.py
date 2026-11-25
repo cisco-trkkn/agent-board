@@ -54,8 +54,11 @@ def _rank(prompt, ids):
     """(failure text or None, ordered ids or None)."""
     try:
         model = json.loads(ROUTING.read_text())["mechanical"]
-        argv = [os.environ.get("TC_IMPROVE_CLAUDE") or "claude", "-p", "--model", model, "--effort", "low",
-                "--permission-mode", "dontAsk", "--output-format", "json"]
+        # The prompt carries adapter-fed targets and evidence and the reply is a list of ids: the call gets no tool, no
+        # MCP server, no skill and leaves no session (as dream.run_model, minus its file tools).
+        argv = [os.environ.get("TC_IMPROVE_CLAUDE") or "claude", "-p", "--model", model, "--effort", "low", "--restricted",
+                "--tools", "", "--permission-mode", "dontAsk", "--strict-mcp-config", "--disable-slash-commands",
+                "--no-session-persistence", "--output-format", "json"]
     except (OSError, ValueError, KeyError):
         return "no mechanical model", None
     env = {k: v for k, v in os.environ.items() if k not in dream.SCRUB}
