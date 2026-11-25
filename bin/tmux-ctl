@@ -81,7 +81,7 @@
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
 #   tmux-ctl project new <name> --init|--clone <url>|--dir <path> | start <name> [--dir <path>]  a new project: its folder (prints it); its dev session and lead (works outside tmux)
-#   tmux-ctl improve outcome status|list|show|propose|revert|tick   the supervised improvement loop (board/improve.py)
+#   tmux-ctl improve list|show|propose|revert|tick|variants|click|adapters --dry-run | outcome status [<id>] | schedule install  the supervised improvement loop (board/improve.py); schedule install sets up the weekly tick
 #   tmux-ctl registry|engine <sub> …       plan manifests, graphs, waves; the PCEE engine (engine/, node)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
