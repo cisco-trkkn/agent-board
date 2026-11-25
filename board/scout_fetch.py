@@ -475,8 +475,15 @@ def _plugin(source, state, installed_version):
 
 # ---- discord_channel ----------------------------------------------------------------------
 
-_SOURCE_REQ = re.compile(r"^source:\s+(\S+)\s+(.+)$")
+_SOURCE_REQ = re.compile(r"^source:\s+(\S+)(?:\s+(.+))?$")
 _URL = re.compile(r"https?://[^\s<>]+")
+DISCORD_MAX = 2000   # characters in one Discord message
+
+
+def parse_request(content):
+    """`source: <url> [text]` (one line) -> (url, text after the URL, "" when there is none); None for any other message."""
+    m = _SOURCE_REQ.match(str(content or "").strip())
+    return (m.group(1), (m.group(2) or "").strip()) if m else None
 
 
 def _discord_token():
@@ -518,11 +525,20 @@ def _channel(channel_id):
 
 def post_message(channel_id, text, reply_to=None):
     """Post text to a channel (no mentions allowed); returns the new message id."""
-    body = {"content": text, "allowed_mentions": {"parse": []}}
+    body = {"content": str(text)[:DISCORD_MAX], "allowed_mentions": {"parse": []}}
     if reply_to:
         body["message_reference"] = {"message_id": str(reply_to)}
     r = _discord("POST", f"/channels/{_channel(channel_id)}/messages", body)
     return str((r or {}).get("id") or "")
+
+
+def edit_message(channel_id, message_id, text):
+    """Replace the text of one of the bot's own messages (no mentions allowed)."""
+    mid = str(message_id or "")
+    if not mid.isdigit():
+        raise FetchError("no message")
+    _discord("PATCH", f"/channels/{_channel(channel_id)}/messages/{mid}",
+             {"content": str(text)[:DISCORD_MAX], "allowed_mentions": {"parse": []}})
 
 
 def reactions(channel_id, message_id, emoji):
@@ -583,9 +599,9 @@ def _discord_channel(source, state, installed_version):
         if author.get("bot"):
             continue  # the poll's own replies carry URLs; they are not input
         content = (m.get("content") or "").strip()
-        req = _SOURCE_REQ.match(content)
+        req = parse_request(content)
         if req:
-            items.append({"request": {"url": req.group(1), "why": req.group(2).strip(), "message_id": str(m["id"]),
+            items.append({"request": {"url": req[0], "why": req[1], "message_id": str(m["id"]),
                                       "author": author.get("username") or "", "author_id": str(author.get("id") or "")}})
             continue
         if str(author.get("id") or "") not in allow:

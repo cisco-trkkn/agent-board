@@ -1,10 +1,16 @@
 """scout_sources: the trend scout's sources.json, the `source` CLI, the daily poll (no model) and #scout source requests.
 
 State lives in scout_dir() (TC_SCOUT_DIR, else ~/.local/state/agent-board/scout): sources.json (sources + health),
-seen.json (keys, per-source first poll time and fetcher state, pending #scout requests), items.jsonl, poll.log.
-poll() fetches each source through scout_fetch, writes unseen items, tracks failures (three in a row show in
-health_report()), and drives #scout source requests: a reply is posted through the Discord REST API and the next poll
-adds the source when an allowFrom user reacted with a check mark. Test: tests/test_scout_sources.py."""
+seen.json (keys, per-source first poll time and fetcher state, pending source requests, answered request messages),
+items.jsonl, poll.log. poll() fetches each source through scout_fetch, writes unseen items and tracks failures (three in
+a row show in health_report()).
+
+Source requests (`source: <url> [name]` in #scout, /source on the agent-board bot) arrive as bridge events through
+discord_controls: discord_request() answers at once with a prompt and records it as pending, discord_confirm() adds the
+source through add_url() on an allowFrom user's check mark, fetches it once and edits the prompt. The poll is the
+fallback for a request or a check mark the bridge missed. The pending prompts are mirrored to
+<discord dir>/scout-prompts.json, which the bridge reads to forward a check mark from any channel.
+Test: tests/test_scout_sources.py."""
 import argparse
 import contextlib
 import fcntl
@@ -34,6 +40,8 @@ KEY_DAYS = 180
 REQUEST_DAYS = 14
 HEALTH_FAILURES = 3
 CHECK = "✅"
+PROMPTS_FILE = "scout-prompts.json"   # in the agent-board discord dir: {pending prompt message id: channel id}
+TITLES_SHOWN = 3
 _HTTP_OK_HOSTS = ()  # test seam: hosts whose requested URL may be http
 
 
@@ -248,32 +256,43 @@ def detect(url, taken=None):
     return {"kind": "html_links", "url": url, "name": name, "prefix": urllib.parse.urlsplit(url).path.rstrip("/") + "/"}
 
 
-def add_url(url, name=None, kind=None, why="", now=None):
-    """The one add path (the CLI, a #scout request, /source): detect() picks kind, url and name unless kind is given."""
+def add_url(url, name=None, kind=None, why="", now=None, st=None):
+    """The one add path (the CLI, a #scout request, /source): detect() picks kind, url and name unless kind is given.
+    st: see add_source."""
     if kind is None:
         d = detect(url)
         kind, url, name = d["kind"], d["url"], name or d["name"]
     elif not name:
         name = request_name(url, _taken())
-    return add_source(name, kind, url, why)
+    return add_source(name, kind, url, why, now=now, st=st)
 
 
-def add_source(name, kind, url, why="", prefix=None, now=None):
+def add_source(name, kind, url, why="", prefix=None, now=None, st=None):
+    """Check and append one source row. With st (the loaded sources.json) the caller already holds the sources lock and
+    saves st itself; without it the row is added under the lock here."""
     if kind not in scout_fetch.KINDS:
         raise Refusal(f"unknown kind {kind!r} (one of {', '.join(sorted(scout_fetch.KINDS))})")
     if not NAME_RE.match(name or ""):
         raise Refusal(f"bad name {name!r} (must match {NAME_RE.pattern})")
-    _check_url(kind, url)
-    if kind not in ("discord_channel", "plugin"):
-        check_url_safe(url)
-    with _lock():
-        st = load()
+    if kind in ("discord_channel", "plugin"):
+        _check_url(kind, url)
+    else:
+        check_url_safe(url)   # the one URL rule: https and a host, as _check_url asks, plus the address test
+
+    def put(st):
         if any(s["name"] == name for s in st["sources"]):
             raise Refusal(f"duplicate name {name!r}")
         row = {"name": name, "kind": kind, "url": url, "why": why or "", "added": _iso(now or time.time()), "builtin": False}
         if kind == "html_links":
             row["prefix"] = prefix or urllib.parse.urlsplit(url).path.rstrip("/") + "/"
         st["sources"].append(row)
+        return row
+
+    if st is not None:
+        return put(st)
+    with _lock():
+        st = load()
+        row = put(st)
         save(st)
     return row
 
@@ -352,10 +371,213 @@ def _guess_kind(url):
     return "rss" if xml else "html_links"
 
 
+def request_tail(text):
+    """The text after a request's URL: the source name when it is one NAME_RE token, else the why -> (name or None, why)."""
+    t = " ".join(str(text or "").split())
+    return (t, "") if NAME_RE.match(t) else (None, t)
+
+
+def _free_name(name, taken):
+    """name, or name-2, name-3… when taken (the base is cut so the suffix still fits NAME_RE)."""
+    out, n = name, 1
+    while out in taken:
+        n += 1
+        out = f"{name[:40 - len(str(n)) - 1]}-{n}"
+    return out
+
+
+def _load_seen():
+    seen = _read(scout_dir() / "seen.json", {})
+    for k in ("keys", "sources", "state", "requests", "request_msgs"):
+        if not isinstance(seen.get(k), dict):
+            seen[k] = {}
+    return seen
+
+
+def _write_prompts(seen):
+    """Mirror the pending prompts for the bridge. Written only when it changes; a missing file means none."""
+    p = tc_env.discord_dir(PROJECT) / PROMPTS_FILE
+    want = {str(rid): str(r.get("channel") or "") for rid, r in seen["requests"].items() if isinstance(r, dict)}
+    if _read(p, {}) != want:
+        _atomic(p, want)
+
+
+def is_pending(rid):
+    """True when rid is the message id of a pending source prompt."""
+    reqs = _read(scout_dir() / "seen.json", {}).get("requests")
+    return isinstance(reqs, dict) and str(rid) in reqs
+
+
+def _scout_channels():
+    """The channel ids of the discord_channel sources (#scout)."""
+    return {str(s.get("url") or "").strip() for s in load(create=False)["sources"] if s.get("kind") == "discord_channel"} - {""}
+
+
+def _fence(text):
+    """Text for a ``` block: a run of three or more backticks is broken up with zero-width spaces (as commands.js fence)."""
+    return re.sub(r"`{3,}", lambda m: "\u200b".join(m.group(0)), str(text))
+
+
+def _say(lines, tail=""):
+    """One Discord message: the data lines in a code block (one line each, never markup), then the fixed tail line.
+    At most scout_fetch.DISCORD_MAX characters; a cut never loses the closing fence or the tail."""
+    end = "\n```" + (f"\n{tail}" if tail else "")
+    body = _fence("\n".join(" ".join(str(l).split()) for l in lines))
+    room = scout_fetch.DISCORD_MAX - len("```\n") - len(end)
+    if len(body) > room:
+        body = body[:room - 1] + "…"
+    return "```\n" + body + end
+
+
+def _confirm_locked(seen, st, rid, now):
+    """A check mark on the pending request rid: take the request out of seen and add its source to st through add_url.
+    The caller holds the sources lock and saves both, so the source is added once whichever path (the bridge event or
+    the poll) sees the check mark first. -> (row, None), or (None, reason) when the add is refused."""
+    r = seen["requests"].pop(rid)
+    try:
+        name = _free_name(r["name"], {s["name"] for s in st["sources"]})
+        return add_url(r["url"], name, r["kind"], r.get("why", ""), now=now, st=st), None
+    except Refusal as e:
+        return None, str(e)
+    except (KeyError, TypeError):
+        return None, "bad request record"
+
+
+def _reply_failed(what, e, now):
+    _log(f"scout source: {what} failed: {type(e).__name__}: {e}", now)
+
+
+def discord_request(ev, now=None):
+    """A `source: <url> [name]` message in #scout (via "message") or a /source command (via "slash"), as the bridge event
+    of an allowFrom user -> the audit result. detect() runs here and the answer goes out at once: the prompt
+    `<name> · <kind> · <url>` / `react ✅ to add`, recorded as pending under the prompt's message id, or `refused: <reason>`
+    with nothing recorded. A #scout message is answered with a REST reply; a /source reply is edited through the bridge
+    (an ireply outbox op), so nothing is posted by REST outside #scout."""
+    now = time.time() if now is None else now
+    slash = ev.get("via") == "slash"
+    chan, mid, iid = str(ev.get("channel_id") or ""), str(ev.get("message_id") or ""), str(ev.get("iid") or "")
+    if slash:
+        url, name, why = str(ev.get("url") or "").strip(), str(ev.get("name") or "").strip() or None, ""
+    else:
+        req = scout_fetch.parse_request(ev.get("text"))
+        if not req or chan not in _scout_channels():
+            return "ignored"
+        url = req[0]
+        name, why = request_tail(req[1])
+    if not url or not mid.isdigit() or not chan.isdigit() or (slash and not iid):
+        return "ignored"
+    with _lock():   # mark the message as answered first, so the poll does not answer it too
+        seen = _load_seen()
+        if mid in seen["request_msgs"] or mid in seen["requests"] or any(r.get("message_id") == mid for r in seen["requests"].values()):
+            return "duplicate"
+        seen["request_msgs"][mid] = _iso(now)
+        _atomic(scout_dir() / "seen.json", seen)
+
+    def answer(text):
+        if slash:
+            discord_feed.outbox_write(tc_env.discord_dir(PROJECT), {"op": "ireply", "iid": iid, "content": text})
+            return mid   # the interaction's own reply is the prompt
+        return scout_fetch.post_message(chan, text, reply_to=mid)
+
+    def forget():   # not answered: the poll may still pick the message up
+        with _lock():
+            seen = _load_seen()
+            seen["request_msgs"].pop(mid, None)
+            seen["requests"].pop(mid, None)
+            _atomic(scout_dir() / "seen.json", seen)
+            _write_prompts(seen)
+
+    try:
+        if name is not None and not NAME_RE.match(name):
+            raise Refusal(f"bad name {name!r} (must match {NAME_RE.pattern})")
+        d = detect(url)
+    except Refusal as e:
+        _log(f"scout source: request {url} refused: {e}", now)
+        try:
+            answer(_say([f"refused: {e}"]))
+        except Exception as e2:  # noqa: BLE001
+            _reply_failed(f"reply to {mid}", e2, now)
+        return "refused"
+    except Exception as e:  # noqa: BLE001  (detect falls back on a failed fetch; anything else is a bug, not an answer)
+        _reply_failed(f"request {url}", e, now)
+        forget()
+        return "error"
+    name = _free_name(name, _taken()) if name else d["name"]
+    rec = {"url": d["url"], "why": why, "name": name, "kind": d["kind"], "channel": chan, "message_id": mid,
+           "created": _iso(now), "via": "slash" if slash else "message"}
+    if slash:
+        rec["iid"] = iid
+
+    def record(rid):
+        with _lock():
+            seen = _load_seen()
+            seen["requests"][rid] = rec
+            _atomic(scout_dir() / "seen.json", seen)
+            _write_prompts(seen)
+
+    text = _say([f"{name} · {d['kind']} · {d['url']}"], f"react {CHECK} to add")
+    if slash:
+        record(mid)   # before the prompt shows: a check mark can come at once
+    try:
+        rid = answer(text)
+    except Exception as e:  # noqa: BLE001
+        _reply_failed(f"reply to {mid}", e, now)
+        forget()
+        return "reply failed"
+    if not slash:
+        if not rid:
+            forget()
+            return "reply failed"
+        record(rid)
+    return "prompted"
+
+
+def discord_confirm(rid, user, now=None):
+    """A check mark by an allowFrom user on the pending prompt rid (bridge event) -> (source name, audit result), or None
+    when rid is not pending (a second check mark, a refusal reply, a prompt the poll already took). The source is added
+    at once through add_url, fetched once (nothing of that fetch is stored: the next poll treats the source as new), and
+    the prompt is edited to `added: <name> (<kind>)` plus the first TITLES_SHOWN titles, or to
+    `added, first fetch failed: <reason>` (the source stays, its health is the poll's business)."""
+    now = time.time() if now is None else now
+    rid = str(rid)
+    with _lock():
+        seen = _load_seen()
+        r = seen["requests"].get(rid)
+        if not isinstance(r, dict):
+            return None
+        st = load()
+        row, why_not = _confirm_locked(seen, st, rid, now)
+        if row is not None:
+            save(st)
+        _atomic(scout_dir() / "seen.json", seen)
+        _write_prompts(seen)
+    if row is None:
+        _log(f"scout source: request {r.get('url')} refused: {why_not}", now)
+        text, result = _say([f"refused: {why_not}"]), (str(r.get("name") or rid), "refused")
+    else:
+        try:
+            items, _ = scout_fetch.fetch(row, {})
+            titles = [str(i.get("title") or i.get("url") or "")[:300] for i in items if "request" not in i][:TITLES_SHOWN]
+            text = _say([f"added: {row['name']} ({row['kind']})"] + titles)
+        except Exception as e:  # noqa: BLE001  (fetch raises FetchError only; anything else is still a failed first fetch)
+            reason = str(e) if isinstance(e, scout_fetch.FetchError) else f"{type(e).__name__}: {e}"
+            text = _say([f"added, first fetch failed: {reason[:300]}"])
+        result = (row["name"], "added")
+    chan = str(r.get("channel") or "")
+    try:
+        if r.get("via") == "slash" and chan not in _scout_channels():
+            discord_feed.outbox_write(tc_env.discord_dir(PROJECT), {"op": "ireply", "iid": str(r.get("iid") or ""), "content": text})
+        else:   # REST edits stay inside #scout
+            scout_fetch.edit_message(chan, rid, text)
+    except Exception as e:  # noqa: BLE001
+        _reply_failed(f"edit {rid}", e, now)
+    return result
+
+
 def _handle_requests(chan, reqs, seen, st, now):
-    """New #scout requests -> a reply and a pending record. Only allowFrom user ids count."""
+    """New #scout requests the bridge did not hand over (it was down) -> a reply and a pending record. Only allowFrom user ids count."""
     allow = _allow()
-    pending = {r.get("message_id") for r in seen["requests"].values()}
+    pending = {r.get("message_id") for r in seen["requests"].values()} | set(seen["request_msgs"])
     retry = False
     for r in reqs:
         if r["author_id"] not in allow or r["message_id"] in pending:
@@ -372,7 +594,8 @@ def _handle_requests(chan, reqs, seen, st, now):
             _log(f"poll scout: request {url}: {type(e).__name__}: {e}", now)
             continue
         taken = {s["name"] for s in st["sources"]} | {x["name"] for x in seen["requests"].values()}
-        name = request_name(url, taken)
+        name, why = request_tail(r["why"])
+        name = _free_name(name, taken) if name else request_name(url, taken)
         try:
             reply = scout_fetch.post_message(chan, f"source request: {name} ({kind}) — react {CHECK} to add",
                                              reply_to=r["message_id"])
@@ -381,13 +604,14 @@ def _handle_requests(chan, reqs, seen, st, now):
             retry = True
             continue
         if reply:
-            seen["requests"][reply] = {"url": url, "why": r["why"], "name": name, "kind": kind, "channel": chan,
+            seen["requests"][reply] = {"url": url, "why": why, "name": name, "kind": kind, "channel": chan,
                                        "message_id": r["message_id"], "created": _iso(now)}
+            seen["request_msgs"][r["message_id"]] = _iso(now)
     return retry
 
 
 def _check_requests(seen, st, now):
-    """Pending requests: add the source when an allowFrom user reacted, drop after REQUEST_DAYS."""
+    """Pending requests: add the source when an allowFrom user reacted (a check mark the bridge did not hand over), drop after REQUEST_DAYS."""
     allow = _allow()
     for rid, r in list(seen["requests"].items()):
         created = time.mktime(time.strptime(r.get("created") or "1970-01-01T00:00:00Z", "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
@@ -402,21 +626,11 @@ def _check_requests(seen, st, now):
         who = next((u for u in users if u in allow), None)
         if who is None:
             continue
-        try:
-            _check_request_url(r["url"])
-        except Refusal as e:
-            _log(f"poll scout: request {r['url']} refused: {e}", now)
-            del seen["requests"][rid]
+        row, why_not = _confirm_locked(seen, st, rid, now)
+        if row is None:
+            _log(f"poll scout: request {r.get('url')} refused: {why_not}", now)
             continue
-        name = r["name"]
-        if any(s["name"] == name for s in st["sources"]):
-            name = request_name(r["url"], {s["name"] for s in st["sources"]})
-        row = {"name": name, "kind": r["kind"], "url": r["url"], "why": r.get("why", ""), "added": _iso(now), "builtin": False}
-        if r["kind"] == "html_links":
-            row["prefix"] = urllib.parse.urlsplit(r["url"]).path.rstrip("/") + "/"
-        st["sources"].append(row)
-        discord_feed.audit_append(tc_env.discord_dir(PROJECT), who, "scout-source", name, "added")
-        del seen["requests"][rid]
+        discord_feed.audit_append(tc_env.discord_dir(PROJECT), who, "scout-source", row["name"], "added")
 
 
 def poll(now=None):
@@ -425,12 +639,11 @@ def poll(now=None):
     d = scout_dir()
     with _lock():
         st = load()
-        seen = _read(d / "seen.json", {})
-        for k, dflt in (("keys", {}), ("sources", {}), ("state", {}), ("requests", {})):
-            if not isinstance(seen.get(k), dict):
-                seen[k] = dflt
+        seen = _load_seen()
         cutoff = _iso(now - KEY_DAYS * 86400)
         seen["keys"] = {k: v for k, v in seen["keys"].items() if v >= cutoff}
+        msg_cutoff = _iso(now - REQUEST_DAYS * 86400)
+        seen["request_msgs"] = {k: v for k, v in seen["request_msgs"].items() if isinstance(v, str) and v >= msg_cutoff}
         n_new = failed = 0
         lines = []
         if not any(s["kind"] == "discord_channel" for s in st["sources"]):
@@ -488,6 +701,7 @@ def poll(now=None):
                 f.write("\n".join(lines) + "\n")
         _atomic(d / "seen.json", seen)
         save(st)
+        _write_prompts(seen)
     return n_new, len(sources), failed
 
 

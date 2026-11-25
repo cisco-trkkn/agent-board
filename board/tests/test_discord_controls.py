@@ -1,5 +1,7 @@
 """discord_controls: react, click and reply consumption (the dialog routes are tested in test_discord_dialogs). Scratch TC_STATE; the runner and add_line are fakes.
 """
+import contextlib
+import io
 import json
 import os
 import sys
@@ -242,6 +244,156 @@ class ScoutRouteTest(Base):
         c = self.run_event({"type": "reply", "key": self.KEY, "text": "t", "user": "X"}, "reply", "noted")
         c.assert_not_called()
         self.assertEqual(self.audit()[-1]["result"], "rejected")
+
+
+class ScoutSourceRouteTest(Base):
+    """Scout source requests (`source:` in #scout, /source) and the check mark on their prompt, on the agent-board bot only."""
+    P = "agent-board"
+
+    def setUp(self):
+        super().setUp()
+        self.d = tc_env.discord_dir(self.P)
+        self.d.mkdir(parents=True)
+        (self.d / "access.json").write_text(json.dumps({"allowFrom": ["U1"]}))
+
+    def run_ev(self, ev, project=None, pending=False, **fns):
+        self.event("1-a.json", dict(ev, ts=1))
+        mocks = {n: mock.patch.object(dc.scout_sources, n, **({"side_effect": v} if isinstance(v, Exception) else {"return_value": v}))
+                 for n, v in dict({"discord_request": "prompted", "discord_confirm": ("blog", "added"), "is_pending": pending}, **fns).items()}
+        got = {n: m.start() for n, m in mocks.items()}
+        for m in mocks.values():
+            self.addCleanup(m.stop)
+        dc.step(project or self.P, self.rec(), 100.0, Runner(), self.add)
+        return got
+
+    def shape(self):
+        return [(a["user"], a["action"], a["target"], a["result"]) for a in self.audit()]
+
+    SRC = {"type": "source", "via": "message", "text": "source: https://a.example/feed", "message_id": "200", "channel_id": "300", "user": "U1"}
+    REACT = {"type": "react", "emoji": "✅", "message_id": "9001", "channel_id": "300", "scout": True, "user": "U1"}
+
+    def test_source_event_reaches_the_request_handler(self):   # mutation: no source branch -> audited as an ignored click
+        got = self.run_ev(self.SRC)
+        got["discord_request"].assert_called_once()
+        self.assertEqual(got["discord_request"].call_args.args[0]["text"], "source: https://a.example/feed")
+        self.assertEqual(self.shape(), [("U1", "scout-source", "source: https://a.example/feed", "prompted")])
+
+    def test_slash_source_event_is_audited_by_its_url(self):
+        self.run_ev({"type": "source", "via": "slash", "url": "https://a.example/feed", "name": "", "iid": "I1", "message_id": "7", "channel_id": "3", "user": "U1"})
+        self.assertEqual(self.shape(), [("U1", "scout-source", "https://a.example/feed", "prompted")])
+
+    def test_source_event_of_a_stranger_is_rejected(self):   # mutation: skip the allowlist -> the handler runs
+        got = self.run_ev(dict(self.SRC, user="X"))
+        got["discord_request"].assert_not_called()
+        self.assertEqual(self.shape(), [("X", "scout-source", "source: https://a.example/feed", "rejected")])
+
+    def test_checkmark_on_a_prompt_adds_and_is_not_a_yes_to_the_lead(self):   # mutation: react branch first -> the lead gets a yes line
+        got = self.run_ev(dict(self.REACT, excerpt="blog · rss"))
+        self.assertEqual(got["discord_confirm"].call_args.args[:2], ("9001", "U1"))
+        self.assertEqual(self.shape(), [("U1", "scout-source", "blog", "added")])
+        self.assertEqual(self.lines, [])
+
+    def test_checkmark_of_a_stranger_is_rejected_and_adds_nothing(self):
+        got = self.run_ev(dict(self.REACT, user="X"))
+        got["discord_confirm"].assert_not_called()
+        self.assertEqual(self.shape(), [("X", "scout-source", "9001", "rejected")])
+        self.assertEqual(self.lines, [])
+
+    def test_home_channel_react_event_on_a_pending_prompt_is_the_scouts(self):
+        ev = {k: v for k, v in self.REACT.items() if k != "scout"}   # the bridge's plain home-channel react event
+        got = self.run_ev(dict(ev, excerpt="blog · rss"), pending=True)
+        got["discord_confirm"].assert_called_once()
+        self.assertEqual(self.lines, [])
+
+    def test_checkmark_on_any_other_message_still_goes_to_the_lead(self):
+        ev = {k: v for k, v in self.REACT.items() if k != "scout"}
+        got = self.run_ev(dict(ev, excerpt="ship it?"), pending=False)
+        got["discord_confirm"].assert_not_called()
+        self.assertEqual(self.lines, [(self.P, '[Discord] ✅ yes to your message "ship it?"')])
+        self.assertEqual(self.shape(), [("U1", "react", "✅", "queued")])
+
+    def test_checkmark_on_a_prompt_that_is_gone(self):   # a second check mark: nothing to add, and no line for the lead
+        self.run_ev(self.REACT, discord_confirm=None)
+        self.assertEqual(self.shape(), [("U1", "scout-source", "9001", "gone")])
+        self.assertEqual(self.lines, [])
+
+    def test_other_emoji_with_the_scout_mark_is_not_routed(self):
+        got = self.run_ev(dict(self.REACT, emoji="❌", excerpt="x"))
+        got["discord_confirm"].assert_not_called()
+        self.assertEqual(self.shape(), [("U1", "react", "❌", "queued")])
+
+    def test_another_projects_bot_never_routes_to_the_scout(self):
+        tc_env.discord_dir("p").joinpath("events").mkdir(exist_ok=True)
+        (tc_env.discord_dir("p") / "events" / "1-a.json").write_text(json.dumps(dict(self.SRC, ts=1)))
+        with mock.patch.object(dc.scout_sources, "discord_request") as req:
+            dc.step("p", self.rec(), 100.0, Runner(), self.add)
+        req.assert_not_called()
+        a = [json.loads(l) for l in (tc_env.discord_dir("p") / "audit.jsonl").read_text().splitlines()]
+        self.assertEqual([(x["action"], x["result"]) for x in a], [("click", "ignored")])
+
+    def test_a_failing_handler_never_breaks_the_step(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.run_ev(self.SRC, discord_request=RuntimeError("boom"))
+        self.assertIn("discord_controls: scout source failed: RuntimeError: boom", err.getvalue())
+        self.assertEqual(self.shape(), [("U1", "scout-source", "source: https://a.example/feed", "error")])
+        self.assertEqual(list((self.d / "events").glob("*.json")), [])
+
+
+class ScoutSourceEndToEndTest(Base):
+    """Bridge event files -> consume_events -> the real scout_sources, in temp dirs: a /source prompt, then the check mark.
+    No network: the resolver and the fetcher are fakes, and a REST call to Discord fails the test."""
+    P = "agent-board"
+    URL = "https://github.com/anthropics/claude-code"
+
+    def setUp(self):
+        super().setUp()
+        ss, sf = dc.scout_sources, dc.scout_sources.scout_fetch
+        self.ss = ss
+        self.d = tc_env.discord_dir(self.P)
+        self.d.mkdir(parents=True)
+        (self.d / "access.json").write_text(json.dumps({"allowFrom": ["U1"]}))
+        self.fetched = []
+
+        def fetch(src, state, installed_version=None):
+            self.fetched.append(src["name"])
+            return [{"title": f"v{i}", "url": "https://e.example/"} for i in range(1, 6)], {}
+
+        def no_rest(*a, **k):
+            raise AssertionError("no Discord REST call outside #scout")
+        for target, name, value in ((os.environ, None, {"TC_SCOUT_DIR": self.tmp.name + "/scout"}), (ss, "_resolve", lambda host: ["93.184.215.14"]),
+                                    (sf, "fetch", fetch), (sf, "post_message", no_rest), (sf, "edit_message", no_rest), (sf, "get", no_rest)):
+            p = mock.patch.dict(target, value) if name is None else mock.patch.object(target, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def put(self, n, ev):
+        self.event(f"{n}-a.json", dict(ev, ts=n))
+        dc.step(self.P, self.rec(), 100.0 + n, Runner(), self.add)
+
+    def names(self):
+        return [s["name"] for s in self.ss.load()["sources"]]
+
+    def test_slash_prompt_then_checkmark_adds_once_and_fetches_once(self):
+        self.put(1, {"type": "source", "via": "slash", "url": self.URL, "name": "cc", "iid": "I1", "message_id": "777", "channel_id": "555", "user": "U1"})
+        self.assertEqual(json.loads((self.d / "scout-prompts.json").read_text()), {"777": "555"})
+        self.assertNotIn("cc", self.names())
+        react = {"type": "react", "emoji": "✅", "message_id": "777", "channel_id": "555", "scout": True, "user": "U1"}
+        self.put(2, dict(react, user="X"))   # not in allowFrom
+        self.assertEqual((self.names().count("cc"), self.fetched), (0, []))
+        self.put(3, react)
+        self.put(4, react)   # a second check mark
+        self.assertEqual((self.names().count("cc"), self.fetched), (1, ["cc"]))
+        self.assertEqual(json.loads((self.d / "scout-prompts.json").read_text()), {})
+        row = [s for s in self.ss.load()["sources"] if s["name"] == "cc"][0]
+        self.assertEqual((row["kind"], row["url"]), ("github_releases", "https://api.github.com/repos/anthropics/claude-code/releases"))
+        self.assertEqual([(o["op"], o["iid"], o["content"]) for o in self.ops()], [
+            ("ireply", "I1", "```\ncc · github_releases · https://api.github.com/repos/anthropics/claude-code/releases\n```\nreact ✅ to add"),
+            ("ireply", "I1", "```\nadded: cc (github_releases)\nv1\nv2\nv3\n```")])
+        self.assertEqual([(a["user"], a["action"], a["target"], a["result"]) for a in self.audit()], [
+            ("U1", "scout-source", self.URL, "prompted"), ("X", "scout-source", "777", "rejected"),
+            ("U1", "scout-source", "cc", "added"), ("U1", "scout-source", "777", "gone")])
+        self.assertEqual(self.lines, [])
 
 
 class ProjectBotLeadGauthTest(Base):

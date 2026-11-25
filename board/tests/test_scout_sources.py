@@ -33,6 +33,8 @@ class Handler(BaseHTTPRequestHandler):
     posted = []        # POST bodies
     fail_posts = 0     # next N POSTs answer 500
     reacted = {}       # reply id -> [user ids]
+    edited = []        # (message id, PATCH body)
+    fail_edits = 0     # next N PATCHes answer 500
     seen = []
 
     def log_message(self, *a):
@@ -65,6 +67,12 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[7] != "%E2%9C%85":
                     return self._send(404, b"{}")
                 return self._send(200, json.dumps([{"id": u} for u in Handler.reacted.get(parts[5], [])]).encode())
+            if method == "PATCH" and len(parts) == 6:
+                if Handler.fail_edits > 0:
+                    Handler.fail_edits -= 1
+                    return self._send(500, b"{}")
+                Handler.edited.append((parts[5], json.loads(data)))
+                return self._send(200, json.dumps({"id": parts[5]}).encode())
             return self._send(404, b"{}")
         if path in Handler.routes:
             status, body, ctype = Handler.routes[path]
@@ -76,6 +84,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._handle("POST")
+
+    def do_PATCH(self):
+        self._handle("PATCH")
 
 
 def tree(root):
@@ -107,7 +118,7 @@ class Base(unittest.TestCase):
         self.addCleanup(p.stop)
         self.scout = Path(t) / "scout"
         Handler.routes, Handler.messages, Handler.posted, Handler.reacted, Handler.seen = {}, [], [], {}, []
-        Handler.fail_posts = 0
+        Handler.fail_posts, Handler.edited, Handler.fail_edits = 0, [], 0
         self.now = 1_800_000_000.0
         import scout_sources as _ss   # the URL check's test seam: the local server is http on 127.0.0.1; other hosts resolve to a global address
         for _n, _v in (("_HTTP_OK_HOSTS", ("127.0.0.1",)), ("_resolve", lambda host: ["93.184.215.14"])):
@@ -454,6 +465,325 @@ class RequestTest(Base):
         self.assertEqual(ss.request_name("https://www.Example.com/Some Path/x", {"scout"}), "example-some-path")
         self.assertEqual(ss.request_name("https://blog.example.com/a", {"blog-a"}), "blog-a-2")
         self.assertEqual(ss.request_name("https://blog.example.com/", set()), "blog")
+
+
+HOME_CHAN = "5555555555555555"   # any channel that is not the #scout channel
+
+
+def feed(*titles):
+    return '<?xml version="1.0"?><rss><channel>' + "".join(
+        f"<item><title>{t}</title><link>https://e.example/{i}</link></item>" for i, t in enumerate(titles)) + "</channel></rss>"
+
+
+def block(*lines):
+    return "```\n" + "\n".join(lines) + "\n```"
+
+
+class InstantAddTest(Base):
+    """`source: <url> [name]` in #scout and /source as bridge events: the prompt at once, the add on the check mark (plan Task 5)."""
+
+    def setUp(self):
+        super().setUp()
+        d = tc_env.discord_dir("agent-board")
+        d.mkdir(parents=True)
+        (d / ".env").write_text(f"DISCORD_BOT_TOKEN={TOKEN}\n")
+        (d / "access.json").write_text(json.dumps({"allowFrom": [int(ALLOWED)]}))
+        self.d = d
+        self.sources({"name": "scout", "kind": "discord_channel", "url": CHAN})
+        self.serve("/blog/feed", feed("T1", "T2", "T3", "T4", "T5"), "application/rss+xml")
+        self.url = self.base + "/blog/feed"
+
+    def msg_event(self, text=None, mid="200", chan=CHAN):
+        return ss.discord_request({"type": "source", "via": "message", "text": text or f"source: {self.url}", "message_id": mid,
+                                   "channel_id": chan, "user": ALLOWED, "ts": 1}, self.now)
+
+    def slash_event(self, url=None, name="", mid="777", chan=HOME_CHAN, iid="I1"):
+        return ss.discord_request({"type": "source", "via": "slash", "url": url or self.url, "name": name, "iid": iid,
+                                   "message_id": mid, "channel_id": chan, "user": ALLOWED, "ts": 1}, self.now)
+
+    def names(self):
+        return [s["name"] for s in ss.load()["sources"]]
+
+    def pending(self):
+        return self.seen_state()["requests"] if (self.scout / "seen.json").exists() else {}
+
+    def prompts(self):
+        p = self.d / "scout-prompts.json"
+        return json.loads(p.read_text()) if p.exists() else {}
+
+    def ops(self):
+        return [json.loads(f.read_text()) for f in sorted((self.d / "outbox").glob("*.json"))] if (self.d / "outbox").exists() else []
+
+    def fake_fetch(self, titles=("A", "B", "C", "D"), exc=None):
+        calls = []
+
+        def fetch(src, state, installed_version=None):
+            calls.append(src["name"])
+            if exc:
+                raise exc
+            return [{"title": t, "url": "https://e.example/" + t} for t in titles], {}
+        p = mock.patch.object(ss.scout_fetch, "fetch", fetch)
+        p.start()
+        self.addCleanup(p.stop)
+        return calls
+
+    # ---- parsing (A5)
+
+    def test_request_tail_one_name_token_is_the_name_else_the_why(self):
+        self.assertEqual(ss.request_tail("my-feed.2"), ("my-feed.2", ""))
+        self.assertEqual(ss.request_tail("a good feed"), (None, "a good feed"))
+        self.assertEqual(ss.request_tail("Interesting"), (None, "Interesting"))   # not a NAME_RE token
+        self.assertEqual(ss.request_tail("x" * 41), (None, "x" * 41))
+        self.assertEqual(ss.request_tail(""), (None, ""))
+
+    # ---- the prompt
+
+    def test_source_message_in_scout_gets_the_prompt_at_once(self):
+        self.assertEqual(self.msg_event(), "prompted")
+        self.assertEqual(len(Handler.posted), 1)
+        p = Handler.posted[0]
+        self.assertEqual(p["content"], block(f"127-blog · rss · {self.url}") + "\nreact ✅ to add")
+        self.assertEqual(p["message_reference"], {"message_id": "200"})
+        self.assertEqual(p["allowed_mentions"], {"parse": []})
+        r = self.pending()["9001"]
+        self.assertEqual((r["url"], r["name"], r["kind"], r["why"], r["channel"], r["message_id"], r["via"]),
+                         (self.url, "127-blog", "rss", "", CHAN, "200", "message"))
+        self.assertEqual(self.prompts(), {"9001": CHAN})   # what the bridge reads to forward a check mark from any channel
+        self.assertTrue(ss.is_pending("9001"))
+        self.assertFalse(ss.is_pending("200"))
+        self.assertEqual(self.names(), ["scout"])
+
+    def test_name_token_names_the_source_and_longer_text_is_the_why(self):
+        self.msg_event(f"source: {self.url} myfeed", mid="200")
+        self.msg_event(f"source: {self.url} worth a look", mid="201")
+        a, b = self.pending()["9001"], self.pending()["9002"]
+        self.assertEqual((a["name"], a["why"]), ("myfeed", ""))
+        self.assertEqual((b["name"], b["why"]), ("127-blog", "worth a look"))
+        self.assertIn("myfeed · rss · ", Handler.posted[0]["content"])
+
+    def test_source_message_outside_scout_is_ignored(self):
+        self.assertEqual(self.msg_event(chan=HOME_CHAN), "ignored")
+        self.assertEqual(self.msg_event(text="sources: nothing to see"), "ignored")
+        self.assertEqual((Handler.posted, self.pending(), self.prompts()), ([], {}, {}))
+
+    def test_refused_url_gets_refused_and_no_prompt(self):   # mutation: record the request before the check -> a later check mark adds it
+        with mock.patch.object(ss, "_resolve", lambda host: ["10.0.0.5"]):
+            self.assertEqual(self.msg_event("source: https://intra.example.com/feed"), "refused")
+        self.assertEqual(Handler.posted[0]["content"], block("refused: private address 10.0.0.5"))
+        self.assertEqual(Handler.posted[0]["message_reference"], {"message_id": "200"})
+        self.assertEqual((self.pending(), self.prompts()), ({}, {}))
+        calls = self.fake_fetch()
+        self.assertIsNone(ss.discord_confirm("9001", ALLOWED, self.now + 5))   # a check mark on the refusal reply
+        self.assertEqual((self.names(), calls, Handler.edited), (["scout"], [], []))
+
+    def test_slash_prompt_goes_through_the_bridge_outbox(self):
+        self.assertEqual(self.slash_event(name="mine"), "prompted")
+        self.assertEqual(Handler.posted, [])   # no REST post outside #scout
+        self.assertEqual(self.ops(), [{"op": "ireply", "iid": "I1", "content": block(f"mine · rss · {self.url}") + "\nreact ✅ to add"}])
+        r = self.pending()["777"]
+        self.assertEqual((r["name"], r["kind"], r["channel"], r["via"], r["iid"]), ("mine", "rss", HOME_CHAN, "slash", "I1"))
+        self.assertEqual(self.prompts(), {"777": HOME_CHAN})
+
+    def test_slash_bad_name_and_refused_url(self):
+        self.assertEqual(self.slash_event(name="Not A Name"), "refused")
+        with mock.patch.object(ss, "_resolve", lambda host: ["169.254.169.254"]):
+            self.assertEqual(self.slash_event(url="https://meta.example.com/x", mid="778", iid="I2"), "refused")
+        ops = self.ops()
+        self.assertEqual([o["iid"] for o in ops], ["I1", "I2"])
+        self.assertTrue(ops[0]["content"].startswith("```\nrefused: bad name"), ops[0])
+        self.assertEqual(ops[1]["content"], block("refused: link-local address 169.254.169.254"))
+        self.assertEqual((self.pending(), self.prompts()), ({}, {}))
+
+    def test_github_url_shows_the_detected_kind_and_url(self):
+        self.slash_event(url="https://github.com/anthropics/claude-code")
+        self.assertEqual(self.ops()[0]["content"],
+                         block("github-anthropics · github_releases · https://api.github.com/repos/anthropics/claude-code/releases") + "\nreact ✅ to add")
+
+    def test_the_same_message_is_answered_once_by_event_and_poll(self):   # mutation: no request_msgs mark -> the poll replies again
+        self.assertEqual(self.msg_event(), "prompted")
+        self.assertEqual(self.msg_event(), "duplicate")
+        self.fake_fetch()
+        self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 5), ("127-blog", "added"))
+        Handler.messages = [dmsg(200, f"source: {self.url}")]   # the daily poll reads the same message later
+        ss.poll(self.now + 60)
+        self.assertEqual(len(Handler.posted), 1)
+        self.assertEqual(self.pending(), {})
+
+    def test_a_request_the_poll_already_answered_is_a_duplicate_event(self):
+        Handler.messages = [dmsg(200, f"source: {self.url}")]
+        ss.poll(self.now)
+        self.assertEqual(len(Handler.posted), 1)
+        self.assertEqual(self.prompts(), {"9001": CHAN})   # the poll's own prompt takes an instant check mark too
+        self.assertEqual(self.msg_event(), "duplicate")
+        self.assertEqual(len(Handler.posted), 1)
+
+    def test_failed_reply_leaves_the_request_to_the_poll(self):
+        Handler.fail_posts = 1
+        self.assertEqual(self.msg_event(), "reply failed")
+        self.assertEqual((self.pending(), self.prompts()), ({}, {}))
+        Handler.messages = [dmsg(200, f"source: {self.url}")]
+        ss.poll(self.now + 60)
+        self.assertEqual(self.pending()["9001"]["message_id"], "200")
+
+    def test_unexpected_detect_error_answers_nothing_and_leaves_the_request_to_the_poll(self):
+        with mock.patch.object(ss, "detect", side_effect=RuntimeError("boom")):
+            self.assertEqual(self.msg_event(), "error")
+        self.assertEqual((Handler.posted, self.pending(), self.seen_state()["request_msgs"]), ([], {}, {}))
+        self.assertIn("scout source: request", self.log())
+        self.assertEqual(self.msg_event(), "prompted")   # not marked as answered
+
+    def test_long_url_is_cut_to_the_discord_limit_inside_the_fence(self):
+        url = "https://e.example/" + "a" * 3000
+        self.slash_event(url=url)
+        c = self.ops()[0]["content"]
+        self.assertLessEqual(len(c), 2000)
+        self.assertTrue(c.endswith("\n```\nreact ✅ to add"), c[-40:])
+        self.assertEqual(self.pending()["777"]["url"], url)   # only the display is cut
+
+    # ---- the check mark
+
+    def test_checkmark_adds_once_fetches_once_and_shows_three_titles(self):
+        # mutation: drop the pending-record removal in _confirm_locked -> the second check mark adds 127-blog-2
+        self.msg_event()
+        calls = self.fake_fetch()
+        with mock.patch.object(ss, "add_url", wraps=ss.add_url) as add:
+            self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 5), ("127-blog", "added"))
+        self.assertEqual(add.call_count, 1)   # the one add path
+        self.assertEqual(add.call_args.args[:3], (self.url, "127-blog", "rss"))
+        self.assertEqual(calls, ["127-blog"])
+        self.assertEqual(Handler.edited, [("9001", {"content": block("added: 127-blog (rss)", "A", "B", "C"), "allowed_mentions": {"parse": []}})])
+        row = [s for s in ss.load()["sources"] if s["name"] == "127-blog"][0]
+        self.assertEqual((row["kind"], row["url"], row["builtin"], row["added"]), ("rss", self.url, False, ss._iso(self.now + 5)))
+        self.assertEqual((self.pending(), self.prompts()), ({}, {}))
+        self.assertIsNone(ss.discord_confirm("9001", ALLOWED, self.now + 6))   # a second check mark
+        self.assertEqual(calls, ["127-blog"])
+        Handler.reacted["9001"] = [ALLOWED]
+        Handler.messages = []
+        ss.poll(self.now + 60)   # and the next poll's _check_requests
+        self.assertEqual([n for n in self.names() if n.startswith("127-blog")], ["127-blog"])
+        self.assertEqual(calls, ["127-blog", "scout", "127-blog"])   # only the poll's own fetch of each source
+        self.assertEqual(len(Handler.edited), 1)
+
+    def test_checkmark_with_the_real_fetcher_shows_the_feeds_first_three_titles(self):
+        self.msg_event()
+        self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 5), ("127-blog", "added"))
+        self.assertEqual(Handler.edited[0][1]["content"], block("added: 127-blog (rss)", "T1", "T2", "T3"))
+        self.assertEqual([p for m, p in Handler.seen if p == "/blog/feed"], ["/blog/feed"] * 2)   # detect, then the one first fetch
+
+    def test_first_fetch_failure_keeps_the_source_and_its_health(self):
+        self.sources({"name": "scout", "kind": "discord_channel", "url": CHAN}, health={"scout": {"failures": 1, "last_error": "x", "last_ok": None}})
+        self.msg_event()
+        calls = self.fake_fetch(exc=ss.scout_fetch.FetchError("HTTP 500 for " + self.url))
+        self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 5), ("127-blog", "added"))
+        self.assertEqual(calls, ["127-blog"])
+        self.assertEqual(Handler.edited[0][1]["content"], block("added, first fetch failed: HTTP 500 for " + self.url))
+        self.assertIn("127-blog", self.names())
+        self.assertEqual(ss.load()["health"], {"scout": {"failures": 1, "last_error": "x", "last_ok": None}})
+        self.assertEqual(ss.health_report(), [])
+
+    def test_first_fetch_writes_no_poll_state(self):   # the next poll still treats the source as new (first-poll cap)
+        self.msg_event()
+        before = (self.scout / "seen.json").read_text()
+        self.fake_fetch()
+        ss.discord_confirm("9001", ALLOWED, self.now + 5)
+        seen = self.seen_state()
+        self.assertEqual((seen.get("keys"), seen.get("sources"), seen.get("state")), ({}, {}, {}))
+        self.assertFalse((self.scout / "items.jsonl").exists())
+        self.assertNotEqual(before, (self.scout / "seen.json").read_text())   # only the pending request went
+
+    def test_duplicate_name_at_checkmark_time_gets_the_next_free_suffix(self):
+        self.msg_event(f"source: {self.url} myfeed")
+        ss.add_source("myfeed", "rss", self.base + "/other")   # taken between the prompt and the check mark
+        ss.add_source("myfeed-2", "rss", self.base + "/other2")
+        self.fake_fetch()
+        self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 5), ("myfeed-3", "added"))
+        self.assertEqual(Handler.edited[0][1]["content"].splitlines()[1], "added: myfeed-3 (rss)")
+        self.assertEqual(ss._free_name("x" * 40, {"x" * 40}), "x" * 38 + "-2")   # the suffix still fits NAME_RE
+        self.assertTrue(ss.NAME_RE.match(ss._free_name("x" * 40, {"x" * 40})))
+
+    def test_url_refused_at_checkmark_time_is_not_added(self):
+        self.msg_event()
+        calls = self.fake_fetch()
+        with mock.patch.object(ss, "_HTTP_OK_HOSTS", ()):
+            self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 5), ("127-blog", "refused"))
+        self.assertEqual(Handler.edited[0][1]["content"], block("refused: url must start with https://"))
+        self.assertEqual((self.names(), calls, self.pending(), self.prompts()), (["scout"], [], {}, {}))
+
+    def test_slash_prompt_outside_scout_is_edited_through_the_outbox(self):
+        self.slash_event()
+        self.fake_fetch()
+        self.assertEqual(ss.discord_confirm("777", ALLOWED, self.now + 5), ("127-blog", "added"))
+        self.assertEqual((Handler.posted, Handler.edited), ([], []))   # no REST call outside #scout
+        self.assertEqual(self.ops()[1], {"op": "ireply", "iid": "I1", "content": block("added: 127-blog (rss)", "A", "B", "C")})
+
+    def test_slash_prompt_inside_scout_is_edited_in_place(self):
+        self.slash_event(chan=CHAN)
+        self.fake_fetch()
+        ss.discord_confirm("777", ALLOWED, self.now + 5)
+        self.assertEqual([m for m, _ in Handler.edited], ["777"])
+        self.assertEqual(len(self.ops()), 1)   # only the prompt went through the outbox
+
+    def test_titles_are_data_fenced_one_line_each_and_cut(self):
+        self.msg_event()
+        self.fake_fetch(titles=("```\n@everyone [x](https://evil.example)", "b\n  b", "c" * 5000, "d"))
+        ss.discord_confirm("9001", ALLOWED, self.now + 5)
+        body = Handler.edited[0][1]
+        c = body["content"]
+        self.assertEqual(body["allowed_mentions"], {"parse": []})
+        self.assertLessEqual(len(c), 2000)
+        self.assertEqual(c.count("```"), 2)   # only the block's own fence: the title's backticks are broken up
+        lines = c.splitlines()
+        self.assertEqual((lines[0], lines[1], lines[-1], len(lines)), ("```", "added: 127-blog (rss)", "```", 6))
+        self.assertEqual(lines[3], "b b")
+        self.assertNotIn("d", lines[4])   # exactly three titles
+
+    def test_failed_edit_is_logged_and_the_source_stays(self):
+        self.msg_event()
+        self.fake_fetch()
+        Handler.fail_edits = 1
+        self.assertEqual(ss.discord_confirm("9001", ALLOWED, self.now + 5), ("127-blog", "added"))
+        self.assertIn("127-blog", self.names())
+        self.assertIn("scout source: edit 9001 failed", self.log())
+
+    def test_token_is_in_no_reply_edit_or_log(self):
+        self.msg_event()
+        self.fake_fetch(exc=ss.scout_fetch.FetchError("HTTP 401 for " + self.url))
+        Handler.fail_edits = 1
+        ss.discord_confirm("9001", ALLOWED, self.now + 5)
+        self.slash_event(mid="778")
+        blob = json.dumps([Handler.posted, Handler.edited, self.ops()]) + self.log() + (self.scout / "seen.json").read_text()
+        self.assertEqual(blob.count(TOKEN), 0)
+        self.assertEqual(blob.count("Authorization"), 0)
+
+    # ---- the poll fallback (a check mark the bridge missed)
+
+    def test_poll_checkmark_goes_through_the_one_add_path(self):
+        # mutation: _check_requests builds its own row again -> add_url is never called
+        Handler.messages = [dmsg(200, f"source: {self.url} myfeed")]
+        ss.poll(self.now)
+        self.assertEqual(Handler.posted[0]["content"], "source request: myfeed (rss) — react ✅ to add")
+        Handler.reacted["9001"] = [ALLOWED]
+        Handler.messages = []
+        with mock.patch.object(ss, "add_url", wraps=ss.add_url) as add:
+            ss.poll(self.now + 60)
+        self.assertEqual(add.call_count, 1)
+        self.assertEqual(add.call_args.args[:3], (self.url, "myfeed", "rss"))
+        self.assertEqual(self.names().count("myfeed"), 1)
+        self.assertEqual((self.pending(), self.prompts()), ({}, {}))
+        self.assertIsNone(ss.discord_confirm("9001", ALLOWED, self.now + 90))   # the bridge's event for the same check mark, late
+        self.assertEqual(self.names().count("myfeed") + self.names().count("myfeed-2"), 1)
+
+    def test_bare_source_request_is_answered_by_the_poll(self):
+        Handler.messages = [dmsg(200, f"source: {self.url}")]
+        ss.poll(self.now)
+        self.assertEqual(Handler.posted[0]["content"], "source request: 127-blog (rss) — react ✅ to add")
+
+    def test_handled_message_marks_age_out(self):
+        self.msg_event()
+        self.assertIn("200", self.seen_state()["request_msgs"])
+        Handler.messages = []
+        ss.poll(self.now + 15 * 86400)
+        self.assertEqual(self.seen_state()["request_msgs"], {})
 
 
 class DetectTest(Base):
