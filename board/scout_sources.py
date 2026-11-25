@@ -9,9 +9,11 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import time
 import urllib.parse
@@ -136,12 +138,52 @@ def _check_url(kind, url):
         raise Refusal("url must start with https://")
 
 
-def _check_request_url(url):
-    """The source-add URL rule for a requested URL (https only), except hosts in _HTTP_OK_HOSTS."""
+def _resolve(host):
+    """Every address host resolves to, as strings (test seam: tests replace it with a fake resolver)."""
+    return sorted({ai[4][0] for ai in socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)})
+
+
+def _addr_class(ip):
+    """None for a global address, else the class that refuses it. An IPv4-mapped IPv6 address is judged as its IPv4."""
+    a = ipaddress.ip_address(ip.split("%", 1)[0])
+    if getattr(a, "ipv4_mapped", None):
+        a = a.ipv4_mapped
+    for cls, flag in (("unspecified", a.is_unspecified), ("loopback", a.is_loopback), ("link-local", a.is_link_local),
+                      ("multicast", a.is_multicast), ("private", a.is_private), ("reserved", a.is_reserved)):
+        if flag:
+            return cls
+    return None if a.is_global else "non-global"
+
+
+def check_url_safe(url):
+    """The one URL rule for every source add, #scout request and fetch hop: https (http only for _HTTP_OK_HOSTS, a test
+    seam that is empty in production and also skips the address test), and every address the host resolves to (or the
+    literal IP) is global. Refusal("<one line>") otherwise."""
     u = urllib.parse.urlsplit(url or "")
-    if u.scheme == "http" and u.hostname in _HTTP_OK_HOSTS:
+    host = u.hostname
+    if host and host in _HTTP_OK_HOSTS and u.scheme in ("http", "https"):
         return
-    _check_url("rss", url)
+    if u.scheme != "https" or not host:
+        raise Refusal("url must start with https://")
+    try:
+        ipaddress.ip_address(host.split("%", 1)[0])
+        ips = [host]
+    except ValueError:
+        try:
+            ips = _resolve(host)
+        except (OSError, UnicodeError):
+            raise Refusal(f"host does not resolve: {host}") from None
+    if not ips:
+        raise Refusal(f"host does not resolve: {host}")
+    for ip in ips:
+        cls = _addr_class(ip)
+        if cls:
+            raise Refusal(f"{cls} address {ip}")
+
+
+def _check_request_url(url):
+    """Kept for callers of the old name: the same rule as check_url_safe."""
+    check_url_safe(url)
 
 
 def add_source(name, kind, url, why="", prefix=None, now=None):
@@ -150,6 +192,8 @@ def add_source(name, kind, url, why="", prefix=None, now=None):
     if not NAME_RE.match(name or ""):
         raise Refusal(f"bad name {name!r} (must match {NAME_RE.pattern})")
     _check_url(kind, url)
+    if kind not in ("discord_channel", "plugin"):
+        check_url_safe(url)
     with _lock():
         st = load()
         if any(s["name"] == name for s in st["sources"]):

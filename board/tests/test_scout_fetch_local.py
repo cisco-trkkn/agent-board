@@ -100,6 +100,11 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         Handler.routes, Handler.messages, Handler.seen, Handler.raw_messages = {}, [], [], None
+        import scout_sources as _ss   # the URL check's test seam: the local server is http on 127.0.0.1; other hosts resolve to a global address
+        for _n, _v in (("_HTTP_OK_HOSTS", ("127.0.0.1",)), ("_resolve", lambda host: ["93.184.215.14"])):
+            _p = mock.patch.object(_ss, _n, _v)
+            _p.start()
+            self.addCleanup(_p.stop)
 
 
 class PluginTest(Base):

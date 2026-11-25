@@ -36,6 +36,27 @@ class FetchError(Exception):
     pass
 
 
+class Refused(FetchError):
+    """A URL (or a redirect hop) that scout_sources.check_url_safe refuses."""
+
+
+class _Redirect(Exception):
+    def __init__(self, url):
+        super().__init__(url)
+        self.url = url
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Redirects are never followed by urllib: get() follows them by hand so each hop is checked first."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+MAX_REDIRECTS = 5
+REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
 FALLBACK_CA = "/etc/ssl/cert.pem"
 
 
@@ -51,7 +72,7 @@ def _ssl_context():
 
 
 # no HTTPCookieProcessor: no cookies are stored or replayed
-_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_context()))
+_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_context()), _NoRedirect)
 
 
 def _open(req):
@@ -60,19 +81,36 @@ def _open(req):
         with _OPENER.open(req, timeout=TIMEOUT) as r:
             return r.status, r.read(MAX_BYTES), r.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
+        loc = e.headers.get("Location") if e.code in REDIRECT_CODES else None
         e.close()
+        if loc:
+            raise _Redirect(urllib.parse.urljoin(req.full_url, loc)) from None
         raise FetchError(f"HTTP {e.code} for {req.full_url}") from None
     except Exception as e:  # URLError, timeout, ssl, bad url, connection reset
         raise FetchError(f"{type(e).__name__}: {e}") from None
 
 
 def get(url, accept=None, headers=None):
-    """GET url -> (status, body bytes (at most MAX_BYTES), content type). FetchError on a network error or status >= 400."""
+    """GET url -> (status, body bytes (at most MAX_BYTES), content type). Each hop (the URL, then each redirect, at most
+    MAX_REDIRECTS) passes scout_sources.check_url_safe before it is requested: Refused otherwise. An Authorization header
+    goes only to the first URL's host. FetchError on a network error or status >= 400."""
+    import scout_sources  # lazy: scout_sources imports this module
     h = {"User-Agent": UA}
     if accept:
         h["Accept"] = accept
     h.update(headers or {})
-    return _open(urllib.request.Request(url, headers=h))
+    origin = urllib.parse.urlsplit(url).hostname
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            scout_sources.check_url_safe(url)
+        except scout_sources.Refusal as e:
+            raise Refused(f"refused: {e}") from None
+        hop = h if urllib.parse.urlsplit(url).hostname == origin else {k: v for k, v in h.items() if k.lower() != "authorization"}
+        try:
+            return _open(urllib.request.Request(url, headers=hop))
+        except _Redirect as r:
+            url = r.url
+    raise FetchError(f"more than {MAX_REDIRECTS} redirects")
 
 
 def _cut(text, limit=EXCERPT_MAX):
@@ -557,10 +595,7 @@ def _discord_channel(source, state, installed_version):
             if url in seen_urls:
                 continue
             try:
-                scout_sources._check_request_url(url)
-                if urllib.parse.urlsplit(url).hostname in ("localhost", "127.0.0.1", "::1") \
-                        and urllib.parse.urlsplit(url).hostname not in scout_sources._HTTP_OK_HOSTS:
-                    raise scout_sources.Refusal("loopback")
+                scout_sources.check_url_safe(url)
             except scout_sources.Refusal:
                 continue
             seen_urls.add(url)

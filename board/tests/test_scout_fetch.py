@@ -21,6 +21,7 @@ FIX = HERE / "fixtures" / "scout"
 class Handler(BaseHTTPRequestHandler):
     extra = {}      # path -> (bytes, content type); overrides the fixture dir
     seen = []       # (path, headers dict) of every request
+    redirects = {}  # path -> Location of a 302
 
     def log_message(self, *a):
         pass
@@ -28,6 +29,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         Handler.seen.append((self.path, dict(self.headers)))
         path = self.path.split("?")[0]
+        if path in Handler.redirects:
+            self.send_response(302)
+            self.send_header("Location", Handler.redirects[path])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/500":
             self.send_response(500)
             self.end_headers()
@@ -71,6 +78,12 @@ class Base(unittest.TestCase):
         self.addCleanup(p.stop)
         Handler.extra = {}
         Handler.seen = []
+        Handler.redirects = {}
+        import scout_sources as _ss   # the URL check's test seam: the local server is http on 127.0.0.1; other hosts resolve to a global address
+        for _n, _v in (("_HTTP_OK_HOSTS", ("127.0.0.1",)), ("_resolve", lambda host: ["93.184.215.14"])):
+            _p = mock.patch.object(_ss, _n, _v)
+            _p.start()
+            self.addCleanup(_p.stop)
         g = mock.patch.object(sf, "_gh_token", return_value=None)
         g.start()
         self.addCleanup(g.stop)
@@ -127,6 +140,67 @@ class GetTest(Base):
             with self.assertRaises(sf.FetchError):
                 sf.get(self.base + "/npm.json")
         self.assertEqual(m.call_args.kwargs.get("timeout"), 20)
+
+
+class RedirectTest(Base):
+    """get() follows redirects by hand: every hop passes scout_sources.check_url_safe before it is requested."""
+
+    def ok_hosts(self, *hosts):
+        import scout_sources
+        p = mock.patch.object(scout_sources, "_HTTP_OK_HOSTS", hosts)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_redirects_followed_by_hand(self):
+        Handler.redirects = {"/r1": "/r2", "/r2": "/npm.json"}
+        st, body, _ = sf.get(self.base + "/r1")
+        self.assertEqual(st, 200)
+        self.assertIn(b"latest", body)
+        self.assertEqual([p for p, _ in Handler.seen], ["/r1", "/r2", "/npm.json"])
+
+    def test_first_url_refused_before_any_request(self):
+        with self.assertRaises(sf.Refused) as cm:
+            sf.get("https://10.0.0.5/feed")
+        self.assertEqual(str(cm.exception), "refused: private address 10.0.0.5")
+        self.assertEqual(Handler.seen, [])
+
+    def test_redirect_to_a_private_address_is_refused(self):
+        # mutation: check only the first URL in get() -> the hop is requested and the test sees a network error instead
+        Handler.redirects = {"/r1": "https://10.0.0.5/meta"}
+        with self.assertRaises(sf.Refused) as cm:
+            sf.get(self.base + "/r1")
+        self.assertEqual(str(cm.exception), "refused: private address 10.0.0.5")
+        self.assertEqual([p for p, _ in Handler.seen], ["/r1"])
+
+    def test_redirect_to_a_name_that_resolves_to_metadata_is_refused(self):
+        import scout_sources
+        fake = lambda host: ["169.254.169.254"] if host == "metadata.example.com" else ["93.184.215.14"]
+        with mock.patch.object(scout_sources, "_resolve", fake):
+            Handler.redirects = {"/r1": "https://metadata.example.com/latest/meta-data"}
+            with self.assertRaises(sf.Refused) as cm:
+                sf.get(self.base + "/r1")
+        self.assertEqual(str(cm.exception), "refused: link-local address 169.254.169.254")
+
+    def test_at_most_five_redirects(self):
+        Handler.redirects = {f"/l{i}": f"/l{i + 1}" for i in range(6)}
+        Handler.extra["/l6"] = (b"end", "text/plain")
+        self.assertEqual(sf.get(self.base + "/l1")[1], b"end")   # five hops: followed
+        self.assertEqual(len(Handler.seen), 6)
+        Handler.seen = []
+        with self.assertRaises(sf.FetchError) as cm:   # six hops: refused after the fifth
+            sf.get(self.base + "/l0")
+        self.assertEqual(str(cm.exception), "more than 5 redirects")
+        self.assertEqual(len(Handler.seen), 6)
+
+    def test_authorization_goes_only_to_the_first_host(self):
+        # mutation: send the same headers on every hop -> the second request carries the token
+        self.ok_hosts("127.0.0.1", "localhost")
+        port = self.srv.server_address[1]
+        Handler.redirects = {"/r1": f"http://localhost:{port}/npm.json"}
+        sf.get(self.base + "/r1", headers={"Authorization": "Bearer T"})
+        self.assertEqual(Handler.seen[0][1].get("Authorization"), "Bearer T")
+        self.assertEqual(Handler.seen[1][0], "/npm.json")
+        self.assertNotIn("Authorization", Handler.seen[1][1])
 
 
 class DispatchTest(Base):

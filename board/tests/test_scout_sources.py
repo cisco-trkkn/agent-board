@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import socket
 import sys
 import tempfile
 import threading
@@ -108,6 +109,11 @@ class Base(unittest.TestCase):
         Handler.routes, Handler.messages, Handler.posted, Handler.reacted, Handler.seen = {}, [], [], {}, []
         Handler.fail_posts = 0
         self.now = 1_800_000_000.0
+        import scout_sources as _ss   # the URL check's test seam: the local server is http on 127.0.0.1; other hosts resolve to a global address
+        for _n, _v in (("_HTTP_OK_HOSTS", ("127.0.0.1",)), ("_resolve", lambda host: ["93.184.215.14"])):
+            _p = mock.patch.object(_ss, _n, _v)
+            _p.start()
+            self.addCleanup(_p.stop)
 
     def sources(self, *rows, health=None):
         ss.save({"sources": [dict({"why": "", "added": "x", "builtin": False}, **r) for r in rows], "health": health or {}})
@@ -194,6 +200,14 @@ class SourcesTest(Base):
         self.assertEqual([l.split("\t")[0] for l in out.splitlines()], ["Claude Code 2.1.302", "Claude Code 2.1.301"])
         self.assertEqual(tree(self.scout), before)
         self.assertEqual(self.cli("source", "test", "nope")[0], 2)
+
+    def test_add_refuses_a_private_or_unresolvable_host(self):
+        with mock.patch.object(ss, "_resolve", lambda host: ["10.0.0.5"]):
+            rc, out, err = self.cli("source", "add", "intra", "--kind", "rss", "--url", "https://intra.example.com/f.xml")
+        self.assertEqual((rc, err.strip()), (2, "scout: private address 10.0.0.5"))
+        rc, out, err = self.cli("source", "add", "meta", "--kind", "html_links", "--url", "https://169.254.169.254/latest/")
+        self.assertEqual((rc, err.strip()), (2, "scout: link-local address 169.254.169.254"))
+        self.assertNotIn("intra", [s["name"] for s in ss.load()["sources"]])
 
 
 class PollTest(Base):
@@ -420,6 +434,14 @@ class RequestTest(Base):
         self.assertEqual(self.seen_state()["requests"]["9001"]["message_id"], "200")
         self.assertEqual(self.seen_state()["state"]["scout"], {"after": "200"})
 
+    def test_request_to_a_private_host_is_refused_and_logged(self):
+        url = "https://intra.example.com/feed"
+        Handler.messages = [dmsg(200, f"source: {url} internal")]
+        with mock.patch.object(ss, "_resolve", lambda host: ["10.0.0.5"]):
+            ss.poll(self.now)
+        self.assertEqual(Handler.posted, [])
+        self.assertIn(f"poll scout: request {url} refused: private address 10.0.0.5", self.log())
+
     def test_kind_guess(self):
         self.serve("/a", "<html>x</html>", "application/atom+xml")
         self.serve("/b", "<?xml version='1.0'?><x/>", "text/html")
@@ -432,6 +454,70 @@ class RequestTest(Base):
         self.assertEqual(ss.request_name("https://www.Example.com/Some Path/x", {"scout"}), "example-some-path")
         self.assertEqual(ss.request_name("https://blog.example.com/a", {"blog-a"}), "blog-a-2")
         self.assertEqual(ss.request_name("https://blog.example.com/", set()), "blog")
+
+
+class UrlCheckTest(unittest.TestCase):
+    """check_url_safe: each refused address class through a fake resolver, literal IP hosts, one real resolution."""
+
+    def check(self, url, addrs=()):
+        with mock.patch.object(ss, "_HTTP_OK_HOSTS", ()), mock.patch.object(ss, "_resolve", lambda host: list(addrs)):
+            ss.check_url_safe(url)
+
+    def refused(self, url, addrs=()):
+        with self.assertRaises(ss.Refusal) as cm:
+            self.check(url, addrs)
+        return str(cm.exception)
+
+    def test_each_refused_class_through_the_resolver(self):
+        cases = [("169.254.169.254", "link-local"), ("10.0.0.5", "private"), ("172.16.3.4", "private"),
+                 ("192.168.1.1", "private"), ("127.0.0.1", "loopback"), ("127.8.9.10", "loopback"), ("::1", "loopback"),
+                 ("fc00::1", "private"), ("fd12::1", "private"), ("fe80::1", "link-local"), ("224.0.0.1", "multicast"),
+                 ("ff02::1", "multicast"), ("0.0.0.0", "unspecified"), ("::", "unspecified"), ("100.64.0.1", "non-global"),
+                 ("::ffff:10.0.0.5", "private"), ("::ffff:169.254.169.254", "link-local")]
+        for ip, cls in cases:
+            self.assertEqual(self.refused("https://feeds.example.com/x", [ip]), f"{cls} address {ip}", ip)
+        self.assertRaises(ss.Refusal, self.check, "https://feeds.example.com/x", ["240.0.0.1"])   # reserved
+
+    def test_one_bad_address_among_global_ones_refuses(self):
+        # mutation: test only the first resolved address -> passes
+        self.assertEqual(self.refused("https://a.example.com/", ["93.184.215.14", "10.1.2.3"]), "private address 10.1.2.3")
+
+    def test_literal_ip_hosts(self):
+        for url, why in (("https://169.254.169.254/latest/meta-data", "link-local address 169.254.169.254"),
+                         ("https://[::1]:8443/x", "loopback address ::1"),
+                         ("https://[::ffff:127.0.0.1]/", "loopback address ::ffff:127.0.0.1"),
+                         ("https://10.0.0.5/feed", "private address 10.0.0.5")):
+            self.assertEqual(self.refused(url, ["93.184.215.14"]), why, url)   # the resolver is not asked for a literal
+
+    def test_global_addresses_pass(self):
+        self.check("https://a.example.com/feed", ["93.184.215.14", "2606:2800:21f:cb07:6820:80da:af6b:8b2c"])
+        self.check("https://8.8.8.8/x")
+        self.check("https://a.example.com/x", ["::ffff:8.8.8.8"])
+
+    def test_scheme_and_resolution_failures(self):
+        self.assertEqual(self.refused("http://a.example.com/", ["93.184.215.14"]), "url must start with https://")
+        self.assertEqual(self.refused("ftp://a.example.com/", ["93.184.215.14"]), "url must start with https://")
+        self.assertEqual(self.refused("https://empty.example.com/", []), "host does not resolve: empty.example.com")
+
+        def boom(host):
+            raise socket.gaierror(8, "nodename nor servname provided")
+        with mock.patch.object(ss, "_HTTP_OK_HOSTS", ()), mock.patch.object(ss, "_resolve", boom):
+            with self.assertRaises(ss.Refusal) as cm:
+                ss.check_url_safe("https://nothere.invalid/")
+        self.assertEqual(str(cm.exception), "host does not resolve: nothere.invalid")
+
+    def test_real_resolution_of_localhost_is_refused(self):
+        # the real resolver (no fake): localhost and the decimal form of 127.0.0.1 both resolve to loopback
+        with mock.patch.object(ss, "_HTTP_OK_HOSTS", ()):
+            for url in ("https://localhost/x", "https://2130706433/x"):
+                with self.assertRaises(ss.Refusal) as cm:
+                    ss.check_url_safe(url)
+                self.assertTrue(str(cm.exception).startswith("loopback address "), (url, str(cm.exception)))
+
+    def test_http_ok_hosts_seam_skips_scheme_and_address(self):
+        with mock.patch.object(ss, "_HTTP_OK_HOSTS", ("127.0.0.1",)):
+            ss.check_url_safe("http://127.0.0.1:8000/x")
+        self.assertEqual(ss._HTTP_OK_HOSTS, ())   # empty in production
 
 
 if __name__ == "__main__":
