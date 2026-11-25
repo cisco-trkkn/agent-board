@@ -95,7 +95,12 @@ function createBackend(opts) {
   function launch(window, job, extra, briefPath) {
     const args = ["agent", window, "--dir", job.worktree, ...extra,
       "--model", job.model, "--effort", job.effort, "--brief", briefPath];
-    const r = cp.spawnSync(tmuxCtl, args, { env: ctlEnv(), encoding: "utf8" });
+    const env = ctlEnv();
+    env.ENGINE_JOB = String(job.id);
+    env.ENGINE_PROJECT = opts.project || "";
+    env.ENGINE_DIR = paths.engineDir();
+    env.ENGINE_WORKTREE = path.resolve(job.worktree);
+    const r = cp.spawnSync(tmuxCtl, args, { env, encoding: "utf8" });
     if (r.status !== 0) throw new Error(`tmux-ctl agent failed (${r.status}): ${(r.stderr || r.stdout || "").trim()}`);
     const l = tmux(["list-panes", "-s", "-t", `=${session}:`, "-F", "#{window_name} #{pane_id}"]);
     const row = (l.stdout || "").split("\n").map((x) => x.split(" ")).find((x) => x[0] === window);
@@ -152,7 +157,7 @@ function createBackend(opts) {
     tmux(["kill-pane", "-t", handle.pane]);
   }
 
-  async function resume(handle, text) {
+  async function resume(handle, text, job) {
     const e = entryOf(handle);
     if (!e) throw new Error(`unknown handle ${handle.pane}`);
     let sid = handle.session_id;
@@ -169,8 +174,9 @@ function createBackend(opts) {
     const briefPath = path.join(dir, `${logName(e.job.id).replace(/\.log$/, "")}-resume${resumes}.md`);
     fs.writeFileSync(briefPath, text);
     const window = `${e.handle.window}-r${resumes}`;
-    const pane = launch(window, e.job, ["--resume", sid], briefPath);
-    const next = register(e.job, window, pane, Date.now());
+    const rjob = job ? { ...e.job, ...job, worktree: e.worktree } : e.job;
+    const pane = launch(window, rjob, ["--resume", sid], briefPath);
+    const next = register(rjob, window, pane, Date.now());
     next.session_id = sid;
     return next;
   }

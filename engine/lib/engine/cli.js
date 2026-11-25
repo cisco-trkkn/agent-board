@@ -96,7 +96,7 @@ const tmuxCtlPath = () => process.env.TC_TMUX_CTL || path.resolve(__dirname, "..
 
 // ---- backend and core ------------------------------------------------------------------------------------------
 
-function makeBackend(kind, flags, session, tmuxCtl) {
+function makeBackend(kind, flags, session, tmuxCtl, project) {
   if (kind === "fake") {
     let script = {};
     if (flags.script) script = JSON.parse(fs.readFileSync(flags.script, "utf8"));
@@ -105,7 +105,7 @@ function makeBackend(kind, flags, session, tmuxCtl) {
   if (kind === "claude-tmux") {
     if (!session) throw Object.assign(new Error("run it from a tmux session (TC_SESSION is not set)"), { usage: true });
     const tmuxArgs = (process.env.TMUX_DASH_TMUX_ARGS || "").split(/\s+/).filter(Boolean);
-    const backend = require("./backend/claude_tmux").createBackend({ session, tmuxCtl, statusDir: paths.statusDir(), tmuxArgs });
+    const backend = require("./backend/claude_tmux").createBackend({ session, tmuxCtl, statusDir: paths.statusDir(), tmuxArgs, project });
     return { backend, tmuxArgs };
   }
   throw Object.assign(new Error(`unknown backend ${kind} (claude-tmux|fake)`), { usage: true });
@@ -124,7 +124,7 @@ function startCore(ctx, flags, backendKind, extra = {}) {
   const core = require("./core");
   const tmuxCtl = tmuxCtlPath();
   const session = process.env.TC_SESSION || "";
-  const { backend, tickMs, tmuxArgs } = makeBackend(backendKind, flags, session, tmuxCtl);
+  const { backend, tickMs, tmuxArgs } = makeBackend(backendKind, flags, session, tmuxCtl, ctx.project);
   const eng = core.start({
     project: ctx.project, repo: ctx.repo, backend, tmuxCtl, session, tmuxArgs, tickMs, backendKind, ...queue.reportHooks, ...extra,
     notify: notifier(ctx.project, ctx.out),
