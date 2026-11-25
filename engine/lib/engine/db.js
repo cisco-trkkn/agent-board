@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS waits(id TEXT PRIMARY KEY, spec TEXT, step TEXT, ques
 CREATE TABLE IF NOT EXISTS retry_policies(kind TEXT PRIMARY KEY, max_attempts INT, backoff_s TEXT, timeout_min REAL, no_retry_on TEXT, on_exhausted TEXT);
 CREATE TABLE IF NOT EXISTS inbox(id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, source_id TEXT, spec TEXT, job TEXT, kind TEXT,
   payload TEXT, received_at REAL, state TEXT DEFAULT 'new', handled_at REAL, reason TEXT, UNIQUE(source, source_id));
+CREATE TABLE IF NOT EXISTS holds(hold_id TEXT PRIMARY KEY, spec TEXT, job TEXT, call_hash TEXT, tool TEXT, input TEXT, created_at REAL, expires_at REAL, used_at REAL);
 `;
 
 // Columns part 2 added to tables part 1 already created (spec 8a, 8b).
@@ -97,4 +98,4 @@ function event(db, { spec = null, job = null, kind, rows = [], ts, detailKind, .
   db.prepare("INSERT INTO events (ts, spec, job, kind, detail) VALUES (?,?,?,?,?)").run(t, spec, job, kind, detail);
 }
 
-module.exports = { open, tx, put, putRaw, event };
+module.exports = { SCHEMA, open, tx, put, putRaw, event };

@@ -159,7 +159,7 @@ test("loadConfig, retryFor override and policyHash", () => {
   const g = gitRepo();
   try {
     const none = policy.loadConfig(g.dir);
-    assert.deepEqual(none, { test: null, test_ok: [0], retry: {}, budget: { attempts: 60, tokens: 5000000 }, raw: "{}" });
+    assert.deepEqual(none, { test: null, test_ok: [0], retry: {}, holds: [], budget: { attempts: 60, tokens: 5000000 }, raw: "{}" });
     const H = (raw) => crypto.createHash("sha256").update(raw + "\n" + JSON.stringify({ ASK_DEFAULTS: policy.ASK_DEFAULTS, SITE_RECS: policy.SITE_RECS })).digest("hex");
     assert.equal(policy.policyHash(none), H("{}"));
     assert.deepEqual(policy.retryFor(none, "review"), policy.DEFAULT_RETRY.review);
@@ -307,4 +307,37 @@ test("put on waits: an open row needs a kind and a valid recommendation; answere
     assert.equal(d.prepare("SELECT id FROM waits WHERE id='c'").get().id, "c");
     d.close();
   } finally { e.restore(); }
+});
+
+test("an existing part 2 database gains the holds table on open", () => {
+  const e = tmpEnv();
+  try {
+    fs.mkdirSync(e.engineDir, { recursive: true });
+    const old = new DatabaseSync(paths.dbPath("p"));
+    old.exec(db.SCHEMA.split("\n").filter((l) => !/holds\(/.test(l)).join("\n"));
+    assert.equal(old.prepare("SELECT count(*) n FROM sqlite_master WHERE name='holds'").get().n, 0);
+    old.close();
+    const d = db.open("p");
+    assert.deepEqual(cols(d, "holds"), ["hold_id", "spec", "job", "call_hash", "tool", "input", "created_at", "expires_at", "used_at"]);
+    d.close();
+    assert.equal(rebuild.check("p").rc, 0);
+  } finally { e.restore(); }
+});
+
+test("loadConfig returns holds, rejects a non-list, and the policy hash covers them", () => {
+  const repo = gitRepo();
+  try {
+    assert.deepEqual(policy.loadConfig(repo.dir).holds, []);
+    const f = path.join(repo.dir, "docs/superpowers/engine.json");
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ test: "x" }));
+    const a = policy.loadConfig(repo.dir);
+    assert.deepEqual(a.holds, []);
+    fs.writeFileSync(f, JSON.stringify({ test: "x", holds: [{ tool: "Bash", pattern: "p", outside_worktree: false }] }));
+    const b = policy.loadConfig(repo.dir);
+    assert.equal(b.holds.length, 1);
+    assert.notEqual(policy.policyHash(a), policy.policyHash(b));
+    fs.writeFileSync(f, JSON.stringify({ holds: "no" }));
+    assert.throws(() => policy.loadConfig(repo.dir), /engine\.json holds must be a list/);
+  } finally { repo.cleanup(); }
 });
