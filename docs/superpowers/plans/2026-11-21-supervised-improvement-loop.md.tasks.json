@@ -109,7 +109,7 @@
     {
       "id": 13,
       "subject": "SIL Task 13: README, help and the all.zsh jobs",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The README documents the loop and its protected set, `tmux-ctl help` lists `improve`, and `tools/tests/all.zsh` picks up the new suites.\n\n**Files:**\n- Modify: `README.md` (one section \"Supervised improvement loop\"), `bin/tmux-ctl` (help comment lines in the header block that `help` prints). `tools/tests/all.zsh` needs no change: it adds one job per `board/tests/test_*.py` and `tools/tests/test_*.zsh` (lines 36-37) and runs `engine/test/*.test.js` (line 44), so the new files are picked up.\n\n**Acceptance Criteria:**\n- [ ] README section names: `tmux-ctl improve outcome status|list|show|propose|revert|tick`, the protected file `docs/superpowers/improve/protected.txt`, the outcome files `docs/superpowers/outcomes/`, and the rule \"learning is cheap, changing behaviour needs evidence, changing authority needs approval\".\n- [ ] `zsh bin/tmux-ctl help | grep -c improve` \u2265 1.\n- [ ] `zsh tools/tests/all.zsh --list | grep -c improve` \u2265 1.\n- [ ] The help header still ends `\u2026registry|engine <sub> \u2026` / `\u2026metrics <sub> \u2026` / `#`, and `python3 -m unittest board.tests.test_metrics_weekly.HelpTest` passes (it pins the `metrics <sub>` line as the last line of the printed range and the range end on the header's `#` line).\n\n**Verify:** `zsh bin/tmux-ctl help | grep -c improve; zsh tools/tests/all.zsh --list | grep -c improve; grep -c 'protected.txt' README.md; python3 -m unittest board.tests.test_metrics_weekly.HelpTest` \u2192 each count \u2265 1, then `OK`\n\nPlan: docs/superpowers/plans/2026-11-21-supervised-improvement-loop.md (Task 13). Spec: docs/superpowers/specs/2026-11-16-supervised-improvement-loop-design.md\n\n```json:metadata\n{\"files\": [\"README.md\", \"bin/tmux-ctl\"], \"verifyCommand\": \"zsh bin/tmux-ctl help | grep -c improve; zsh tools/tests/all.zsh --list | grep -c improve; grep -c 'protected.txt' README.md; python3 -m unittest board.tests.test_metrics_weekly.HelpTest\", \"acceptanceCriteria\": [\"README section with commands, protected.txt, outcomes dir, the rule\", \"tmux-ctl help lists improve\", \"all.zsh --list shows the improve jobs (auto-discovered)\", \"help line above registry|engine, range 2,87p, metrics <sub> still last; HelpTest passes\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         12
@@ -134,5 +134,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-11-25T19:47:41Z"
+  "lastUpdated": "2026-11-25T19:50:45Z"
 }
