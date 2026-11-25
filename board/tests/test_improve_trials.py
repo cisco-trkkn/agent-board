@@ -180,6 +180,34 @@ class StaleTest(Base):
         self.assertEqual(self.rejected(), ("rejected", "stale patch"))
 
 
+class ContentLookalikeTest(Base):
+    def one(self, old, new, rel="claude/x.md"):
+        self.put(rel, old)
+        self.trial("rule", rel, diff(rel, old, new))
+        return self.variants(self.inn)
+
+    def test_removed_dash_dash_content_line_applies(self):
+        # a removed line `-- x` shows as `--- x` in the patch: not a file header
+        v = self.one("# T\n-- \nkeep\n", "# T\nkeep\n")
+        self.assertEqual(self.s.get("P1")["state"], "trial")
+        self.assertIn("keep", v["variants"][0]["overlay"])
+
+    def test_added_plus_plus_content_line_applies(self):
+        v = self.one("# T\nkeep\n", "# T\n++ \nkeep\n")
+        self.assertEqual(self.s.get("P1")["state"], "trial")
+        self.assertIn("++ \n", v["variants"][0]["overlay"])
+
+    def test_removed_dotdot_content_line_is_not_an_unsafe_path(self):
+        v = self.one("# T\n-- ../x\nkeep\n", "# T\nkeep\n")
+        self.assertEqual(len(v["variants"]), 1)
+        self.assertEqual(self.s.get("P1")["state"], "trial")
+
+    def test_first_change_ignores_lookalike_lines(self):
+        old = "# A\n-- x\n## B\nkeep\nmore\n"
+        v = self.one(old, old.replace("keep", "new"))
+        self.assertTrue(v["variants"][0]["overlay"].startswith("## Trial P1\n## B\nnew"))
+
+
 class CliTest(Base):
     def test_variants_json_on_the_cli(self):
         # the real command, unpatched, against the scratch engine db; no trial -> empty list

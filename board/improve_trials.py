@@ -23,12 +23,54 @@ def in_trial(spec_id, pid):
     return int(hashlib.sha256((spec_id + pid).encode()).hexdigest(), 16) % 2 == 0
 
 
-def _paths(patch):
-    out = []
+HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _walk(patch):
+    """Yield (kind, line, new_lineno) for a unified diff. kind: old/new (file headers, only outside a hunk), hunk, ctx,
+    del, add, other. Hunk line counts decide where a hunk ends, so a content line `-- x` or `++ x` is never a header."""
+    old_left = new_left = 0
+    n = 0
     for line in patch.splitlines():
-        if line.startswith("--- a/"):
-            out.append(line[6:].split("\t")[0])
-    return out
+        if old_left > 0 or new_left > 0:
+            c = line[:1]
+            if c == " " or line == "":
+                old_left, new_left, n = old_left - 1, new_left - 1, n + 1
+                yield "ctx", line, n
+                continue
+            if c == "-":
+                old_left -= 1
+                yield "del", line, n + 1   # the new line this removal sits before
+                continue
+            if c == "+":
+                new_left, n = new_left - 1, n + 1
+                yield "add", line, n
+                continue
+            if c == "\\":
+                yield "other", line, n
+                continue
+            old_left = new_left = 0
+        m = HUNK.match(line)
+        if m:
+            old_left = int(m.group(1)) if m.group(1) is not None else 1
+            new_left = int(m.group(3)) if m.group(3) is not None else 1
+            n = int(m.group(2)) - 1
+            yield "hunk", line, n
+        elif line.startswith("--- "):
+            yield "old", line, n
+        elif line.startswith("+++ "):
+            yield "new", line, n
+        else:
+            yield "other", line, n
+
+
+def _header_path(line):
+    p = line[4:].split("\t")[0]
+    return p[2:] if p[:2] in ("a/", "b/") else p
+
+
+def _paths(patch):
+    return [_header_path(l) for k, l, _ in _walk(patch) if k == "old" and l[4:].startswith("a/")]
 
 
 def _unsafe(rel):
@@ -40,32 +82,29 @@ def _apply(repo, patch, target):
     """Apply patch to a copy of the files it names. Returns (tempdir, error); the caller removes the dir.
     Any path that is absolute or climbs out (`..`) is an error before anything is written."""
     d = tempfile.mkdtemp(prefix="improve-trial-")
-    named = [l.split(None, 1)[1].split("\t")[0] for l in patch.splitlines() if l.startswith(("--- ", "+++ "))]
-    named = [n[2:] if n[:2] in ("a/", "b/") else n for n in named if n != "/dev/null"]
-    if any(_unsafe(n) for n in named + [target or ""]):
-        return d, "unsafe path"
-    if "--- /dev/null" in patch.splitlines() or not (Path(repo) / target).is_file():
-        return d, "creates or lacks its target"   # a variant changes an existing champion file
-    for rel in _paths(patch):
-        src = Path(repo) / rel
-        if src.is_file():
-            (Path(d) / rel).parent.mkdir(parents=True, exist_ok=True)
-            (Path(d) / rel).write_bytes(src.read_bytes())
-    r = subprocess.run(["git", "apply", "-"], input=patch, cwd=d, capture_output=True, text=True)
+    try:
+        heads = [l for k, l, _ in _walk(patch) if k in ("old", "new")]
+        named = [_header_path(l) for l in heads if l[4:].split("\t")[0] != "/dev/null"]
+        if any(_unsafe(n) for n in named + [target or ""]):
+            return d, "unsafe path"
+        if any(l.startswith("--- /dev/null") for l in heads) or not (Path(repo) / target).is_file():
+            return d, "creates or lacks its target"   # a variant changes an existing champion file
+        for rel in _paths(patch):
+            src = Path(repo) / rel
+            if src.is_file():
+                (Path(d) / rel).parent.mkdir(parents=True, exist_ok=True)
+                (Path(d) / rel).write_bytes(src.read_bytes())
+        r = subprocess.run(["git", "apply", "-"], input=patch, cwd=d, capture_output=True, text=True)
+    except (OSError, ValueError, TypeError) as e:
+        return d, f"unreadable patch: {e}"
     return d, (r.stderr.strip() or "git apply failed") if r.returncode else None
 
 
 def _first_change(patch):
     """The new-file line number of the first added or removed line of the patch (1 when there is none)."""
-    n = None
-    for line in patch.splitlines():
-        m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
-        if m:
-            n = int(m.group(1))
-        elif n is not None and line[:1] in "+-" and not line.startswith(("+++", "---")):
-            return n
-        elif n is not None and line[:1] == " ":
-            n += 1
+    for k, _, n in _walk(patch):
+        if k in ("del", "add"):
+            return max(n, 1)
     return 1
 
 
