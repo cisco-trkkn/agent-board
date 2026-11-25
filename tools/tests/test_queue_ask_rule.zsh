@@ -17,4 +17,16 @@ check 'the two lines are never a push' has 'neither line is ever a push'
 check 'ask records the metrics run as --outcome kept' has 'metrics record <spec> --batch <id> --outcome kept'
 check 'ask stores push false' has '`ask` stores `"push": false`'
 check 'morning report lists specs still awaiting merge approval' has 'lists each spec still awaiting merge approval with its branch'
+# the pinned merge approval: a continuation paragraph of step 2 (not a step line), one line
+pinned="$(grep -F '     **Pinned merge approval.**' "$DOC")"
+pin() { print -r -- "$pinned" | grep -qF -- "$1" }
+check 'pinned rule is one continuation line'               test "$(print -r -- "$pinned" | grep -c .)" -eq 1
+check 'step 2 sends the merge to the pinned rule'          has 'with `merge` of the approved SHA only, as Pinned merge approval below says'
+check 'pinned: the approved line carries the full sha'     pin '`[Discord] merge approved for <spec> @ <sha>`, where `<sha>` is the full SHA'
+check 'pinned: the branch tip is checked against the sha'  pin 'run `git rev-parse <branch>`'
+check 'pinned: the sha is merged, not the branch name'     pin '`git merge <sha>`, never the branch name'
+check 'pinned: outcome records the merge sha'              pin 'record `metadata.outcome = "merged <merge sha>"`'
+check 'pinned: a moved tip is re-requested, not merged'    pin 'When it differs, do not merge: run `tmux-ctl discord merge-request` again'
+check 'pinned: the outcome stays awaiting merge approval'  pin 'keep `metadata.outcome = "awaiting merge approval <branch>"`'
+check 'pinned: a line without the sha is not pinned'       pin 'without ` @ <sha>` (a card posted before this rule) is not pinned: re-request the same way and never merge on it'
 tt_done

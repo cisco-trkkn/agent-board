@@ -31,6 +31,12 @@ const LIVE_MS = 10000;
 const OWN_KEEP = 200;
 const BOT_AFTER_KEEP = 50;
 const REACT_EMOJI = new Set(['✅', '❌', '🛑', '▶', '⏭']);
+// Scout source requests (the agent-board project bot): `source: <url> [name]` typed outside the home channel becomes a
+// source event; the board decides whether that channel is #scout and answers. <dir>/scout-prompts.json is the board's list
+// of pending source prompts ({message id: channel id}): a ✅ on one of them is forwarded from any channel.
+const SOURCE_RE = /^source:\s+\S/;
+const SOURCE_TEXT_MAX = 600;
+const SCOUT_PROMPTS = 'scout-prompts.json';
 
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 
@@ -65,6 +71,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   let unreactWarned = false;
   st.liveness ||= { target: null, shown: null, added: null, bot_after: [] };
   st.own_sent ||= [];
+  st.source_prompts ||= {}; // 'scout-src:<message id>' -> {id, channel}: the /source replies, so an edit op reaches them in any channel
 
   // Every log line: token replaced by ***, bodies cut to 80 chars.
   const say = (msg) => {
@@ -345,7 +352,9 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     let cleared = false;
     for (const [mid, k] of Object.entries(st.reply_armed)) if (k === key) { delete st.reply_armed[mid]; cleared = true; }   // an edited or answered dialog takes no reply
     if (cleared) save();
-    const where = [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')], [st.dialogs, () => (ops ? chan('approvals') : home())]].find(([m]) => m[key]);
+    const sp = Object.hasOwn(st.source_prompts, key) ? st.source_prompts[key] : null; // a /source reply lives in the channel the command ran in
+    const where = sp ? [{ [key]: sp.id }, () => client.channels.fetch(sp.channel)]
+      : [[st.prompts, home], [st.posts, home], [st.approvals, () => chan('approvals')], [st.dialogs, () => (ops ? chan('approvals') : home())]].find(([m]) => m[key]);
     if (!where) { say(`edit ${snip(key)}: no message`); return; }
     const ch = await where[1]();
     try {
@@ -609,7 +618,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   async function register(ch) {
     if (registered || !ch?.guildId) return;
     registered = true;
-    try { await client.application.commands.set(commands.payload(ops), ch.guildId); say('commands registered'); } catch (e) {
+    try { await client.application.commands.set(commands.payload(ops, path.basename(dir)), ch.guildId); say('commands registered'); } catch (e) {
       registered = false;
       say(`commands registration failed: ${snip(e?.message)}`);
     }
@@ -787,12 +796,25 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     say(`event ${snip(id)}`);
   }
 
+  // `source: <url> [name]` by an allowlisted user outside the home channel (a home-channel message is the lead's): one
+  // source event with the text as typed. Only the scout's own project bot forwards it; liveness tracking is untouched.
+  function onSourceMessage(msg) {
+    if (ops || path.basename(dir) !== commands.SOURCE_PROJECT) return;
+    const text = String(msg.content ?? '').trim();
+    const channel = String(msg.channel?.id ?? msg.channelId ?? '');
+    if (!SOURCE_RE.test(text) || !channel || channel === cfg().channel) return;
+    const uid = String(msg.author?.id);
+    if (!allowFrom().has(uid)) return;
+    writeEvent({ type: 'source', via: 'message', text: text.slice(0, SOURCE_TEXT_MAX), message_id: String(msg.id), channel_id: channel, user: uid, ts: now() });
+    say(`source request ${snip(msg.id)}`);
+  }
+
   // A reply to an armed dialog message by an allowlisted user becomes one reply event; the message is disarmed.
   async function onMessage(msg) {
     track(msg);
     if (!msg || msg.author?.bot) return;
     const ref = msg.reference?.messageId;
-    if (!ref || !Object.hasOwn(st.reply_armed, ref)) return;
+    if (!ref || !Object.hasOwn(st.reply_armed, ref)) return onSourceMessage(msg);
     const uid = String(msg.author?.id);
     if (!allowFrom().has(uid)) return;
     const text = String(msg.content ?? '').trim().slice(0, REPLY_TEXT_MAX);
@@ -849,6 +871,16 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (!user || user.bot || !allowFrom().has(String(user.id))) return;
     const emoji = String(reaction.emoji?.name ?? '').replace(/\uFE0F/g, '');
     if (!ops && emoji === '❓') return onAsk(reaction, user);
+    if (!ops && emoji === '✅') { // a pending scout source prompt, in whatever channel it is: the board adds the source
+      const prompts = readJson(path.join(dir, SCOUT_PROMPTS), null);
+      const mid = String(reaction.message?.id ?? '');
+      if (mid && prompts && typeof prompts === 'object' && !Array.isArray(prompts) && Object.hasOwn(prompts, mid)) {
+        const channel = String(reaction.message?.channel?.id ?? reaction.message?.channelId ?? prompts[mid]);
+        writeEvent({ type: 'react', emoji, message_id: mid, channel_id: channel, scout: true, user: String(user.id), ts: now() });
+        say(`react ${emoji} scout prompt ${snip(mid)}`);
+        return;
+      }
+    }
     if (!REACT_EMOJI.has(emoji)) return;
     let msg = reaction.message;
     if (msg?.partial) msg = await msg.fetch();
@@ -892,7 +924,11 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   }
   const dropTokenFile = (name) => { try { fs.rmSync(path.join(dir, 'np-token', path.basename(String(name))), { force: true }); } catch { /* gone */ } };
 
-  const ctx = { dir, ops, homeChannel: () => (ops ? null : cfg().channel), commandCenter: () => (ops ? cfg().command_center ?? null : null), writeTokenFile, dropTokenFile, opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
+  // /source: remember the interaction's reply (kept on disk, unlike the interaction itself), so the board's later
+  // `edit` op with key scout-src:<message id> changes that message in place.
+  const notePrompt = (mid, channel) => { st.source_prompts[`scout-src:${mid}`] = { id: String(mid), channel: String(channel) }; trim(st.source_prompts, PROMPTS_KEEP); save(); };
+
+  const ctx = { dir, ops, notePrompt, homeChannel: () => (ops ? null : cfg().channel), commandCenter: () => (ops ? cfg().command_center ?? null : null), writeTokenFile, dropTokenFile, opsAllow, views, allowFrom, writeEvent, now, say, snip, answer, fence, keep, NO_MENTIONS };
   return { ctx, tick, watchTick, onInteraction, onReaction, onMessage, onReady, onDisconnect, attach, close, TICK_MS };
 }
 

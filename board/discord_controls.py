@@ -1,7 +1,8 @@
 """discord_controls: the board side of the discord buttons and reactions.
 
-step(project, record, now, run, add_line) consumes the bridge's react/click/reply/slash events from <dir>/events (dialog taps and
-replies go to discord_dialogs, which presses through `tmux-ctl dialog`; a leftover `perm` event is audited `unknown`) and saves <dir>/controls-state.json under flock. `run(argv) -> str` raises
+step(project, record, now, run, add_line) consumes the bridge's react/click/reply/slash/source events from <dir>/events (dialog taps and
+replies go to discord_dialogs, which presses through `tmux-ctl dialog`; a leftover `perm` event is audited `unknown`; a scout source request and
+the check mark on its prompt go to scout_sources) and saves <dir>/controls-state.json under flock. `run(argv) -> str` raises
 RuntimeError(output) on a non-zero exit (server.run_script); `add_line(sess, text)` is COMMENTS.add_line. Test: tests/test_discord_controls.py."""
 import fcntl
 import json
@@ -19,6 +20,7 @@ import discover_post
 import dream_discord
 import improve_discord
 import scout_post
+import scout_sources
 import tc_env
 
 BIN = Path(__file__).resolve().parent.parent / "bin"
@@ -72,6 +74,41 @@ def _scout(project, ev, allow, add_line):
     return None
 
 
+_LATER = object()        # _scout_source: leave the event file for the next tick
+EVENT_RETRY_S = 900      # for this long; an older event is audited `busy` and dropped (the daily poll is the fallback)
+
+
+def _scout_source(project, ev, allow):
+    """(audit action, target, result) for a scout source request (a `source:` message in #scout or /source: a `source` event)
+    or a check mark on a source prompt, else None. Only on the scout's own bot. A check mark counts when the bridge marked
+    the event (`scout`) or the message is a pending prompt; it is checked before the react branch, so a check mark on a
+    prompt in the home channel is never a yes to the lead. detect and the first fetch run here, in the board.
+    _LATER while the daily poll holds the scout's lock: the event stays in the events dir and is tried again next tick."""
+    if project != scout_sources.PROJECT:
+        return None
+    user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
+    try:
+        if kind == "source":
+            target = str(ev.get("url") or ev.get("text") or "")
+            return "scout-source", target, scout_sources.discord_request(ev, time.time()) if user in allow else "rejected"
+        if kind == "react" and str(ev.get("emoji") or "").replace("\ufe0f", "") == scout_sources.CHECK:
+            mid = str(ev.get("message_id") or "")
+            if ev.get("scout") is not True and not scout_sources.is_pending(mid):
+                return None
+            if user not in allow:
+                return "scout-source", mid, "rejected"
+            return ("scout-source",) + (scout_sources.discord_confirm(mid, user, time.time()) or (mid, "gone"))
+    except scout_sources.Busy:
+        ts = ev.get("ts")
+        if isinstance(ts, (int, float)) and not isinstance(ts, bool) and time.time() - ts / 1000 < EVENT_RETRY_S:
+            return _LATER
+        return "scout-source", str(ev.get("url") or ev.get("text") or ev.get("message_id") or ""), "busy"
+    except Exception as e:  # noqa: BLE001 -- a failed request never breaks the controls step
+        print(f"discord_controls: scout source failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        return "scout-source", str(ev.get("url") or ev.get("text") or ev.get("message_id") or ""), "error"
+    return None
+
+
 def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
     ev_dir = d / "events"
     allow = _allow(d)
@@ -85,8 +122,13 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
             shutil.move(str(f), str(ev_dir / "failed" / f.name))
             continue
         user, kind = str(ev.get("user") or ""), str(ev.get("type") or "")
+        keep = False
         try:
-            dlg = _scout(project, ev, allow, add_line) or discord_dialogs.consume_event(d, ev, allow, run, time.time(), add_line=add_line)
+            dlg = _scout(project, ev, allow, add_line) or _scout_source(project, ev, allow)
+            if dlg is _LATER:
+                keep = True
+                continue
+            dlg = dlg or discord_dialogs.consume_event(d, ev, allow, run, time.time(), add_line=add_line)
             if dlg:
                 discord_feed.audit_append(d, user, *dlg)
             elif kind == "perm":   # the old prompt buttons are gone: a leftover event is only audited
@@ -124,10 +166,11 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
             else:
                 discord_feed.audit_append(d, user, "click", str(ev.get("custom_id") or ""), "ignored" if user in allow else "rejected")
         finally:
-            try:
-                f.unlink()
-            except OSError:
-                pass
+            if not keep:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
 
 
 SCOUT_RETRY_EVERY = 600

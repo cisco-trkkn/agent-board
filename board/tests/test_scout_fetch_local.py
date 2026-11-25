@@ -62,6 +62,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps({"id": "999"}).encode())
             if method == "GET" and len(parts) == 8 and parts[6] == "reactions":
                 return self._send(200, json.dumps([{"id": "42"}, {"id": "43"}]).encode())
+            if method == "PATCH" and len(parts) == 6 and parts[4] == "messages":
+                return self._send(200, json.dumps({"id": parts[5]}).encode())
             return self._send(404, b"{}")
         if u.path in Handler.routes:
             return self._send(Handler.routes[u.path][0], Handler.routes[u.path][1], Handler.routes[u.path][2])
@@ -75,6 +77,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._handle("POST")
+
+    def do_PATCH(self):
+        self._handle("PATCH")
 
 
 class Base(unittest.TestCase):
@@ -100,6 +105,11 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         Handler.routes, Handler.messages, Handler.seen, Handler.raw_messages = {}, [], [], None
+        import scout_sources as _ss   # the URL check's test seam: the local server is http on 127.0.0.1; other hosts resolve to a global address
+        for _n, _v in (("_HTTP_OK_HOSTS", ("127.0.0.1",)), ("_resolve", lambda host: ["93.184.215.14"])):
+            _p = mock.patch.object(_ss, _n, _v)
+            _p.start()
+            self.addCleanup(_p.stop)
 
 
 class PluginTest(Base):
@@ -328,6 +338,48 @@ class DiscordTest(Base):
         self.assertEqual(sf.reactions(CHAN, "999", "✅"), ["42", "43"])
         self.assertIn("%E2%9C%85", Handler.seen[-1][1])
         self.assertIn("/messages/999/reactions/", Handler.seen[-1][1])
+
+    def test_bare_source_request_is_accepted(self):   # mutation: keep the old regex (text after the URL required) -> no request
+        Handler.messages = [msg(111, "source: https://x.example/feed.xml"), msg(110, "source: https://y.example/a  myfeed ")]
+        reqs = [i["request"] for i in sf.fetch(self.src, {})[0] if "request" in i]
+        self.assertEqual([(r["url"], r["why"], r["message_id"]) for r in reqs],
+                         [("https://x.example/feed.xml", "", "111"), ("https://y.example/a", "myfeed", "110")])
+
+    def test_parse_request(self):
+        self.assertEqual(sf.parse_request("  source:  https://x.example/f   two words \n"), ("https://x.example/f", "two words"))
+        self.assertEqual(sf.parse_request("source: https://x.example/f"), ("https://x.example/f", ""))
+        for text in ("source:https://x.example/f", "a source: https://x.example/f", "source: ", "", None,
+                     "source: https://x.example/f why\nsecond line"):
+            self.assertIsNone(sf.parse_request(text), text)
+
+    def test_edit_message(self):
+        sf.edit_message(CHAN, "999", "added: x (rss)")
+        m, path, headers, body = Handler.seen[-1]
+        self.assertEqual((m, urlsplit(path).path), ("PATCH", f"/api/channels/{CHAN}/messages/999"))
+        self.assertEqual(headers["Authorization"], f"Bot {TOKEN}")
+        self.assertEqual(json.loads(body), {"content": "added: x (rss)", "allowed_mentions": {"parse": []}})
+        with self.assertRaises(sf.FetchError):
+            sf.edit_message(CHAN, "12/../../x", "t")   # a message id is digits only: nothing else reaches the path
+        self.assertEqual(Handler.seen[-1][0], "PATCH")
+        self.assertEqual(len([s for s in Handler.seen if s[0] == "PATCH"]), 1)
+
+    def test_post_and_edit_cut_to_the_discord_limit(self):   # mutation: send text as is -> 2500 characters
+        sf.post_message(CHAN, "p" * 2500)
+        self.assertEqual(len(json.loads(Handler.seen[-1][3])["content"]), 2000)
+        sf.edit_message(CHAN, "999", "e" * 2500)
+        self.assertEqual(len(json.loads(Handler.seen[-1][3])["content"]), 2000)
+
+    def test_edit_needs_token_and_never_leaks_it(self):
+        env = tc_env.discord_dir("agent-board") / ".env"
+        env.write_text(f"DISCORD_BOT_TOKEN={TOKEN}x\n")   # wrong token, still contains TOKEN: the fake answers 401
+        with self.assertRaises(sf.FetchError) as cm:
+            sf.edit_message(CHAN, "999", "hi")
+        self.assertIn("401", str(cm.exception))
+        for text in (str(cm.exception), repr(cm.exception), str(cm.exception.__cause__)):
+            self.assertEqual(text.count(TOKEN), 0)
+        env.unlink()
+        with self.assertRaises(sf.FetchError):
+            sf.edit_message(CHAN, "999", "hi")
 
     def test_post_and_reactions_need_token(self):
         (tc_env.discord_dir("agent-board") / ".env").unlink()

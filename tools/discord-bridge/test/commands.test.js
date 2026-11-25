@@ -48,6 +48,10 @@ test('payload: 8 chat-input commands; project option required per mode', () => {
   const o = commands.payload(true), p = commands.payload(false);
   assert.deepStrictEqual(o.map((c) => c.name), names);
   assert.deepStrictEqual(p.map((c) => c.name), names.filter((n) => n !== 'new-project')); // project bots register /ideas but not /new-project
+  // /source: the agent-board project bot only, never the ops bot or another project's bot
+  assert.deepStrictEqual(commands.payload(false, 'agent-board').map((c) => c.name), [...names.filter((n) => n !== 'new-project'), 'source']);
+  assert.deepStrictEqual(commands.payload(false, 'myproj').map((c) => c.name), p.map((c) => c.name));
+  assert.deepStrictEqual(commands.payload(true, 'agent-board').map((c) => c.name), names);
   assert.ok(o.every((c) => c.type === 1));
   const req = (list) => Object.fromEntries(list.map((c) => [c.name, c.options?.find((x) => x.name === 'project')?.required ?? null]));
   assert.deepStrictEqual(req(o), { status: false, queue: false, pause: true, resume: true, idea: true, 'new-spec': true, ideas: false, approvals: null, tasks: false, lead: true, gauth: true, 'new-project': null });
@@ -67,6 +71,9 @@ test('ready registers the commands once for the guild; a resume after disconnect
   s.bridge.onDisconnect();
   await s.bridge.onReady();
   assert.strictEqual(s.client.callsOf('setCommands').length, 2);
+  const p = setup({ ops: false }); // a project bot that is not agent-board: 11 commands, no /source
+  await p.bridge.onReady();
+  assert.deepStrictEqual([p.client.callsOf('setCommands')[0].payload.length, p.client.callsOf('setCommands')[0].payload.some((x) => x.name === 'source')], [11, false]);
 });
 
 test('registration failure is logged and onReady still completes', async () => {
@@ -223,6 +230,9 @@ test('project option has max_length 60 so the modal custom_id stays under 100 ch
     for (const c of commands.payload(ops).filter((x) => x.options)) assert.strictEqual(c.options.find((x) => x.name === (c.name === 'new-project' ? 'name' : 'project')).max_length, 60, c.name); // lead: action comes first (required before optional)
   }
   assert.ok(`ab:modal:new-spec:${'p'.repeat(60)}`.length <= 100);
+  // /source has its own options, each with a max_length: the URL, then the optional name (scout_sources.NAME_RE allows 40)
+  const src = commands.payload(false, 'agent-board').find((c) => c.name === 'source');
+  assert.deepStrictEqual(src.options.map((x) => [x.name, x.required, x.max_length]), [['url', true, 500], ['name', false, 40]]);
 });
 
 test('ops mode with no project: Pick a project. for pause/resume/idea/new-spec; no event, no modal', async () => {

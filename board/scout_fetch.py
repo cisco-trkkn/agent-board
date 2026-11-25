@@ -36,6 +36,27 @@ class FetchError(Exception):
     pass
 
 
+class Refused(FetchError):
+    """A URL (or a redirect hop) that scout_sources.check_url_safe refuses."""
+
+
+class _Redirect(Exception):
+    def __init__(self, url):
+        super().__init__(url)
+        self.url = url
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Redirects are never followed by urllib: get() follows them by hand so each hop is checked first."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+MAX_REDIRECTS = 5
+REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
 FALLBACK_CA = "/etc/ssl/cert.pem"
 
 
@@ -51,28 +72,45 @@ def _ssl_context():
 
 
 # no HTTPCookieProcessor: no cookies are stored or replayed
-_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_context()))
+_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_context()), _NoRedirect)
 
 
-def _open(req):
+def _open(req, timeout=TIMEOUT):
     """Open a Request -> (status, body (at most MAX_BYTES), content type). FetchError text never carries request headers."""
     try:
-        with _OPENER.open(req, timeout=TIMEOUT) as r:
+        with _OPENER.open(req, timeout=timeout) as r:
             return r.status, r.read(MAX_BYTES), r.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
+        loc = e.headers.get("Location") if e.code in REDIRECT_CODES else None
         e.close()
+        if loc:
+            raise _Redirect(urllib.parse.urljoin(req.full_url, loc)) from None
         raise FetchError(f"HTTP {e.code} for {req.full_url}") from None
     except Exception as e:  # URLError, timeout, ssl, bad url, connection reset
         raise FetchError(f"{type(e).__name__}: {e}") from None
 
 
-def get(url, accept=None, headers=None):
-    """GET url -> (status, body bytes (at most MAX_BYTES), content type). FetchError on a network error or status >= 400."""
+def get(url, accept=None, headers=None, timeout=TIMEOUT):
+    """GET url -> (status, body bytes (at most MAX_BYTES), content type). Each hop (the URL, then each redirect, at most
+    MAX_REDIRECTS) passes scout_sources.check_url_safe before it is requested: Refused otherwise. An Authorization header
+    goes only to the first URL's host. FetchError on a network error or status >= 400."""
+    import scout_sources  # lazy: scout_sources imports this module
     h = {"User-Agent": UA}
     if accept:
         h["Accept"] = accept
     h.update(headers or {})
-    return _open(urllib.request.Request(url, headers=h))
+    origin = urllib.parse.urlsplit(url).hostname
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            scout_sources.check_url_safe(url)
+        except scout_sources.Refusal as e:
+            raise Refused(f"refused: {e}") from None
+        hop = h if urllib.parse.urlsplit(url).hostname == origin else {k: v for k, v in h.items() if k.lower() != "authorization"}
+        try:
+            return _open(urllib.request.Request(url, headers=hop), timeout)
+        except _Redirect as r:
+            url = r.url
+    raise FetchError(f"more than {MAX_REDIRECTS} redirects")
 
 
 def _cut(text, limit=EXCERPT_MAX):
@@ -437,8 +475,15 @@ def _plugin(source, state, installed_version):
 
 # ---- discord_channel ----------------------------------------------------------------------
 
-_SOURCE_REQ = re.compile(r"^source:\s+(\S+)\s+(.+)$")
+_SOURCE_REQ = re.compile(r"^source:\s+(\S+)(?:\s+(.+))?$")
 _URL = re.compile(r"https?://[^\s<>]+")
+DISCORD_MAX = 2000   # characters in one Discord message
+
+
+def parse_request(content):
+    """`source: <url> [text]` (one line) -> (url, text after the URL, "" when there is none); None for any other message."""
+    m = _SOURCE_REQ.match(str(content or "").strip())
+    return (m.group(1), (m.group(2) or "").strip()) if m else None
 
 
 def _discord_token():
@@ -480,11 +525,20 @@ def _channel(channel_id):
 
 def post_message(channel_id, text, reply_to=None):
     """Post text to a channel (no mentions allowed); returns the new message id."""
-    body = {"content": text, "allowed_mentions": {"parse": []}}
+    body = {"content": str(text)[:DISCORD_MAX], "allowed_mentions": {"parse": []}}
     if reply_to:
         body["message_reference"] = {"message_id": str(reply_to)}
     r = _discord("POST", f"/channels/{_channel(channel_id)}/messages", body)
     return str((r or {}).get("id") or "")
+
+
+def edit_message(channel_id, message_id, text):
+    """Replace the text of one of the bot's own messages (no mentions allowed)."""
+    mid = str(message_id or "")
+    if not mid.isdigit():
+        raise FetchError("no message")
+    _discord("PATCH", f"/channels/{_channel(channel_id)}/messages/{mid}",
+             {"content": str(text)[:DISCORD_MAX], "allowed_mentions": {"parse": []}})
 
 
 def reactions(channel_id, message_id, emoji):
@@ -545,9 +599,9 @@ def _discord_channel(source, state, installed_version):
         if author.get("bot"):
             continue  # the poll's own replies carry URLs; they are not input
         content = (m.get("content") or "").strip()
-        req = _SOURCE_REQ.match(content)
+        req = parse_request(content)
         if req:
-            items.append({"request": {"url": req.group(1), "why": req.group(2).strip(), "message_id": str(m["id"]),
+            items.append({"request": {"url": req[0], "why": req[1], "message_id": str(m["id"]),
                                       "author": author.get("username") or "", "author_id": str(author.get("id") or "")}})
             continue
         if str(author.get("id") or "") not in allow:
@@ -557,10 +611,7 @@ def _discord_channel(source, state, installed_version):
             if url in seen_urls:
                 continue
             try:
-                scout_sources._check_request_url(url)
-                if urllib.parse.urlsplit(url).hostname in ("localhost", "127.0.0.1", "::1") \
-                        and urllib.parse.urlsplit(url).hostname not in scout_sources._HTTP_OK_HOSTS:
-                    raise scout_sources.Refusal("loopback")
+                scout_sources.check_url_safe(url)
             except scout_sources.Refusal:
                 continue
             seen_urls.add(url)

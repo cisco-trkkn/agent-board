@@ -82,6 +82,13 @@ hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].ends
 assert len(hit) == 1 and hit[0][0] is None and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
 PY
 check "context-recall.sh is executable" test -x "$P/scripts/context-recall.sh"
+check "hooks.json registers context-recall-file on PostToolUse Read|Edit|Write|Grep|Glob, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
+hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/context-recall-file.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] == "Read|Edit|Write|Grep|Glob" and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
+PY
+check "context-recall-file.sh is executable" test -x "$P/scripts/context-recall-file.sh"
 check "hooks.json registers shutdown-record on PostToolUse SendMessage, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]

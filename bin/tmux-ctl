@@ -76,7 +76,7 @@
 #   tmux-ctl discover collect|rank <project> [--root <dir>] [--json]  opportunity discovery: candidates; model-ranked items
 #   tmux-ctl discover nightly [--project <p>] [--dry-run] [--force]  the nightly run: rank, post to Discord (--dry-run prints)
 #   tmux-ctl discover schedule install|status|uninstall  the 07:00 nightly job (launchd)
-#   tmux-ctl scout poll | source add <name> --kind <k> --url <u> [--why <t>] | source list|remove|test [<name>]  trend scout: daily poll, sources
+#   tmux-ctl scout poll | source add <name> [--kind <k>] --url <u> [--why <t>] | source list|remove|test [<name>]  trend scout: daily poll, sources
 #   tmux-ctl scout weekly [--dry-run] [--force] [--retry]  the Sunday pass: evaluate, draft specs, post the digest (--dry-run prints, writes nothing)
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack

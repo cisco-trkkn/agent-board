@@ -213,7 +213,10 @@ class OnMerge(Base):
     def test_equal_sha_sends_the_lead_line(self):
         src = self.posted()
         out = dm.on_merge("proj", src, self.rec(src), self.add, NOW + 5)
-        self.assertEqual(self.lines, [("proj", "[Discord] merge approved for spec-x")])
+        sha = git(self.repo, "rev-parse", "feat")
+        self.assertRegex(sha, r"^[0-9a-f]{40}$")
+        # mutation: send the line without " @ <sha>" (or with the 8-char key) -> fails
+        self.assertEqual(self.lines, [("proj", f"[Discord] merge approved for spec-x @ {sha}")])
         self.assertEqual(out, {"result": "merged", "text": "merge approved — sent to the lead"})
         self.assertEqual(len(self.feed()), 1)
 
@@ -255,7 +258,7 @@ class OnMerge(Base):
         src = f"merge:7:{self.evfile()['sha'][:8]}"
         out = dm.on_merge("proj", src, self.rec(src), self.add, NOW + 5)
         self.assertEqual(out["result"], "merged")
-        self.assertEqual(self.lines, [("proj", "[Discord] merge approved for spec-x")])
+        self.assertEqual(self.lines, [("proj", f"[Discord] merge approved for spec-x @ {self.evfile()['sha']}")])
 
     def test_diffs_ignore_user_git_config_color_and_external_diff(self):
         # M1: a real git run with color.ui=always and diff.external set; the stored output must be plain
@@ -300,7 +303,7 @@ class OnMerge(Base):
             ops.consume(self.add, lambda argv: "", NOW, on_merge=dm.on_merge)
         audit = [json.loads(l) for l in (self.ops / "audit.jsonl").read_text().splitlines()]
         self.assertEqual([a["result"] for a in audit], ["merged", "unknown"])
-        self.assertEqual(self.lines, [("proj", "[Discord] merge approved for spec-x")])
+        self.assertEqual(self.lines, [("proj", f"[Discord] merge approved for spec-x @ {self.evfile()['sha']}")])
         self.assertEqual(ops._default_merge.__name__, "_default_merge")
 
     def test_default_on_merge_is_discord_merge(self):

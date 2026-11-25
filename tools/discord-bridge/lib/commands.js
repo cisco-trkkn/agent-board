@@ -1,7 +1,7 @@
 'use strict';
 // Slash commands and idea/new-spec forms, shared by the ops bridge and the project bridges.
-// Exports: payload(ops), handle(i, ctx), inboxText(data), fence(text) (escapes ``` for code blocks).
-// handle(i, ctx) gets the bridge's ctx: {dir, ops, views, allowFrom, writeEvent, now, say, snip, answer}.
+// Exports: payload(ops, project), handle(i, ctx), inboxText(data), fence(text) (escapes ``` for code blocks), SOURCE_PROJECT.
+// handle(i, ctx) gets the bridge's ctx: {dir, ops, views, allowFrom, writeEvent, now, say, snip, answer, keep, notePrompt}.
 const path = require('node:path');
 
 const REPLY_MAX = 2000;
@@ -16,11 +16,17 @@ const COMPONENT_RE = /^ab:(?:lead:(restart|handoff|cancel):(.+):([0-9]+)|(tasks:
 const NP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/;
 const NP_SOURCES = ['new', 'clone', 'folder'];
 const NP_BAD_NAME = "Bad name: letters, digits, '_' and '-', starting with a letter or digit, at most 60.";
+// /source (a scout source from a URL): registered and served only by the scout's own project bot. The board detects the
+// kind and answers; the bridge only hands the URL and name over.
+const SOURCE_PROJECT = 'agent-board';
+const SOURCE_URL_MAX = 500;
+const SOURCE_NAME_MAX = 40; // scout_sources.NAME_RE
 const DESCRIPTIONS = {
   status: 'Show the board status', queue: 'Show a project queue', pause: "Pause a project's queue",
   resume: "Resume a project's queue", idea: 'Add an idea', 'new-spec': 'Ask the lead for a new spec', ideas: 'Group the open ideas', approvals: 'List open decisions',
   tasks: "Show a project's task list", lead: "Check, restart or hand off a project's lead", gauth: 'Re-authenticate Google for a project',
   'new-project': 'Set up a new project and its own bot',
+  source: 'Add a scout source from a URL',
 };
 const NOT_SET_UP = 'Ops bot not set up (tmux-ctl discord ops-channels).';
 const FORMS = {
@@ -28,10 +34,16 @@ const FORMS = {
   'new-spec': { title: 'New spec request', inputs: [['what', 'What', 1, 100], ['why', 'Why', 2, 1000]], ack: (p) => `Sent to ${p}'s lead.` },
 };
 
-function payload(ops) {
-  return Object.keys(DESCRIPTIONS).filter((name) => ops || name !== 'new-project').map((name) => { // /new-project runs in the command center: project bots do not register it
+// project: the base name of a project bridge's dir (unused in ops mode).
+function payload(ops, project) {
+  // /new-project runs in the command center: project bots do not register it. /source is the agent-board project bot's alone.
+  const skip = (name) => (name === 'new-project' && !ops) || (name === 'source' && (ops || project !== SOURCE_PROJECT));
+  return Object.keys(DESCRIPTIONS).filter((name) => !skip(name)).map((name) => {
     const c = { name, description: DESCRIPTIONS[name], type: 1 };
-    if (name === 'new-project') {
+    if (name === 'source') {
+      c.options = [{ name: 'url', description: 'Page, feed, repository or package URL', type: 3, max_length: SOURCE_URL_MAX, required: true },
+        { name: 'name', description: 'Source name (default: from the URL)', type: 3, max_length: SOURCE_NAME_MAX, required: false }];
+    } else if (name === 'new-project') {
       c.options = [{ name: 'name', description: 'Resume the unfinished setup of this project', type: 3, max_length: PROJECT_MAX, required: false }];
     } else if (name !== 'approvals') {
       c.options = [{ name: 'project', description: 'Project name', type: 3, max_length: PROJECT_MAX, required: ops && NEEDS_PROJECT.has(name) && name !== 'queue' }];
@@ -125,6 +137,22 @@ async function handleCommand(i, ctx) {
       components: [input('name', 'Name', 1, PROJECT_MAX, true), input('source', 'Source: new, clone or folder', 1, 6, true, 'new'),
         input('target', 'Git URL (clone) or path (folder)', 1, 400, false)],
     });
+    return;
+  }
+  if (name === 'source') {
+    if (ctx.ops || own !== SOURCE_PROJECT) { await ctx.answer(i, 'Not available here.'); return; }
+    const url = String(i.options?.getString?.('url') ?? '').trim();
+    if (!url || /\s/.test(url)) { await ctx.answer(i, 'Give one URL.'); return; }
+    await i.deferReply(); // public: this reply becomes the prompt that takes the ✅
+    ctx.keep(i); // the board answers through an ireply op
+    let mid;
+    try { mid = String((await i.fetchReply()).id); } catch (e) {
+      ctx.say(`/source: reply not readable: ${ctx.snip(e?.message)}`);
+      try { await i.editReply({ content: 'Could not set up the prompt; run /source again.', allowedMentions: ctx.NO_MENTIONS }); } catch { /* nothing more to say */ }
+      return;
+    }
+    ctx.notePrompt(mid, i.channelId); // the result after the ✅ is an edit op on this reply
+    event({ type: 'source', via: 'slash', url: url.slice(0, SOURCE_URL_MAX), name: String(i.options?.getString?.('name') ?? '').trim().slice(0, SOURCE_NAME_MAX), iid: String(i.id), channel_id: String(i.channelId), message_id: mid });
     return;
   }
   if (name === 'queue' && ctx.ops && !project) { // one card per lead, posted by the board
@@ -302,4 +330,4 @@ async function handle(i, ctx) {
   return true;
 }
 
-module.exports = { payload, handle, inboxText, fence };
+module.exports = { payload, handle, inboxText, fence, SOURCE_PROJECT };

@@ -53,6 +53,12 @@
         ]
       },
       {
+        "matcher": "Read|Edit|Write|Grep|Glob",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/context-recall-file.sh\" --scoped", "timeout": 5 }
+        ]
+      },
+      {
         "matcher": "Write|Edit|MultiEdit|Artifact|mcp__claude_ai_Claude_Docs__batch|mcp__claude_ai_Claude_Docs__create|mcp__claude_ai_Claude_Docs__update",
         "hooks": [
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/artifact-register.sh\" --scoped", "timeout": 5, "async": true }
