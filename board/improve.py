@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""improve: `tmux-ctl improve list|show|propose|variants|tick|revert|outcome status` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
+"""improve: `tmux-ctl improve list|show|propose|variants|tick|revert|outcome status|schedule install` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
 Errors are one line `improve: <sub>: <reason>` on stderr, exit 1.
 Rule R3 (ruling A20; for any Stop gate the loop adds later): it checks `stop_hook_active` and blocks at most once per stop,
 never again for the same stop.
-Tests: tests/test_improve_store.py, tests/test_improve_eval.py, tests/test_improve_apply.py (revert, the tick's sweeps)."""
+Tests: tests/test_improve_store.py, tests/test_improve_eval.py, tests/test_improve_apply.py (revert, the tick's sweeps),
+engine/test/improve_holds.test.js (schedule install)."""
 import argparse
 import json
 import os
@@ -152,6 +153,25 @@ def cmd_revert(a, store):
     print(f"reverted {a.id}: {sha}")
 
 
+SCHEDULE = ("improve", "weekly Sun 08:00", ("tmux-ctl", "improve", "tick"))
+
+
+def cmd_schedule(a, project):
+    """`schedule install`: the weekly tick as an engine schedule. A second run is the engine's `unchanged`; an `improve`
+    schedule with another rule or command is left as it is (the engine exits 1 and says so)."""
+    name, rule, command = SCHEDULE
+    ctl = os.environ.get("TC_TMUX_CTL") or str(improve_class.REPO / "bin" / "tmux-ctl")
+    try:
+        r = subprocess.run([ctl, "engine", "schedule", "add", name, "--rule", rule, "--project", project, "--", *command],
+                           capture_output=True, text=True, cwd=str(improve_class.REPO))
+    except OSError as e:
+        raise Fail(f"cannot run {ctl}: {e.strerror}")
+    if r.stdout.strip():
+        print(r.stdout.strip())
+    if r.returncode:
+        raise Fail(next((ln.strip() for ln in r.stderr.splitlines() if ln.strip()), f"engine schedule add: exit {r.returncode}"))
+
+
 def cmd_variants(a, store):
     v = improve_trials.variants(a.spec, store)
     if a.json:
@@ -177,6 +197,8 @@ def parser():
     s = sub.add_parser("revert"); s.add_argument("id")
     s = sub.add_parser("outcome"); o = s.add_subparsers(dest="osub", required=True)
     o = o.add_parser("status"); o.add_argument("id", nargs="?")
+    s = sub.add_parser("schedule"); o = s.add_subparsers(dest="ssub", required=True)
+    o.add_parser("install")
     return p
 
 
@@ -187,6 +209,9 @@ def main(argv):
         return 1 if e.code else 0
     try:
         project = project_name(a.project)
+        if a.sub == "schedule":   # no store: the engine makes its database on the first schedule
+            cmd_schedule(a, project)
+            return 0
         store = improve_store.Store(project)
         {"list": lambda: cmd_list(a, store), "show": lambda: cmd_show(a, store), "propose": lambda: cmd_propose(a, store, project),
          "outcome": lambda: cmd_outcome(a, store), "tick": lambda: cmd_tick(a, store, project), "revert": lambda: cmd_revert(a, store), "variants": lambda: cmd_variants(a, store)}[a.sub]()

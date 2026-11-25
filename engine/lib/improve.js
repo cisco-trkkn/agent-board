@@ -3,7 +3,8 @@
 // once per spec and keeps the answer in one `improve_variants` event; everything here is derived from that list:
 // the brief overlays, the challenger skill copies, the per-spec routing map and the env of a job.
 // It never opens the proposals table and never writes a champion file. It also holds the protected-path check of the engine's
-// improve merge entry (integrate.mergeBranch; test: engine/test/improve_merge.test.js). Protected (docs/superpowers/improve/protected.txt).
+// improve merge entry (integrate.mergeBranch; test: engine/test/improve_merge.test.js) and the hold rules of the protected set
+// (protectedHolds; test: engine/test/improve_holds.test.js). Protected (docs/superpowers/improve/protected.txt).
 // Test: engine/test/improve.test.js.
 const fs = require("node:fs");
 const os = require("node:os");
@@ -37,12 +38,13 @@ function protectedGlobs(file = PROTECTED_FILE) {
 }
 
 // Python's fnmatch.fnmatchcase: `*` crosses "/" (so `**` does too), `?` is one character, `[seq]` a set.
-function globRe(glob) {
+// The anchored source needs no flag (`*` and `?` are written as [\s\S]), so a hold rule can carry it as a plain string.
+function globSource(glob) {
   let re = "";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
-    if (c === "*") re += ".*";
-    else if (c === "?") re += ".";
+    if (c === "*") re += "[\\s\\S]*";
+    else if (c === "?") re += "[\\s\\S]";
     else if (c === "[") {
       let j = i + 1;
       if (glob[j] === "!") j++;
@@ -56,8 +58,9 @@ function globRe(glob) {
       i = j;
     } else re += c.replace(/[.+^${}()|\\\]]/g, "\\$&");
   }
-  return new RegExp(`^${re}$`, "s");
+  return `^${re}$`;
 }
+const globRe = (glob) => new RegExp(globSource(glob));
 
 const expandUser = (p) => (p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p);
 
@@ -96,6 +99,23 @@ function isProtected(target, { hunks, src, file } = {}) {
     }
   }
   return false;
+}
+
+// The approval-hold rules of the protected set (engine/lib/engine/hold.js rulesFor): one per line of `repo`'s protected.txt,
+// for the four tools that write a file. A relative line is matched against the worktree-relative path, a `~/` line against
+// the absolute one, and a `path#improve` line holds the whole file. No protected.txt: no rule.
+// Known gap: a protected file written through Bash is not held here; the improve merge entry refuses it on the way to main.
+const HOLD_TOOLS = "Write|Edit|MultiEdit|NotebookEdit";
+function protectedHolds(repo) {
+  let globs;
+  try { globs = protectedGlobs(path.join(repo, "docs/superpowers/improve/protected.txt")); } catch (e) {
+    if (e && e.code === "ENOENT") return [];
+    throw e;
+  }
+  return globs.map((g) => {
+    const at = g.indexOf("#");
+    return { tool: HOLD_TOOLS, pattern: globSource(expandUser(at >= 0 ? g.slice(0, at) : g)), outside_worktree: false };
+  });
 }
 
 const under = (dir, p) => p.startsWith(dir + path.sep);
@@ -178,4 +198,4 @@ function envFor(variants, job) {
   return env;
 }
 
-module.exports = { fetch, apply, skillCopy, overlay, routing, envFor, ids, isProtected, protectedGlobs, hunksOf, improveRange };
+module.exports = { fetch, apply, skillCopy, overlay, routing, envFor, ids, isProtected, protectedGlobs, protectedHolds, hunksOf, improveRange };

@@ -5,13 +5,16 @@ const path = require("node:path");
 const cp = require("node:child_process");
 
 function tmpEnv() {
-  const old = { TC_ENGINE_DIR: process.env.TC_ENGINE_DIR, TC_STATE: process.env.TC_STATE };
+  const old = { TC_ENGINE_DIR: process.env.TC_ENGINE_DIR, TC_STATE: process.env.TC_STATE, TC_IMPROVE_TICK: process.env.TC_IMPROVE_TICK };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "eng-"));
   const engineDir = path.join(root, "engine");
   const state = path.join(root, "state");
   fs.mkdirSync(state, { recursive: true });
   process.env.TC_ENGINE_DIR = engineDir;
   process.env.TC_STATE = state;
+  // No post-report `improve tick` row (queue_report.write): an engine a test restarts after a committed report would drain
+  // it and open a window on the default tmux server. engine/test/improve_holds.test.js turns it back on.
+  process.env.TC_IMPROVE_TICK = "0";
   return {
     root, engineDir, state,
     restore() {

@@ -25,11 +25,18 @@ function compile(rule, id) {
   return { id, tool: new RegExp(`^(?:${rule.tool})$`), pattern: new RegExp(rule.pattern), outside: !!rule.outside_worktree };
 }
 
-function rulesFor(config) {
+// The defaults, then the config rules, then the protected set of the improvement loop (`repo`'s protected.txt; none
+// without a repo or without the file).
+function rulesFor(config, repo) {
   const out = DEFAULT_HOLDS.map((r) => compile(r, r.id));
   ((config && config.holds) || []).forEach((r, i) => {
     try { out.push(compile(r, `config:${i}`)); } catch (e) { throw new Error(`bad hold rule ${i}: ${e.message}`); }
   });
+  if (repo) {
+    require("../improve").protectedHolds(repo).forEach((r, i) => {
+      try { out.push(compile(r, `improve_protected:${i}`)); } catch (e) { throw new Error(`bad protected rule ${i}: ${e.message}`); }
+    });
+  }
   return out;
 }
 
@@ -103,7 +110,9 @@ function match(rules, { tool_name, tool_input, cwd }, worktree) {
     const p = callPath(input);
     if (p === null) continue;
     const abs = path.resolve(base, p);
-    if (!r.pattern.test(abs) && !r.pattern.test(path.relative(worktree, abs))) continue;
+    // the path as written, relative to the worktree, and relative to it with every symlink resolved
+    if (!r.pattern.test(abs) && !r.pattern.test(path.relative(worktree, abs))
+      && !r.pattern.test(path.relative(realpathDeep(worktree), realpathDeep(abs)))) continue;
     if (r.outside && !isOutside(abs, worktree)) continue;
     return r;
   }
@@ -125,22 +134,25 @@ function question(tool, input) {
   return `${tool}: ${what}`.slice(0, 300);
 }
 
-function configFor(worktree) {
+// The main checkout of the worktree's repository, or null.
+function repoFor(worktree) {
   try {
     const out = cp.execFileSync("git", ["-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return policy.loadConfig(path.dirname(out));
-  } catch { return {}; }
+    return path.dirname(out);
+  } catch { return null; }
 }
+const configFor = (repo) => { try { return repo ? policy.loadConfig(repo) : {}; } catch { return {}; } };
 
 // `handle` is an open database or null (then it is opened here, after a rule matched, from env).
 function decide(handle, hookInput, env, now) {
   if (!env.ENGINE_JOB) return { decision: "none" };
   const worktree = env.ENGINE_WORKTREE || (hookInput && hookInput.cwd) || process.cwd();
+  const repo = repoFor(worktree);
   let rules;
-  try { rules = rulesFor(configFor(worktree)); } catch (e) {
-    // a bad config rule must not switch the defaults off
+  try { rules = rulesFor(configFor(repo), repo); } catch (e) {
+    // a bad config rule must not switch the defaults or the protected set off, and an unreadable protected set not the defaults
     process.stderr.write(`engine hold: ${e.message}; using the default holds\n`);
-    rules = rulesFor({ holds: [] });
+    try { rules = rulesFor({ holds: [] }, repo); } catch { rules = rulesFor({ holds: [] }); }
   }
   const rule = match(rules, hookInput, worktree);
   if (!rule) return { decision: "none" };
