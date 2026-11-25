@@ -56,6 +56,44 @@ setmark; mk_tr_extra "$tmp/plain.jsonl" '{"type":"user","isSidechain":false,"uui
 check "lead, marker, last row with no origin (not positively typed): marker kept"  denies "$LEAD"
 setmark; run '{"transcript_path":"/nonexistent/t.jsonl"}'
 check "lead, marker, missing transcript: marker decides"  denies "$LEAD"
+# rule 2b: a lead with no marker is remote when the bridge saw the user within 12 h and no typed prompt is newer
+# mkum <dir> <hours old> [raw]: <dir>/last-user-message.json in the bridge's shape (JS toISOString)
+mkum() { mkdir -p "$1"; if [[ -n "$3" ]]; then print -r -- "$3" > "$1/last-user-message.json"; else python3 -c 'import json,sys; from datetime import datetime,timezone,timedelta; t=datetime.now(timezone.utc)-timedelta(hours=float(sys.argv[2])); json.dump({"ts":t.strftime("%Y-%m-%dT%H:%M:%S.000Z"),"message_id":"1234567890123456789"},open(sys.argv[1]+"/last-user-message.json","w"))' "$1" "$2"; fi }
+# mktr_h <out> <minutes ago> <origin json>: a user row with that origin and age appended to the first 4 fixture rows
+mktr_h() { local ts="$(python3 -c 'import sys; from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(minutes=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%S.000Z"))' "$2")"
+  mk_tr_extra "$1" "{\"type\":\"user\",\"isSidechain\":false,\"uuid\":\"h\",\"timestamp\":\"$ts\",\"origin\":$3,\"message\":{\"role\":\"user\",\"content\":\"typed\"}}"; }
+DD="$tmp/discord"; export AGENT_BOARD_LEAD=1 DISCORD_STATE_DIR="$DD"; clr
+mkum "$DD" 1; mktr_h "$tmp/t_old.jsonl" 120 '{"kind":"human"}'
+run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: lead, no marker, Discord 1 h ago, typed prompt older: remote-lead text"   denies "$LEAD"
+check "  ... and no marker is written"                    test ! -e "$M"
+mktr_h "$tmp/t_new.jsonl" 5 '{"kind":"human"}'
+run "{\"transcript_path\":\"$tmp/t_new.jsonl\"}"
+check "2b: typed prompt newer than the Discord message: silent"   silent   # mutation: drop the newer-human check -> fails
+mktr_h "$tmp/t_20h.jsonl" 1200 '{"kind":"human"}'   # older than the 13 h file: only the age test can make this silent
+mkum "$DD" 13; run "{\"transcript_path\":\"$tmp/t_20h.jsonl\"}"
+check "2b: Discord message 13 h ago: silent"              silent   # mutation: 86400 -> fails
+rm -f "$DD/last-user-message.json"; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: no file: silent"                               silent
+mkum "$DD" 1 'not json{'; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: unparsable file: silent (fails open)"          silent
+mkum "$DD" 1 '{"ts":"yesterday","message_id":"1"}'; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: unparsable ts: silent"                         silent
+mkum "$DD" 1; run '{"transcript_path":"/nonexistent/t.jsonl"}'
+check "2b: recent file, unreadable transcript: fails open, silent"   silent
+mkum "$DD" 1; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: marker still absent after a deny"              test ! -e "$M"
+export TC_ROLE=worker; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"; unset TC_ROLE
+check "2b: worker order unchanged: teammate text"         denies "$TM"
+# tmux fallback: no DISCORD_STATE_DIR -> $TC_STATE/discord/<session of TMUX_PANE> (the scratch session is "tt")
+unset DISCORD_STATE_DIR; rm -rf "$DD"
+run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: tmux fallback, no file under the session dir: silent"   silent
+mkum "$TC_STATE/discord/tt" 1; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: tmux fallback, TMUX_PANE session dir holds a recent file: remote-lead text"   denies "$LEAD"
+tt rename-session -t '=tt' tt-bg; mkum "$TC_STATE/discord/tt" 1; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
+check "2b: tmux fallback strips -bg from the session name"   denies "$LEAD"
+tt rename-session -t '=tt-bg' tt
 unset AGENT_BOARD_LEAD
 setmark; touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d '-1 hour' +%Y%m%d%H%M)" "$M"; run '{}'
 check "peer, marker 1 h old: peer text"                   denies "$PEER"

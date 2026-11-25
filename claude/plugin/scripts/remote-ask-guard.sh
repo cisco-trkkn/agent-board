@@ -5,6 +5,9 @@
 #        -> deny, "ask the lead with SendMessage; the user is not at your window"
 #   2. AGENT_BOARD_LEAD=1 with its own marker <state>/remote/<session id>
 #        -> deny, "the user is remote: ask in Discord as a numbered list with the reply tool"
+#   2b. AGENT_BOARD_LEAD=1 with no marker of its own, when the project's discord dir (DISCORD_STATE_DIR, else the tmux session of
+#        TMUX_PANE under <TC_STATE or ~/.local/state/agent-board>/discord/) holds last-user-message.json within 43200 s and no typed
+#        prompt (origin.kind "human") in the lead's transcript is newer than its ts -> deny, same text as 2. Never writes the marker.
 #   3. no role and any marker under <state>/remote/ with mtime within 43200 s (12 h)
 #        -> deny, "the user is remote: write the question as plain text and end your turn; it reaches Discord as a Needs you item"
 # Otherwise exit 0, no output. Deny = exit 2 with the text on stderr. Any error fails open.
@@ -31,6 +34,7 @@
 input=$(cat) || exit 0
 HOOK_PAYLOAD="$input" exec python3 -I - <<'PY'
 import json, os, re, subprocess, sys, time
+from datetime import datetime
 TM = "ask the lead with SendMessage; the user is not at your window"
 LEAD = "the user is remote: ask in Discord as a numbered list with the reply tool"
 PEER = "the user is remote: write the question as plain text and end your turn; it reaches Discord as a Needs you item"
@@ -86,6 +90,63 @@ def last_user_row(path):
         return r
     return None
 
+def discord_dir():
+    dd = env.get("DISCORD_STATE_DIR")
+    if dd:
+        return dd
+    pane, tmux = env.get("TMUX_PANE"), env.get("TMUX")
+    if not (pane and tmux):
+        return None
+    tb = env.get("TC_TMUX") or os.path.join(env.get("HOME", ""), ".local/bin/tmux")
+    if not os.access(tb, os.X_OK):
+        tb = "tmux"
+    def q(fmt):
+        return subprocess.run([tb, "-S", tmux.split(",")[0], "display", "-p", "-t", pane, fmt],
+                              capture_output=True, text=True, timeout=3).stdout.strip()
+    name = q("#{?session_group,#{session_group},#{session_name}}")
+    if name.endswith("-bg"):
+        name = name[:-3]
+    if not name:
+        return None
+    base = env.get("TC_STATE") or os.path.join(env.get("HOME", ""), ".local/state/agent-board")
+    return os.path.join(base, "discord", name)
+
+def _ts(s):
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+def recent_remote(tp, ddir, now):
+    """True when the bridge saw the user within 12 h and no typed terminal prompt in the transcript is newer."""
+    try:
+        if not ddir:
+            return False
+        with open(os.path.join(ddir, "last-user-message.json")) as f:
+            ts = _ts(json.load(f).get("ts"))
+        if ts is None or now - ts > 43200:
+            return False
+        if isinstance(tp, str) and tp:
+            with open(tp, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 4 * 1024 * 1024))
+                data = f.read().decode("utf-8", "replace")
+            for line in data.splitlines():
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(r, dict) or r.get("type") != "user" or r.get("isSidechain"):
+                    continue
+                if (r.get("origin") or {}).get("kind") == "human":
+                    t = _ts(r.get("timestamp"))
+                    if t is not None and t > ts:
+                        return False
+        return True
+    except Exception:
+        return False
+
 try:
     d = json.loads(env["HOOK_PAYLOAD"])
     if d.get("tool_name") != "AskUserQuestion":
@@ -119,6 +180,8 @@ try:
                     except FileNotFoundError:
                         pass
         if marker and os.path.exists(marker):
+            deny(LEAD)
+        if recent_remote(tp, discord_dir(), time.time()):
             deny(LEAD)
         sys.exit(0)
     now = time.time()
