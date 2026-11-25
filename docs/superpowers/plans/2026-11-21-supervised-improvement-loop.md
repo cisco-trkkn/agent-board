@@ -154,8 +154,9 @@
   file), is not inside a leading `---` frontmatter block, and does not start with `$ `, `    ` (indented code), `` ` ``
   or `tmux-ctl `. A null patch is never prose-only.
 - **Proposal states** and the only allowed transitions:
-  `proposed→trial|rejected|drafted`, `trial→kept|reverted|awaiting_you`, `awaiting_you→promoted|rejected|trial` (extend),
-  `kept→reverted`, `promoted→reverted`, `drafted→rejected|promoted`. Any other transition raises `ImproveError`.
+  `proposed→trial|rejected|drafted`, `trial→kept|reverted|awaiting_you|rejected`, `awaiting_you→promoted|rejected|trial` (extend),
+  `kept→reverted|rejected`, `promoted→reverted|rejected`, `drafted→rejected|promoted` (the `→rejected` from trial, kept and
+  promoted is for a stale patch only, lead rulings in Tasks 6 and 10). Any other transition raises `ImproveError`.
 - **Events:** every proposal state change is one row in the engine's `events` table (kind `improve`, spec null, detail
   `{"rows": [{"table": "proposals", "row": <the full new row>}], "proposal": id, "from": old, "to": new, "reason": …}`),
   in the same transaction as the `proposals` update. `engine rebuild --check` replays `detail.rows` into a scratch DB
