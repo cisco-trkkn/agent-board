@@ -31,7 +31,9 @@ const ADDED = [["specs", "gate", "TEXT"], ["specs", "budget_attempts", "INT"], [
 
 function migrate(db) {
   for (const [table, col, type] of ADDED) {
-    if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+    if (db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) continue;
+    // another process opening the same database between the check and the ALTER adds the column first: that is the goal met
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch (e) { if (!/duplicate column name/.test(String(e.message))) throw e; }
   }
   // An open part 1 wait has no kind: it becomes a cannot_tell wait with that kind's default, and an event
   // carries the filled row so that a replay (rebuild) reaches the same table.
@@ -51,7 +53,14 @@ function open(project) {
   fs.mkdirSync(path.dirname(paths.dbPath(project)), { recursive: true });
   const db = new DatabaseSync(paths.dbPath(project));
   db.exec("PRAGMA busy_timeout=5000"); // first: the statements below already wait for another connection's lock
-  db.exec("PRAGMA journal_mode=WAL");
+  // The first conversion of a fresh file to WAL fails at once with "database is locked" when another process is doing the
+  // same: the busy handler does not wait for it. The loser tries again until the winner is done (the mode then sticks).
+  for (let n = 0; ; n++) {
+    try { db.exec("PRAGMA journal_mode=WAL"); break; } catch (e) {
+      if (n >= 100 || !/locked|busy/i.test(String(e.message))) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
   db.exec(SCHEMA);
   migrate(db);
   return db;

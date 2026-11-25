@@ -341,3 +341,23 @@ test("loadConfig returns holds, rejects a non-list, and the policy hash covers t
     assert.throws(() => policy.loadConfig(repo.dir), /engine\.json holds must be a list/);
   } finally { repo.cleanup(); }
 });
+
+// Two processes opening a project's database for the first time both see the part 2 columns missing; only one ALTER can win.
+// The engine child died with "duplicate column name: budget_tokens" when a reader (engine status, a test's peek) opened the
+// database at the same moment. Each round is a fresh database and 6 processes released at one wall-clock instant.
+test("concurrent first opens of a fresh database all succeed", async () => {
+  const cp = require("node:child_process");
+  const e = tmpEnv();
+  try {
+    const dbm = path.resolve(__dirname, "../lib/engine/db.js");
+    const code = `const t = Number(process.argv[1]); while (Date.now() < t) {} require(${JSON.stringify(dbm)}).open(process.argv[2]).close();`;
+    const failures = [];
+    for (let round = 0; round < 8; round++) {
+      const at = String(Date.now() + 500);
+      const kids = Array.from({ length: 6 }, () => cp.spawn("node", ["-e", code, at, `race${round}`], { stdio: ["ignore", "ignore", "pipe"] }));
+      const done = await Promise.all(kids.map((k) => new Promise((r) => { let err = ""; k.stderr.on("data", (d) => { err += d; }); k.on("exit", (c) => r({ c, err })); })));
+      for (const d of done) if (d.c !== 0) failures.push(d.err.split("\n").find((l) => /Error|duplicate/.test(l)) || `exit ${d.c}`);
+    }
+    assert.deepEqual(failures, []);
+  } finally { e.restore(); }
+});
