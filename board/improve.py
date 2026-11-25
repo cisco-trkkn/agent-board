@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""improve: `tmux-ctl improve list|show|propose|variants|outcome status` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
+"""improve: `tmux-ctl improve list|show|propose|variants|tick|outcome status` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
 Errors are one line `improve: <sub>: <reason>` on stderr, exit 1.
-Rule R3 (for any later gate that can block a Stop): it fires once per stop, never again for the same stop.
-Test: tests/test_improve_store.py."""
+Rule R3 (ruling A20; for any Stop gate the loop adds later): it checks `stop_hook_active` and blocks at most once per stop,
+never again for the same stop.
+Tests: tests/test_improve_store.py, tests/test_improve_eval.py."""
 import argparse
 import json
 import os
@@ -13,8 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dream_paths  # noqa: E402
 import improve_class  # noqa: E402
+import improve_eval  # noqa: E402
 import improve_store  # noqa: E402
 import improve_trials  # noqa: E402
+import metrics  # noqa: E402
 
 OUTCOMES = improve_class.REPO / "docs" / "superpowers" / "outcomes"
 
@@ -87,19 +90,54 @@ def cmd_propose(a, store, project):
     print(store.insert(source, a.kind, a.target, patch, evidence, outcome=a.outcome, shrinks_reads=a.shrinks_reads))
 
 
-def cmd_outcome(a, store):
-    found = []
+def load_outcomes():
+    """Every outcome file as a dict, with `_path`; unreadable ones are skipped."""
+    out = []
     for f in sorted(OUTCOMES.glob("*.json")):
         try:
             o = json.loads(f.read_text())
         except ValueError:
             continue
-        if o.get("state") == "active" and (not a.id or o.get("id") == a.id):
-            found.append(o["id"])
-    if a.id and not found:
+        if isinstance(o, dict) and o.get("id"):
+            out.append({**o, "_path": str(f)})
+    return out
+
+
+def load_configs():
+    """{name: config} of the metrics configs, for the baseline flag."""
+    out = {}
+    d = metrics.mdir(improve_class.REPO) / "configs"
+    for f in sorted(d.glob("*.md")) if d.is_dir() else []:
+        c = metrics._fence(f.read_text(), "json:config")
+        if isinstance(c, dict):
+            out[f.stem] = c
+    return out
+
+
+def _runs():
+    return list(metrics.last_runs(metrics.read_log(improve_class.REPO)[0]).values())
+
+
+def cmd_outcome(a, store):
+    active = [o for o in load_outcomes() if o.get("state") == "active" and (not a.id or o["id"] == a.id)]
+    if a.id and not active:
         raise Fail(f"no active outcome {a.id}")
-    for i in found:
-        print(f"{i} too early")   # the real value vs baseline needs compare_to_baseline (Task 5), shown from Task 8
+    runs, configs = _runs(), load_configs()
+    for o in active:
+        st = improve_eval.outcome_status(runs, o, configs, improve_eval.first_commit(o["_path"]))
+        sig = st["signal"]
+        print(f"{o['id']} {st['verdict']}")
+        print(f"  tokens_per_merged_task {improve_eval._fmt(sig['trial_value'])} vs baseline {improve_eval._fmt(sig['control_value'])}, "
+              f"index {improve_eval._fmt(sig['index'])} ({sig['verdict']}, {sig['n_trial']}/{sig['n_control']} specs, {st['batches']} batches)")
+        for m, v in st["guardrails"].items():
+            print(f"  {m} {v['verdict']} ({v['trial_value']} vs {v['control_value']})")
+
+
+def cmd_tick(a, store, project):
+    lines = metrics.read_log(improve_class.REPO)[0]
+    out = improve_eval.tick(store, project, lines, load_outcomes(), configs=load_configs())
+    for k, v in out.items():
+        print(f"{k} {json.dumps(v)}")
 
 
 def cmd_variants(a, store):
@@ -123,6 +161,7 @@ def parser():
     s.add_argument("--outcome"); s.add_argument("--evidence"); s.add_argument("--shrinks-reads", action="store_true")
     s.add_argument("--from-dream")
     s = sub.add_parser("variants"); s.add_argument("spec"); s.add_argument("--json", action="store_true")
+    sub.add_parser("tick")
     s = sub.add_parser("outcome"); o = s.add_subparsers(dest="osub", required=True)
     o = o.add_parser("status"); o.add_argument("id", nargs="?")
     return p
@@ -137,7 +176,7 @@ def main(argv):
         project = project_name(a.project)
         store = improve_store.Store(project)
         {"list": lambda: cmd_list(a, store), "show": lambda: cmd_show(a, store), "propose": lambda: cmd_propose(a, store, project),
-         "outcome": lambda: cmd_outcome(a, store), "variants": lambda: cmd_variants(a, store)}[a.sub]()
+         "outcome": lambda: cmd_outcome(a, store), "tick": lambda: cmd_tick(a, store, project), "variants": lambda: cmd_variants(a, store)}[a.sub]()
     except improve_store.ImproveError as e:
         m = str(e)
         print(m if m.startswith("improve: no engine database") else f"improve: {a.sub}: {m.removeprefix('improve: ')}", file=sys.stderr)
