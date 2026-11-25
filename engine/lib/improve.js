@@ -60,13 +60,13 @@ function skillCopy({ repo, worktree, variant }) {
   }
 }
 
-// Makes the spec's variants real in its worktree. A skill variant whose copy cannot be built is dropped: the spec
+// Makes the spec's variants real in its worktree (null when the spec has none of its own: its skill variants are dropped). A skill variant whose copy cannot be built is dropped: the spec
 // then runs without it, so it is not one of the spec's variants.
 function apply({ repo, worktree, variants }) {
   const kept = [];
   const dropped = [];
   for (const v of variants) {
-    const reason = v.skill_copy ? skillCopy({ repo, worktree, variant: v }) : null;
+    const reason = !v.skill_copy ? null : worktree ? skillCopy({ repo, worktree, variant: v }) : "no worktree";
     if (reason) dropped.push({ id: v.id, reason }); else kept.push(v);
   }
   return { variants: kept, dropped };

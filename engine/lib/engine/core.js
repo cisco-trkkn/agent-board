@@ -1246,7 +1246,9 @@ function start(opts) {
     const r = improve.fetch({ tmuxCtl, spec: spec.id, cwd: repo, env: { ...env, TC_PROJECT: project } });
     if (r.error) { emit("improve_variants_error", { spec: spec.id, error: r.error, text: r.error }); return; }
     if (!r.variants.length) return;
-    const a = improve.apply({ repo, worktree: wtOf(spec), variants: r.variants });
+    // a challenger copy goes only into the spec's own worktree, never into the main checkout wtOf falls back to
+    const own = spec.worktree && fs.existsSync(spec.worktree) && path.resolve(spec.worktree) !== path.resolve(repo) ? spec.worktree : null;
+    const a = improve.apply({ repo, worktree: own, variants: r.variants });
     emit("improve_variants", { spec: spec.id, variants: a.variants, dropped: a.dropped,
       text: `${improve.ids(a.variants).join(",") || "none"}${a.dropped.length ? ` (dropped ${a.dropped.map((d) => `${d.id}: ${d.reason}`).join("; ")})` : ""}` });
   }

@@ -177,6 +177,20 @@ test("a skill patch that does not apply drops that variant: no copy, no brief bl
   assert.equal(argv[argv.indexOf("--variants") + 1], "P1");
 });
 
+test("a spec with no worktree of its own drops its skill variants: nothing lands in the main checkout, other variants stay", async (t) => {
+  const h = mk(t, { variants: (patch) => ({ [SPEC_A]: [P1, P2(patch)] }) });
+  h.add(SPEC_A, { worktree: h.repo.dir }); // the spec runs in the main checkout
+  for (let i = 0; i < 600 && h.spec(SPEC_A).state !== "done"; i++) { h.clock.t += 5; await h.eng.tick(); }
+  assert.equal(h.spec(SPEC_A).outcome, "merged");
+  assert.equal(fs.existsSync(path.join(h.repo.dir, ".superpowers/improve")), false);
+  const ev = h.events("improve_variants", SPEC_A);
+  assert.equal(ev.length, 1);
+  assert.deepEqual(ev[0].detail.variants.map((v) => v.id), ["P1"]);
+  assert.deepEqual(ev[0].detail.dropped, [{ id: "P2", reason: "no worktree" }]);
+  assert.match(h.brief(SPEC_A, "implement"), /## Trial P1/);
+  assert.doesNotMatch(h.brief(SPEC_A, "implement"), /Trial P2/);
+});
+
 test("skill copy paths outside the trial folder or the skills folder are refused", () => {
   const improve = require("../lib/improve");
   const env = tmpEnv();
