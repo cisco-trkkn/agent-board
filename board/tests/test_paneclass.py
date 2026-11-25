@@ -406,6 +406,23 @@ class InputTextTest(unittest.TestCase):
         import paneclass
         self.assertTrue(paneclass.input_has_text(self.esc_rows("❯ half typed\x1b[2m and a suggestion\x1b[0m")))
 
+    def test_extended_colour_params_are_not_dim(self):
+        import paneclass
+        for line in ("\x1b[38;2;200;100;50m❯ typed text\x1b[0m",
+                     "\x1b[38;5;2m❯ typed text\x1b[0m",
+                     "\x1b[48;2;1;2;3m❯ typed\x1b[0m",
+                     "\x1b[38:2::1:2:3m❯ typed\x1b[0m",
+                     "\x1b[38:5:2m❯ typed\x1b[0m"):
+            self.assertTrue(paneclass.input_has_text(self.esc_rows(line)), line)
+
+    def test_extended_colour_then_real_dim_is_not_input(self):
+        import paneclass
+        self.assertFalse(paneclass.input_has_text(self.esc_rows("❯ \x1b[38;5;245;2mwhich project\x1b[0m")))
+
+    def test_zero_padded_reset_clears_dim(self):
+        import paneclass
+        self.assertTrue(paneclass.input_has_text(self.esc_rows("❯ \x1b[2mab\x1b[00mcd")))
+
     def test_escaped_empty_and_try_placeholder(self):
         import paneclass
         self.assertFalse(paneclass.input_has_text(self.esc_rows("\x1b[39m❯ \x1b[0m")))

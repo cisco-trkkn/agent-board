@@ -90,10 +90,17 @@ def _plain_and_dim(row):
         pos = m.end()
         sgr = SGR_RE.fullmatch(m.group())
         if sgr:
-            for code in (sgr.group(1).replace(":", ";").split(";") or [""]):
-                if code in ("", "0", "22"):
+            params, i = sgr.group(1).split(";"), 0
+            while i < len(params):
+                head = params[i].split(":")[0]
+                i += 1
+                code = int(head) if head.isdigit() else 0
+                if code in (38, 48, 58):   # extended colour: its parameters are not SGR codes
+                    if ":" not in params[i - 1] and i < len(params):   # `;` form: 5;n or 2;r;g;b follow
+                        i += 2 if params[i] == "5" else 4
+                elif code in (0, 22):
                     on = False
-                elif code == "2":
+                elif code == 2:
                     on = True
     for ch in row[pos:]:
         plain.append(ch)
