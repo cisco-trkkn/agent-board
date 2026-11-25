@@ -84,6 +84,20 @@ check "kills.jsonl: one line for that pid" python3 -c '
 import json, sys
 ls = [json.loads(l) for l in open(sys.argv[1])]
 sys.exit(0 if len(ls) == 1 and ls[0]["pid"] == int(sys.argv[2]) and ls[0]["project"] == "e2e-rw" and ls[0]["window"] == "✦ fake" and ls[0]["cap_s"] == 1 else 1)' "$TC_STATE/watch/kills.jsonl" "$PID"
+# tell_pane against real panes (the run watch's hold rule): a pane whose input line holds typed text is held (False,
+# nothing typed); a pane with an empty input line gets the line. Static `cat` panes draw Claude's rule + `❯` input frame.
+RULE="$(printf '─%.0s' {1..20})"
+tt new-window -d -t '=e2e-rw:' -n held -c "$E" sh -c "printf '%s\n❯ draft text\n' '$RULE'; cat"
+tt new-window -d -t '=e2e-rw:' -n idle -c "$E" sh -c "printf '%s\n❯ \n' '$RULE'; cat"
+sleep 1
+HELD="$(tt display -p -t '=e2e-rw:held' '#{pane_id}')"; IDLE="$(tt display -p -t '=e2e-rw:idle' '#{pane_id}')"
+TELL="$(python3 -B -c '
+import sys; sys.path.insert(0, sys.argv[1]); import server
+print("held", server.tell_pane(sys.argv[2], "[Watch] probe held"), "idle", server.tell_pane(sys.argv[3], "[Watch] probe idle"))' "$R/board" "$HELD" "$IDLE" 2>&1)"
+print -r -- "tell_pane: $TELL"
+check "tell_pane: held with text in the input, typed into an empty one" test "$TELL" = "held False idle True"
+check "idle pane shows the line" tt_wait 5 zsh -c '"$1" -L "$2" capture-pane -p -J -t "=e2e-rw:idle" | grep -qF "[Watch] probe idle"' _ "$TT_BIN" "$TT_SOCK_NAME"
+check "held pane never got the line" zsh -c '! "$1" -L "$2" capture-pane -p -J -t "=e2e-rw:held" | grep -qF "[Watch] probe held"' _ "$TT_BIN" "$TT_SOCK_NAME"
 [[ -s "$E/drive.err" ]] && { print -r -- "--- driver stderr:"; cat "$E/drive.err" }
 
 # read-only, real state: on this machine's own process tree, no direct non-shell child of a claude process (its MCP
