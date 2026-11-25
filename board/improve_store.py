@@ -21,7 +21,7 @@ PROPOSALS_SQL = ("CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, sour
                  "reason TEXT);")
 TRANSITIONS = {
     "proposed": {"trial", "rejected", "drafted"},
-    "trial": {"kept", "reverted", "awaiting_you"},
+    "trial": {"kept", "reverted", "awaiting_you", "rejected"},
     "awaiting_you": {"promoted", "rejected", "trial"},
     "kept": {"reverted"},
     "promoted": {"reverted"},
