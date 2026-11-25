@@ -5,7 +5,7 @@ metrics.compare_to_baseline (rulings A12, A11: no engine-run record is `too earl
 Later tasks plug in through `hooks`, a dict of optional callables (an absent one is skipped; see load_hooks):
   apply(store, pid)            Task 10, after a trial is kept
   card(kind, payload)          Task 12 (improve_discord): kind awaiting_you | breach | achieved
-  pick(store, runs, tick_id)   Task 9, returns a counts dict
+  pick(store, runs, tick_id)   Task 9, returns the ids it started (or a counts dict)
   digest(store, tick_id)       Task 12, returns a counts dict
 The outcome file is protected: it is never written; `achieved` is one improve_outcome event and one card call.
 Protected (docs/superpowers/improve/protected.txt). Test: tests/test_improve_eval.py."""
@@ -296,7 +296,8 @@ def tick(store, project, lines, outcomes, configs=None, hooks=None, adapters=Non
     step("trials", evaluate_trials(store, runs, store.now(), configs=configs, last_tick=last, hooks=hooks))
     step("outcomes", evaluate_outcomes(store, runs, outcomes, last, configs=configs, hooks=hooks))
     if hooks.get("pick"):
-        step("pick", hooks["pick"](store, runs, tid) or {})
+        started = hooks["pick"](store, runs, tid)
+        step("pick", {"started": len(started)} if isinstance(started, list) else started or {})
     if hooks.get("digest"):
         step("digest", hooks["digest"](store, tid) or {})
     return out

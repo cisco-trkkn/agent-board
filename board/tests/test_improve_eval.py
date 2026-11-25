@@ -385,6 +385,13 @@ class TickOrder(Base):
         finally:
             c.close()
 
+    def test_pick_returning_started_ids_is_counted(self):
+        # mutation: store the list as the step counts -> counts is a list, not {"started": 2}
+        h = Hooks()
+        h["pick"] = lambda *a: ["P1", "P2"]
+        E.tick(self.s, "proj", [], [], configs=BASE, hooks=h, adapters=lambda *a, **k: {})
+        self.assertEqual([d["counts"] for _, d in self.steps() if d["step"] == "pick"], [{"started": 2}])
+
     def test_absent_pick_and_digest_are_skipped(self):
         # mutation: calling a missing hook -> TypeError
         E.tick(self.s, "proj", [], [], configs=BASE, hooks={}, adapters=lambda *a, **k: {})
