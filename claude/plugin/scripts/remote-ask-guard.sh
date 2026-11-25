@@ -16,7 +16,8 @@
 # guard reads payload.transcript_path and takes the last non-sidechain, non-meta-without-origin "user" row that is not a tool result.
 # origin {kind: channel, server: plugin:discord:discord} -> the lead is remote: write/touch the marker. origin.kind "human" (a prompt
 # typed at the terminal; real rows: {"origin": {"kind": "human"}, "promptSource": "typed", "turnOrigin": "human"}) -> remove the marker.
-# Every other user row leaves it: teammate messages are rows with no origin whose text starts "Another Claude session sent a message:\n
+# The relay's startup prompt (origin human, text "Read <doc> and continue from where the previous session left off.") is not typed: it leaves the marker
+# and does not count as a newer typed prompt in 2b. Every other user row leaves it: teammate messages are rows with no origin whose text starts "Another Claude session sent a message:\n
 # <teammate-message" (17 of 17 in the real lead transcript 78659598), task notifications carry origin.kind "task-notification". Unreadable
 # transcript: change nothing, the marker file decides. (Deviation from spec §3's letter, F14: teammate/task/cross-session prompts keep
 # the marker.) Cost: the marker is only refreshed when a dialog is attempted.
@@ -90,6 +91,15 @@ def last_user_row(path):
         return r
     return None
 
+STARTUP = re.compile(r"^Read \S.* and continue from where the previous session left off\.$")
+
+def is_startup_prompt(r):
+    """The relay's startup prompt (board/relay.py prompt_for) arrives as an origin-human row; it is not a typed prompt."""
+    c = (r.get("message") or {}).get("content")
+    if isinstance(c, list):
+        c = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+    return isinstance(c, str) and STARTUP.match(c.strip()) is not None
+
 def discord_dir():
     dd = env.get("DISCORD_STATE_DIR")
     if dd:
@@ -139,7 +149,7 @@ def recent_remote(tp, ddir, now):
                     continue
                 if not isinstance(r, dict) or r.get("type") != "user" or r.get("isSidechain"):
                     continue
-                if (r.get("origin") or {}).get("kind") == "human":
+                if (r.get("origin") or {}).get("kind") == "human" and not is_startup_prompt(r):
                     t = _ts(r.get("timestamp"))
                     if t is not None and t > ts:
                         return False
@@ -174,7 +184,7 @@ try:
                     with open(marker, "a"):
                         pass
                     os.utime(marker, None)
-                elif o.get("kind") == "human":   # positive evidence of a typed prompt; every other row leaves the marker
+                elif o.get("kind") == "human" and not is_startup_prompt(r):   # positive evidence of a typed prompt; every other row (the relay startup prompt too) leaves the marker
                     try:
                         os.remove(marker)
                     except FileNotFoundError:

@@ -94,6 +94,25 @@ check "2b: tmux fallback, TMUX_PANE session dir holds a recent file: remote-lead
 tt rename-session -t '=tt' tt-bg; mkum "$TC_STATE/discord/tt" 1; run "{\"transcript_path\":\"$tmp/t_old.jsonl\"}"
 check "2b: tmux fallback strips -bg from the session name"   denies "$LEAD"
 tt rename-session -t '=tt-bg' tt
+# the relay's startup prompt reaches the new lead as a row with origin human; it is not a typed prompt (final review I1).
+# The text comes from relay.prompt_for itself, so a change there breaks this test instead of drifting.
+SP="$(cd "$TT_REPO" && python3 -c 'import sys; sys.path.insert(0,"board"); import relay; print(relay.prompt_for("/x/doc.md"))')"
+agoz() { python3 -c 'import sys; from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z"))'; }
+mkrow() { python3 -c 'import json,sys; rows=[json.loads(l) for l in open(sys.argv[1])][:4]; rows.append({"type":"user","isSidechain":False,"uuid":"s","timestamp":sys.argv[4],"origin":{"kind":"human"},"message":{"role":"user","content":sys.argv[3]}}); open(sys.argv[2],"w").write("".join(json.dumps(r)+"\n" for r in rows))' "$FIX" "$1" "$2" "$3"; }
+mkrow "$tmp/startup.jsonl" "$SP" "$(agoz)"
+setmark; run "{\"transcript_path\":\"$tmp/startup.jsonl\"}"
+check "I1: marker + only user row is the relay startup prompt: remote-lead text"   denies "$LEAD"
+check "  ... and the marker is kept"                       test -f "$M"
+clr; export DISCORD_STATE_DIR="$tmp/dd1"; mkum "$DISCORD_STATE_DIR" 0.0833
+run "{\"transcript_path\":\"$tmp/startup.jsonl\"}"
+check "I1: no marker, Discord 5 min ago, startup prompt newer: 2b still denies"   denies "$LEAD"
+mkrow "$tmp/typed2.jsonl" "please look at the failing test" "$(agoz)"
+run "{\"transcript_path\":\"$tmp/typed2.jsonl\"}"
+check "I1 control: 2b, a different typed prompt newer than Discord: silent"   silent
+setmark; run "{\"transcript_path\":\"$tmp/typed2.jsonl\"}"
+check "I1 control: a different typed prompt clears the marker"   silent
+check "  ... marker removed"                               test ! -e "$M"
+unset DISCORD_STATE_DIR
 unset AGENT_BOARD_LEAD
 setmark; touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d '-1 hour' +%Y%m%d%H%M)" "$M"; run '{}'
 check "peer, marker 1 h old: peer text"                   denies "$PEER"
