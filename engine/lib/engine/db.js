@@ -37,10 +37,11 @@ function migrate(db) {
   }
   // An open part 1 wait has no kind: it becomes a cannot_tell wait with that kind's default, and an event
   // carries the filled row so that a replay (rebuild) reaches the same table.
-  const open = db.prepare("SELECT * FROM waits WHERE answered_at IS NULL AND kind IS NULL").all();
-  if (!open.length) return;
+  if (!db.prepare("SELECT 1 FROM waits WHERE answered_at IS NULL AND kind IS NULL").get()) return;
   const rec = JSON.stringify(policy.ASK_DEFAULTS.cannot_tell);
   tx(db, () => {
+    // read again under the write lock: another process opening the database may have migrated these rows first
+    const open = db.prepare("SELECT * FROM waits WHERE answered_at IS NULL AND kind IS NULL").all();
     for (const w of open) {
       const row = { ...w, kind: "cannot_tell", recommendation: rec };
       putRaw(db, "waits", row);
