@@ -75,10 +75,10 @@ def _ssl_context():
 _OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_context()), _NoRedirect)
 
 
-def _open(req):
+def _open(req, timeout=TIMEOUT):
     """Open a Request -> (status, body (at most MAX_BYTES), content type). FetchError text never carries request headers."""
     try:
-        with _OPENER.open(req, timeout=TIMEOUT) as r:
+        with _OPENER.open(req, timeout=timeout) as r:
             return r.status, r.read(MAX_BYTES), r.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
         loc = e.headers.get("Location") if e.code in REDIRECT_CODES else None
@@ -90,7 +90,7 @@ def _open(req):
         raise FetchError(f"{type(e).__name__}: {e}") from None
 
 
-def get(url, accept=None, headers=None):
+def get(url, accept=None, headers=None, timeout=TIMEOUT):
     """GET url -> (status, body bytes (at most MAX_BYTES), content type). Each hop (the URL, then each redirect, at most
     MAX_REDIRECTS) passes scout_sources.check_url_safe before it is requested: Refused otherwise. An Authorization header
     goes only to the first URL's host. FetchError on a network error or status >= 400."""
@@ -107,7 +107,7 @@ def get(url, accept=None, headers=None):
             raise Refused(f"refused: {e}") from None
         hop = h if urllib.parse.urlsplit(url).hostname == origin else {k: v for k, v in h.items() if k.lower() != "authorization"}
         try:
-            return _open(urllib.request.Request(url, headers=hop))
+            return _open(urllib.request.Request(url, headers=hop), timeout)
         except _Redirect as r:
             url = r.url
     raise FetchError(f"more than {MAX_REDIRECTS} redirects")

@@ -17,6 +17,7 @@ import socket
 import sys
 import time
 import urllib.parse
+from html.parser import HTMLParser
 from pathlib import Path
 
 import discord_feed
@@ -184,6 +185,77 @@ def check_url_safe(url):
 def _check_request_url(url):
     """Kept for callers of the old name: the same rule as check_url_safe."""
     check_url_safe(url)
+
+
+GH_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:/releases)?/?$")
+NPM_RE = re.compile(r"^https://www\.npmjs\.com/package/((?:@[A-Za-z0-9._~-]+/)?[A-Za-z0-9._~-]+)/?$")
+FEED_TYPES = ("application/rss+xml", "application/atom+xml")
+DETECT_TIMEOUT = 10
+
+
+class _AltFeed(HTMLParser):
+    """The first <link rel="alternate" type="application/rss+xml|application/atom+xml" href=…>."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.href = None
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        if tag == "link" and self.href is None and "alternate" in a.get("rel", "").lower().split() \
+                and a.get("type", "").lower().strip() in FEED_TYPES and a.get("href", "").strip():
+            self.href = a["href"].strip()
+
+
+def _taken():
+    seen = _read(scout_dir() / "seen.json", {})
+    reqs = seen.get("requests") if isinstance(seen.get("requests"), dict) else {}
+    return {s["name"] for s in load(create=False)["sources"]} | {r.get("name") for r in reqs.values() if isinstance(r, dict)}
+
+
+def detect(url, taken=None):
+    """url -> {kind, url, name, prefix?}; first match wins (spec 2026-11-23-hardening §b2). At most one page is fetched
+    (through check_url_safe, DETECT_TIMEOUT s); a failed fetch falls back to html_links. Refusal for a refused URL."""
+    check_url_safe(url)
+    name = request_name(url, _taken() if taken is None else set(taken))
+    m = GH_RE.match(url)
+    if m:
+        return {"kind": "github_releases", "url": f"https://api.github.com/repos/{m.group(1)}/{m.group(2)}/releases", "name": name}
+    m = NPM_RE.match(url)
+    if m:
+        return {"kind": "npm", "url": f"https://registry.npmjs.org/{m.group(1)}", "name": name}
+    if urllib.parse.urlsplit(url).path.endswith("CHANGELOG.md"):
+        return {"kind": "changelog_md", "url": url, "name": name}
+    try:
+        _, body, ctype = scout_fetch.get(url, timeout=DETECT_TIMEOUT)
+    except scout_fetch.Refused as e:
+        raise Refusal(str(e).split(": ", 1)[-1]) from None
+    except scout_fetch.FetchError:
+        body, ctype = b"", ""
+    p = _AltFeed()
+    try:
+        p.feed(body.decode("utf-8", "replace"))
+        p.close()
+    except Exception:  # noqa: BLE001  (odd markup: no feed link)
+        p.href = None
+    if p.href:
+        feed = urllib.parse.urljoin(url, p.href)
+        check_url_safe(feed)
+        return {"kind": "rss", "url": feed, "name": name}
+    head = body[:200].lstrip().lower()
+    if "xml" in (ctype or "").lower() or head.startswith((b"<?xml", b"<rss", b"<feed")):
+        return {"kind": "rss", "url": url, "name": name}
+    return {"kind": "html_links", "url": url, "name": name, "prefix": urllib.parse.urlsplit(url).path.rstrip("/") + "/"}
+
+
+def add_url(url, name=None, kind=None, why="", now=None):
+    """The one add path (the CLI, a #scout request, /source): detect() picks kind, url and name unless kind is given."""
+    if kind is None:
+        d = detect(url)
+        kind, url, name = d["kind"], d["url"], name or d["name"]
+    elif not name:
+        name = request_name(url, _taken())
+    return add_source(name, kind, url, why)
 
 
 def add_source(name, kind, url, why="", prefix=None, now=None):
@@ -432,7 +504,7 @@ def main(argv=None):
     sp = sub.add_parser("source").add_subparsers(dest="sub", required=True)
     a = sp.add_parser("add")
     a.add_argument("name")
-    a.add_argument("--kind", required=True)
+    a.add_argument("--kind")
     a.add_argument("--url", required=True)
     a.add_argument("--why", default="")
     sp.add_parser("list")
@@ -450,7 +522,7 @@ def main(argv=None):
             n, m, f = poll()
             print(f"poll: {n} new from {m} sources, {f} failed")
         elif args.sub == "add":
-            row = add_source(args.name, args.kind, args.url, args.why)
+            row = add_url(args.url, args.name, args.kind, args.why)
             print(f"added {row['name']} ({row['kind']})")
         elif args.sub == "list":
             st = load()

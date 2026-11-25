@@ -456,6 +456,99 @@ class RequestTest(Base):
         self.assertEqual(ss.request_name("https://blog.example.com/", set()), "blog")
 
 
+class DetectTest(Base):
+    """detect(): one row of the spec's table per test, from inline HTML served by the local server."""
+
+    def test_github_repo_and_releases_need_no_fetch(self):
+        for url in ("https://github.com/anthropics/claude-code", "https://github.com/anthropics/claude-code/releases",
+                    "https://github.com/anthropics/claude-code.git"):
+            d = ss.detect(url, taken=set())
+            self.assertEqual((d["kind"], d["url"]), ("github_releases", "https://api.github.com/repos/anthropics/claude-code/releases"), url)
+        self.assertEqual(Handler.seen, [])
+
+    def test_npm_package_page(self):
+        d = ss.detect("https://www.npmjs.com/package/@anthropic-ai/claude-code", taken=set())
+        self.assertEqual((d["kind"], d["url"]), ("npm", "https://registry.npmjs.org/@anthropic-ai/claude-code"))
+        d = ss.detect("https://www.npmjs.com/package/left-pad", taken=set())
+        self.assertEqual(d["url"], "https://registry.npmjs.org/left-pad")
+
+    def test_raw_changelog(self):
+        url = "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md"
+        self.assertEqual(ss.detect(url, taken=set())["kind"], "changelog_md")
+        self.assertEqual(ss.detect(url, taken=set())["url"], url)
+        self.assertEqual(Handler.seen, [])
+
+    def test_page_with_a_feed_link_gives_the_absolute_feed_url(self):
+        self.serve("/blog", '<html><head><link rel="stylesheet" href="/s.css">'
+                            '<link rel="alternate" type="application/rss+xml" href="/blog/feed.xml"></head></html>', "text/html")
+        self.serve("/news", '<html><head><link rel="Alternate home" type="application/atom+xml" '
+                            'href="https://feeds.example.com/atom"></head></html>', "text/html")
+        self.assertEqual(ss.detect(self.base + "/blog", taken=set())[ "url"], self.base + "/blog/feed.xml")
+        self.assertEqual(ss.detect(self.base + "/blog", taken=set())["kind"], "rss")
+        self.assertEqual(ss.detect(self.base + "/news", taken=set())["url"], "https://feeds.example.com/atom")
+
+    def test_feed_link_to_a_private_address_is_refused(self):
+        # mutation: drop the check of the feed URL -> an rss row pointing at 10.0.0.5
+        self.serve("/blog", '<html><head><link rel="alternate" type="application/rss+xml" href="https://10.0.0.5/f"></head></html>', "text/html")
+        with self.assertRaises(ss.Refusal) as cm:
+            ss.detect(self.base + "/blog", taken=set())
+        self.assertEqual(str(cm.exception), "private address 10.0.0.5")
+
+    def test_url_that_is_itself_a_feed(self):
+        self.serve("/a", "<html>x</html>", "application/atom+xml")
+        self.serve("/b", "<?xml version='1.0'?><rss/>", "text/html")
+        self.serve("/c", "<feed></feed>", "text/plain")
+        for p in ("/a", "/b", "/c"):
+            self.assertEqual((ss.detect(self.base + p, taken=set())["kind"], ss.detect(self.base + p, taken=set())["url"]),
+                             ("rss", self.base + p), p)
+
+    def test_anything_else_is_html_links_with_its_path_as_prefix(self):
+        self.serve("/docs/changes", "<html><body><a href='/docs/changes/1'>one</a></body></html>", "text/html")
+        d = ss.detect(self.base + "/docs/changes", taken=set())
+        self.assertEqual((d["kind"], d["url"], d["prefix"]), ("html_links", self.base + "/docs/changes", "/docs/changes/"))
+
+    def test_failed_fetch_falls_back_to_html_links(self):
+        d = ss.detect(self.base + "/missing/page", taken=set())   # 404
+        self.assertEqual((d["kind"], d["prefix"]), ("html_links", "/missing/page/"))
+
+    def test_refused_url_and_redirect_hop(self):
+        with self.assertRaises(ss.Refusal):
+            ss.detect("https://10.0.0.5/x", taken=set())
+        Handler.routes["/go"] = (200, b"", "text/html")
+        import scout_fetch
+        with mock.patch.object(scout_fetch, "get", side_effect=scout_fetch.Refused("refused: link-local address 169.254.169.254")):
+            with self.assertRaises(ss.Refusal) as cm:
+                ss.detect(self.base + "/go", taken=set())
+        self.assertEqual(str(cm.exception), "link-local address 169.254.169.254")
+
+    def test_one_fetch_with_a_10_second_timeout(self):
+        import scout_fetch
+        with mock.patch.object(scout_fetch, "get", return_value=(200, b"<html></html>", "text/html")) as g:
+            ss.detect(self.base + "/x", taken=set())
+        self.assertEqual(g.call_count, 1)
+        self.assertEqual(g.call_args.kwargs.get("timeout"), 10)
+
+    def test_name_default_and_duplicates(self):
+        self.assertEqual(ss.detect("https://github.com/Anthropics/claude-code", taken=set())["name"], "github-anthropics")
+        self.assertEqual(ss.detect("https://github.com/anthropics/x", taken={"github-anthropics"})["name"], "github-anthropics-2")
+        self.assertEqual(ss.detect("https://github.com/anthropics/x", taken={"github-anthropics", "github-anthropics-2"})["name"],
+                         "github-anthropics-3")
+        self.sources({"name": "github-anthropics", "kind": "rss", "url": "https://a.example/f"})
+        self.assertEqual(ss.detect("https://github.com/anthropics/y")["name"], "github-anthropics-2")   # taken read from sources.json
+
+    def test_cli_add_without_kind_detects_it(self):
+        import scout_fetch   # add_source takes https only, so the fetch is faked rather than served over http
+        with mock.patch.object(scout_fetch, "get", return_value=(200, b"<?xml version='1.0'?><rss/>", "application/rss+xml")):
+            rc, out, _ = self.cli("source", "add", "feed1", "--url", "https://feeds.example.com/f.xml")
+        self.assertEqual((rc, out.strip()), (0, "added feed1 (rss)"))
+        rc, out, _ = self.cli("source", "add", "cc", "--url", "https://github.com/anthropics/claude-code")
+        self.assertEqual((rc, out.strip()), (0, "added cc (github_releases)"))
+        row = [s for s in ss.load()["sources"] if s["name"] == "cc"][0]
+        self.assertEqual(row["url"], "https://api.github.com/repos/anthropics/claude-code/releases")
+        rc, _, err = self.cli("source", "add", "bad", "--url", "https://10.0.0.5/")
+        self.assertEqual((rc, err.strip()), (2, "scout: private address 10.0.0.5"))
+
+
 class UrlCheckTest(unittest.TestCase):
     """check_url_safe: each refused address class through a fake resolver, literal IP hosts, one real resolution."""
 
