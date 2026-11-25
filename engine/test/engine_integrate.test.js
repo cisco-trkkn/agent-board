@@ -250,7 +250,8 @@ test("ledger.render lines are counted by metrics.py ledger_fields", () => {
   const py = `import json,sys\nsys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, "../../board"))})\nimport metrics\nprint(json.dumps(metrics.ledger_fields(sys.stdin.read(), "")))`;
   const r = cp.spawnSync("python3", ["-I", "-c", py], { input: text, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(JSON.parse(r.stdout), { bounces: 2, fix_rounds: 2, fix_wave: true, rulings: 2, parked: 1, final_findings: 0 });
+  assert.deepEqual(JSON.parse(r.stdout), { bounces: 2, fix_rounds: 2, fix_wave: true, rulings: 2, parked: 1, final_findings: 0,
+    red_after_merge: false, final_review_crit_imp: 0 }); // the two guardrail fields of the improve loop (its plan's Task 5)
 });
 
 // ---- task 8b: a failed spec's ledger goes on the spec branch ---------------------------------------------------

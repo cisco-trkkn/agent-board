@@ -102,7 +102,7 @@ test("render: the headings, in order, the first three lines, the marker; two spe
   const rel = h.of("queue_finished")[0].detail.report;
   assert.equal(rel, "docs/superpowers/reports/2026-01-01-queue.md", "named for the start date, though it ended on 2026-01-02");
   const md = fs.readFileSync(path.join(h.wt, rel), "utf8");
-  assert.deepEqual(H2(md), ["## Specs", "## Awaiting you", "## Metrics", "## Sleep"]);
+  assert.deepEqual(H2(md), ["## Specs", "## Awaiting you", "## Metrics", "## Sleep", "## Improve"]);
   assert.deepEqual(md.split("\n").slice(0, 3), ["# Queue report 2026-01-01", "", "Written by the engine (demo)."]);
   assert.equal(md.trimEnd().split("\n").pop(), `<!-- engine-queue: demo ${h.of("spec_added")[0].seq} -->`);
   assert.deepEqual(md.split("\n").filter((l) => l.startsWith("### ")).slice(0, 2), [`### ${S1}`, `### ${S2}`]);
@@ -127,7 +127,7 @@ test("render: a lead-run spec has the one rulings line and no Spend line; pure o
   const md = qr.render({ db: d, project: "demo", outputs: {}, now: () => 1 });
   assert.ok(md.includes("- Rulings:\n  - (lead-run: the lead appends its rulings)"));
   assert.ok(!md.includes("- Spend:"));
-  assert.deepEqual(H2(md), ["## Specs", "## Awaiting you", "## Metrics", "## Sleep"]);
+  assert.deepEqual(H2(md), ["## Specs", "## Awaiting you", "## Metrics", "## Sleep", "## Improve"]);
   assert.equal(md, qr.render({ db: d, project: "demo", outputs: {}, now: () => 1 }), "render is deterministic");
 });
 

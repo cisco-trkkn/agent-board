@@ -1,6 +1,6 @@
 "use strict";
-// The engine's command line (spec sections 5 and 6): run, status, events, resume, signal, rebuild, and the queue's
-// enqueue, start and done.
+// The engine's command line (spec sections 5 and 6): run, status, events, resume, signal, rebuild, the queue's
+// enqueue, start and done, and merge-branch (the improve loop's merge entry).
 // main(argv, io) resolves to the exit code; io = {out, err, cwd} (defaults: stdout, stderr, process.cwd()).
 const fs = require("node:fs");
 const path = require("node:path");
@@ -20,7 +20,7 @@ const lead = lazy("./lead");
 const queue = lazy("./queue");
 const schedule = lazy("./schedule");
 
-const SUBS = ["run", "status", "events", "resume", "signal", "rebuild", "enqueue", "start", "done", "schedule", "wake"];
+const SUBS = ["run", "status", "events", "resume", "signal", "rebuild", "enqueue", "start", "done", "schedule", "wake", "merge-branch"];
 const USAGE = `engine: usage: engine <${SUBS.join("|")}> ...\n`;
 const ANSWERS = ["approve", "deny", "fail"];
 const OK_OUTCOME = /^(merged|mr|kept)/;
@@ -30,7 +30,7 @@ const QUIET = /^(deadline|timer_fired|inbox_.*|job_session|step_intent|step_done
 const TICK_MS_FAKE = 100;
 
 const VALUE_FLAGS = new Set(["--integration", "--batch", "--project", "--backend", "--note", "--script", "--budget-attempts", "--budget-tokens",
-  "--runner", "--gate", "--worktree", "--outcome", "--rule", "--skip-if-weekly-usage"]);
+  "--runner", "--gate", "--worktree", "--outcome", "--rule", "--skip-if-weekly-usage", "--key", "--proposal"]);
 const BOOL_FLAGS = new Set(["--push", "--waiting", "--check", "--apply", "--preflight", "--here", "--unfinished", "--dry-run"]);
 
 function parseArgs(argv) {
@@ -604,6 +604,31 @@ function cmdRebuild(args, io) {
   return 0;
 }
 
+// ---- merge-branch: the improve loop's one write to main (improve plan Task 10) -------------------------------------------
+
+const MERGE_WAITING = 3; // the live checkout is mid-change or off the target branch: nothing was written, ask again later
+
+// Exit 0 `merged <branch>: <sha>`; 2 refused (`protected path <p>`) or usage; 3 waiting; 1 failed (a rebase conflict).
+function cmdMergeBranch(args, io) {
+  const p = parseArgs(args);
+  if (p.error || p.pos.length !== 1 || !p.flags.key || !p.flags.proposal) {
+    io.err(`engine: merge-branch: ${p.error || "usage: engine merge-branch <branch> --key <key> --proposal <id> [--project P]"}\n`);
+    return 2;
+  }
+  const project = resolveProject(p.flags, io);
+  if (!project) return 2;
+  const top = git(io.cwd, ["rev-parse", "--show-toplevel"]);
+  if (!top) { io.err("engine: merge-branch: not inside a git checkout\n"); return 2; }
+  const d = db.open(project);
+  try {
+    const r = require("./integrate").mergeBranch({ db: d, repo: mainRoot(top), tmuxCtl: tmuxCtlPath(), project },
+      { branch: p.pos[0], key: p.flags.key, proposal: p.flags.proposal });
+    if (r.outcome === "merged") { io.out(`merged ${p.pos[0]}: ${r.commit}`); return 0; }
+    io.err(`engine: merge-branch: ${r.outcome === "waiting" ? "waiting: " : ""}${r.why}\n`);
+    return r.outcome === "refused" ? 2 : r.outcome === "waiting" ? MERGE_WAITING : 1;
+  } finally { d.close(); }
+}
+
 // ---- entry -----------------------------------------------------------------------------------------------------
 
 async function main(argv, io0) {
@@ -628,6 +653,7 @@ async function main(argv, io0) {
       case "done": return cmdDone(rest, io);
       case "schedule": return await cmdSchedule(rest, io);
       case "wake": return await cmdWake(rest, io);
+      case "merge-branch": return cmdMergeBranch(rest, io);
       default: return cmdRebuild(rest, io);
     }
   } catch (e) {

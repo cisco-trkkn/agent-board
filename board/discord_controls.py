@@ -17,6 +17,7 @@ import discord_feed
 import discord_ideas
 import discover_post
 import dream_discord
+import improve_discord
 import scout_post
 import tc_env
 
@@ -108,6 +109,9 @@ def consume_events(d, project, state, run, add_line, lead_run=None, spawn=None):
             elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:dream:"):
                 cid = str(ev.get("custom_id"))
                 discord_feed.audit_append(d, user, "click", cid, dream_discord.click(project, user, cid, time.time()) if user in allow else "rejected")
+            elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:improve:"):
+                cid = str(ev.get("custom_id"))
+                discord_feed.audit_append(d, user, "click", cid, improve_discord.click(project, user, cid, time.time(), add_line=lambda t: add_line(project, t)) if user in allow else "rejected")
             elif kind == "click" and str(ev.get("custom_id") or "").startswith("ab:ideas:"):
                 cid = str(ev.get("custom_id"))
                 discord_feed.audit_append(d, user, "click", cid, discord_ideas.click(user, cid, add_line, time.time()) if user in allow else "rejected")

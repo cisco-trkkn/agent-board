@@ -43,6 +43,19 @@ Coming from the author's earlier global setup? `./install.sh --migrate` (see [do
 
 `tmux-ctl scout …` runs the trend scout: a daily source poll, a Sunday pass that drafts specs and posts a digest, and `approve` / `reject` / `revise` for each draft.
 
+## Supervised improvement loop
+
+Learning is cheap, changing behaviour needs evidence, changing authority needs approval. `tmux-ctl improve tick`
+(weekly on the engine schedule, and after every queue's morning report) collects proposals from memory consolidation,
+opportunity discovery, the trend scout, task-observer and `tmux-ctl improve propose`, trials low and high ones on half
+of the engine-run specs, keeps or reverts low ones by the metrics decision rule against the active outcomes in
+`docs/superpowers/outcomes/`, and cards the rest to you on Discord. It never changes a path in
+`docs/superpowers/improve/protected.txt`. The loop runs for this project only: for any other project the commands
+answer `not the loop's project` and do nothing. Commands: `tmux-ctl improve list|show|propose|revert|tick|variants|click|adapters`,
+`tmux-ctl improve outcome status [<id>]` and `tmux-ctl improve schedule install`. Nothing sets up the weekly tick by
+itself: run `tmux-ctl improve schedule install` once, and it adds the tick to the engine schedule (Sunday 08:00).
+The post-report tick is keyed by the report's date, so a second queue that finishes the same day adds no second tick.
+
 ## Layout
 
 | Repo path | Role |

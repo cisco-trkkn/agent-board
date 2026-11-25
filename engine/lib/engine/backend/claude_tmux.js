@@ -93,7 +93,9 @@ function createBackend(opts) {
   }
 
   function launch(window, job, extra, briefPath) {
-    const args = ["agent", window, "--dir", job.worktree, ...extra,
+    // a job's own env (a trial's Code Mode switch) reaches the worker through `tmux-ctl agent --env K=V`
+    const jobEnv = Object.entries(job.env || {}).flatMap(([k, v]) => ["--env", `${k}=${v}`]);
+    const args = ["agent", window, "--dir", job.worktree, ...extra, ...jobEnv,
       "--model", job.model, "--effort", job.effort, "--brief", briefPath];
     const env = ctlEnv();
     env.ENGINE_JOB = String(job.id);
@@ -174,7 +176,7 @@ function createBackend(opts) {
     const briefPath = path.join(dir, `${logName(e.job.id).replace(/\.log$/, "")}-resume${resumes}.md`);
     fs.writeFileSync(briefPath, text);
     const window = `${e.handle.window}-r${resumes}`;
-    const rjob = job ? { ...e.job, ...job, worktree: e.worktree } : e.job;
+    const rjob = job ? { ...e.job, ...job, worktree: e.worktree, env: job.env } : e.job; // the env is the new job's own
     const pane = launch(window, rjob, ["--resume", sid], briefPath);
     const next = register(rjob, window, pane, Date.now());
     next.session_id = sid;

@@ -9,6 +9,8 @@ const cp = require("node:child_process");
 const steps = require("./steps");
 const db_ = require("./db");
 const integrate = require("./integrate");
+const inbox = require("./inbox");
+const improve = require("../improve");
 
 const REPORT_DIR = "docs/superpowers/reports";
 const METRICS_FILES = ["docs/superpowers/metrics/runs.jsonl", "docs/superpowers/metrics/tasks.jsonl"];
@@ -43,6 +45,30 @@ function reportName(ctx, q) {
   }
 }
 const reportPath = (ctx) => reportName(ctx, queueOf(ctx.db));
+
+// The improvement loop as of its last tick (improve plan Task 11): the tick's `improve_step` counts in one line, then one
+// line per proposal in `trial` with the specs that ran its variant so far (their `improve_variants` events) of its length.
+// The tick this report starts runs after it, so its verdicts are in the next report.
+function improveLines(db) {
+  const out = [];
+  const start = db.prepare("SELECT seq, ts FROM events WHERE kind='improve_step' AND json_extract(detail, '$.step')='start' ORDER BY seq DESC LIMIT 1").get();
+  if (start) {
+    const parts = db.prepare("SELECT detail FROM events WHERE kind='improve_step' AND json_extract(detail, '$.tick')=? ORDER BY seq").all(start.seq)
+      .map((e) => parse(e.detail)).map((d) => [d.step, Object.entries(d.counts && typeof d.counts === "object" ? d.counts : {})])
+      .filter(([, counts]) => counts.length)
+      .map(([step, counts]) => `${step} ${counts.map(([k, v]) => `${k} ${typeof v === "object" ? JSON.stringify(v) : v}`).join(", ")}`);
+    out.push(`Last tick ${isoOf(start.ts)}: ${parts.join("; ") || "nothing counted"}`, "");
+  }
+  const trials = db.prepare("SELECT id, trial_len FROM proposals WHERE state='trial' ORDER BY created_at, id").all();
+  if (!trials.length) { out.push("no trials"); return out; }
+  const ran = db.prepare("SELECT spec, detail FROM events WHERE kind='improve_variants' AND spec IS NOT NULL ORDER BY seq").all()
+    .map((e) => ({ spec: e.spec, ids: (parse(e.detail).variants || []).map((v) => v && v.id) }));
+  for (const p of trials) {
+    const n = new Set(ran.filter((r) => r.ids.includes(p.id)).map((r) => r.spec)).size;
+    out.push(`- ${p.id} trial: ${n}/${p.trial_len == null ? 5 : p.trial_len} specs`);
+  }
+  return out;
+}
 
 // ---- render ----------------------------------------------------------------------------------------------------
 
@@ -98,6 +124,8 @@ function render({ db, project, outputs = {}, now }) {
   if (o.sleepsErr) out.push(`(not available: ${o.sleepsErr})`);
   else if (!(o.sleeps || []).length) out.push("none");
   else for (const l of o.sleeps) out.push(l);
+  out.push("", "## Improve", "");
+  try { out.push(...improveLines(db)); } catch (e) { out.push(`(not available: ${firstLine(e && e.message)})`); }
   out.push("", marker(project, q), "");
   return out.join("\n");
 }
@@ -184,6 +212,14 @@ function write(ctx) {
     }
   }
   call(ctx, q, "artifact", `artifact:${seq}:${rel}`, ["artifact", abs]);
+  // The improvement loop's tick after a committed report (improve plan Task 11): one `schedule` row per report date, drained
+  // like any schedule row (schedule.handleRow; its name is `improve`). An uncommitted report writes none, and
+  // TC_IMPROVE_TICK=0 turns the row off (the engine tests' seam, engine/test/engine_helpers.js tmpEnv). Only the loop's own
+  // repo gets the row (improve.isLoopRepo): another project's queue never schedules a tick.
+  if (envOf(ctx).TC_IMPROVE_TICK !== "0" && improve.isLoopRepo(ctx.repo, envOf(ctx)) && ctx.db.prepare("SELECT 1 FROM steps WHERE key=? AND state='done'").get(`commit_report:${rel}`)) {
+    inbox.insert(ctx.db, { source: "schedule", source_id: `improve@${dateOf(q, ctx.now)}`, kind: "run",
+      payload: { command: "tmux-ctl improve tick", skip_if_weekly_usage: 85, cwd: ctx.repo } }, typeof ctx.now === "function" ? ctx.now() : undefined);
+  }
   // A queue with a lead-run spec or a `keep` spec (what an `ask` answer enqueues with) has merge requests or rulings still to
   // post: the Mac must stay awake until the lead hears `queue finished`, and the lead's rule ends with `tmux-ctl awake off`.
   if (!q.specs.some((s) => s.runner === "lead" || s.integration === "keep")) call(ctx, q, "awake_off", `awake_off:${seq}`, ["awake", "off"]);

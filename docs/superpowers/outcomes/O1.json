@@ -1,0 +1,9 @@
+{"id": "O1",
+ "statement": "Cheaper specs, quality held",
+ "signal": {"metric": "tokens_per_task", "source": "metrics", "compare": "trial_vs_baseline"},
+ "completion": {"change": -0.25, "min_queues": 2},
+ "guardrails": [
+   {"metric": "failed_specs", "rule": "not_worse"},
+   {"metric": "red_after_merge", "rule": "not_worse"},
+   {"metric": "final_review_crit_imp_per_spec", "rule": "not_worse"}],
+ "state": "active"}

@@ -30,6 +30,7 @@ const architect = require("./architect");
 const hold = require("./hold");
 const schedule = require("./schedule");
 const specDriven = require("./strategy/spec_driven");
+const improve = require("../improve");
 
 const TICK_S = 5;
 const HEARTBEAT_S = 120; // no status for this long fails the attempt
@@ -154,7 +155,7 @@ function start(opts) {
   const hash = policy.policyHash(config);
   const tmuxCtl = opts.tmuxCtl || process.env.TC_TMUX_CTL || path.join(repo, "bin/tmux-ctl");
   const env = { ...process.env, ...(opts.env || {}) };
-  const routing = parse(readOr(path.join(repo, "docs/superpowers/model-routing.json"), "null")) || {};
+  const engineRouting = parse(readOr(path.join(repo, "docs/superpowers/model-routing.json"), "null")) || {};
   const tell = opts.tell || ((handle, text) => { cp.spawnSync(tmuxCtl, ["tell", handle.window, text], { env, encoding: "utf8" }); });
   const notify = opts.notify || ((text) => process.stderr.write(`${text}\n`));
   const sleep = opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -191,6 +192,11 @@ function start(opts) {
     if (INPUTS.includes(kind)) produced = true;
   }
   const detailOf = (job) => parse(job.detail) || {};
+  // The trial variants of an engine-run spec (improve spec section 4): the list its `improve_variants` event stored.
+  const variantsOf = (specId) => {
+    const e = db.prepare("SELECT detail FROM events WHERE spec=? AND kind='improve_variants' ORDER BY seq DESC LIMIT 1").get(specId);
+    return (e && (parse(e.detail) || {}).variants) || [];
+  };
   const withDetail = (job, d) => ({ ...job, detail: JSON.stringify(d) });
   const handleOf = (job) => ({ job: job.id, window: job.window, pane: job.pane, session_id: job.session_id || undefined });
   const lastEvent = (spec, kind) => {
@@ -257,9 +263,10 @@ function start(opts) {
     const task = c.task === undefined ? null : c.task;
     const n = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE spec=? AND kind=? AND task IS ?").get(spec.id, c.kind, task).n;
     const tier = c.tier || "standard";
+    const routing = improve.routing(variantsOf(spec.id), engineRouting); // a routing trial patches the map of this spec's jobs only
     return {
       id: `${slugOf(spec)}:${c.kind}${task === null ? "" : task}:${n + 1}`, spec: spec.id, kind: c.kind, task, tier,
-      model: c.model || routing[tier] || DEFAULT_MODELS[tier] || "sonnet",
+      model: c.model || (typeof routing[tier] === "string" && routing[tier]) || DEFAULT_MODELS[tier] || "sonnet",
       effort: (routing.effort && routing.effort[tier] !== "inherit" && routing.effort[tier]) || DEFAULT_EFFORT[tier] || "medium",
       state: c.state || "pending", attempt: n + 1, brief: null, report: null, window: null, pane: null, session_id: null,
       base: null, head: null, tools: "all", mcp: "all", started_at: null, ended_at: null, needs_you_since: null,
@@ -1058,6 +1065,8 @@ function start(opts) {
     } else {
       out.push("You are an engine worker: claude/worker.md applies. Commit your work on this branch; do not push, merge or delete branches.", "");
     }
+    const trial = improve.overlay(variantsOf(spec.id)); // worker and reviewer briefs only, never the architect's (A13)
+    if (trial) out.push(trial);
     for (const n of tasks) out.push(taskText(spec, n));
     if (d.findings !== undefined && d.findings !== null) {
       out.push(d.bounce ? `## The verify command is red (bounce ${d.bounce})` : "## Findings to fix", "",
@@ -1158,6 +1167,8 @@ function start(opts) {
       const prev = d.resume_of ? get("jobs", d.resume_of) : null;
       const fresh = { id: ready.id, kind: ready.kind, task: ready.task, model: ready.model, effort: ready.effort,
         brief: ready.brief, report: ready.report, worktree: wt, window: ready.window };
+      const trialEnv = improve.envFor(variantsOf(spec.id), job); // Code Mode: mechanical-tier implement jobs of a trial spec
+      if (trialEnv) fresh.env = trialEnv;
       // fix rounds and answered holds resume the worker's own session when it can be resumed; the session is told the
       // brief, or after a hold the answer alone. The new job goes along (A6): the window gets its ENGINE_JOB.
       if (prev && prev.pane && prev.session_id) {
@@ -1217,12 +1228,31 @@ function start(opts) {
     if (spec.batch === null || spec.batch === undefined || spec.batch === "") return;
     try {
       steps.run(db, { key: `metrics_start:${spec.id}`, spec: spec.id, kind: "metrics_start", facts: { spec: spec.id, batch: spec.batch } }, () => {
-        const r = cp.spawnSync(tmuxCtl, ["metrics", "start", spec.id, "--batch", String(spec.batch), "--worktree", String(spec.worktree)],
+        const trial = improve.ids(variantsOf(spec.id));
+        const r = cp.spawnSync(tmuxCtl, ["metrics", "start", spec.id, "--batch", String(spec.batch), "--worktree", String(spec.worktree),
+          ...(trial.length ? ["--variants", trial.join(",")] : [])],
           { cwd: repo, env, encoding: "utf8", timeout: 60000 });
         if (r.error || r.status !== 0) throw new Error(`metrics start: ${(r.stderr || (r.error && r.error.message) || "").trim().split("\n")[0]}`);
         return { spec: spec.id, batch: spec.batch };
       }, { now });
     } catch (_) { /* recorded as a failed step */ }
+  }
+
+  // The trials of an engine-run spec, asked once when it starts: `tmux-ctl improve variants <spec> --json`. The answer
+  // is kept in one improve_variants event (none for a spec in no trial), which the briefs, the routing, the job env and
+  // metrics start read. A failing call is one improve_variants_error event and the spec runs with no variants.
+  // Only the loop's own repo is asked (improve.isLoopRepo): a spec of any other project runs with no variants.
+  function loadVariants(spec) {
+    if (!improve.isLoopRepo(repo, env)) return;
+    if (lastEvent(spec.id, "improve_variants") || lastEvent(spec.id, "improve_variants_error")) return;
+    const r = improve.fetch({ tmuxCtl, spec: spec.id, cwd: repo, env: { ...env, TC_PROJECT: project } });
+    if (r.error) { emit("improve_variants_error", { spec: spec.id, error: r.error, text: r.error }); return; }
+    if (!r.variants.length) return;
+    // a challenger copy goes only into the spec's own worktree, never into the main checkout wtOf falls back to
+    const own = spec.worktree && fs.existsSync(spec.worktree) && path.resolve(spec.worktree) !== path.resolve(repo) ? spec.worktree : null;
+    const a = improve.apply({ repo, worktree: own, variants: r.variants });
+    emit("improve_variants", { spec: spec.id, variants: a.variants, dropped: a.dropped,
+      text: `${improve.ids(a.variants).join(",") || "none"}${a.dropped.length ? ` (dropped ${a.dropped.map((d) => `${d.id}: ${d.reason}`).join("; ")})` : ""}` });
   }
 
   // The gate of a lead-run spec (spec section 6): `metrics gate <id>`, once, as a step; its answer is the gate_result event.
@@ -1287,6 +1317,7 @@ function start(opts) {
       }
     }
     plan(spec); // a plan the engine cannot compile is an error before anything starts
+    loadVariants(spec); // engine-run specs only: a lead-run spec carries no trial
     metricsStart(spec); // not for a lead-run spec: the lead runs its own (R17)
     const t = now();
     emit("spec_started", { spec: spec.id, rows: [["specs", { ...spec, state: "running", policy_version: policy.POLICY_VERSION, policy_hash: hash, updated_at: t }], ...retryRows()],

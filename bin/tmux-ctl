@@ -81,6 +81,7 @@
 #   tmux-ctl scout schedule install|status|uninstall  the two scout LaunchAgents (poll 06:00, weekly Sun 07:00 + Mon retry)
 #   tmux-ctl scout approve|reject|revise <id> [--note <text>] | redraft <id> | pack  decide a drafted spec; redraft a revise now; print the context pack
 #   tmux-ctl project new <name> --init|--clone <url>|--dir <path> | start <name> [--dir <path>]  a new project: its folder (prints it); its dev session and lead (works outside tmux)
+#   tmux-ctl improve list|show|propose|revert|tick|variants|click|adapters --dry-run | outcome status [<id>] | schedule install  the supervised improvement loop (board/improve.py); schedule install sets up the weekly tick
 #   tmux-ctl registry|engine <sub> …       plan manifests, graphs, waves; the PCEE engine (engine/, node)
 #   tmux-ctl metrics <sub> …                run-log metrics (board/metrics.py)
 #
@@ -120,7 +121,7 @@ except BaseException:
   return 0
 }
 
-[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || "$1" == project || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || "$1" == engine || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
+[[ -n "$TMUX" || -z "$1" || "$1" == (-h|--help|help) || "$1" == discord || "$1" == project || ( "$1" == context && "$2" == dream* ) || ( "$1" == gauth && "$2" == config ) || "$1" == lead-restart || "$1" == awake || "$1" == discover || "$1" == scout || "$1" == registry || "$1" == engine || "$1" == improve || ( "$1" == metrics && ( "$2" == schedule || "$2" == weekly || "$2" == append || "$2" == has || "$2" == runs || "$2" == gate ) ) ]] || die "not inside tmux"   # discord, context dream*, gauth config, metrics schedule|weekly|append|has|runs|gate (registry calls them; gate is a read-only evaluator), discover, scout, registry, engine, improve, lead-restart and awake work outside tmux (the restore job's launchd run; awake finds the server through tc_tmux)
 if [[ -z "$TMUX" ]]; then
   SESSION=; FEEDKEY=
 elif [[ -n "$TC_SESSION" ]]; then
@@ -537,7 +538,7 @@ case "$cmd" in
 
   agent)
     name="$1"; shift
-    force=0; briefile=""; wdir=""; resume=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"
+    force=0; briefile=""; wdir=""; resume=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"; uenv=""
     while [[ "$1" == --* ]]; do
       case "$1" in
         --force) force=1; shift ;;
@@ -551,6 +552,10 @@ case "$cmd" in
                   model="$2"; shift 2 ;;
         --effort) (( ${TC_EFFORTS[(Ie)$2]} )) || die "--effort needs one of: ${TC_EFFORTS}"
                   effort="$2"; shift 2 ;;
+        --env)    # one variable for the worker's process (the engine's per-job env); the launch line's own variables are not for it
+                  [[ "$2" =~ '^[A-Z][A-Z0-9_]*=' ]] || die "--env needs NAME=value, the name matching ^[A-Z][A-Z0-9_]*\$"
+                  [[ "${2%%=*}" == (ENGINE_*|TC_ROLE|PATH|AGENT_BOARD_REPO|CLAUDE_MD_REVISE_HOOK) ]] && die "--env cannot set ${2%%=*}"
+                  uenv+=" ${2%%=*}=${(q)${2#*=}}"; shift 2 ;;
         *) die "unknown agent option '$1' (tmux-ctl help)" ;;
       esac
     done
@@ -598,7 +603,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     cmd="claude --model $model --effort $effort ${rflag}${wflag}-n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
     [[ -n "$TC_AGENT_CMD" ]] && cmd="$TC_AGENT_CMD"   # test seam: replaces the claude command
     eenv=""; [[ -n "$ENGINE_JOB" ]] && eenv=" ENGINE_JOB=${(q)ENGINE_JOB} ENGINE_PROJECT=${(q)ENGINE_PROJECT} ENGINE_DIR=${(q)ENGINE_DIR} ENGINE_WORKTREE=${(q)ENGINE_WORKTREE}"
-    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO}${eenv} $cmd"
+    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO}${eenv}${uenv} $cmd"
     # the line is long (task, PATH): typed into a shell that has not started ZLE it overflows the tty's 1024-byte typeahead, so it goes in a file and only `. file` is typed
     launchf="$STATE/agents/${SESSION//[^A-Za-z0-9._-]/_}-$name.zsh"   # a tmux session name can hold other characters
     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; print -r -- "DRYRUN launch: $launchf"; exit 0 }   # test seam: stop before any window is created
@@ -857,11 +862,15 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     [[ -n "$SESSION" ]] && export TC_SESSION="$SESSION"
     exec node "${0:A:h:h}/engine/bin/engine.js" "$@" ;;
 
+  improve)
+    [[ -n "$TC_PROJECT" || -z "$TMUX" ]] || export TC_PROJECT="$FEEDKEY"   # inside tmux the project is the session's, as for engine)
+    source "${0:A:h:h}/tools/lib/improve.zsh"; improve_main "${0:A:h:h}" "$@" ;;
+
   metrics)
     exec python3 -I "${0:A:h:h}/board/metrics.py" "$@" ;;
 
   ""|-h|--help|help)
-    sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,87p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   *) die "unknown command '$cmd' (tmux-ctl help)" ;;
 esac

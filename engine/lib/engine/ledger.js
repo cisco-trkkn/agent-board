@@ -16,6 +16,13 @@ const LINES = {
   minor: (e) => `Task ${e.task}: minor (deferred): ${e.text}`,
   ruling: (e) => `Ruling: ${e.text} — ${e.cost || e.cost_if_wrong}`,
   fix_wave: () => "Final review: fix wave",
+  integrated: (e) => (e.outcome === "tests_red" ? "Merge: tests red after the merge" : null),
+  job_done: (e) => {
+    const row = (e.rows || []).find((r) => r && r.table === "jobs");
+    if (!row || !row.row || row.row.kind !== "final_review") return null;
+    const n = ((e.status && e.status.findings) || []).filter((x) => x && (x.severity === "critical" || x.severity === "important")).length;
+    return `Final review: ${n} critical/important finding(s)`;
+  },
   task_complete: (e) => `Task ${e.task}: complete (commits ${e.first}..${e.last}, review clean)`,
 };
 
@@ -24,7 +31,8 @@ function render(events) {
   for (const raw of events) {
     const e = flat(raw);
     const f = LINES[e.kind];
-    if (f) out.push(f(e));
+    const line = f ? f(e) : null;
+    if (line !== null) out.push(line);
   }
   return out.join("\n") + "\n";
 }

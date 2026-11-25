@@ -1,0 +1,10 @@
+{"protected": ["board/metrics.py", "docs/superpowers/metrics/configs/a.md", "docs/superpowers/outcomes/O1.json",
+               "docs/superpowers/improve/protected.txt", "docs/superpowers/improve/glob-vectors.json",
+               "claude/orchestrator.md", "claude/worker.md", "claude/plugin/hooks/hooks.json", "claude/plugin/mods/x.js",
+               ".claude/settings.json", ".claude/settings.local.json", "board/improve.py", "board/improve_eval.py",
+               "tools/lib/improve.zsh", "engine/lib/improve.js", "engine/lib/engine/hold.js", "engine/bin/hold.js",
+               "claude/hooks/engine-hold.sh", "claude/plugin/scripts/engine-hold.sh", "claude/improve-rank.md",
+               "bin/tmux-ctl"],
+ "not_protected": ["docs/superpowers/model-routing.json", "claude/skills/x/SKILL.md", "engine/lib/engine/core.js",
+                   "engine/lib/engine/holds.js", "docs/superpowers/metricsx.md", "board/improve.md",
+                   "claude/plugin/scripts/other.sh", "README.md"]}

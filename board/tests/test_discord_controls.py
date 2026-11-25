@@ -11,6 +11,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 import discord_controls as dc  # noqa: E402
+import improve_discord  # noqa: E402
 import tc_env  # noqa: E402
 
 TC = str(dc.BIN / "tmux-ctl")
@@ -133,6 +134,29 @@ class FilesTest(Base):
     def test_click_rejected_user(self):
         self.event("1-a.json", {"type": "click", "custom_id": "ab:x", "user": "X", "message_id": "m", "channel_id": "c", "ts": 1})
         self.step(Runner())
+        self.assertEqual(self.audit()[-1]["result"], "rejected")
+
+
+class ImproveClickTest(Base):
+    CID = "ab:improve:reject:p:P1"
+
+    def click(self, name, cid, user="U1"):
+        self.event(name, {"type": "click", "custom_id": cid, "user": user, "message_id": "m", "channel_id": "c", "ts": 1})
+
+    def test_allowlisted_click_runs_and_is_audited(self):   # mutation: no ab:improve: branch -> audit says "ignored"
+        self.click("1-a.json", self.CID)
+        with mock.patch.object(improve_discord, "click", return_value="rejected") as c:
+            self.step(Runner())
+        c.assert_called_once()
+        self.assertEqual(c.call_args.args[:3], ("p", "U1", self.CID))
+        self.assertEqual([(a["action"], a["target"], a["result"]) for a in self.audit()], [("click", self.CID, "rejected")])
+        self.assertEqual(list((self.d / "events").glob("*.json")), [])
+
+    def test_other_user_rejected_and_nothing_runs(self):
+        self.click("1-a.json", self.CID, user="X")
+        with mock.patch.object(improve_discord, "click") as c:
+            self.step(Runner())
+        c.assert_not_called()
         self.assertEqual(self.audit()[-1]["result"], "rejected")
 
 
