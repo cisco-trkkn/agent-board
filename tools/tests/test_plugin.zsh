@@ -81,6 +81,13 @@ d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
 hit = [(e["matcher"], h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/shutdown-record.sh\" --scoped")]
 assert len(hit) == 1 and hit[0][0] == "SendMessage" and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
 PY
+check "hooks.json registers handoff-arm on PostToolUse Write|Edit|MultiEdit, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]
+hit = [(e.get("matcher"), h) for e in d for h in e["hooks"] if h["command"].endswith("/scripts/handoff-arm.sh\" --scoped")]
+assert len(hit) == 1 and hit[0][0] == "Write|Edit|MultiEdit" and hit[0][1]["timeout"] == 5 and not hit[0][1].get("async"), hit
+PY
+check "handoff-arm.sh is executable" test -x "$P/scripts/handoff-arm.sh"
 check "hooks.json registers lead-stop-guard on Stop (no matcher), --scoped, timeout 10, not async" python3 - "$P/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["Stop"]

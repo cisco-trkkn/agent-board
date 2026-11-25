@@ -87,7 +87,7 @@ It prints one line: `handoff doc: <n> tokens (budget 3000): ok`, or `over` with 
 
 **Register it** only if the doc is saved somewhere other than `~/.local/state/agent-board/handoffs/`: `tmux-ctl artifact <doc> --kind handoff`. A doc under `~/.local/state/agent-board/handoffs/` is already registered by the hook.
 
-**Mark a self-started handoff** (inside tmux only; step 4 defines self-started): run `tmux-ctl handoff-mark` now. Until `tmux-ctl relay` runs, the Stop guard blocks this session from ending its turn, so a handoff whose doc is written cannot stall before the relay. A user-started handoff does not run it. If you call the handoff off, run `tmux-ctl handoff-mark --clear`.
+**Mark a self-started handoff** (inside tmux only; step 4 defines self-started): run `tmux-ctl handoff-mark` now. Until `tmux-ctl relay` runs, the Stop guard blocks this session from ending its turn, so a handoff whose doc is written cannot stall before the relay. A user-started handoff does not run it. The plugin's `handoff-arm.sh` hook sets the same mark anyway when a lead writes or edits a `.md` in the handoffs dir, user-started or not, so running it again is harmless. If you call the handoff off, run `tmux-ctl handoff-mark --clear`.
 
 ## 3. Shut the team down
 
@@ -115,7 +115,7 @@ When the user started the handoff, never run the relay without a Yes from this q
   ```
 
   The relay waits for your turn to end, then replaces this window. Do nothing else after it. If no switch happens within about 2 minutes, a tmux message ("relay failed: …") says why (full reason in `$STATE/relay-<project>.log`), and the doc stays where it is for a manual start.
-- **On Not yet:** end with
+- **On Not yet:** inside tmux, first run `tmux-ctl handoff-mark --clear` (the hook armed the Stop guard when the doc was written), then end with
 
   ```
   Handoff saved: <absolute path>
