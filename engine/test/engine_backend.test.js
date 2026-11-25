@@ -299,6 +299,19 @@ fs.mkdirSync(require("node:path").dirname(r),{recursive:true});fs.writeFileSync(
     assert.notEqual(next.window, h.window);
   });
 
+  test("claude-tmux: a job's env goes to tmux-ctl agent as --env K=V; a job without env gets none, on start and on resume", async (t) => {
+    const env = tmpEnv(); t.after(() => env.restore());
+    const ctx = await makeClaudeTmux(env.root); t.after(() => ctx.cleanup());
+    const h = await ctx.backend.start(ctx.job({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "1", OTHER_VAR: "a b" } }));
+    // the next job on that session has no env of its own: the earlier job's env must not ride along
+    const h2 = await ctx.backend.resume(h, "fix it", ctx.job({ id: "myspec-p1:fix1:1", kind: "fix" }));
+    await ctx.backend.resume(h2, "again", ctx.job({ id: "myspec-p1:implement1:2", attempt: 2, env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "1" } }));
+    const lines = fs.readFileSync(ctx.argvLog, "utf8").trim().split("\n");
+    assert.equal(lines[0], `agent myspec-p1·implement1 --dir ${ctx.worktree} --env CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 --env OTHER_VAR=a b --model sonnet --effort low --brief ${path.join(env.root, "brief.md")}`);
+    assert.doesNotMatch(lines[1], /--env/);
+    assert.match(lines[2], / --resume \S+ --env CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 --model /);
+  });
+
   // The logging tmux-ctl stub also logs the four ENGINE_ variables of its env.
   test("claude-tmux: start and resume pass the new job's ENGINE_ variables", async (t) => {
     const env = tmpEnv(); t.after(() => env.restore());

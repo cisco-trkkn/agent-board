@@ -537,7 +537,7 @@ case "$cmd" in
 
   agent)
     name="$1"; shift
-    force=0; briefile=""; wdir=""; resume=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"
+    force=0; briefile=""; wdir=""; resume=""; model="$TC_DEFAULT_MODEL"; effort="$TC_DEFAULT_EFFORT"; uenv=""
     while [[ "$1" == --* ]]; do
       case "$1" in
         --force) force=1; shift ;;
@@ -551,6 +551,10 @@ case "$cmd" in
                   model="$2"; shift 2 ;;
         --effort) (( ${TC_EFFORTS[(Ie)$2]} )) || die "--effort needs one of: ${TC_EFFORTS}"
                   effort="$2"; shift 2 ;;
+        --env)    # one variable for the worker's process (the engine's per-job env); the launch line's own variables are not for it
+                  [[ "$2" =~ '^[A-Z][A-Z0-9_]*=' ]] || die "--env needs NAME=value, the name matching ^[A-Z][A-Z0-9_]*\$"
+                  [[ "${2%%=*}" == (ENGINE_*|TC_ROLE|PATH|AGENT_BOARD_REPO|CLAUDE_MD_REVISE_HOOK) ]] && die "--env cannot set ${2%%=*}"
+                  uenv+=" ${2%%=*}=${(q)${2#*=}}"; shift 2 ;;
         *) die "unknown agent option '$1' (tmux-ctl help)" ;;
       esac
     done
@@ -598,7 +602,7 @@ Write a longer brief inline, pass it as --brief FILE, or use --force to send thi
     cmd="claude --model $model --effort $effort ${rflag}${wflag}-n ${(q)name} $(ab_claude_args)${rules} ${(q)task}"
     [[ -n "$TC_AGENT_CMD" ]] && cmd="$TC_AGENT_CMD"   # test seam: replaces the claude command
     eenv=""; [[ -n "$ENGINE_JOB" ]] && eenv=" ENGINE_JOB=${(q)ENGINE_JOB} ENGINE_PROJECT=${(q)ENGINE_PROJECT} ENGINE_DIR=${(q)ENGINE_DIR} ENGINE_WORKTREE=${(q)ENGINE_WORKTREE}"
-    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO}${eenv} $cmd"
+    line="cd -- ${(q)root} && CLAUDE_MD_REVISE_HOOK=0 TC_ROLE=worker PATH=${(q)$(ab_path)} AGENT_BOARD_REPO=${(q)AB_REPO}${eenv}${uenv} $cmd"
     # the line is long (task, PATH): typed into a shell that has not started ZLE it overflows the tty's 1024-byte typeahead, so it goes in a file and only `. file` is typed
     launchf="$STATE/agents/${SESSION//[^A-Za-z0-9._-]/_}-$name.zsh"   # a tmux session name can hold other characters
     [[ -n "$TC_AGENT_DRYRUN" ]] && { print -r -- "DRYRUN model: $model effort: $effort"; print -r -- "DRYRUN task: $task"; print -r -- "DRYRUN line: $line"; print -r -- "DRYRUN launch: $launchf"; exit 0 }   # test seam: stop before any window is created

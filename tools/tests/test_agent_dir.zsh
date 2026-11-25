@@ -55,6 +55,16 @@ out="$(ENGINE_JOB=s:implement1:2 ENGINE_PROJECT=p ENGINE_DIR="$work/e" ENGINE_WO
 line="$(grep '^DRYRUN line:' <<< "$out")"
 check "ENGINE_JOB set with --resume: line has --resume and ENGINE_JOB=" test -n "$(grep -F -- '--resume sess-9' <<< "$line")" -a -n "$(grep -F 'ENGINE_JOB=s:implement1:2' <<< "$line")"
 check "ENGINE_JOB unset: no ENGINE_ in the line" test -z "$(dry "$new" agent w9 --dir "$work/wt" --brief "$brief" | grep '^DRYRUN line:' | grep -F ENGINE_)"
+out="$(dry "$new" agent e1 --dir "$work/wt" --env CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 --brief "$brief")"
+line="$(grep '^DRYRUN line:' <<< "$out")"
+check "--env K=V: the launch line sets it before claude" zsh -c '[[ $1 == *" CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 claude "* ]]' _ "$line"
+for bad in lower=1 1X=1 'A-B=1' NOEQ '=1' ENGINE_JOB=x ENGINE_DIR=/tmp TC_ROLE=lead PATH=/tmp AGENT_BOARD_REPO=/tmp CLAUDE_MD_REVISE_HOOK=1; do
+  out="$(dry "$new" agent e2 --dir "$work/wt" --env "$bad" --brief "$brief")"; rc=$?
+  check "--env $bad: refused, no launch line" test $rc -ne 0 -a -z "$(grep '^DRYRUN' <<< "$out")"
+done
+out="$(ENGINE_JOB=s:implement1:1 ENGINE_PROJECT=p ENGINE_DIR="$work/e" ENGINE_WORKTREE="$work/wt" dry "$new" agent e3 --dir "$work/wt" --env X_Y2=v --brief "$brief")"
+line="$(grep '^DRYRUN line:' <<< "$out")"
+check "--env with ENGINE_JOB: both in the line" test -n "$(grep -F ' X_Y2=v ' <<< "$line")" -a -n "$(grep -F 'ENGINE_JOB=s:implement1:1' <<< "$line")"
 check "agent usage header line documents --dir" grep -qxF '#   tmux-ctl agent <name> [--force] [--dir WT [--resume ID]] [--model M] [--effort E] <task> | --brief FILE' "$new"
 out="$(dry "$new" agent 'my-spec-p1·implement3' --dir "$work/wt" --brief "$brief")"; rc=$?
 check "--dir: window name <slug>·<kind><task> accepted" test $rc -eq 0 -a -n "$(grep -F 'DRYRUN line:' <<< "$out")"
