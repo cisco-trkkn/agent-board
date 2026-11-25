@@ -23,7 +23,7 @@ const inboxRow = (db, source, source_id) => db.prepare("SELECT * FROM inbox WHER
 // Move every due, unfired timer into the inbox: one tx per timer, with its event. Oldest due first.
 function moveDueTimers(db, now) {
   const t = nowS(now);
-  const due = db.prepare("SELECT * FROM timers WHERE fired_at IS NULL AND due_at <= ? ORDER BY due_at, id").all(t);
+  const due = db.prepare("SELECT * FROM timers WHERE fired_at IS NULL AND kind != 'schedule' AND due_at <= ? ORDER BY due_at, id").all(t);
   let n = 0;
   for (const timer of due) {
     tx(db, () => {
