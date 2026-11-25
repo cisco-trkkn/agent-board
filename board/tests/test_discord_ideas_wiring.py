@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -56,9 +57,28 @@ class Slash(Base):
 
     def test_named_project_passes_through_on_the_ops_bridge(self):   # whatever bridge the event names, /ideas posts through _ops
         with mock.patch.object(discord_ideas, "request", return_value="unknown project") as rq:
-            self.assertEqual(self.slash("alpha", bridge="alpha"), "unknown project")
+            self.assertEqual(self.slash("alpha", bridge="_ops"), "unknown project")
         self.assertEqual(rq.call_args.args[:2], ("alpha", "_ops"))
         self.assertEqual(self.audit(self.ops)[-1]["target"], "ideas:alpha")
+
+    def test_project_bridge_routes_to_that_bridge(self):   # mutation: "_ops" hardcoded
+        with mock.patch.object(discord_ideas, "request", return_value="asked") as rq:
+            self.assertEqual(self.slash("alpha", bridge="alpha"), "asked")
+            self.assertEqual(rq.call_args.args[:2], ("alpha", "alpha"))
+            self.assertEqual(self.audit(self.ops)[-1]["target"], "ideas:alpha")
+            self.assertEqual(self.slash(None, bridge="alpha"), "asked")
+            self.assertEqual(rq.call_args.args[:2], ("alpha", "alpha"))
+
+    def test_project_bridge_refuses_other_project(self):   # mutation: refusal dropped
+        with mock.patch.object(discord_ideas, "request") as rq:
+            self.assertEqual(self.slash("beta", bridge="alpha"), "refused: other project")
+        rq.assert_not_called()
+        self.assertEqual(self.audit(self.ops)[-1]["result"], "refused: other project")
+
+    def test_missing_bridge_is_ops(self):
+        with mock.patch.object(discord_ideas, "request", return_value="asked") as rq:
+            r = ops.handle_event(None, self.ops, {"type": "slash", "command": "ideas", "project": "alpha", "user": "U1", "ts": NOW}, self.add, {"U1"})
+        self.assertEqual((r, rq.call_args.args[:2]), ("asked", ("alpha", "_ops")))
 
     def test_disallowed_user_is_rejected_without_request(self):   # mutation: branch before the allow check
         with mock.patch.object(discord_ideas, "request") as rq:
@@ -71,6 +91,27 @@ class Slash(Base):
             r = ops.handle_event(None, self.ops, {"type": "slash", "command": "pause", "project": "nope", "user": "U1"}, self.add, {"U1"})
         self.assertEqual(r, "unknown project")
         rq.assert_not_called()
+
+
+class ProjectOutbox(Slash):
+    def test_post_and_click_edit_land_in_the_project_outbox(self):   # real discord_ideas, real files
+        import ideas
+        ideas_dir = Path(self.tmp.name) / "ideas"
+        ideas_dir.mkdir()
+        alpha = tc_env.discord_dir("alpha")
+        alpha.mkdir(parents=True)
+        (alpha / "bridge.json").write_text("{}")
+        with mock.patch.dict(os.environ, {"TC_IDEAS_DIR": str(ideas_dir)}), mock.patch.object(ideas, "_kick"):
+            ideas.add("alpha", "one idea")
+            self.assertEqual(self.slash("alpha", bridge="alpha"), "asked")
+            req = self.lines[-1][1].split()[2].rstrip(":")
+            iid = discord_ideas.open_ideas("alpha")[0][0]
+            doc = {"request": req, "groups": [{"title": "T", "emoji": "🔧", "project": "alpha", "ideas": [iid]}]}
+            self.assertEqual(discord_ideas.post(doc, time.time())[0], 0)
+            self.assertEqual(discord_ideas.click("U1", f"ab:ideas:park:{req}:0", self.add, time.time()), "parked")
+        ops_out = [json.loads(f.read_text())["op"] for f in sorted((alpha / "outbox").glob("*.json"))]
+        self.assertEqual(ops_out, ["post", "edit"])
+        self.assertFalse((self.ops / "outbox").is_dir() and list((self.ops / "outbox").glob("*.json")))
 
 
 class Clicks(Base):

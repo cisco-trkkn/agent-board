@@ -850,8 +850,9 @@ class Events(Base):
         self.assertEqual(self.outbox(), [])
         self.assertEqual(self.audit()[-1]["result"], "unknown project")
 
-    def test_ideas_slash_from_a_project_bridge_goes_through_ops(self):
-        # mutation: pass ev.get("bridge") to discord_ideas.request -> the post, the click edit and the expiry land in the project's outbox
+    def test_ideas_slash_from_a_project_bridge_stays_in_that_project(self):
+        # mutations: request(..., "_ops") for a project bridge -> the request file says "_ops" and the post, click edit and expiry land in the ops outbox;
+        # refusal dropped -> /ideas from bridge a with project b returns "asked" and adds a line
         import discord_ideas as di
         ideas_dir = Path(self.tmp.name) / "ideas"
         ideas_dir.mkdir()
@@ -861,18 +862,24 @@ class Events(Base):
             self.assertEqual(r, "asked")
             T = time.time()
             req = self.lines[-1][1].split()[2].rstrip(":")
-            self.assertEqual(json.loads((self.ops / "ideas" / f"req-{req}.json").read_text())["bridge"], "_ops")
+            self.assertEqual(json.loads((self.ops / "ideas" / f"req-{req}.json").read_text())["bridge"], "a")
             ids = [i for i, _, _ in di.open_ideas("a")]
             self.assertEqual(di.post({"request": req, "groups": [{"title": "G", "emoji": "🔧", "project": "a", "ideas": ids}]}, T + 1)[0], 0)
-            self.assertEqual([o["key"] for o in self.outbox()], [f"ideas-{req}-0"])
+            self.assertEqual([o["key"] for o in self.outbox(self.pd)], [f"ideas-{req}-0"])
             self.assertEqual(di.click("U1", f"ab:ideas:park:{req}:0", self.add, T + 2), "parked")
-            self.assertEqual([o["op"] for o in self.outbox()], ["post", "edit"])
-        self.assertEqual(self.outbox(self.pd), [])
+            self.assertEqual([o["op"] for o in self.outbox(self.pd)], ["post", "edit"])
+        self.assertEqual(self.outbox(), [])
         r2 = ops.handle_event(None, self.ops, {"type": "slash", "command": "ideas", "project": None, "bridge": "a", "user": "U1", "ts": NOW}, self.add, {"U1"})
         req2 = self.lines[-1][1].split()[2].rstrip(":")
         self.assertEqual(di.expire(time.time() + 10_000), 1)
-        self.assertEqual([o["key"] for o in self.outbox()][-1], f"ideas-{req2}-timeout")
-        self.assertEqual(self.outbox(self.pd), [])
+        self.assertEqual([o["key"] for o in self.outbox(self.pd)][-1], f"ideas-{req2}-timeout")
+        self.assertEqual(self.outbox(), [])
+        n_lines, n_pd = len(self.lines), len(self.outbox(self.pd))
+        r3 = ops.handle_event(None, self.ops, {"type": "slash", "command": "ideas", "project": "b", "bridge": "a", "user": "U1", "ts": NOW}, self.add, {"U1"})
+        self.assertEqual(r3, "refused: other project")
+        self.assertEqual(len(self.lines), n_lines)
+        self.assertEqual(len(self.outbox(self.pd)), n_pd)
+        self.assertEqual(self.outbox(), [])
 
     def test_analytics_click_routes_and_audits(self):   # mutation: no ab:analytics branch in _click -> audit says "ignored"
         self.configure()

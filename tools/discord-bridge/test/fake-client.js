@@ -2,6 +2,17 @@
 // Fake discord.js client for tests: records every call in calls[], injects failures.
 const { EventEmitter } = require('node:events');
 
+// One reaction cache entry: .me (the bot's own), .emoji.name, users.remove(userId) records 'unreact' through rec and clears .me for the bot.
+function reactionEntry(cache, e, msgId, botId, rec, me = true) {
+  const entry = { emoji: { name: e }, me, users: { remove: async (u) => {
+    rec('unreact', msgId, { emoji: e, user: u });
+    if (String(u) === botId) entry.me = false;
+    if (!entry.me) cache.delete(e);
+  } } };
+  cache.set(e, entry);
+  return entry;
+}
+
 class FakeClient extends EventEmitter {
   constructor({ guildId = 'G1' } = {}) {
     super();
@@ -50,10 +61,10 @@ class FakeClient extends EventEmitter {
   _makeMessage(channelId, payload) {
     const msg = {
       id: this._newId('m'), channelId, payload, pinned: false,
-      author: { id: this.user.id }, content: payload?.content ?? '',
+      author: { id: this.user.id }, content: payload?.content ?? '', createdTimestamp: Date.parse('2026-11-24T21:00:00Z'),
       channel: { id: channelId, parentId: this.chans.get(channelId)?.parentId ?? null },
       reactions: { cache: new Map() },
-      react: async (e) => { this._record('react', msg.id, e); msg.reactions.cache.set(e, { me: true }); },
+      react: async (e) => { this._record('react', msg.id, e); reactionEntry(msg.reactions.cache, e, msg.id, this.user.id, (m, t, p) => this._record(m, t, p)); },
       edit: async (p) => { this._record('edit', msg.id, p); this._maybeFail('edit'); this._gone(msg); msg.payload = p; if (p?.content !== undefined) msg.content = p.content; return msg; },
       reply: async (p) => { this._record('reply', msg.id, p); this._maybeFail('reply'); this._gone(msg); return this._makeMessage(channelId, p); },
       pin: async () => { this._record('pin', msg.id); this._maybeFail('pin'); msg.pinned = true; },
@@ -103,10 +114,13 @@ class FakeClient extends EventEmitter {
 }
 
 // A standalone message (any author/channel); react() records into .reacted.
-function fakeMessage({ id = 'mx', authorId = 'BOT', content = '', channelId = 'C1', parentId = null, partial = false, hasEyes = false } = {}) {
-  const m = { id, author: { id: authorId }, content, channel: { id: channelId, parentId }, partial, reacted: [], reactions: { cache: new Map() } };
-  if (hasEyes) m.reactions.cache.set('👀', { me: true });
-  m.react = async (e) => { m.reacted.push(e); m.reactions.cache.set(e, { me: true }); };
+// createdTimestamp, authorBot, interactionMetadata: for the liveness tracking; unreacted lists {emoji, user} of users.remove calls; failReact = n makes the next n react() calls reject.
+function fakeMessage({ id = 'mx', authorId = 'BOT', content = '', channelId = 'C1', parentId = null, partial = false, hasEyes = false, createdTimestamp = Date.parse('2026-11-24T21:00:00Z'), authorBot = false, interactionMetadata = undefined } = {}) {
+  const m = { id, author: { id: authorId, bot: authorBot }, content, createdTimestamp, channel: { id: channelId, parentId }, partial, reacted: [], unreacted: [], failReact: 0, reactions: { cache: new Map() } };
+  if (interactionMetadata !== undefined) m.interactionMetadata = interactionMetadata;
+  const rec = (method, _t, p) => { if (method === 'unreact') m.unreacted.push(p); };
+  if (hasEyes) reactionEntry(m.reactions.cache, '👀', id, 'BOT', rec);
+  m.react = async (e) => { if (m.failReact > 0) { m.failReact--; throw new Error('fake react failure'); } m.reacted.push(e); reactionEntry(m.reactions.cache, e, id, 'BOT', rec); };
   m.fetch = async () => { m.partial = false; return m; };
   return m;
 }

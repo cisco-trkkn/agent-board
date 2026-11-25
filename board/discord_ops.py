@@ -677,7 +677,13 @@ def handle_event(project, d, ev, add_line, allow, run=None, spawn=None, st=None)
     elif kind == "read":
         result = "answered"
     elif ideas_slash:
-        result = discord_ideas.request(ev.get("project"), "_ops", add_line, time.time())   # /ideas always posts in #command-center
+        bridge = str(ev.get("bridge") or "_ops")   # the ops bot's /ideas posts in #command-center; a project bot's in its own channel
+        if bridge == "_ops":
+            result = discord_ideas.request(ev.get("project"), "_ops", add_line, time.time())
+        elif ev.get("project") and ev.get("project") != bridge:
+            result = "refused: other project"
+        else:
+            result = discord_ideas.request(bridge, bridge, add_line, time.time())
         discord_feed.audit_append(d, user, kind, f"ideas:{ev.get('project') or 'all'}", result)
         return result
     elif kind == "slash" and ev.get("command") == "queue" and not project:

@@ -8,6 +8,7 @@ const outbox = require('./lib/outbox');
 const stateLib = require('./lib/state');
 const commands = require('./lib/commands');
 const watch = require('./lib/watch');
+const liveness = require('./lib/liveness');
 
 const CARD_MIN_MS = 30000;
 const BACKOFF_START = 1000;
@@ -26,6 +27,9 @@ const REPLY_TEXT_MAX = 1000;
 const DIALOGS_KEEP = 200;
 // The dialog custom-id grammar: ab:dlg:<key>:<n>, :<n>:confirm|cancel, :t<n>, :submit, :reply.
 const DLG_RE = /^ab:dlg:(p[0-9]+-[0-9a-f]{16}):(?:t([0-9]{1,2})|([0-9]{1,2})(?::(confirm|cancel))?|(submit|reply))$/;
+const LIVE_MS = 10000;
+const OWN_KEEP = 200;
+const BOT_AFTER_KEEP = 50;
 const REACT_EMOJI = new Set(['✅', '❌', '🛑', '▶', '⏭']);
 
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
@@ -56,6 +60,11 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
   let lastCardAt = -Infinity;
   let busy = false;
   let closed = false;
+  let lastLiveAt = -Infinity;
+  let lastEnq = 0;
+  let unreactWarned = false;
+  st.liveness ||= { target: null, shown: null, added: null, bot_after: [] };
+  st.own_sent ||= [];
 
   // Every log line: token replaced by ***, bodies cut to 80 chars.
   const say = (msg) => {
@@ -93,9 +102,18 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (!pinWarned) { pinWarned = true; say(`pin failed: grant Pin Messages (${snip(e?.message)})`); }
   };
 
+  // The bridge and the lead's plugin post as the same bot user, so the bridge records the id of each message it sends in
+  // st.own_sent (last 200): a bot message in the home channel that is not in the list is the lead's. Every home-channel
+  // send goes through sendOwn (a test pins that this is the only channel send in this file).
+  const noteOwn = (msg) => {
+    if (msg?.id !== undefined) { st.own_sent.push(String(msg.id)); if (st.own_sent.length > OWN_KEEP) st.own_sent.splice(0, st.own_sent.length - OWN_KEEP); save(); }
+    return msg;
+  };
+  const sendOwn = async (ch, payload) => noteOwn(await ch.send(payload));
+
   async function createCard(text) {
     const ch = await home();
-    const msg = await ch.send(cardPayload(text));
+    const msg = await sendOwn(ch, cardPayload(text));
     st.card_message_id = msg.id; save();
     lastCardAt = now();
     try { await msg.pin(); st.card_pinned = true; } catch (e) { st.card_pinned = false; pinFailed(e); }
@@ -208,7 +226,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
         || !sl.options.every((o) => o && typeof o === 'object' && okStr(o.label) && okStr(o.value))) throw new Error('post: malformed select');
       payload.components = [...(payload.components || []), { type: 1, components: [{ type: 3, custom_id: sl.custom_id, placeholder: String(sl.placeholder ?? '').slice(0, 150), options: sl.options.map((o) => ({ label: o.label, value: o.value })) }] }];
     }
-    const sent = await target.send(payload);
+    const sent = await sendOwn(target, payload);
     if (op.key) { st.posts[op.key] = sent.id; trim(st.posts, PROMPTS_KEEP); save(); }
     if (op.delete_files === true) {
       let tmpRoot = null;
@@ -235,7 +253,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     }
     payload.content = text.slice(0, 2000);
     const ch = await (ops ? chan('approvals') : home());
-    const sent = await ch.send(payload);
+    const sent = await sendOwn(ch, payload);
     st.dialogs[op.key] = sent.id;
     trim(st.dialogs, DIALOGS_KEEP);
     save();
@@ -265,7 +283,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (!cut) buttons.push({ type: 2, style: 3, label: 'Allow once', custom_id: id('allow') });
     buttons.push({ type: 2, style: 4, label: 'Deny', custom_id: id('deny') });
     const ch = await home();
-    const msg = await ch.send({
+    const msg = await sendOwn(ch, {
       content: content.slice(0, 2000),
       allowedMentions: c.user ? { users: [String(c.user)] } : { parse: [] },
       components: [{ type: 1, components: buttons }],
@@ -315,7 +333,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     payload.content = text.slice(0, REPLY_MAX);
     if (comps.length) payload.components = comps;
     const ch = await chan('approvals');
-    const msg = await ch.send(payload);
+    const msg = await sendOwn(ch, payload);
     st.approvals[key] = msg.id;
     trim(st.approvals, APPROVALS_KEEP);
     save();
@@ -334,7 +352,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
       const msg = await ch.messages.fetch(where[0][key]);
       await msg.edit({ content: String(op.text ?? '').slice(0, 2000), components: Array.isArray(op.rows) ? toRows(op.rows) : [] });
       if (typeof op.reply === 'string' && op.reply) {
-        try { await msg.reply({ content: op.reply.slice(0, 2000), allowedMentions: { parse: [] } }); }
+        try { noteOwn(await msg.reply({ content: op.reply.slice(0, 2000), allowedMentions: { parse: [] } })); }
         catch (e) { say(`edit reply failed: ${snip(e?.message)}`); }
       }
     } catch (e) {
@@ -379,7 +397,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     if (op.private === true) { kept.delete(iid); say(`ireply ${snip(iid)} dropped (private)`); return; }
     kept.delete(iid);
     const ch = await home();
-    await ch.send({ content, allowedMentions: { parse: [] }, ...(Array.isArray(op.components) && op.components.length ? { components: toRows(op.components) } : {}) });
+    await sendOwn(ch, { content, allowedMentions: { parse: [] }, ...(Array.isArray(op.components) && op.components.length ? { components: toRows(op.components) } : {}) });
     say(`ireply ${snip(iid)} fell back to post`);
   }
 
@@ -420,7 +438,104 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     }
   }
 
-  const handlers = { create_channel: opCreateChannel, channel_overwrite: opChannelOverwrite, ireply: opIreply, presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  // ---- Lead liveness (spec 2026-11-23-remote-lead-liveness §2). Project mode only.
+  // Delivery semantics: handlers run on one JS thread and liveTick only inside the serialized tick(); an out-of-order or
+  // repeated messageCreate is dropped by the snowflake `newer` guard (no reset, no file write); the outbox ops are
+  // at-least-once and idempotent (adding or removing the same emoji twice ends in the same state). `shown` and `added`
+  // change only after the Discord call succeeded, so a failed op leaves them as they were and the next evaluation retries.
+  // No in-flight marker: tick() runs the outbox before liveTick, so an op is done or failed before the next evaluation.
+  const L = st.liveness;
+  const strip = (x) => String(x ?? '').replace(/️/g, '');
+  const newer = (a, b) => { try { return BigInt(a) > BigInt(b); } catch { return String(a) > String(b); } };
+  const reactionOf = (msg, e) => msg.reactions?.cache?.get(e) ?? [...(msg.reactions?.cache?.values() ?? [])].find((r) => strip(r.emoji?.name) === strip(e));
+
+  function enqueue(op) {
+    lastEnq = Math.max(now(), lastEnq + 1);
+    const name = `${String(lastEnq).padStart(13, '0')}-${crypto.randomBytes(4).toString('hex')}.json`;
+    const file = path.join(dir, 'outbox', name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(op));
+    fs.renameSync(`${file}.tmp`, file);
+  }
+
+  function track(msg) {
+    if (ops || !msg || msg.channel?.id !== cfg().channel) return;
+    const t = L.target;
+    if (msg.author?.id === client.user?.id) {
+      if (!t || !newer(msg.id, t.id) || msg.interactionMetadata || msg.interaction) return;
+      // pin notices, thread-created notices and the like are not the lead's answer: only Default (0) and Reply (19) count
+      if (msg.system || (msg.type !== undefined && msg.type !== 0 && msg.type !== 19)) return;
+      if (!L.bot_after.includes(String(msg.id))) { L.bot_after.push(String(msg.id)); L.bot_after.splice(0, Math.max(0, L.bot_after.length - BOT_AFTER_KEEP)); save(); }
+      return;
+    }
+    if (msg.author?.bot || !allowFrom().has(String(msg.author?.id))) return;
+    if (t && !newer(msg.id, t.id)) return;
+    if (t && L.added) enqueue({ op: 'liveness', message_id: t.id, add: null, remove: L.added, unreact: null });
+    fails = { key: null, n: 0 };
+    st.liveness = Object.assign(L, { target: { id: String(msg.id), text: String(msg.content ?? '').trim().slice(0, 200) }, shown: null, added: null, bot_after: [] });
+    save();
+    const file = path.join(dir, 'last-user-message.json');
+    const ts = Number.isFinite(msg.createdTimestamp) ? new Date(msg.createdTimestamp).toISOString() : new Date(now()).toISOString();
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ts, message_id: String(msg.id) }));
+    fs.renameSync(`${file}.tmp`, file);
+    lastLiveAt = -Infinity;
+  }
+
+  function liveTick() {
+    if (ops || closed || !L.target || now() - lastLiveAt < LIVE_MS) return;
+    lastLiveAt = now();
+    const answered = L.bot_after.some((id) => !st.own_sent.includes(id));
+    const want = liveness.pick(liveness.readState(path.join(dir, 'lead-state.json')), { ...L.target, answered }, now());
+    if (!want || want === L.shown) return;
+    enqueue({ op: 'liveness', message_id: L.target.id, add: want, remove: L.added, unreact: null });
+  }
+
+  // A permanently failing add (50013 and the like) is tried 3 times through the normal failed path, then given up on:
+  // shown = want, one log line, no throw, so nothing more lands in outbox/failed. Counted per (target, want).
+  const GIVE_UP_AFTER = 3;
+  let fails = { key: null, n: 0 };
+  async function opLiveness(op) {
+    const key = `${op.message_id}|${op.add}`;
+    try { await doLiveness(op); if (fails.key === key) fails = { key: null, n: 0 }; } catch (e) {
+      if (!op.add || L.target?.id !== String(op.message_id) || isRetryable(e)) throw e;
+      fails = { key, n: fails.key === key ? fails.n + 1 : 1 };
+      if (fails.n < GIVE_UP_AFTER) throw e;
+      say(`liveness: giving up on ${op.add} for ${op.message_id}: ${snip(e?.message)}`);
+      L.shown = op.add; save();
+      fails = { key: null, n: 0 };
+    }
+  }
+  async function doLiveness(op) {
+    const current = () => L.target?.id === String(op.message_id);
+    let msg;
+    try { msg = await (await home()).messages.fetch(op.message_id); } catch (e) {
+      if (e?.code !== UNKNOWN_MESSAGE) throw e;
+      say(`liveness: message ${snip(op.message_id)} is gone`);
+      if (current()) { L.shown = op.add ?? L.shown; L.added = null; save(); }   // nothing left to react on: stop re-enqueuing
+      return;
+    }
+    if (op.remove) {
+      await reactionOf(msg, op.remove)?.users.remove(client.user.id);
+      if (current()) { L.added = null; save(); }
+    }
+    if (op.unreact) {
+      try { await reactionOf(msg, op.unreact.emoji)?.users.remove(String(op.unreact.user)); } catch (e) {
+        if (!unreactWarned) { unreactWarned = true; say(`liveness: cannot remove ${op.unreact.emoji} (grant Manage Messages)`); }
+      }
+    }
+    if (op.add) {
+      if (op.add === '👀' && reactionOf(msg, '👀')?.me) { if (current()) { L.added = null; L.shown = op.add; save(); } } else {
+        await msg.react(op.add);
+        if (current()) { L.added = op.add; L.shown = op.add; save(); }
+      }
+    }
+  }
+
+  async function opLivenessReply(op) {
+    await sendOwn(await home(), { content: cut(String(op.text), REPLY_MAX), allowedMentions: { parse: [] } });
+  }
+
+  const handlers = { liveness_reply: opLivenessReply, liveness: opLiveness, create_channel: opCreateChannel, channel_overwrite: opChannelOverwrite, ireply: opIreply, presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -463,6 +578,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
           say(`failed ${name}: ${snip(reasonOf(e))}`);
         }
       }
+      liveTick();
     } finally { busy = false; }
   }
 
@@ -479,7 +595,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
         const c = cfg();
         const down = text.startsWith('⚠️');
         const content = down && c.user ? `<@${c.user}> ${text}` : text;
-        await withRetry(async () => (await home()).send({ content, allowedMentions: down && c.user ? { users: [String(c.user)] } : { parse: [] } }));
+        await withRetry(async () => sendOwn(await home(), { content, allowedMentions: down && c.user ? { users: [String(c.user)] } : { parse: [] } }));
         say(`watch ${snip(text)}`);
       }
       fs.writeFileSync(`${file}.tmp`, JSON.stringify(next));
@@ -673,6 +789,7 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
 
   // A reply to an armed dialog message by an allowlisted user becomes one reply event; the message is disarmed.
   async function onMessage(msg) {
+    track(msg);
     if (!msg || msg.author?.bot) return;
     const ref = msg.reference?.messageId;
     if (!ref || !Object.hasOwn(st.reply_armed, ref)) return;
@@ -709,11 +826,29 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     say(`event ${snip(id)}`);
   }
 
+  // ❓ by an allowlisted user on a home-channel message: one status line from lead-state.json, then the ❓ is removed.
+  // The reply op is enqueued first so the line posts even when the removal fails. A repeat of (message, user) within 10 s is dropped.
+  const asked = new Map();
+  async function onAsk(reaction, user) {
+    let msg = reaction.message;
+    if (msg?.partial) msg = await msg.fetch();
+    if (!msg || msg.channel?.id !== cfg().channel) return;
+    const t = now();
+    for (const [k, at] of asked) if (t - at > 60000) asked.delete(k);
+    const key = `${msg.id}:${user.id}`;
+    if (t - (asked.get(key) ?? -Infinity) < LIVE_MS) return;
+    asked.set(key, t);
+    enqueue({ op: 'liveness_reply', text: liveness.replyLine(liveness.readState(path.join(dir, 'lead-state.json')), t) });
+    enqueue({ op: 'liveness', message_id: String(msg.id), add: null, remove: null, unreact: { emoji: '❓', user: String(user.id) } });
+    say(`ask ${snip(msg.id)}`);
+  }
+
   async function onReaction(reaction, user) {
     if (reaction?.partial) reaction = await reaction.fetch();
     if (user?.partial) user = await user.fetch();
     if (!user || user.bot || !allowFrom().has(String(user.id))) return;
     const emoji = String(reaction.emoji?.name ?? '').replace(/\uFE0F/g, '');
+    if (!ops && emoji === '❓') return onAsk(reaction, user);
     if (!REACT_EMOJI.has(emoji)) return;
     let msg = reaction.message;
     if (msg?.partial) msg = await msg.fetch();

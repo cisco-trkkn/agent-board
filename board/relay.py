@@ -11,7 +11,9 @@ restart_orchestrator uses respawn() too. On failure the old pane is left alone.
 import argparse
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -198,7 +200,7 @@ def pane_tail(tmux, pane, n=12):
     return "\n".join("| " + r for r in [r for r in rows if r.strip()][-n:])
 
 
-def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=START_CAP, **wait):
+def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=START_CAP, home=None, **wait):
     pane = claude_pane(tmux, sess)
     if pane is None:
         raise RuntimeError(f"no claude window in {sess}")
@@ -206,6 +208,9 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=S
     if not wait_turn_end(tmux, pane, **wait):
         raise RuntimeError("the lead is still busy after the wait; not switching. Run tmux-ctl relay again when it is idle")
     timing = {k: wait[k] for k in ("sleep", "clock") if k in wait}
+    home = home or default_home()
+    old_id = old_session_id or session_for_pane(pane, home, state_dir)
+    t0_ms = int(time.time() * 1000)
     shown = ""
     for n in range(1, attempts + 1):
         respawn(tmux, pane, root, prompt_for(doc))
@@ -215,6 +220,7 @@ def relay(tmux, sess, doc, state_dir, old_session_id="", attempts=2, start_cap=S
         print(f"relay: attempt {n}: the new lead did not start in {root}; the pane shows:\n{shown}", file=sys.stderr)
     else:
         raise RuntimeError(f"the new lead did not start in {root} after {attempts} attempts; the pane shows:\n{shown}")
+    carry_to_successor(pane, home, t0_ms, state_dir, old_id, "relay", timing.get("sleep", time.sleep))
     lin = tc_env.lineage_dir()   # persistent state; state_dir no longer decides the path
     lin.mkdir(parents=True, exist_ok=True)
     with open(lin / f"{sess}.jsonl", "a") as f:
@@ -262,6 +268,60 @@ def session_for_pane(pane, home, state):
     return str(rec.get("session_id") or "") if rec else ""
 
 
+def default_home():
+    return os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+
+
+def session_started_after(pane, home, t0_ms):
+    """The sessionId of the newest ~/.claude/sessions/*.json entry of the pane that started at or after t0 (1 s slack), else ''."""
+    best = (-1, "")
+    for f in sorted((Path(home) / "sessions").glob("*.json")):
+        try:
+            e = json.loads(f.read_text())
+            started = e.get("startedAt") or 0
+            if str(e.get("tmux", "")).endswith("." + pane) and e.get("sessionId") and started >= t0_ms - 1000 and started > best[0]:
+                best = (started, str(e["sessionId"]))
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+    return best[1]
+
+
+def await_new_session(pane, home, t0_ms, cap=30.0, poll=1.0, sleep=time.sleep):
+    """Poll int(cap / poll) times for the successor's session entry; '' when none shows up."""
+    for _ in range(int(cap / poll)):
+        sid = session_started_after(pane, home, t0_ms)
+        if sid:
+            return sid
+        sleep(poll)
+    return session_started_after(pane, home, t0_ms)
+
+
+ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def carry_remote(state, old, new):
+    """Copy <state>/remote/<old> to <state>/remote/<new> when both ids are plain and differ, the old marker exists and
+    the new one does not. True when copied; never raises."""
+    try:
+        if not (ID_RE.fullmatch(old or "") and ID_RE.fullmatch(new or "")) or old == new:
+            return False
+        src, dst = Path(state) / "remote" / old, Path(state) / "remote" / new
+        if not src.is_file() or dst.exists():
+            return False
+        shutil.copy2(src, dst)
+        return True
+    except OSError:
+        return False
+
+
+def carry_to_successor(pane, home, t0_ms, state, old_id, who, sleep):
+    if not old_id or not (Path(state) / "remote" / old_id).is_file():
+        return
+    new_id = await_new_session(pane, home, t0_ms, sleep=sleep)
+    if new_id and carry_remote(state, old_id, new_id):
+        print(f"{who}: remote marker carried to {new_id}", file=sys.stderr)
+
+
 def newest_handoff(root, handoffs):
     """The newest handoffs/*.md (not drafts/) whose first line is `Project: <root>`, or None."""
     best = (-1.0, None)
@@ -300,8 +360,10 @@ def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, h
         root = os.path.realpath(session_root(tmux, sess))
     except FolderGone as e:
         raise LeadRestartError(str(e)) from None
+    home = home or default_home()
+    state = state or default_state()
     if resume:
-        sid = session_for_pane(pane, home or os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"), state or default_state())
+        sid = session_for_pane(pane, home, state)
         if not sid:
             raise LeadRestartError(f"no session id for {project}'s lead pane {pane}: cannot --resume")
         args, what = f"--resume {shlex.quote(sid)}", f"resume {sid}"
@@ -312,6 +374,8 @@ def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, h
         if not os.path.isfile(d):
             raise LeadRestartError(f"no handoff doc '{d}'")
         args, what = shlex.quote(prompt_for(d)), f"doc {os.path.basename(d)}"
+    old_id = session_for_pane(pane, home, state)
+    t0_ms = int(time.time() * 1000)
     if win == "claude-next":
         tmux("rename-window", "-t", pane, "claude", check=True)
     shell = os.environ.get("SHELL") or "/bin/zsh"
@@ -322,6 +386,7 @@ def restart_lead(tmux, project, resume=False, doc=None, home=None, state=None, h
     tmux("respawn-pane", "-k", "-t", pane, "-c", root, wrap, check=True)
     if not wait_started(tmux, pane, cap=LEAD_START_CAP, **timing):
         raise LeadRestartError(f"the new lead did not start in {root}; the pane shows:\n{pane_tail(tmux, pane)}")
+    carry_to_successor(pane, home, t0_ms, state, old_id, "lead-restart", timing.get("sleep", time.sleep))
     return {"project": project, "pane": pane, "what": what}
 
 
