@@ -12,7 +12,12 @@
 
 ```json:manifest
 {"spec": "docs/superpowers/specs/2026-11-23-hardening-design.md",
- "base": "8b6ef53ab674e52449a1e39220d29633bf6e3477",
+ "base": "ec8b2098142d6daf991b86ae18cc029d141b7cd8",
+ "refreshed_from": {"base": "8b6ef53ab674e52449a1e39220d29633bf6e3477",
+                    "stale_paths": ["bin/tmux-ctl", "board/discord_feed.py", "board/discord_ops.py", "claude/orchestrator.md",
+                                    "tools/discord-bridge/bridge.js", "tools/discord-bridge/lib/commands.js",
+                                    "tools/discord-bridge/test/commands.test.js", "tools/discord-bridge/test/fake-client.js",
+                                    "tools/tests/test_plugin.zsh"]},
  "depends_on": [],
  "writes": [
   {"path": "board/discord_merge.py", "mode": "modify"},
@@ -38,7 +43,8 @@
  ],
  "reads": ["claude/plugin/scripts/context-recall.sh", "tools/tests/test_context_recall.zsh", "tools/tests/lib.zsh",
            "board/discord_ops.py", "board/discord_feed.py", "tools/discord-bridge/test/fake-client.js",
-           "tools/discord-bridge/test/bridge.test.js", "claude/plugin/scripts/spec-boundary-nudge.sh"],
+           "tools/discord-bridge/test/bridge.test.js", "tools/discord-bridge/test/liveness-bridge.test.js",
+           "claude/plugin/scripts/spec-boundary-nudge.sh"],
  "produces": ["scout_sources.check_url_safe", "scout_sources.detect", "scout_sources.add_url", "context-recall-file hook"],
  "consumes": [],
  "tests": ["board/tests/test_discord_merge.py", "tools/tests/test_queue_ask_rule.zsh", "board/tests/test_scout_sources.py",
@@ -52,7 +58,9 @@
 - The live install runs this checkout's `main`, so nothing here touches live state. That rules out the live bridge, `~/.local/state/agent-board/scout`, the real `access.json`, the real archive (read-only checks only) and the live Discord channels. Board tests set `TC_STATE` (and `TC_SCOUT_DIR`) to temp dirs, as the existing classes do.
 - The scout suites keep their local `http://127.0.0.1` server. The URL check has two test seams: `scout_sources._HTTP_OK_HOSTS` (empty in production; a host listed there skips both the scheme and the address test) and `scout_sources._resolve(host)` (the resolver). Every scout test `Base.setUp` patches both, `_HTTP_OK_HOSTS = ("127.0.0.1",)` and `_resolve` returning `["93.184.215.14"]`, so no test resolves a real name except the one test that has to.
 - Python code runs under `/usr/bin/python3` 3.9 (launchd) as well as 3.14. Use no syntax or stdlib API newer than 3.9. Both interpreters were run once on the T3/T4 code below and passed.
-- `bin/tmux-ctl help` prints a pinned line range (`sed -n '2,85p'`, 9 suites pin it). The scout help line is edited in place and no header line is added.
+- `bin/tmux-ctl help` prints a pinned line range (`sed -n '2,86p'` on main since new-project-remote added the `project` line; 9 suites pin it). The scout help line (still line 79 on main) is edited in place and no header line is added.
+- Refreshed against main `ec8b209` (2026-11-24). Every plan-authored diff in Tasks 1–4 and 6 was re-applied to main with `patch -p1` (no offset, no fuzz). On a patched copy of main, the scout suites ran (138 tests OK), `test_discord_merge.py` was OK, and `test_queue_ask_rule.zsh` gave `9 FAILED` before the Task 2 rule edit and `ALL PASS` after it. Main has 9 `^  N. ` lines in `claude/orchestrator.md` before and after.
+- `tools/discord-bridge/bridge.js` on main (remote-lead-liveness): every channel send goes through `sendOwn(ch, payload)`, and a message reply goes through `noteOwn(await msg.reply(…))`. Both record the message id in `st.own_sent`, so liveness does not count the bridge's own post as the lead's answer. `tools/discord-bridge/test/liveness-bridge.test.js` ("guard: every home-channel send goes through the one noteOwn helper") pins exactly one `.send(` and one non-interaction `.reply(` in `bridge.js`. No task adds a raw `.send(` or message `.reply(` to `bridge.js`, and none edits that guard test. Interaction replies (`i.reply`, `i.deferReply`, `i.editReply`) are not channel sends.
 - `claude/orchestrator.md` Queue mode step lines are matched one line each (`^  N. `) by `tools/tests/test_plugin.zsh` and `tools/tests/test_queue_ask_rule.zsh`. New rule text goes on a continuation paragraph (5-space indent), never as a new step line.
 - zsh suites run as `env -u AGENT_BOARD_LEAD zsh <test>`. The board suite as a whole runs through `tmux-ctl run -t 900 tests "…"`, never with its exit code read through a `| tail` pipe.
 - The bridge tests run with `npm test` inside `tools/discord-bridge`. A fresh worktree runs `npm ci` there first.
@@ -1001,6 +1009,15 @@ In `bin/tmux-ctl` line 79, change `source add <name> --kind <k> --url <u> [--why
 - Modify: `board/scout_sources.py`, `board/scout_fetch.py` (`edit_message`, the `source:` request regex), `board/discord_controls.py`, `tools/discord-bridge/lib/commands.js`, `tools/discord-bridge/bridge.js`
 - Test: `board/tests/test_scout_sources.py`, `board/tests/test_scout_fetch_local.py`, `board/tests/test_discord_controls.py`, `tools/discord-bridge/test/commands.test.js`
 - Create: `tools/discord-bridge/test/scout-source.test.js`
+- Read (must stay green, not edited): `tools/discord-bridge/test/liveness-bridge.test.js` (the `sendOwn` guard), `tools/discord-bridge/test/fake-client.js` (main's fakes: `fakeMessage` takes `createdTimestamp`, `authorBot`, `interactionMetadata` and keeps `reactions.cache` entries with `users.remove`; `fakeModal` has `deferReply`/`editReply`)
+
+**Main as of `ec8b209` (refresh; the code this task changes moved since the plan was written):**
+- `bridge.js` `onReaction` now sends `❓` from an allowlisted user to `onAsk` before the `REACT_EMOJI` test, in project mode. The scout ✅ branch goes after that line and leaves the `❓` path and the home-channel `react` event exactly as they are.
+- `bridge.js` `onMessage` calls `track(msg)` first (lead liveness). `track` ignores messages outside the home channel. A bot message in the home channel whose id is not in `st.own_sent` counts as the lead's answer. A `source:` event from `#scout` runs after `track(msg)` and does not change it.
+- `bridge.js` posts and replies only through `sendOwn` / `noteOwn` (see Global Constraints and the guard test). The `/source` prompt is the interaction's own reply, so `track` skips it (`interactionMetadata`) and no new `.send(` is needed. Any other bridge post uses an existing outbox op handler (`post` with `key`, then `edit` by that key), which already calls `sendOwn`. The board's `scout_fetch` REST post and `edit_message` target `#scout` only. A REST post into the agent-board home channel is not in `own_sent`, so liveness would read it as the lead's answer. That makes it out of bounds.
+- `bridge.js` `handlers` now also holds `liveness_reply`, `liveness`, `create_channel` and `channel_overwrite`. A new outbox op kind needs a handler there and an entry in `board/discord_feed._check`'s `shapes` (main added `create_channel` and `channel_overwrite` to it). Prefer the existing `post` and `edit` ops, which need neither. If a new op kind turns out to be needed, ask the lead first: `board/discord_feed.py` is not in this task's files.
+- `commands.js` `payload(ops)` on main: project bots register `/ideas` too, and only `/new-project` is ops-only. Registration is in `bridge.js` `register(ch)`: `commands.payload(ops)`. `/source` needs the bridge's project (`path.basename(dir)`) passed into `payload`. `commands.test.js` pins the exact list (12 names on the ops bot, 11 on a project bot, `setCommands` payload length 12). It also has a max_length test that reads each command's `project` option, or `name` for `new-project`. Edit those three tests so that `/source` appears only for `agent-board`, and so its own options (`url` required, `name` optional, each with a max_length) pass the max_length test.
+- `commands.js` `handle()` also routes `ab:modal:new-project` / `np-token` and `ab:np:token:` components, and `ctx` carries `commandCenter`, `writeTokenFile` and `dropTokenFile`. `/source` is a new `handleCommand` branch and leaves those untouched.
 
 **Constraints:**
 - One add path: the ✅ handler calls `scout_sources.add_url` with the kind, URL and name stored at prompt time. It must not build its own row as `_check_requests` does today. Rewire `_check_requests` (the daily-poll fallback for a ✅ the bridge missed) to `add_url` too, so a pending request is added once whichever path sees the ✅ first. The pending record is removed under the `sources.lock` flock.
@@ -1018,12 +1035,13 @@ In `bin/tmux-ctl` line 79, change `source add <name> --kind <k> --url <u> [--why
 - [ ] A refused URL (fake resolver to 10.0.0.5) gets `refused: private address 10.0.0.5`. No prompt is recorded, so a later ✅ on that reply adds nothing.
 - [ ] Node: `/source` appears in the agent-board bridge's command payload and not in the ops payload or another project's. `/source` from an allowed user writes one event carrying the URL and name. A non-allowed user gets `Not authorized.` and no source event. A ✅ on a recorded scout prompt outside the home channel writes one react event, and a ✅ on any other non-home message writes none.
 - [ ] `source: <url> [name]` parsing: a one-token `NAME_RE` tail is the name, longer text is `why`, and a bare `source: <url>` is accepted.
-- [ ] Every existing test in `board/tests/test_scout_*.py`, `board/tests/test_discord_controls.py` and the bridge suite still passes.
+- [ ] Main's liveness is unchanged. `liveness-bridge.test.js` passes unedited, including the guard (one `.send(` and one message `.reply(` in `bridge.js`). A `❓` from an allowlisted user still goes to `onAsk`. A scout ✅ prompt or `/source` reply never enters `st.liveness.bot_after` as the lead's answer. A node test checks this: after a `/source` reply in the home channel, `bot_after` holds no id outside `own_sent`.
+- [ ] Every existing test in `board/tests/test_scout_*.py`, `board/tests/test_discord_controls.py` and the bridge suite still passes. In `commands.test.js`, only the payload, registration-count and max_length tests change, to add `/source` for `agent-board`.
 
 **Verify:** `python3 -m unittest discover -s board/tests -p 'test_scout_*.py' && python3 -m unittest discover -s board/tests -p 'test_discord_controls.py' && cd tools/discord-bridge && (test -d node_modules || npm ci) && npm test` → `OK`, `OK`, then node's `# fail 0`
 
 ```json:metadata
-{"files": ["board/scout_sources.py", "board/scout_fetch.py", "board/discord_controls.py", "board/tests/test_scout_sources.py", "board/tests/test_scout_fetch_local.py", "board/tests/test_discord_controls.py", "tools/discord-bridge/lib/commands.js", "tools/discord-bridge/bridge.js", "tools/discord-bridge/test/commands.test.js", "tools/discord-bridge/test/scout-source.test.js"], "verifyCommand": "python3 -m unittest discover -s board/tests -p 'test_scout_*.py' && python3 -m unittest discover -s board/tests -p 'test_discord_controls.py' && cd tools/discord-bridge && (test -d node_modules || npm ci) && npm test", "acceptanceCriteria": ["checkmark adds once and fetches once with a fake fetcher; reply edited with added line and first 3 titles; second checkmark or poll adds nothing", "failed first fetch: 'added, first fetch failed: <reason>', source kept", "non-allowFrom checkmark rejected", "refused URL: 'refused: <reason>', no prompt", "/source only on the agent-board bridge, allowFrom only, one event; checkmark on a scout prompt outside home channel forwarded, others not", "source: <url> [name] parsing", "existing scout, controls and bridge suites pass"], "modelTier": "frontier"}
+{"files": ["board/scout_sources.py", "board/scout_fetch.py", "board/discord_controls.py", "board/tests/test_scout_sources.py", "board/tests/test_scout_fetch_local.py", "board/tests/test_discord_controls.py", "tools/discord-bridge/lib/commands.js", "tools/discord-bridge/bridge.js", "tools/discord-bridge/test/commands.test.js", "tools/discord-bridge/test/scout-source.test.js", "tools/discord-bridge/test/liveness-bridge.test.js", "tools/discord-bridge/test/fake-client.js"], "verifyCommand": "python3 -m unittest discover -s board/tests -p 'test_scout_*.py' && python3 -m unittest discover -s board/tests -p 'test_discord_controls.py' && cd tools/discord-bridge && (test -d node_modules || npm ci) && npm test", "acceptanceCriteria": ["checkmark adds once and fetches once with a fake fetcher; reply edited with added line and first 3 titles; second checkmark or poll adds nothing", "failed first fetch: 'added, first fetch failed: <reason>', source kept", "non-allowFrom checkmark rejected", "refused URL: 'refused: <reason>', no prompt", "/source only on the agent-board bridge, allowFrom only, one event; checkmark on a scout prompt outside home channel forwarded, others not", "source: <url> [name] parsing", "main liveness unchanged: liveness-bridge.test.js (sendOwn guard) passes unedited; question-mark still goes to onAsk; a /source reply never counts as the lead's answer", "existing scout, controls and bridge suites pass; commands.test.js changes only the payload, registration-count and max_length tests"], "modelTier": "frontier"}
 ```
 
 ### Task 6: Context recall for teammates (PostToolUse hook)
@@ -1242,7 +1260,7 @@ exit 0
       },
 ```
 
-In `tools/tests/test_plugin.zsh`, after the line `check "context-recall.sh is executable" test -x "$P/scripts/context-recall.sh"`, add:
+In `tools/tests/test_plugin.zsh` (on main the anchor is still line 77; main's only change there is a `[Watch]` check near line 186), after the line `check "context-recall.sh is executable" test -x "$P/scripts/context-recall.sh"`, add:
 
 ````zsh
 check "hooks.json registers context-recall-file on PostToolUse Read|Edit|Write|Grep|Glob, --scoped, timeout 5, not async" python3 - "$P/hooks/hooks.json" <<'PY'
