@@ -111,8 +111,16 @@ def transcript_info(path):
                 pending.clear()
             continue
         o = r.get("origin") or {}
+        content = None
         if r.get("type") == "user" and not r.get("isSidechain") and o.get("kind") == "channel" and o.get("server") == CHANNEL:
-            ms = list(_TAG.finditer(_text((r.get("message") or {}).get("content"))))
+            content = (r.get("message") or {}).get("content")
+        elif r.get("type") == "attachment":   # a message that arrived mid-turn is read as a queued_command attachment, with no user row
+            a = r.get("attachment")
+            ao = (a.get("origin") if isinstance(a, dict) else None) or {}
+            if isinstance(a, dict) and a.get("type") == "queued_command" and ao.get("kind") == "channel" and ao.get("server") == CHANNEL:
+                content = a.get("prompt")
+        if content is not None:
+            ms = list(_TAG.finditer(_text(content)))
             if ms:
                 m = ms[-1]   # a row can hold several tags: the newest is the last
                 text = m.group(2).strip()[:READ_MAX]

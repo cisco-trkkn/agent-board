@@ -36,6 +36,28 @@ def q(op, content=None):
 CH = lambda t, mid="m9": chan(t, mid)["message"]["content"]   # noqa: E731
 
 
+# A mid-turn channel message as the lead transcript records it, copied from 019bd56d-*.jsonl (2026-11-25) with ids, user and text
+# redacted (the <channel …> tag attributes the code reads are kept): queue-operation enqueue, queue-operation remove
+# (reason absorbed_mid_turn), then the attachment row with attachment.type queued_command. There is no user row for it.
+_QTAG = '<channel source="plugin:discord:discord" chat_id="C1" message_id="{mid}" user="u" user_id="U1" ts="2026-11-25T00:02:48.730Z">\n{text}\n</channel>'
+
+
+def queued_rows(text, mid="m7"):
+    tag = _QTAG.format(mid=mid, text=text)
+    return [
+        {"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-11-25T00:02:48.752Z", "sessionId": "s1", "content": tag},
+        {"type": "queue-operation", "operation": "remove", "timestamp": "2026-11-25T00:02:49.695Z", "sessionId": "s1", "content": tag,
+         "reason": "absorbed_mid_turn", "commandUuid": "cu1", "deliveryId": "d1"},
+        {"parentUuid": "p1", "isSidechain": False,
+         "attachment": {"type": "queued_command", "prompt": tag, "source_uuid": "cu1", "delivery_id": "d1", "commandMode": "prompt",
+                        "origin": {"kind": "channel", "server": "plugin:discord:discord"}, "timestamp": "2026-11-25T00:02:48.752Z", "isMeta": True},
+         "type": "attachment", "uuid": "u1", "timestamp": "2026-11-25T00:02:48.752Z",
+         "rendered": [{"content": "<system-reminder>\nA message arrived from plugin:discord:discord while you were working:\n" + tag + "\n</system-reminder>"}],
+         "renderedRole": "user", "session_id": "s1", "userType": "external", "entrypoint": "cli", "cwd": "/x", "sessionId": "s1", "version": "2.1.0",
+         "gitBranch": "main", "dataFlowOn": True},
+    ]
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -122,6 +144,36 @@ class Transcript(Base):
         self.tick([rec()])
         s = self.state()
         self.assertEqual((s["last_read_text"], s["last_read_message_id"]), ("deploy it?", "m2"))
+
+    def test_queued_channel_message_counts_as_read(self):   # final review I3; mutation: ignore attachment rows -> (None, None)
+        self.transcript(queued_rows("deploy it?", "m7"))
+        self.tick([rec()])
+        s = self.state()
+        self.assertEqual((s["last_read_text"], s["last_read_message_id"], s["queued"]), ("deploy it?", "m7", 0))
+
+    def test_latest_of_user_row_and_queued_attachment_wins(self):
+        self.transcript([chan("old", "m1")] + queued_rows("newer", "m2"))
+        self.tick([rec()])
+        self.assertEqual((self.state()["last_read_text"], self.state()["last_read_message_id"]), ("newer", "m2"))
+        self.transcript(queued_rows("older", "m3") + [chan("newest", "m4")])
+        self.tick([rec()], now=NOW + 10)
+        self.assertEqual((self.state()["last_read_text"], self.state()["last_read_message_id"]), ("newest", "m4"))
+
+    def test_queued_attachment_prompt_as_content_blocks(self):
+        rows = queued_rows("blocks", "m5")
+        rows[2]["attachment"]["prompt"] = [{"type": "text", "text": rows[2]["attachment"]["prompt"]}]
+        self.transcript(rows)
+        self.tick([rec()])
+        self.assertEqual((self.state()["last_read_text"], self.state()["last_read_message_id"]), ("blocks", "m5"))
+
+    def test_queued_attachment_from_another_origin_or_type_is_ignored(self):
+        rows = queued_rows("nope", "m6")
+        rows[2]["attachment"]["origin"] = {"kind": "channel", "server": "plugin:other:other"}
+        rows.append({"type": "attachment", "attachment": {"type": "other", "prompt": _QTAG.format(mid="m8", text="x"),
+                                                          "origin": {"kind": "channel", "server": "plugin:discord:discord"}}})
+        self.transcript(rows)
+        self.tick([rec()])
+        self.assertEqual((self.state()["last_read_text"], self.state()["last_read_message_id"]), (None, None))
 
     def test_row_with_several_tags_reports_the_last(self):   # mutation: first match -> "one"/"m1"
         r = chan("one", "m1")
