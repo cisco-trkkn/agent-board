@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dream_check  # noqa: E402
 import improve_adapters as A  # noqa: E402
 import improve_fixtures as F  # noqa: E402
 import improve_store as S  # noqa: E402
@@ -10,7 +11,9 @@ import improve_store as S  # noqa: E402
 REPO = Path(__file__).resolve().parents[2]
 SKILL = "docs-compose"
 LIVE = (REPO / "claude" / "skills" / SKILL / "SKILL.md").read_text()
-ORCH_PATCH = "--- a/claude/orchestrator.md\n+++ b/claude/orchestrator.md\n@@ -1,1 +1,1 @@\n-a\n+b\n"
+# header forms copied from real observer patches (2026-10-19 round: absolute ---, bare .new +++, tab + timestamp)
+ORCH_PATCH = ("--- /Users/x/agent-board/claude/orchestrator.md\t2026-10-19 22:37:49\n"
+              "+++ orchestrator.md.new\t2026-10-19 23:14:37\n@@ -1,1 +1,1 @@\n-a\n+b\n")
 
 
 def w(p, text):
@@ -48,12 +51,15 @@ class Base(unittest.TestCase):
 
 class Dream(Base):
     def report(self, run, props):
-        return w(Path(self.d["ctx"]) / "dream" / "proj" / run / "out" / "report.json", {"proposals": props})
+        rep = {"changed": {"merged": [], "archived": 0, "stale": 0, "added": 0}, "contradictions": [], "proposals": props,
+               "summary": "s"}
+        self.assertIsNone(dream_check.report_problem(rep))
+        return w(Path(self.d["ctx"]) / "dream" / "proj" / run / "out" / "report.json", rep)
 
     def test_observer_and_idea(self):
-        old = self.report("20261101-0300", [{"kind": "observer", "title": "old", "evidence": ["x"]}])
-        p = self.report("20261102-0300", [{"kind": "observer", "title": "t", "target": "claude/worker.md", "evidence": ["e1"]},
-                                          {"kind": "idea", "title": "i", "evidence": []}])
+        old = self.report("20261101-0300", [{"kind": "observer", "text": "old", "evidence": ["x"]}])
+        p = self.report("20261102-0300", [{"kind": "observer", "text": "t line\nmore", "target": "claude/worker.md", "evidence": ["e1"]},
+                                          {"kind": "idea", "text": "i", "evidence": []}])
         A.run_all("proj")
         r = self.rows()
         self.assertEqual(len(r), 2)
@@ -62,6 +68,7 @@ class Dream(Base):
         ev = json.loads(r[0]["evidence"])
         self.assertEqual(ev[0], {"type": "report", "ref": f"{p}#proposals[0]"})
         self.assertEqual(ev[1]["type"], "note")
+        self.assertEqual(r[0]["title"], "t line")
         self.assertNotIn(str(old), r[0]["evidence"])
 
 
@@ -119,6 +126,22 @@ class Observer(Base):
         pend = Path(self.d["obs"]) / "skill-updates" / "PENDING.md"
         self.assertEqual(json.loads(r["rule"]["evidence"]), [{"type": "report", "ref": f"{pend}#2026-11-01"}])
 
+    def test_bare_plus_line_resolves_to_repo_file(self):
+        o = self.ws(patch="--- orchestrator.md\n+++ orchestrator.md\n@@ -1 +1 @@\n-a\n+b\n")
+        A.run_all("proj")
+        self.assertEqual({x["target"]: x["class"] for x in self.rows() if x["kind"] == "rule"}, {"claude/orchestrator.md": "protected"})
+
+    def test_unresolvable_name_stays_bare_and_is_not_protected(self):
+        self.ws(patch="--- zz-nothing.md\n+++ zz-nothing.md.new\n@@ -1 +1 @@\n-a\n+b\n")
+        A.run_all("proj")
+        r = [x for x in self.rows() if x["kind"] == "rule"][0]
+        self.assertEqual((r["target"], r["class"]), ("zz-nothing.md", "high"))
+
+    def test_rule_target_forms(self):
+        for hdr, want in [("--- a/claude/worker.md\n+++ b/claude/worker.md\n", "claude/worker.md"),
+                          ("--- /x/.live-mirror/agent-board/claude/worker.md\t2026-10-21 01:22:43\n+++ /x/2026-10-21/_target-files/worker.md.new\t2026\n", "claude/worker.md")]:
+            self.assertEqual(A.rule_target(hdr + "@@\n"), want)
+
     def test_not_awaiting_skipped(self):
         self.ws(status="installed")
         A.run_all("proj")
@@ -152,19 +175,26 @@ class Errors(Base):
         w(Path(self.d["scout"]) / "drafts.json", "{not json")
         w(Path(self.d["state"]) / "discover" / "proj.json", {"posts": {"n": {"items": [{"key": "k", "path": "d.md"}]}}})
         A.run_all("proj")
-        ev = [e for e in self.events("improve_adapter_error") if e["source"] != "observer"]
+        ev = self.events("improve_adapter_error")
         self.assertEqual([e["source"] for e in ev], ["scout"])
         self.assertTrue(ev[0]["reason"])
         self.assertEqual([x["target"] for x in self.rows()], ["d.md"])
 
-    def test_missing_observer_workspace_one_event(self):
-        shutil.rmtree(self.d["obs"])
+    def test_unparsable_pending_one_event(self):
+        o = Path(self.d["obs"]) / "skill-updates"
+        o.mkdir(parents=True)
+        (o / "PENDING.md").write_bytes(b"\xff\xfe")
         A.run_all("proj")
         self.assertEqual([e["source"] for e in self.events("improve_adapter_error")], ["observer"])
 
+    def test_missing_observer_workspace_is_absent_not_error(self):
+        shutil.rmtree(self.d["obs"])
+        self.assertEqual(A.run_all("proj")["observer"], 0)
+        self.assertEqual(self.events("improve_adapter_error"), [])
+
     def test_absent_scout_and_discover_files_are_not_errors(self):
         A.run_all("proj")
-        self.assertEqual(sorted(e["source"] for e in self.events("improve_adapter_error")), ["observer"])
+        self.assertEqual(self.events("improve_adapter_error"), [])
 
 
 if __name__ == "__main__":
