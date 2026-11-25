@@ -529,7 +529,11 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     }
   }
 
-  const handlers = { liveness: opLiveness, create_channel: opCreateChannel, channel_overwrite: opChannelOverwrite, ireply: opIreply, presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
+  async function opLivenessReply(op) {
+    await sendOwn(await home(), { content: cut(String(op.text), REPLY_MAX), allowedMentions: { parse: [] } });
+  }
+
+  const handlers = { liveness_reply: opLivenessReply, liveness: opLiveness, create_channel: opCreateChannel, channel_overwrite: opChannelOverwrite, ireply: opIreply, presence: opPresence, approval: opApproval, dialog: opDialog, prompt: opPrompt, edit: opEdit, post: opPost, card: opCard, thread: opThread, archive: opArchive };
 
   // Run fn until it succeeds; 5xx/network backs off 1s,2s,4s… capped at 60s. Throws on 4xx.
   async function withRetry(fn) {
@@ -820,11 +824,29 @@ function createBridge({ dir, client, ops = false, log = () => {}, now = Date.now
     say(`event ${snip(id)}`);
   }
 
+  // ❓ by an allowlisted user on a home-channel message: one status line from lead-state.json, then the ❓ is removed.
+  // The reply op is enqueued first so the line posts even when the removal fails. A repeat of (message, user) within 10 s is dropped.
+  const asked = new Map();
+  async function onAsk(reaction, user) {
+    let msg = reaction.message;
+    if (msg?.partial) msg = await msg.fetch();
+    if (!msg || msg.channel?.id !== cfg().channel) return;
+    const t = now();
+    for (const [k, at] of asked) if (t - at > 60000) asked.delete(k);
+    const key = `${msg.id}:${user.id}`;
+    if (t - (asked.get(key) ?? -Infinity) < LIVE_MS) return;
+    asked.set(key, t);
+    enqueue({ op: 'liveness_reply', text: liveness.replyLine(liveness.readState(path.join(dir, 'lead-state.json')), t) });
+    enqueue({ op: 'liveness', message_id: String(msg.id), add: null, remove: null, unreact: { emoji: '❓', user: String(user.id) } });
+    say(`ask ${snip(msg.id)}`);
+  }
+
   async function onReaction(reaction, user) {
     if (reaction?.partial) reaction = await reaction.fetch();
     if (user?.partial) user = await user.fetch();
     if (!user || user.bot || !allowFrom().has(String(user.id))) return;
     const emoji = String(reaction.emoji?.name ?? '').replace(/\uFE0F/g, '');
+    if (!ops && emoji === '❓') return onAsk(reaction, user);
     if (!REACT_EMOJI.has(emoji)) return;
     let msg = reaction.message;
     if (msg?.partial) msg = await msg.fetch();

@@ -281,3 +281,85 @@ test('a permanently failing react is given up on after 3 attempts: one log line,
   const n = fs.existsSync(failed) ? fs.readdirSync(failed).filter((f) => f.endsWith('.json')).length : 0;
   assert.ok(n <= 3, `failed op files: ${n}`);
 });
+
+// ---- Task 5: ❓ on demand
+const { fakeReaction } = require('./fake-client');
+function ask(s, m, { user = 'U1', emoji = '❓' } = {}) {
+  m.reactions.cache.set('❓', { emoji: { name: '❓' }, me: false, users: { remove: async (u) => { m.unreacted.push({ emoji: '❓', user: u }); } } });
+  return s.bridge.onReaction(fakeReaction({ emoji, message: m }), { id: user, bot: false });
+}
+const sends = (s) => s.client.callsOf('send').map((c) => c.payload.content);
+
+test('❓ (with or without U+FE0F) by an allowlisted user on a bot or user message: one reply line, the ❓ removed', async () => {
+  for (const [emoji, authorId] of [['❓', 'BOT'], ['❓️', 'U1']]) {
+    const s = setup();
+    s.leadState({ state: 'busy', tool: 'Bash', since: iso(T0 - 386000) });
+    const m = s.msg('1001', { authorId });
+    await ask(s, m, { emoji });
+    await s.tick();
+    assert.deepStrictEqual(sends(s), ['busy 6m26s: Bash; 0 message(s) queued']);
+    assert.deepStrictEqual(m.unreacted, [{ emoji: '❓', user: 'U1' }]);
+  }
+});
+
+test('❓ without a lead-state.json replies "no lead state (board not running?)"', async () => {
+  const s = setup();
+  await ask(s, s.msg('1001'));
+  await s.tick();
+  assert.deepStrictEqual(sends(s), ['no lead state (board not running?)']);
+});
+
+test('❓ from a non-allowlisted user, in another channel or in ops mode: no op, no send', async () => {
+  const s = setup();
+  s.leadState({});
+  await ask(s, s.msg('1001'), { user: 'U9' });
+  await ask(s, s.msg('1002', { channelId: 'C2' }));
+  await s.tick();
+  assert.deepStrictEqual(sends(s), []);
+  assert.deepStrictEqual(fs.readdirSync(path.join(s.dir, 'outbox')).filter((f) => f.endsWith('.json')), []);
+  const o = setup({ ops: true });
+  fs.writeFileSync(path.join(o.dir, 'bridge.json'), JSON.stringify({ channel: 'C1', command_center: 'C1' }));
+  await ask(o, o.msg('1001'));
+  await o.tick();
+  assert.deepStrictEqual(sends(o), []);
+  assert.deepStrictEqual(o.client.callsOf('unreact'), []);
+});
+
+test('the same ❓ twice within 10 s makes one reply', async () => {
+  const s = setup();
+  s.leadState({});
+  const m = s.msg('1001');
+  await ask(s, m);
+  s.clock.t += 3000;
+  await ask(s, m);
+  await s.tick();
+  assert.strictEqual(sends(s).length, 1);
+});
+
+test('the ❓ reply is recorded as the bridge\'s own, so it does not turn the target ✅', async () => {
+  const s = setup();
+  s.leadState({ state: 'busy' });
+  const t = s.msg('1001');
+  await s.bridge.onMessage(t); await s.tick(); await s.tick();
+  await ask(s, t);
+  await s.tick();
+  const reply = [...s.client.messages.values()].find((x) => x.content === sends(s)[0]);
+  assert.ok(reply && s.ownSent().includes(reply.id));
+  await s.bridge.onMessage(reply);
+  s.leadState({ state: 'busy' }); await s.settle();
+  assert.deepStrictEqual(mine(t), ['⏳']);
+});
+
+test('without Manage Messages the ❓ removal logs once per process and the reply still posts', async () => {
+  const s = setup();
+  s.leadState({});
+  for (const id of ['1001', '1002']) {
+    const m = s.msg(id);
+    await ask(s, m);
+    m.reactions.cache.get('❓').users.remove = async () => { const e = new Error('Missing Permissions'); e.status = 403; throw e; };
+    s.clock.t += 11000;
+  }
+  await s.tick();
+  assert.strictEqual(sends(s).length, 2);
+  assert.strictEqual(s.logs.filter((l) => l === 'liveness: cannot remove ❓ (grant Manage Messages)').length, 1);
+});
