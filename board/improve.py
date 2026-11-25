@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""improve: `tmux-ctl improve list|show|propose|variants|tick|revert|outcome status|schedule install` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
+"""improve: `tmux-ctl improve list|show|propose|variants|tick|adapters --dry-run|revert|outcome status|schedule install` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
 Errors are one line `improve: <sub>: <reason>` on stderr, exit 1.
 Rule R3 (ruling A20; for any Stop gate the loop adds later): it checks `stop_hook_active` and blocks at most once per stop,
 never again for the same stop.
@@ -189,6 +189,43 @@ def cmd_variants(a, store):
         print(f"{e['id']} {e['kind']} {e['target']}")
 
 
+class _DryStore:
+    """Stands in for the store in `adapters --dry-run`: records each insert with its derived class, writes nothing."""
+    def __init__(self):
+        self.items = []
+
+    def insert(self, source, kind, target, patch, evidence, outcome=None, shrinks_reads=False, title=None, tick=None,
+               state="proposed", reason=None):
+        text = None
+        f = improve_class.REPO / target if target else None
+        if f is not None and f.is_file():
+            text = f.read_text(errors="replace")
+        cls = improve_class.derive(kind, target, patch, source=source, target_text=text)
+        self.items.append((source, kind, target, cls, state))
+        return None
+
+
+def cmd_adapters(a, project):
+    """`adapters --dry-run [--source S]`: run the adapters against a recording store; print each item and the count read."""
+    if not a.dry_run:
+        raise Fail("only --dry-run is supported (the tick runs the adapters for real)")
+    import improve_adapters
+    for name, fn in improve_adapters.ADAPTERS:
+        if a.source and name != a.source:
+            continue
+        store, errors = _DryStore(), []
+        try:
+            n = fn(store, project, errors)
+        except Exception as e:  # noqa: BLE001 -- one unreadable source never stops the others
+            n = None
+            errors.append(f"{type(e).__name__}: {e}")
+        for src, kind, target, cls, state in store.items:
+            print(f"{src} {kind} {target} {cls} {state}")
+        for e in errors:
+            print(f"{name} error: {e}")
+        print(f"{name}: {'unreadable' if n is None else f'{n} item(s) read'}")
+
+
 def parser():
     p = argparse.ArgumentParser(prog="improve")
     p.add_argument("--project")
@@ -201,6 +238,8 @@ def parser():
     s.add_argument("--from-dream")
     s = sub.add_parser("variants"); s.add_argument("spec"); s.add_argument("--json", action="store_true")
     sub.add_parser("tick")
+    s = sub.add_parser("adapters"); s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--source", choices=("dream", "scout", "discovery", "observer"))
     s = sub.add_parser("revert"); s.add_argument("id")
     s = sub.add_parser("click"); s.add_argument("act", choices=("promote", "reject", "extend", "approve", "revert")); s.add_argument("id")
     s = sub.add_parser("outcome"); o = s.add_subparsers(dest="osub", required=True)
@@ -219,6 +258,9 @@ def main(argv):
         project = project_name(a.project)
         if a.sub == "schedule":   # no store: the engine makes its database on the first schedule
             cmd_schedule(a, project)
+            return 0
+        if a.sub == "adapters":   # read-only: no store, so no engine database is needed or opened
+            cmd_adapters(a, project)
             return 0
         if a.sub == "click":
             cmd_click(a, project)

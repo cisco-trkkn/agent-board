@@ -197,5 +197,39 @@ class Errors(Base):
         self.assertEqual(self.events("improve_adapter_error"), [])
 
 
+class DryRun(Base):
+    """`improve adapters --dry-run`: reads each source, prints what it would insert and the count read, writes nothing."""
+    ws = Observer.ws
+
+    def run_cli(self, *a, **extra):
+        import subprocess
+        env = dict(os.environ, TC_PROJECT="proj", **extra)
+        return subprocess.run([sys.executable, "-I", str(REPO / "board/improve.py"), "adapters", *a],
+                              capture_output=True, text=True, env=env, cwd=REPO)
+
+    def test_observer_lists_items_with_classes_and_inserts_nothing(self):
+        self.ws()
+        before = len(self.rows())
+        r = self.run_cli("--dry-run", "--source", "observer")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("observer skill docs-compose", r.stdout)
+        self.assertIn("observer rule claude/orchestrator.md protected", r.stdout)
+        self.assertIn("observer: 2 item(s) read", r.stdout)
+        self.assertEqual(len(self.rows()), before)
+        self.assertEqual(self.events("improve_adapter_error"), [])
+
+    def test_needs_dry_run_flag(self):
+        r = self.run_cli("--source", "observer")
+        self.assertEqual(r.returncode, 1)
+
+    def test_works_without_an_engine_database(self):
+        self.ws()
+        empty = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, empty, True)
+        r = self.run_cli("--dry-run", "--source", "observer", TC_ENGINE_DIR=empty)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(os.listdir(empty), [])
+
+
 if __name__ == "__main__":
     unittest.main()
