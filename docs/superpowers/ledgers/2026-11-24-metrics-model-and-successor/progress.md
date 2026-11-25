@@ -53,3 +53,5 @@ Task 6: minor (deferred): raw timing outputs not kept in scratch; figures rest o
 Task 6: minor (deferred): 6 of 22 resolved records counted by difference, not traced (stated in doc)
 Task 6: complete (commits d02908a..2efccea, review clean)
 Ruling: branch rebased onto origin/main 1a064b1 (dropping local-main-only e099984/ef6c5ab) before push — the PR then carries only this spec — cost if wrong: none; local main keeps both commits.
+Finish: board suite on rebased branch: Ran 3041, FAILED (failures=1): test_paneclass.PaneStatusTest.test_pane_status
+Ruling: the failure is not this branch's — pane_status reads the real agent-status dir and pane %3 is the live lead pane (agent-board:claude), whose status file said ready; branch does not touch paneclass; the test passes 3/3 alone — cost if wrong: a real regression in pane status ships; the PR description names it.
