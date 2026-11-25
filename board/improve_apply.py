@@ -9,11 +9,11 @@ and fast-forwards, so the commit with the trailers `Proposal: <id>` and `Engine-
   revert(store, pid)         `improve revert <id>`: one revert commit, state `reverted`
   draft(store, pid)          a `proposed` proposal of class `protected` -> a drafted spec on `improve/<id>` only, state `drafted`
   approve_draft(store, pid)  the Approve click (Task 12): merges that branch, state `promoted`, the ideas line, the lead line
-  applies / reject_if_stale  whether the patch still applies on main; a stale one goes to `rejected` where the state allows it
+  applies / reject_if_stale  whether the patch still applies on main; a stale one goes to `rejected`
   sweep_apply / sweep_drafts what `improve tick` runs around the tick: retry waiting commits, draft protected proposals
 
-A kept or promoted proposal cannot go to `rejected` (the store's transitions), so a patch found stale at apply time moves
-it to `reverted` with the reason `stale patch`: nothing landed.
+A patch that no longer applies on main moves the proposal to `rejected` with the reason `stale patch`, from any state
+(kept and promoted included: `reverted` is kept for a commit that landed and was undone).
 Test: tests/test_improve_apply.py (scratch repo through TC_IMPROVE_REPO; the engine's side: engine/test/improve_merge.test.js)."""
 import json
 import os
@@ -292,8 +292,7 @@ def applies(store, pid, repo=None):
 
 
 def _stale(store, row):
-    to = "rejected" if "rejected" in improve_store.TRANSITIONS.get(row["state"], ()) else "reverted"
-    store.transition(row["id"], to, "stale patch")
+    store.transition(row["id"], "rejected", "stale patch")
 
 
 def reject_if_stale(store, pid, repo=None):

@@ -110,7 +110,7 @@ class ApplyTest(Base):
         self.assertEqual(self.leftovers(), ([], []))
 
     def test_apply_again_after_a_crash_before_the_state_write_makes_no_second_commit(self):
-        # mutation: drop the trailer lookup on main (_landed) -> a second commit attempt; the patch no longer applies -> `reverted`
+        # mutation: drop the trailer lookup on main (_landed) -> a second commit attempt; the patch no longer applies -> `stale`, state `rejected`
         pid = self.kept()
         before = self.head()
         with mock.patch.object(A, "_record", side_effect=RuntimeError("crash")):
@@ -154,6 +154,8 @@ class ApplyTest(Base):
         self.assertEqual(self.count(before), 1)
         self.assertIn(f"Engine-Step: improve:{pid}@{before}", self.git("log", "-1", "--format=%B", "main").splitlines())
         self.assertEqual(len(self.events("improve_waiting")), 1)
+        self.assertEqual(A.sweep_apply(self.s), {})   # idempotent: nothing left to apply, no second commit
+        self.assertEqual(self.count(before), 1)
 
     def test_kept_proposal_touching_a_protected_path_is_refused_by_the_engine(self):
         # the class is forced to low, as if the protected list had gained the path after the proposal was classed
@@ -175,7 +177,14 @@ class ApplyTest(Base):
         self.assertEqual(self.head(), before)
         self.assertEqual(self.leftovers(), ([], []))
 
-    def test_stale_patch_kept_goes_to_reverted_and_nothing_lands(self):
+    def test_stale_patch_goes_to_rejected_from_kept_and_promoted_and_nothing_lands(self):
+        # lead ruling: `reverted` means a commit landed and was undone; a stale patch is `rejected` from every state
+        # mutation: _stale moves a kept row to `reverted` -> ("reverted", ...) != ("rejected", ...)
+        prom = self.kept(patch="--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-o\n+p\n", target="other.txt", to="promoted")
+        (self.repo / "other.txt").write_text("rewritten\n")
+        self.git("commit", "-q", "-am", "main rewrote other")
+        self.assertEqual(A.apply(self.s, prom), "stale")
+        self.assertEqual((self.s.get(prom)["state"], self.s.get(prom)["reason"]), ("rejected", "stale patch"))
         pid = self.kept()
         (self.repo / "docs/foo.md").write_text("rewritten\n")
         self.git("commit", "-q", "-am", "main rewrote it")
@@ -184,7 +193,7 @@ class ApplyTest(Base):
         self.assertEqual(A.apply(self.s, pid), "stale")
         self.assertEqual(self.head(), before)
         row = self.s.get(pid)
-        self.assertEqual((row["state"], row["reason"], row["commit_sha"]), ("reverted", "stale patch", None))
+        self.assertEqual((row["state"], row["reason"], row["commit_sha"]), ("rejected", "stale patch", None))
         self.assertEqual(self.leftovers(), ([], []))
 
     def test_stale_patch_in_trial_goes_to_rejected(self):
@@ -381,6 +390,8 @@ class DraftTest(Base):
         self.assertEqual(A.sweep_drafts(self.s), {"drafted": 1})
         self.assertEqual([self.s.get(i)["state"] for i in (pid, low, adapter)], ["drafted", "proposed", "drafted"])
         self.assertEqual(A.sweep_drafts(self.s), {})
+        self.assertEqual(int(self.git("rev-list", "--count", f"main..improve/{pid}")), 1)   # never drafted twice
+        self.assertEqual(len([e for e in self.events("improve") if e["to"] == "drafted" and e["proposal"] == pid]), 1)
 
     def test_approve_draft_merges_the_branch_adds_the_ideas_line_and_tells_the_lead(self):
         pid = self.proposed()
@@ -413,6 +424,23 @@ class DraftTest(Base):
         with self.assertRaises(A.ApplyError) as cm:
             A.approve_draft(self.s, adapter, add_done=lambda *a: done.append(a))
         self.assertEqual(str(cm.exception), "not a protected draft")
+
+
+class SweepWaitingTest(Base):
+    def test_a_waiting_commit_retries_twice_without_a_duplicate(self):
+        # the checkout stays busy over two sweeps: one branch, one key, no commit; then it lands once
+        pid = self.kept()
+        before = self.head()
+        (self.repo / "other.txt").write_text("half\n")
+        self.assertEqual(A.sweep_apply(self.s), {"waiting": 1})
+        tip = self.head(f"improve/{pid}")
+        self.assertEqual(A.sweep_apply(self.s), {"waiting": 1})
+        self.assertEqual((self.head(), self.head(f"improve/{pid}")), (before, tip))
+        self.assertEqual({w["key"] for w in self.events("improve_waiting")}, {f"improve:{pid}@{before}"})
+        self.git("checkout", "-q", "--", "other.txt")
+        self.assertEqual(A.sweep_apply(self.s), {"applied": 1})
+        self.assertEqual(A.sweep_apply(self.s), {})
+        self.assertEqual(self.count(before), 1)
 
 
 class TickCliTest(Base):

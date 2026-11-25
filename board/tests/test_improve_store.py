@@ -124,6 +124,19 @@ class TransitionTest(Base):
         with self.assertRaises(S.ImproveError):
             self.s.transition(pid, "trial", "x")
 
+    def test_kept_and_promoted_can_be_rejected_for_a_stale_patch(self):
+        # lead ruling (Task 10): a patch found stale at apply time is `rejected`, never `reverted`
+        kept = self.ins()
+        self.s.transition(kept, "trial", "go")
+        self.s.transition(kept, "kept", "numbers")
+        self.assertEqual(self.s.transition(kept, "rejected", "stale patch")["state"], "rejected")
+        prom = self.s.insert("manual", "procedure", "docs/bar.md", PATCH, EV)
+        for to in ("trial", "awaiting_you", "promoted"):
+            self.s.transition(prom, to, "x")
+        self.assertEqual(self.s.transition(prom, "rejected", "stale patch")["state"], "rejected")
+        with self.assertRaises(S.ImproveError):
+            self.s.transition(prom, "trial", "x")
+
     def test_atomic(self):
         # mutation: commit after the UPDATE -> row changes despite the failure
         pid = self.ins()

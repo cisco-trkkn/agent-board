@@ -23,8 +23,8 @@ TRANSITIONS = {
     "proposed": {"trial", "rejected", "drafted"},
     "trial": {"kept", "reverted", "awaiting_you", "rejected"},
     "awaiting_you": {"promoted", "rejected", "trial"},
-    "kept": {"reverted"},
-    "promoted": {"reverted"},
+    "kept": {"reverted", "rejected"},        # rejected: the patch was stale at apply time, nothing landed (Task 10 ruling)
+    "promoted": {"reverted", "rejected"},
     "drafted": {"rejected", "promoted"},
 }
 EVIDENCE_TYPES = {"run", "task", "event", "ledger", "report", "hook"}
