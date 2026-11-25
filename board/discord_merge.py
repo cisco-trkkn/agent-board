@@ -140,7 +140,8 @@ def request(project, repo, task, spec, branch, target, tests, verdict, findings,
 
 
 def on_merge(project, src_key, rec, add_line, now):
-    """The Merge button. Same branch tip as posted -> `[Discord] merge approved for <spec>` to the lead; a moved or deleted
+    """The Merge button. Same branch tip as posted -> `[Discord] merge approved for <spec> @ <full sha>` to the lead (the sha
+    just checked: the lead merges that sha, never the branch name); a moved or deleted
     branch -> nothing is sent, and a moved one gets a fresh request. Returns {"result", "text"} for discord_ops, which edits
     both copies; never touches the ops state (its lock is held)."""
     m = SRC_RE.match(str(src_key))
@@ -158,7 +159,7 @@ def on_merge(project, src_key, rec, add_line, now):
         return {"result": "stale", "text": "superseded by a newer request"}
     now_sha = rev_parse(ev["repo"], ev["branch"])
     if now_sha == ev["sha"]:
-        add_line(project, f"[Discord] merge approved for {ev['spec']}")
+        add_line(project, f"[Discord] merge approved for {ev['spec']} @ {now_sha}")   # pinned: the lead merges this sha only
         return {"result": "merged", "text": "merge approved — sent to the lead"}
     if now_sha:
         request(project, ev["repo"], task, ev["spec"], ev["branch"], ev["target"], ev["tests"], ev["verdict"], ev.get("findings") or [], now)
