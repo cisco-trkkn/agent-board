@@ -231,5 +231,27 @@ class DryRun(Base):
         self.assertEqual(os.listdir(empty), [])
 
 
+class DryRunDream(DryRun):
+    def rep(self, run, props):
+        return Dream.report(self, run, props)
+
+    def test_kinds_of_the_newest_run(self):
+        self.rep("20261101-0300", [{"kind": "idea", "text": "old", "evidence": []}])
+        self.rep("20261102-0300", [{"kind": "observer", "text": "a", "evidence": ["e"]}, {"kind": "idea", "text": "b", "evidence": []}])
+        r = self.run_cli("--dry-run", "--source", "dream")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("dream 20261102-0300: observer, idea", r.stdout)
+        self.assertIn("dream: 2 item(s) read", r.stdout)
+
+    def test_empty_report(self):
+        self.rep("20261102-0300", [])
+        r = self.run_cli("--dry-run", "--source", "dream")
+        self.assertIn("dream 20261102-0300: no proposals", r.stdout)
+
+    def test_no_report(self):
+        r = self.run_cli("--dry-run", "--source", "dream")
+        self.assertIn("dream: no report", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

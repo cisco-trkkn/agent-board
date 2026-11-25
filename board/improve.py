@@ -205,6 +205,20 @@ class _DryStore:
         return None
 
 
+def _dream_line(project):
+    """The newest dream run's id and its proposals' kinds, `no proposals` for an empty report, `no report` when none."""
+    d = dream_paths.project_dir(project)
+    runs = sorted((r for r in d.iterdir() if (r / "out" / "report.json").is_file()), key=lambda r: r.name) if d.is_dir() else []
+    if not runs:
+        return "dream: no report"
+    try:
+        props = json.loads((runs[-1] / "out" / "report.json").read_text()).get("proposals") or []
+    except ValueError:
+        return f"dream {runs[-1].name}: unreadable report"
+    kinds = ", ".join(str(p.get("kind")) for p in props if isinstance(p, dict))
+    return f"dream {runs[-1].name}: {kinds or 'no proposals'}"
+
+
 def cmd_adapters(a, project):
     """`adapters --dry-run [--source S]`: run the adapters against a recording store; print each item and the count read."""
     if not a.dry_run:
@@ -221,6 +235,8 @@ def cmd_adapters(a, project):
             errors.append(f"{type(e).__name__}: {e}")
         for src, kind, target, cls, state in store.items:
             print(f"{src} {kind} {target} {cls} {state}")
+        if name == "dream":
+            print(_dream_line(project))
         for e in errors:
             print(f"{name} error: {e}")
         print(f"{name}: {'unreadable' if n is None else f'{n} item(s) read'}")
