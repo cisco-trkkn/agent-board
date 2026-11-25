@@ -282,6 +282,10 @@ class SpawnWiringTest(Base):
         with mock.patch.dict(os.environ, {"AGENT_BOARD_SPAWNS": str(self.t / "x.jsonl")}):
             self.assertEqual(metrics.spawns_path(), self.t / "x.jsonl")
 
+    def test_read_spawns_tolerates_invalid_bytes(self):
+        (self.t / "state" / "spawns.jsonl").write_bytes(b'\xff\xfe{"ts": 1}\n\x80\n')
+        self.assertEqual(metrics.read_spawns(0, 10**12), [])
+
     def test_record_task_without_rows_takes_the_spawn_model(self):
         self.row(self.t0 + 50)                     # Task 1 has usage rows; Task 2 has none
         self.spawns(spawn_row(self.t0 + 150, "w1", "opus"))

@@ -85,7 +85,7 @@ def read_spawns(lo, hi):
     """Spawn rows with a numeric ts in [lo, hi]; [] when the file is missing or unreadable."""
     try:
         rows = _read_jsonl(spawns_path())[0]
-    except OSError:
+    except (OSError, ValueError):
         return []
     return [r for r in rows if isinstance(r.get("ts"), (int, float)) and lo <= r["ts"] <= hi]
 

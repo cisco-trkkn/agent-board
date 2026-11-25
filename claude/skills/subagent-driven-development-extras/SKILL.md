@@ -9,7 +9,7 @@ Load alongside `superpowers-extended-cc:subagent-driven-development`. Where this
 
 The plugin's routing gate allows a dispatch model only from the in-progress task's tier or `standard`. Each lever stays inside that limit. Leave `SUPERPOWERS_ROUTING_GUARD` unset; if a dispatch is blocked, change the dispatch to a model the gate allows.
 
-Ledger dispatch lines name the tier and the model: `Task <N>: dispatched <name> (<tier>, <model>) …`, e.g. `Task 3: dispatched impl3 (standard, sonnet), BASE 8f46426`. `metrics record` reads the model from this line when no usage row or spawn row names one.
+Ledger dispatch lines name the tier and the model: `Task <N>: dispatched <name> (<tier>, <model>) …`, e.g. `Task 3: dispatched impl3 (standard, sonnet), BASE 8f46426`. `metrics record` reads the model from this line when no usage row or spawn row names one. Review dispatches keep the keyword first: `Task <N>: review dispatched <name> (<tier>, <model>) on <package>`.
 
 ## 1. Green before review
 

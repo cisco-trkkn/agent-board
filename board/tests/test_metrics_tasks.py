@@ -154,6 +154,11 @@ class TestDispatchForms(unittest.TestCase):
         for line in (TIER_COMMA, TIER_SLASH, MODEL_FIRST):
             self.assertEqual(metrics_tasks.parse_ledger(line)[1]["dispatch_models"], ["sonnet"], line)
 
+    def test_review_dispatch_with_tier_and_model_next_to_implementer(self):
+        t = metrics_tasks.parse_ledger("Task 3: dispatched impl3 (standard, sonnet), BASE 8f46426\n"
+                                       "Task 3: review dispatched rev (standard, sonnet) on review-A..B.diff")[3]
+        self.assertEqual((t["owners"], t["reviewers"]), (["impl3"], ["rev"]))
+
     def test_tier_alone_names_no_model(self):
         t = metrics_tasks.parse_ledger("Task 1: dispatched w9 (standard)")[1]
         self.assertEqual((t["owners"], t["dispatch_models"]), (["w9"], []))
