@@ -99,7 +99,7 @@ class Store:
                    and j.get("kind") == "retire" and j.get("from") is None)
 
     def insert(self, source, kind, target, patch, evidence, outcome=None, shrinks_reads=False, title=None, tick=None,
-               state="proposed"):
+               state="proposed", reason=None):
         if state not in ("proposed", "drafted"):
             raise ImproveError(f"improve: bad initial state {state}")
         key = hashlib.sha256(f"{source}\0{target}\0{hashlib.sha256((patch or '').encode()).hexdigest()}".encode()).hexdigest()
@@ -124,9 +124,9 @@ class Store:
                 n = 1 + max((int(r[0][1:]) for r in c.execute("SELECT id FROM proposals")), default=0)
                 pid, now = f"P{n}", self.now()
                 c.execute("INSERT INTO proposals(id, source, kind, target, patch, evidence, class, state, outcome, created_at, "
-                          "updated_at, dedupe_key, title, shrinks_reads) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                          "updated_at, dedupe_key, title, shrinks_reads, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                           (pid, source, kind, target, patch, json.dumps(evidence), cls, state, outcome, now, now, key, title,
-                           1 if shrinks_reads else 0))
+                           1 if shrinks_reads else 0, reason))
                 row = c.execute("SELECT * FROM proposals WHERE id = ?", (pid,)).fetchone()
                 self._append_event(c, row, None, "insert", {"tick": tick})
                 if patch is not None:
