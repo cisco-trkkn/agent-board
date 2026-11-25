@@ -10,11 +10,17 @@ const ACTIONS = new Set(['pause', 'resume', 'idea', 'new-spec', 'ideas', 'lead',
 const NEEDS_PROJECT = new Set(['queue', 'pause', 'resume', 'idea', 'new-spec', 'lead', 'gauth']);
 const LEAD_ACTIONS = ['status', 'restart', 'handoff'];
 const CONFIRM_TTL_MS = 5 * 60 * 1000; // a /lead Confirm older than this has expired
-const COMPONENT_RE = /^ab:(?:lead:(restart|handoff|cancel):(.+):([0-9]+)|(tasks:pick)|gauth:code:(.+))$/;
+const COMPONENT_RE = /^ab:(?:lead:(restart|handoff|cancel):(.+):([0-9]+)|(tasks:pick)|gauth:code:(.+)|np:token:([A-Za-z0-9][A-Za-z0-9_-]{0,59}))$/;
+// /new-project names: today's project-name rule without '.', at most 60 chars (dev maps '.' to '_' in the session name;
+// ab:np:retry:<name>:<step> stays under Discord's 100-char custom_id limit)
+const NP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/;
+const NP_SOURCES = ['new', 'clone', 'folder'];
+const NP_BAD_NAME = "Bad name: letters, digits, '_' and '-', starting with a letter or digit, at most 60.";
 const DESCRIPTIONS = {
   status: 'Show the board status', queue: 'Show a project queue', pause: "Pause a project's queue",
   resume: "Resume a project's queue", idea: 'Add an idea', 'new-spec': 'Ask the lead for a new spec', ideas: 'Group the open ideas', approvals: 'List open decisions',
   tasks: "Show a project's task list", lead: "Check, restart or hand off a project's lead", gauth: 'Re-authenticate Google for a project',
+  'new-project': 'Set up a new project and its own bot',
 };
 const NOT_SET_UP = 'Ops bot not set up (tmux-ctl discord ops-channels).';
 const FORMS = {
@@ -23,9 +29,11 @@ const FORMS = {
 };
 
 function payload(ops) {
-  return Object.keys(DESCRIPTIONS).filter((name) => ops || name !== 'ideas').map((name) => { // /ideas posts in the ops channel: project bots do not register it
+  return Object.keys(DESCRIPTIONS).filter((name) => ops || (name !== 'ideas' && name !== 'new-project')).map((name) => { // /ideas posts in the ops channel and /new-project runs in the command center: project bots register neither
     const c = { name, description: DESCRIPTIONS[name], type: 1 };
-    if (name !== 'approvals') {
+    if (name === 'new-project') {
+      c.options = [{ name: 'name', description: 'Resume the unfinished setup of this project', type: 3, max_length: PROJECT_MAX, required: false }];
+    } else if (name !== 'approvals') {
       c.options = [{ name: 'project', description: 'Project name', type: 3, max_length: PROJECT_MAX, required: ops && NEEDS_PROJECT.has(name) && name !== 'queue' }];
     }
     if (name === 'lead') {
@@ -96,6 +104,29 @@ async function handleCommand(i, ctx) {
   const inHome = !ctx.ops && !!homeId && (i.channelId === homeId || i.channel?.parentId === homeId); // an unknown home channel means no default
   const project = name === 'ideas' ? given : (given || (inHome ? own : null)); // /ideas covers every project unless one is given (R2)
 
+  if (name === 'new-project') {
+    if (!ctx.ops) { await ctx.answer(i, 'Use /new-project on the ops bot.'); return; }
+    if (String(i.channelId ?? '') !== String(ctx.commandCenter() ?? '')) {
+      await ctx.answer(i, 'Use /new-project in the command center.');
+      event({ type: 'rejected', what, project: null });
+      return;
+    }
+    const nm = i.options?.getString?.('name');
+    if (nm) { // resume an unfinished setup: the board answers
+      if (!NP_NAME_RE.test(nm)) { await ctx.answer(i, NP_BAD_NAME); return; }
+      await i.deferReply({ flags: 64 });
+      ctx.keep(i);
+      event({ type: 'slash', command: 'new-project', name: nm, channel_id: String(i.channelId), iid: String(i.id) });
+      return;
+    }
+    const input = (id, label, style, max, required, placeholder) => ({ type: 1, components: [{ type: 4, custom_id: id, label, style, max_length: max, required, ...(placeholder ? { placeholder } : {}) }] });
+    await i.showModal({
+      custom_id: 'ab:modal:new-project', title: 'New project',
+      components: [input('name', 'Name', 1, PROJECT_MAX, true), input('source', 'Source: new, clone or folder', 1, 6, true, 'new'),
+        input('target', 'Git URL (clone) or path (folder)', 1, 400, false)],
+    });
+    return;
+  }
   if (name === 'queue' && ctx.ops && !project) { // one card per lead, posted by the board
     const n = Object.keys(ctx.views()?.leads || {}).filter((p) => p in (ctx.views()?.queue || {})).length;
     await ctx.answer(i, `posting ${n} queue cards`);
@@ -165,6 +196,39 @@ async function handleCommand(i, ctx) {
 
 async function handleModal(i, ctx, m) {
   const [, form, project] = m;
+  const user = String(i.user?.id);
+  if (form === 'new-project') {
+    if (!ctx.ops || String(i.channelId ?? '') !== String(ctx.commandCenter() ?? '')) {
+      await ctx.answer(i, 'Use /new-project in the command center.');
+      ctx.writeEvent({ type: 'rejected', what: 'ab:modal:new-project', user, ts: ctx.now() });
+      return;
+    }
+    const v = (id) => String(i.fields.getTextInputValue(id) ?? '').trim();
+    const name = v('name'), source = v('source').toLowerCase(), target = v('target');
+    const why = !NP_NAME_RE.test(name) ? NP_BAD_NAME
+      : !NP_SOURCES.includes(source) ? 'Source must be new, clone or folder.'
+        : source !== 'new' && !target ? `Source ${source} needs a ${source === 'clone' ? 'git URL' : 'path'}.` : null;
+    if (why) { await ctx.answer(i, why); return; }
+    await i.deferReply({ flags: 64 });
+    ctx.keep(i);
+    ctx.writeEvent({ type: 'modal', form: 'new-project', fields: { name, source, target: source === 'new' ? '' : target }, user, channel_id: String(i.channelId), iid: String(i.id), ts: ctx.now() });
+    ctx.say(`modal new-project ${ctx.snip(name)} from ${ctx.snip(user)}`);
+    return;
+  }
+  if (form === 'np-token') {
+    const tok = String(i.fields.getTextInputValue('token') ?? '').trim();
+    if (!ctx.ops || !NP_NAME_RE.test(project)) { await ctx.answer(i, 'Not available here.'); return; }
+    if (!tok || /\s/.test(tok)) { await ctx.answer(i, 'That does not look like a bot token; Paste token again.'); return; }
+    let file;
+    try { file = ctx.writeTokenFile(tok); } catch { ctx.say(`modal np-token ${ctx.snip(project)}: could not write the token file`); await ctx.answer(i, 'Could not take the token; Paste token again.'); return; }
+    try {
+      await i.deferReply({ flags: 64 });
+      ctx.keep(i);
+      ctx.writeEvent({ type: 'np_token', name: project, file, user, iid: String(i.id), ts: ctx.now() });
+    } catch { ctx.dropTokenFile(file); ctx.say(`modal np-token ${ctx.snip(project)}: event write failed`); return; }
+    ctx.say(`modal np-token ${ctx.snip(project)} from ${ctx.snip(user)}`); // never the token itself
+    return;
+  }
   if (form === 'gauth') {
     const code = String(i.fields.getTextInputValue('code') ?? '').trim();
     if (!code) { await ctx.answer(i, 'Empty code.'); return; }
@@ -195,6 +259,10 @@ async function handleComponent(i, ctx, c) {
     ctx.writeEvent({ type: 'read', what: 'ab:tasks:pick', user, ts: ctx.now() });
     return;
   }
+  if (c[6]) { // ab:np:token:<name>: the one-field private token form
+    await i.showModal({ custom_id: `ab:modal:np-token:${c[6]}`, title: `Bot token for ${c[6]}`.slice(0, 45), components: [{ type: 1, components: [{ type: 4, custom_id: 'token', label: 'Bot token (Reset Token in the portal)', style: 1, max_length: 100, required: true }] }] });
+    return;
+  }
   if (c[5]) { // ab:gauth:code:<project>
     await i.showModal({ custom_id: `ab:modal:gauth:${c[5]}`, title: 'Google auth code', components: [{ type: 1, components: [{ type: 4, custom_id: 'code', label: 'Code', style: 1, max_length: 400, required: true }] }] });
     return;
@@ -218,7 +286,7 @@ async function handleComponent(i, ctx, c) {
 // True when the interaction was a command, modal or one of our components (handled here).
 async function handle(i, ctx) {
   const isCmd = i?.isChatInputCommand?.();
-  const m = i?.isModalSubmit?.() ? /^ab:modal:(idea|new-spec|gauth):(.+)$/.exec(String(i.customId)) : null;
+  const m = i?.isModalSubmit?.() ? (/^ab:modal:(idea|new-spec|gauth|np-token):(.+)$/.exec(String(i.customId)) || /^ab:modal:(new-project)()$/.exec(String(i.customId))) : null;
   const c = !isCmd && !m && typeof i?.customId === 'string' ? COMPONENT_RE.exec(i.customId) : null;
   if (!isCmd && !m && !c) return false;
   const what = isCmd ? `/${i.commandName}` : i.customId;

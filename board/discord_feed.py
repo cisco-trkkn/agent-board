@@ -63,7 +63,10 @@ def _check(op):
               "dialog": ({"op", "key", "text", "rows", "mention_user"}, set()),
               "presence": ({"op", "text"}, set()),
               "ireply": ({"op", "iid", "content"}, {"components", "private"}),
-              "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"})}
+              "approval": ({"op", "key", "kind", "text", "mention_user"}, {"link", "project"}),
+              # /new-project (board/newproject.py): the ops bridge creates #<name> and grants the new bot its overwrite
+              "create_channel": ({"op", "guild", "name", "req"}, set()),
+              "channel_overwrite": ({"op", "channel", "user", "allow", "name", "req"}, set())}
     if kind not in shapes:
         raise ValueError(f"unknown op {kind!r}")
     need, opt = shapes[kind]
