@@ -136,6 +136,50 @@ class VariantsTest(Base):
         self.assertEqual(self.variants(self.inn)["variants"], [])
 
 
+class StaleTest(Base):
+    def rejected(self, pid="P1"):
+        p = self.s.get(pid)
+        return (p["state"], p["reason"])
+
+    def test_dotdot_patch_writes_nothing_and_is_rejected(self):
+        sib = Path(self.repo).parent / f"victim-{os.getpid()}.txt"
+        sib.write_text("orig\n")
+        self.addCleanup(lambda: sib.unlink() if sib.exists() else None)
+        self.put("claude/x.md", "# T\na\n")
+        patch = f"--- a/../{sib.name}\n+++ b/../{sib.name}\n@@ -1 +1 @@\n-orig\n+PWNED\n"
+        self.trial("rule", "claude/x.md", patch)
+        self.assertEqual(self.variants(self.inn)["variants"], [])
+        self.assertEqual(sib.read_text(), "orig\n")
+        self.assertEqual(self.rejected(), ("rejected", "stale patch"))
+
+    def test_absolute_patch_path_is_rejected(self):
+        self.put("claude/x.md", "# T\na\n")
+        self.trial("rule", "claude/x.md", "--- a//etc/hosts\n+++ b//etc/hosts\n@@ -1 +1 @@\n-a\n+b\n")
+        self.assertEqual(self.variants(self.inn)["variants"], [])
+        self.assertEqual(self.rejected(), ("rejected", "stale patch"))
+
+    def test_bad_routing_json_is_stale(self):
+        old = '{\n  "mechanical": "haiku"\n}\n'
+        self.put("docs/superpowers/model-routing.json", old)
+        self.trial("routing", "docs/superpowers/model-routing.json",
+                   diff("docs/superpowers/model-routing.json", old, '{\n  "mechanical": \n}\n'))
+        self.assertEqual(self.variants(self.inn)["variants"], [])
+        self.assertEqual(self.rejected(), ("rejected", "stale patch"))
+
+    def test_patch_that_creates_its_target_is_stale(self):
+        patch = "--- /dev/null\n+++ b/claude/new.md\n@@ -0,0 +1 @@\n+hello\n"
+        self.trial("rule", "claude/new.md", patch)
+        self.assertEqual(self.variants(self.inn)["variants"], [])
+        self.assertEqual(self.rejected(), ("rejected", "stale patch"))
+
+    def test_skill_target_without_skills_part_is_stale(self):
+        old = "# S\na\n"
+        self.put("claude/other/SKILL.md", old)
+        self.trial("skill", "claude/other/SKILL.md", diff("claude/other/SKILL.md", old, "# S\nb\n"))
+        self.assertEqual(self.variants(self.inn)["variants"], [])
+        self.assertEqual(self.rejected(), ("rejected", "stale patch"))
+
+
 class CliTest(Base):
     def test_variants_json_on_the_cli(self):
         # the real command, unpatched, against the scratch engine db; no trial -> empty list

@@ -31,15 +31,27 @@ def _paths(patch):
     return out
 
 
-def _apply(repo, patch):
-    """Apply patch to a copy of the files it names. Returns (tempdir, error); the caller removes the dir."""
+def _unsafe(rel):
+    p = Path(rel)
+    return p.is_absolute() or ".." in p.parts or not p.parts
+
+
+def _apply(repo, patch, target):
+    """Apply patch to a copy of the files it names. Returns (tempdir, error); the caller removes the dir.
+    Any path that is absolute or climbs out (`..`) is an error before anything is written."""
     d = tempfile.mkdtemp(prefix="improve-trial-")
+    named = [l.split(None, 1)[1].split("\t")[0] for l in patch.splitlines() if l.startswith(("--- ", "+++ "))]
+    named = [n[2:] if n[:2] in ("a/", "b/") else n for n in named if n != "/dev/null"]
+    if any(_unsafe(n) for n in named + [target or ""]):
+        return d, "unsafe path"
+    if "--- /dev/null" in patch.splitlines() or not (Path(repo) / target).is_file():
+        return d, "creates or lacks its target"   # a variant changes an existing champion file
     for rel in _paths(patch):
         src = Path(repo) / rel
         if src.is_file():
             (Path(d) / rel).parent.mkdir(parents=True, exist_ok=True)
             (Path(d) / rel).write_bytes(src.read_bytes())
-    r = subprocess.run(["git", "apply", "--unsafe-paths", "-"], input=patch, cwd=d, capture_output=True, text=True)
+    r = subprocess.run(["git", "apply", "-"], input=patch, cwd=d, capture_output=True, text=True)
     return d, (r.stderr.strip() or "git apply failed") if r.returncode else None
 
 
@@ -77,28 +89,35 @@ def _code_mode(patch, routing):
     return routing.get("codeMode") is True or (isinstance(mech, dict) and mech.get("codeMode") is True)
 
 
+def _build(row, d, patch, target, kind, store):
+    base = {"id": row["id"], "kind": kind, "target": target}
+    if kind == "skill":
+        skill = Path(target).parts[Path(target).parts.index("skills") + 1]
+        base["skill_copy"] = {"from": f"claude/skills/{skill}", "to": f".superpowers/improve/skills/{skill}@{row['id']}",
+                              "patch": str(improve_store.patches_dir(store.project) / f"{row['id']}.diff")}
+    elif kind == "routing":
+        routing = json.loads((Path(d) / target).read_text())
+        base["routing"] = routing
+        if _code_mode(patch, routing):
+            base["env"] = dict(CODE_MODE_ENV)
+            base["applies_to"] = {"tier": "mechanical", "kind": "implement"}
+    else:
+        heading, text = _section((Path(d) / target).read_text(), patch)
+        base["overlay"] = f"## Trial {row['id']}\n{text}\n(This replaces the section {heading} of {target}.)"
+    return base
+
+
 def _variant(row, repo, store):
     """The variant entry for one trial proposal, or None when its patch no longer applies."""
     patch, target, kind = row["patch"] or "", row["target"], row["kind"]
-    d, err = _apply(repo, patch)
+    d, err = _apply(repo, patch, target)
     try:
         if err:
             return None
-        base = {"id": row["id"], "kind": kind, "target": target}
-        if kind == "skill":
-            skill = Path(target).parts[Path(target).parts.index("skills") + 1]
-            base["skill_copy"] = {"from": f"claude/skills/{skill}", "to": f".superpowers/improve/skills/{skill}@{row['id']}",
-                                  "patch": str(improve_store.patches_dir(store.project) / f"{row['id']}.diff")}
-        elif kind == "routing":
-            routing = json.loads((Path(d) / target).read_text())
-            base["routing"] = routing
-            if _code_mode(patch, routing):
-                base["env"] = dict(CODE_MODE_ENV)
-                base["applies_to"] = {"tier": "mechanical", "kind": "implement"}
-        else:
-            heading, text = _section((Path(d) / target).read_text(), patch)
-            base["overlay"] = f"## Trial {row['id']}\n{text}\n(This replaces the section {heading} of {target}.)"
-        return base
+        try:
+            return _build(row, d, patch, target, kind, store)
+        except (OSError, ValueError, KeyError, IndexError, AttributeError):
+            return None
     finally:
         import shutil
         shutil.rmtree(d, ignore_errors=True)
