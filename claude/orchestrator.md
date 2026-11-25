@@ -264,6 +264,11 @@ confirmation:
   `lead-stop-guard` hook blocks that stop.
 - A line `[Board] Please shut down teammate <name>.` was sent by the user from the Agent Board: send that
   teammate a `shutdown_request` (same `reason` note as above), run `tmux-ctl wait-gone <name>`, and confirm in one line.
+- A line starting `[Watch]` is the night watch of the Agent Board (queue mode only), not the user: act on it and do not
+  reply to it. `teammate <name> window is gone`: replace that teammate as "Replacing a stalled teammate" (Rules) says;
+  `teammate <name> has been idle`: read its report, then nudge it with SendMessage if the task is not done;
+  `you have been idle`: continue the queue; `the awake hold dropped`: nothing to do when it ends `ok`, else put the
+  line in the morning report.
 - Workers: `tmux-ctl tell` / `tmux-ctl agents`.
 - Peer sessions: send a plain-text `SendMessage` to the name in `ListAgents`. Structured
   `shutdown_request` messages only reach teammates. To shut a peer down, find its pane in `ListAgents`

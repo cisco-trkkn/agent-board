@@ -45,7 +45,7 @@ passes.
 | 4 | — | K3 | not started | — | 2026-11-10 |
 | 5 | — | K4 | not started | — | 2026-11-10 |
 | 6 | — | — | not started | — | 2026-11-10 |
-| 7 | — | — | not started (Discord interface; takes approval holds and schedules from the engine spec) | — | 2026-11-19 |
+| 7 | — | — | not started (Discord interface; approval holds and schedules moved back to the engine spec as Part 3, 2026-11-24, user C1) | — | 2026-11-19 |
 | 8 | — | — | not started (Claude Agent SDK backend after stage 3 passes K2; opens with a spike: billing, setup parity, `canUseTool` to Discord) | — | 2026-11-19 |
 | 10 | — | — | not started (project owner above the engine; after stage 6) | — | 2026-11-19 |
 
