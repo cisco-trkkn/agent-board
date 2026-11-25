@@ -127,7 +127,9 @@ function isProtected(target, { hunks, src, file } = {}) {
 
 // The approval-hold rules of the protected set (engine/lib/engine/hold.js rulesFor): one per line of `repo`'s protected.txt,
 // for the four tools that write a file. A relative line is matched against the worktree-relative path, a `~/` line against
-// the absolute one, and a `path#improve` line holds the whole file. No protected.txt: no rule.
+// the absolute one. A `path#section` line adds no rule: spec section 6 protects only that section of the file, and the
+// improve merge entry refuses a hunk in it (isProtected with hunks); a hold would freeze the whole file for every worker.
+// No protected.txt: no rule.
 // Known gap: a protected file written through Bash is not held here; the improve merge entry refuses it on the way to main.
 const HOLD_TOOLS = "Write|Edit|MultiEdit|NotebookEdit";
 function protectedHolds(repo) {
@@ -136,10 +138,8 @@ function protectedHolds(repo) {
     if (e && e.code === "ENOENT") return [];
     throw e;
   }
-  return globs.map((g) => {
-    const at = g.indexOf("#");
-    return { tool: HOLD_TOOLS, pattern: globSource(expandUser(at >= 0 ? g.slice(0, at) : g)), outside_worktree: false };
-  });
+  return globs.filter((g) => !g.includes("#"))
+    .map((g) => ({ tool: HOLD_TOOLS, pattern: globSource(expandUser(g)), outside_worktree: false }));
 }
 
 const under = (dir, p) => p.startsWith(dir + path.sep);

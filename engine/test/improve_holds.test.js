@@ -48,13 +48,13 @@ const edit = (tool, file) => ({ tool_name: tool, tool_input: { file_path: file, 
 
 // ---- the rules ---------------------------------------------------------------------------------------------------
 
-test("protectedHolds: one rule per line, the four write tools, never outside-only; ~ and #improve lines", (t) => {
+test("protectedHolds: one rule per whole-file line, the four write tools, never outside-only; ~ lines; no rule for a #section line", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "iph-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   assert.deepEqual(improve.protectedHolds(dir), [], "a missing protected.txt adds no rule");
   write(dir, PROTECTED_REL, "a/b.md\n# a comment\n\n~/.claude/settings*.json\nbin/tmux-ctl#improve\ndocs/x/**\n");
   const rules = improve.protectedHolds(dir);
-  assert.equal(rules.length, 4);
+  assert.equal(rules.length, 3, "bin/tmux-ctl#improve adds no hold: the merge entry guards that section by hunk (spec section 6)");
   for (const r of rules) assert.deepEqual(Object.keys(r).sort(), ["outside_worktree", "pattern", "tool"]);
   for (const r of rules) assert.deepEqual([r.tool, r.outside_worktree, typeof r.pattern], [TOOLS, false, "string"]);
   const re = rules.map((r) => new RegExp(r.pattern));
@@ -64,8 +64,8 @@ test("protectedHolds: one rule per line, the four write tools, never outside-onl
   assert.ok(re[1].test(path.join(home, ".claude/settings.local.json")), "a ~/ line is an absolute-path pattern");
   assert.equal(re[1].test(".claude/settings.json"), false);
   assert.equal(re[1].test("~/.claude/settings.json"), false);
-  assert.deepEqual([re[2].test("bin/tmux-ctl"), re[2].test("bin/tmux-ctl#improve"), re[2].test("bin/tmux-ctl2")], [true, false, false]);
-  assert.deepEqual([re[3].test("docs/x/a/b.md"), re[3].test("docs/x/a\nb"), re[3].test("docs/xy")], [true, true, false]);
+  for (const f of ["bin/tmux-ctl", "bin/tmux-ctl#improve"]) assert.equal(re.some((x) => x.test(f)), false, `${f} is not held`);
+  assert.deepEqual([re[2].test("docs/x/a/b.md"), re[2].test("docs/x/a\nb"), re[2].test("docs/xy")], [true, true, false]);
 });
 
 test("protectedHolds reads the file of the repo it is given, not the engine's own", (t) => {
@@ -88,16 +88,21 @@ test("rulesFor: the defaults, then the config rules, then improve_protected:<n>;
 });
 
 // Ruling A15: the hold agrees with every vector of the shared file (board/improve_class.py and improve.isProtected do too).
-test("every glob vector: an Edit inside the worktree is held by an improve_protected rule exactly when the vector is protected", () => {
+// The one exception (final review I3): a file protected only in a section (`bin/tmux-ctl#improve`) is never held as a
+// whole; the improve merge entry refuses a hunk in that section.
+test("every glob vector: an Edit inside the worktree is held by an improve_protected rule exactly when the vector is protected as a whole file", () => {
+  const sectionOnly = improve.protectedGlobs(path.join(REPO, PROTECTED_REL)).filter((g) => g.includes("#")).map((g) => g.slice(0, g.indexOf("#")));
+  assert.deepEqual(sectionOnly, ["bin/tmux-ctl"]);
   const all = [...VECTORS.protected.map((v) => [v, true]), ...VECTORS.not_protected.map((v) => [v, false])];
   assert.ok(VECTORS.protected.length >= 21 && VECTORS.not_protected.length >= 8, "the vector file is not empty");
   const own = improve.protectedHolds(REPO);
-  assert.equal(own.length, improve.protectedGlobs(path.join(REPO, PROTECTED_REL)).length, "one rule per line");
+  assert.equal(own.length, improve.protectedGlobs(path.join(REPO, PROTECTED_REL)).length - sectionOnly.length, "one rule per whole-file line");
   const rules = hold.rulesFor({}, REPO);
   const wt = "/nowhere/wt";
-  for (const [v, want] of all) {
+  for (const [v, prot] of all) {
+    assert.equal(improve.isProtected(v), prot, `isProtected agrees on ${v}`);
+    const want = prot && !sectionOnly.includes(v);
     assert.equal(own.some((r) => new RegExp(r.pattern).test(v)), want, `protectedHolds on ${v}`);
-    assert.equal(improve.isProtected(v), want, `isProtected agrees on ${v}`);
     for (const file of [path.join(wt, v), v]) { // an absolute path and one relative to the worker's cwd
       const m = hold.match(rules, { ...edit("Edit", file), cwd: wt }, wt);
       assert.equal(m ? m.id : null, want ? m && IMPROVE_ID.test(m.id) && m.id : null, `${file}: ${m && m.id}`);
