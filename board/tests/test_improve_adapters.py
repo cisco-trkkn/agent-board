@@ -119,7 +119,9 @@ class Observer(Base):
         A.run_all("proj")
         r = {x["kind"]: x for x in self.rows()}
         self.assertEqual(set(r), {"skill", "rule"})
-        self.assertEqual(r["skill"]["target"], SKILL)
+        self.assertEqual(r["skill"]["target"], f"claude/skills/{SKILL}/SKILL.md")
+        self.assertEqual(r["skill"]["patch"].splitlines()[:2], [f"--- a/claude/skills/{SKILL}/SKILL.md", f"+++ b/claude/skills/{SKILL}/SKILL.md"])
+        self.assertEqual(r["rule"]["patch"], "--- a/claude/orchestrator.md\n+++ b/claude/orchestrator.md\n@@ -1,1 +1,1 @@\n-a\n+b\n")
         self.assertIn("+extra line", r["skill"]["patch"])
         self.assertEqual(r["rule"]["target"], "claude/orchestrator.md")
         self.assertEqual(r["rule"]["class"], "protected")
@@ -131,11 +133,42 @@ class Observer(Base):
         A.run_all("proj")
         self.assertEqual({x["target"]: x["class"] for x in self.rows() if x["kind"] == "rule"}, {"claude/orchestrator.md": "protected"})
 
-    def test_unresolvable_name_stays_bare_and_is_not_protected(self):
-        self.ws(patch="--- zz-nothing.md\n+++ zz-nothing.md.new\n@@ -1 +1 @@\n-a\n+b\n")
+    def test_unresolvable_name_is_skipped_with_one_error(self):
+        # a bare name that is no single repo file (and a file outside the repo) can be neither trialled nor landed
+        o = self.ws(patch="--- zz-nothing.md\n+++ zz-nothing.md.new\n@@ -1 +1 @@\n-a\n+b\n")
+        w(o / "2026-11-01" / "_target-files" / "home.patch",
+          "--- /Users/x/.zz-nothing-rc\t2026-10-19 22:37:49\n+++ /Users/x/.zz-nothing-rc.new\t2026\n@@ -1 +1 @@\n-a\n+b\n")
         A.run_all("proj")
-        r = [x for x in self.rows() if x["kind"] == "rule"][0]
-        self.assertEqual((r["target"], r["class"]), ("zz-nothing.md", "high"))
+        self.assertEqual([x["kind"] for x in self.rows()], ["skill"])
+        reasons = sorted(e["reason"] for e in self.events("improve_adapter_error"))
+        self.assertEqual(len(reasons), 2)
+        self.assertRegex(reasons[0], r"^no single repo file for .*home\.patch \(/Users/x/\.zz-nothing-rc\)$")
+        self.assertRegex(reasons[1], r"^no single repo file for .*orch\.patch \(zz-nothing\.md\)$")
+
+    def test_patch_of_two_files_is_skipped_with_one_error(self):
+        two = ORCH_PATCH + "--- /Users/x/agent-board/claude/worker.md\t2026\n+++ worker.md.new\t2026\n@@ -1,1 +1,1 @@\n-a\n+b\n"
+        self.ws(patch=two)
+        A.run_all("proj")
+        self.assertEqual([x["kind"] for x in self.rows()], ["skill"])
+        self.assertRegex(self.events("improve_adapter_error")[0]["reason"], r"^not a one-file patch: .*orch\.patch$")
+
+    def test_removed_line_that_looks_like_a_header_is_left_alone(self):
+        body = "@@ -1,3 +1,3 @@\n--- not a header\n+++ nor this\n@@ in text\n x\n"
+        self.ws(patch="--- orchestrator.md\n+++ orchestrator.md\n" + body)
+        A.run_all("proj")
+        r = [x for x in self.rows() if x["kind"] == "rule"]
+        self.assertEqual([x["patch"] for x in r], ["--- a/claude/orchestrator.md\n+++ b/claude/orchestrator.md\n" + body])
+
+    def test_skill_that_lives_outside_the_repo_is_skipped_with_one_error(self):
+        o = self.ws()
+        home = Path(self.d["state"]) / "home"
+        w(home / ".claude" / "skills" / "zz-home-only" / "SKILL.md", "live\n")
+        w(o / "2026-11-01" / "zz-home-only" / "SKILL.md", "live\nmore\n")
+        with mock.patch.object(Path, "home", return_value=home):
+            A.run_all("proj")
+        self.assertEqual(sorted(x["target"] for x in self.rows()), ["claude/orchestrator.md", f"claude/skills/{SKILL}/SKILL.md"])
+        self.assertEqual([e["reason"] for e in self.events("improve_adapter_error")],
+                         ["skill zz-home-only lives outside the repo (round 2026-11-01)"])
 
     def test_rule_target_forms(self):
         for hdr, want in [("--- a/claude/worker.md\n+++ b/claude/worker.md\n", "claude/worker.md"),
@@ -156,6 +189,75 @@ class Observer(Base):
         ev = self.events("improve_adapter_error")
         self.assertEqual([(e["source"]) for e in ev], ["observer"])
         self.assertIn("zz-no-such-skill-xyz", ev[0]["reason"])
+
+
+class ObserverToTrialAndApply(Base):
+    """Final review I2: what observer() stores is what a trial and the apply step can use. The round is laid out as a real
+    one, and its rule patch is a real `diff -u` between the two files of that layout, so the headers are the ones diff
+    writes there. Shape copied (read-only, 2026-11-25) from
+    ~/.task-observer/skill-updates/2026-11-02/_target-files/worker.md.patch:
+      --- /Users/<u>/.task-observer/skill-updates/.live-mirror/agent-board/claude/worker.md<TAB>2026-10-29 01:50:47
+      +++ /Users/<u>/.task-observer/skill-updates/2026-11-02/_target-files/worker.md.new<TAB>2026-11-02 12:12:46"""
+    RULE = "claude/worker.md"
+    MARK = "- Observer marker 5c1e: say so in the report."
+
+    def setUp(self):
+        super().setUp()
+        import subprocess
+        o = Path(self.d["obs"]) / "skill-updates"
+        live = (REPO / self.RULE).read_text()
+        mirror = w(o / ".live-mirror" / "agent-board" / self.RULE, live)
+        new = w(o / "2026-11-02" / "_target-files" / "worker.md.new", live + self.MARK + "\n")
+        d = subprocess.run(["diff", "-u", str(mirror), str(new)], capture_output=True, text=True)
+        self.assertEqual(d.returncode, 1, d.stderr)
+        self.raw = d.stdout
+        w(o / "2026-11-02" / "_target-files" / "worker.md.patch", self.raw)
+        w(o / "2026-11-02" / SKILL / "SKILL.md", LIVE + "\nObserver skill line 5c1e.\n")
+        w(o / "PENDING.md", "# Pending\n\n## 2026-11-02 (review): awaiting install\n\nx\n")
+        # a scratch main with the two champion files: `applies` reads git, and never this checkout's
+        self.main = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.main, True)
+        self.skill_rel = f"claude/skills/{SKILL}/SKILL.md"
+        for rel in (self.RULE, self.skill_rel):
+            w(self.main / rel, (REPO / rel).read_text())
+        for a in (["init", "-q", "-b", "main"], ["add", "-A"],
+                  ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "champions"]):
+            subprocess.run(["git", "-C", str(self.main), *a], check=True, capture_output=True)
+
+    def test_the_fixture_has_the_real_header_shape(self):
+        head = self.raw.splitlines()[:2]
+        self.assertRegex(head[0], r"^--- /.+/skill-updates/\.live-mirror/agent-board/claude/worker\.md\t\d{4}-\d\d-\d\d \d\d:\d\d:\d\d")
+        self.assertRegex(head[1], r"^\+\+\+ /.+/skill-updates/2026-11-02/_target-files/worker\.md\.new\t\d{4}-\d\d-\d\d \d\d:\d\d:\d\d")
+
+    def test_stored_rows_reach_a_variant_and_apply_on_main(self):
+        import improve_apply
+        import improve_trials
+        self.assertEqual(A.run_all("proj")["observer"], 2)
+        self.assertEqual(self.events("improve_adapter_error"), [])
+        rows = {x["kind"]: x for x in self.rows()}
+        self.assertEqual({k: v["target"] for k, v in rows.items()}, {"rule": self.RULE, "skill": self.skill_rel})
+        for row in rows.values():
+            self.assertEqual(row["patch"].splitlines()[:2], [f"--- a/{row['target']}", f"+++ b/{row['target']}"])
+            self.s.transition(row["id"], "trial", "test")
+        ids = [r["id"] for r in rows.values()]
+        spec = next(f"docs/s{i}.md" for i in range(500) if all(improve_trials.in_trial(f"docs/s{i}.md", p) for p in ids))
+        got = {v["kind"]: v for v in improve_trials.variants(spec, self.s)["variants"]}
+        self.assertEqual(set(got), {"rule", "skill"}, [(r["id"], r["state"], r["reason"]) for r in self.rows()])
+        self.assertIn(self.MARK, got["rule"]["overlay"])
+        self.assertEqual(got["skill"]["skill_copy"]["from"], f"claude/skills/{SKILL}")
+        self.assertEqual({r["state"] for r in self.rows()}, {"trial"})
+        for row in rows.values():
+            self.assertTrue(improve_apply.applies(self.s, row["id"], repo=self.main), row["target"])
+
+    def test_the_raw_real_shaped_patch_is_what_used_to_fail(self):
+        # the stored form before the fix: the trial calls it unsafe and git cannot apply it on main
+        import improve_apply
+        import improve_trials
+        pid = self.s.insert("observer", "rule", self.RULE, self.raw, [{"type": "report", "ref": "x"}])
+        d, err = improve_trials._apply(REPO, self.raw, self.RULE)
+        shutil.rmtree(d, ignore_errors=True)
+        self.assertEqual(err, "unsafe path")
+        self.assertFalse(improve_apply.applies(self.s, pid, repo=self.main))
 
 
 class Idempotence(Base):
@@ -212,7 +314,7 @@ class DryRun(Base):
         before = len(self.rows())
         r = self.run_cli("--dry-run", "--source", "observer")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("observer skill docs-compose", r.stdout)
+        self.assertIn("observer skill claude/skills/docs-compose/SKILL.md", r.stdout)
         self.assertIn("observer rule claude/orchestrator.md protected", r.stdout)
         self.assertIn("observer: 2 item(s) read", r.stdout)
         self.assertEqual(len(self.rows()), before)

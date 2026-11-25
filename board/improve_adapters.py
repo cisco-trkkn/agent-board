@@ -47,7 +47,7 @@ def _clean(raw):
 
 def rule_target(patch):
     """The repo-relative file an observer `_target-files` patch changes, or the bare name when it cannot be resolved to
-    exactly one repo file (derive then classes it high, never protected)."""
+    exactly one repo file (observer() then skips the patch)."""
     names = [n for n in (_clean(m) for m in _HDR.findall(patch)[:2]) if n]
     repo = improve_class.REPO
     for n in names:
@@ -120,14 +120,27 @@ def discovery(store, project, errors):
     return n
 
 
-def _live_skill(skill):
-    for f in (improve_class.REPO / "claude" / "skills" / skill / "SKILL.md", Path.home() / ".claude" / "skills" / skill / "SKILL.md"):
-        if f.is_file():
-            return f
-    return None
+def _repo_file(target):
+    return bool(target) and not target.startswith("/") and ".." not in Path(target).parts and (improve_class.REPO / target).is_file()
+
+
+def _rehead(patch, rel):
+    """The patch with its one ---/+++ header pair rewritten to a/<rel> and b/<rel> (what a trial and git apply on main
+    read), or None when it is not a one-file patch. A header pair is a --- line, a +++ line, then a hunk line: a removed
+    line that starts with `-- ` is not one."""
+    lines = patch.split("\n")
+    at = [i for i in range(len(lines) - 2)
+          if lines[i].startswith("--- ") and lines[i + 1].startswith("+++ ") and lines[i + 2].startswith("@@ ")
+          and (i == 0 or not lines[i - 1].startswith("@@ "))]
+    if len(at) != 1:
+        return None
+    return "\n".join(lines[:at[0]] + [f"--- a/{rel}", f"+++ b/{rel}"] + lines[at[0] + 2:])
 
 
 def observer(store, project, errors):
+    """Every stored patch names its target as a/<rel> and b/<rel>, <rel> a file of this repo: the form improve_trials and
+    improve_apply read. An item that has no such file (a skill that lives only in ~/.claude/skills, a rule patch whose
+    name is no single repo file) is one error line and no proposal."""
     pend = observer_dir() / "skill-updates" / "PENDING.md"
     if not pend.is_file():
         return 0                          # no workspace or no PENDING.md: an absent source, not an error
@@ -138,21 +151,31 @@ def observer(store, project, errors):
         ev = [{"type": "report", "ref": f"{pend}#{rnd}"}]
         for staged in sorted(base.glob("*/SKILL.md")):
             skill = staged.parent.name
-            live = _live_skill(skill)
-            if live is None:
-                errors.append(f"no live SKILL.md for {skill} (round {rnd})")
+            rel = f"claude/skills/{skill}/SKILL.md"
+            live = improve_class.REPO / rel
+            if not live.is_file():
+                outside = (Path.home() / ".claude" / "skills" / skill / "SKILL.md").is_file()
+                errors.append(f"skill {skill} lives outside the repo (round {rnd})" if outside
+                              else f"no live SKILL.md for {skill} (round {rnd})")
                 continue
             patch = "".join(difflib.unified_diff(live.read_text().splitlines(True), staged.read_text().splitlines(True),
-                                                 str(live), str(staged)))
+                                                 f"a/{rel}", f"b/{rel}"))
             if not patch:
                 continue
-            store.insert("observer", "skill", skill, patch, ev)
+            store.insert("observer", "skill", rel, patch, ev)
             n += 1
         for pf in sorted((base / "_target-files").glob("*.patch")):
-            patch = pf.read_text()
-            target = rule_target(patch)
+            raw = pf.read_text()
+            target = rule_target(raw)
             if not target:
                 errors.append(f"no ---/+++ header in {pf}")
+                continue
+            if not _repo_file(target):
+                errors.append(f"no single repo file for {pf} ({target})")
+                continue
+            patch = _rehead(raw, target)
+            if patch is None:
+                errors.append(f"not a one-file patch: {pf}")
                 continue
             store.insert("observer", "rule", target, patch, ev)
             n += 1
