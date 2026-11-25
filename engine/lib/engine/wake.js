@@ -25,7 +25,7 @@ async function pass(db, project, ctx, t0) {
   const keys = new Set(schedule.runIntents(db, hctx));
   // every open run of this pass (this one or an earlier wake's) waits for its rc file, at most its timeout_min (A10)
   const deadline = new Map();
-  for (const r of db.prepare("SELECT * FROM steps WHERE kind='schedule_run' AND state='done'").all()) {
+  for (const r of db.prepare("SELECT * FROM steps WHERE kind='schedule_run' AND state='done' AND json_extract(result,'$.ran') IS NULL").all()) {
     if (db.prepare("SELECT 1 FROM events WHERE kind='schedule_ran' AND json_extract(detail,'$.key')=?").get(r.key)) continue;
     if (!keys.has(r.key)) continue;
     const src = r.key.slice("schedule_run:".length);

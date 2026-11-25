@@ -237,6 +237,31 @@ test("engine wake under launchd's environment (env -i, only the plist's variable
   assert.notEqual(dflt.status, 0, `a server appeared on the default socket: ${dflt.stdout}`);
 });
 
+test("finishRuns: a run already recorded costs no events query on the next tick (I5)", () => {
+  const w = world();
+  const db = w.db();
+  addRow(db, "once", "echo hi", nowS() - 30);
+  db.close();
+  assert.equal(w.wake().status, 0);
+  const d = w.db();
+  assert.equal(events(d, "schedule_ran").length, 1);
+  const sql = [];
+  const real = d.prepare.bind(d);
+  d.prepare = (q) => { sql.push(q); return real(q); };
+  assert.deepEqual(schedule.finishRuns(d, {}), []);
+  assert.deepEqual(sql.filter((q) => /FROM events/i.test(q)), [], "the second tick queried events for a finished run");
+  assert.equal(events(d, "schedule_ran").length, 1);
+  // a crash between the schedule_ran event and the step mark: the next tick marks the step and records nothing twice
+  const key = d.prepare("SELECT key FROM steps WHERE kind='schedule_run'").get().key;
+  const row = d.prepare("SELECT * FROM steps WHERE key=?").get(key);
+  d.prepare("UPDATE steps SET result=? WHERE key=?").run(JSON.stringify({ ...JSON.parse(row.result), ran: undefined }), key);
+  assert.deepEqual(schedule.finishRuns(d, {}), []);
+  assert.equal(events(d, "schedule_ran").length, 1);
+  assert.equal(JSON.parse(d.prepare("SELECT result FROM steps WHERE key=?").get(key).result).ran, true);
+  ok();
+  d.close();
+});
+
 test("tmuxArgsFromEnv: TMUX_DASH_TMUX_ARGS, else $TMUX's server, else the dedicated -L socket", () => {
   assert.deepEqual(schedule.tmuxArgsFromEnv({ TMUX_DASH_TMUX_ARGS: "-L a -f /dev/null", TMUX: "/x,1,2" }), ["-L", "a", "-f", "/dev/null"]);
   assert.deepEqual(schedule.tmuxArgsFromEnv({ TMUX: "/x/sock,1,2" }), ["-S", "/x/sock"]);

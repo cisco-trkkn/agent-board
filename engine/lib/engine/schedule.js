@@ -189,18 +189,26 @@ function runIntents(db, ctx) {
 }
 
 // One `schedule_ran` for each done run whose rc file exists. -> the keys it recorded.
+// A recorded run is marked on its own step (`ran: true` in the result): the next ticks skip it without a query on events.
+const OPEN_RUNS = "SELECT * FROM steps WHERE kind='schedule_run' AND state='done' AND json_extract(result,'$.ran') IS NULL ORDER BY created_at, key";
 function finishRuns(db, ctx) {
   const out = [];
-  for (const srow of db.prepare("SELECT * FROM steps WHERE kind='schedule_run' AND state='done' ORDER BY created_at, key").all()) {
+  for (const srow of db.prepare(OPEN_RUNS).all()) {
     const f = parseResult(srow.result);
     if (!f.rc_file) continue;
-    if (db.prepare("SELECT 1 FROM events WHERE kind='schedule_ran' AND json_extract(detail,'$.key')=?").get(srow.key)) continue;
+    const desc = { key: srow.key, spec: null, kind: "schedule_run" };
+    const t = ctx.now !== undefined ? ctx.now : Date.now() / 1000;
+    // an earlier tick wrote the event and died before the mark: mark now, record nothing twice
+    if (db.prepare("SELECT 1 FROM events WHERE kind='schedule_ran' AND json_extract(detail,'$.key')=?").get(srow.key)) {
+      steps.finish(db, desc, { ...f, ran: true }, { now: t });
+      continue;
+    }
     let text;
     try { text = fs.readFileSync(f.rc_file, "utf8"); } catch (_) { continue; }
     const rc = parseInt(text.trim(), 10);
     if (!Number.isInteger(rc)) continue;
-    const t = ctx.now !== undefined ? ctx.now : Date.now() / 1000;
     tx(db, () => event(db, { kind: "schedule_ran", ts: t, name: f.name, key: srow.key, rc, log: f.log }));
+    steps.finish(db, desc, { ...f, ran: true }, { now: t });
     out.push(srow.key);
   }
   return out;
