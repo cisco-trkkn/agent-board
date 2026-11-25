@@ -2,10 +2,12 @@
 // Engine-core step 7 (spec §3) and the revert of §4. Every outside action is a `steps.run` row.
 // ctx = {db, repo (main checkout), worktree, tmuxCtl, tasks?, now?, env?, target?}.
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
 const steps = require("./steps");
 const ledger = require("./ledger");
+const improve = require("../improve");
 const { loadConfig, SITE_RECS } = require("./policy");
 
 const TEST_TIMEOUT = 30 * 60 * 1000;
@@ -180,6 +182,111 @@ function finalize(ctx, spec, outcome, { removeWorktree = false } = {}) {
   }
 }
 
+// ---- the improve loop's merge entry (improve plan Task 10, rulings A16 and A17) -------------------------------------------
+
+// The sha of the commit on `ref` whose message has the line `Engine-Step: <key>`, or null.
+function stepCommit(ctx, key, ref) {
+  const r = git(ctx, ctx.repo, ["log", ref, "--format=%H%n%B%x00"]);
+  if (r.error || r.status !== 0) return null;
+  const want = `Engine-Step: ${key}`;
+  for (const rec of r.stdout.split("\0")) {
+    const lines = rec.trim().split("\n");
+    if (lines.slice(1).some((l) => l.trim() === want)) return lines[0];
+  }
+  return null;
+}
+
+// {state, class, ...} of a proposal from `tmux-ctl improve show <id> --json`, or null.
+function proposalOf(ctx, id) {
+  const args = ["improve", ...(ctx.project ? ["--project", ctx.project] : []), "show", id, "--json"];
+  const r = spawn(ctx, tmuxCtl(ctx), args, { cwd: ctx.repo });
+  if (r.error || r.status !== 0) return null;
+  try {
+    const p = JSON.parse(r.stdout);
+    return p && typeof p === "object" && typeof p.state === "string" ? p : null;
+  } catch (_) { return null; }
+}
+
+// The first protected path the one commit of `branch` (over `base`) touches, or null.
+function protectedPath(ctx, base, branch) {
+  const names = must(git(ctx, ctx.repo, ["diff", "--name-only", "--no-renames", base, branch]), "git diff").split("\n").filter(Boolean);
+  for (const p of names) {
+    if (!improve.isProtected(p)) continue;
+    const diff = git(ctx, ctx.repo, ["diff", "-U0", "--no-renames", base, branch, "--", p]);
+    const old = git(ctx, ctx.repo, ["show", `${base}:${p}`]);
+    if (diff.status !== 0 || improve.isProtected(p, { hunks: improve.hunksOf(diff.stdout), src: old.status === 0 ? old.stdout : "" })) return p;
+  }
+  return null;
+}
+
+// Rebases `branch` onto the target in a worktree of its own, never in the live checkout.
+function rebaseOnto(ctx, branch) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "improve-merge-"));
+  const wt = path.join(tmp, "wt");
+  try {
+    must(git(ctx, ctx.repo, ["worktree", "add", "-q", wt, branch]), "worktree add");
+    const r = git(ctx, wt, ["rebase", target(ctx)]);
+    if (r.status !== 0) {
+      git(ctx, wt, ["rebase", "--abort"]);
+      throw new Error(`rebase conflict: ${branch} no longer applies on ${target(ctx)}`);
+    }
+  } finally {
+    git(ctx, ctx.repo, ["worktree", "remove", "--force", wt]);
+    fs.rmSync(tmp, { recursive: true, force: true });
+    git(ctx, ctx.repo, ["worktree", "prune"]);
+  }
+}
+
+// Lands the one commit of `improve/<id>` on the target: rebase in its own worktree, then `merge --ff-only`, so the commit
+// with `Proposal: <id>` and `Engine-Step: <key>` is the commit on the target and no merge commit exists (ruling A16).
+// One `steps` row, kind `merge`, key `key`. ctx = {db, repo, tmuxCtl?, project?, env?, now?, target?}.
+// -> {outcome: "merged", commit} | {outcome: "waiting"|"refused"|"failed", why}. Nothing is written for waiting and refused.
+function mergeBranch(ctx, { branch, key, proposal }) {
+  const tgt = target(ctx);
+  const refused = (why) => ({ outcome: "refused", why });
+  if (!/^improve\/[A-Za-z0-9._-]+$/.test(String(branch))) return refused(`${branch} is not an improve branch`);
+  if (!/^[A-Za-z0-9_-]+$/.test(String(proposal))) return refused(`bad proposal id ${proposal}`);
+  if (!new RegExp(`^improve:${proposal}[@:]`).test(String(key))) return refused(`key must start with improve:${proposal}`);
+  const have = steps.getRow(ctx.db, key);
+  if (have && have.state === "done") return { outcome: "merged", commit: have.result.commit, reused: true };
+  const desc = { key, spec: null, kind: "merge" };
+  // resume (spec 10.4): the commit is already on the target, the row was never finished
+  const landed = stepCommit(ctx, key, tgt);
+  if (landed) {
+    steps.finish(ctx.db, desc, { branch, target: tgt, commit: landed, reconciled: true }, stepOpts(ctx));
+    return { outcome: "merged", commit: landed };
+  }
+  if (git(ctx, ctx.repo, ["rev-parse", "-q", "--verify", `refs/heads/${branch}`]).status !== 0) return { outcome: "failed", why: `no branch ${branch}` };
+  let base;
+  try {
+    base = must(git(ctx, ctx.repo, ["merge-base", tgt, branch]), "merge-base");
+    const n = Number(must(git(ctx, ctx.repo, ["rev-list", "--count", `${base}..${branch}`]), "rev-list"));
+    if (n !== 1) return refused(`${branch} has ${n} commits, want 1`);
+    const msg = must(git(ctx, ctx.repo, ["log", "-1", "--format=%B", branch]), "git log").split("\n").map((l) => l.trim());
+    if (!msg.includes(`Proposal: ${proposal}`)) return refused(`${branch} has no Proposal: ${proposal} trailer`);
+    if (!msg.includes(`Engine-Step: ${key}`)) return refused(`${branch} has no Engine-Step: ${key} trailer`);
+    const p = proposalOf(ctx, proposal);
+    if (!p) return refused(`cannot read proposal ${proposal}`);
+    const hit = protectedPath(ctx, base, branch);
+    if (hit && !(p.state === "promoted" && p.class !== "protected")) return refused(`protected path ${hit}`);
+  } catch (e) {
+    return { outcome: "failed", why: e.message };
+  }
+  if (liveCheckoutBusy(ctx)) return { outcome: "waiting", why: "live checkout is mid-change" };
+  const cur = git(ctx, ctx.repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (cur.status !== 0 || cur.stdout.trim() !== tgt) return { outcome: "waiting", why: `live checkout is on ${(cur.stdout || "").trim() || "?"}, not ${tgt}` };
+  try {
+    const r = steps.run(ctx.db, { ...desc, facts: { branch, target: tgt } }, () => {
+      if (base !== must(git(ctx, ctx.repo, ["rev-parse", tgt]), "rev-parse")) rebaseOnto(ctx, branch);
+      must(git(ctx, ctx.repo, ["merge", "--ff-only", "-q", branch]), "merge --ff-only");
+      return { branch, target: tgt, commit: must(git(ctx, ctx.repo, ["rev-parse", "HEAD"]), "rev-parse") };
+    }, stepOpts(ctx));
+    return { outcome: "merged", commit: r.result.commit };
+  } catch (e) {
+    return { outcome: "failed", why: e.message };
+  }
+}
+
 // ---- entry points -------------------------------------------------------------------------------------------
 
 function runIntegrate(ctx, spec) {
@@ -219,4 +326,4 @@ function revert(ctx, spec) {
   return { outcome: "reverted", merge: sha, revert: r.result.revert };
 }
 
-module.exports = { isFailure, run: runIntegrate, revert, finalize, metricsRecordArgv, runTests, liveCheckoutBusy };
+module.exports = { isFailure, run: runIntegrate, revert, finalize, metricsRecordArgv, runTests, liveCheckoutBusy, mergeBranch };

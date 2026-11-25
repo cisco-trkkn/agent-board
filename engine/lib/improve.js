@@ -2,7 +2,8 @@
 // Trials on engine-run specs (improve spec 2026-11-16 section 4). The engine asks `tmux-ctl improve variants <spec> --json`
 // once per spec and keeps the answer in one `improve_variants` event; everything here is derived from that list:
 // the brief overlays, the challenger skill copies, the per-spec routing map and the env of a job.
-// It never opens the proposals table and never writes a champion file. Protected (docs/superpowers/improve/protected.txt).
+// It never opens the proposals table and never writes a champion file. It also holds the protected-path check of the engine's
+// improve merge entry (integrate.mergeBranch; test: engine/test/improve_merge.test.js). Protected (docs/superpowers/improve/protected.txt).
 // Test: engine/test/improve.test.js.
 const fs = require("node:fs");
 const os = require("node:os");
@@ -24,6 +25,77 @@ function fetch({ tmuxCtl, spec, cwd, env }) {
   try { doc = JSON.parse(r.stdout); } catch (_) { /* not JSON */ }
   if (!doc || !Array.isArray(doc.variants)) return { variants: [] };
   return { variants: doc.variants.filter((v) => v && typeof v === "object" && typeof v.id === "string") };
+}
+
+// ---- the protected set (spec section 6) ----------------------------------------------------------------------------
+// The same rule as board/improve_class.py is_protected; docs/superpowers/improve/glob-vectors.json holds both to it.
+
+const PROTECTED_FILE = path.resolve(__dirname, "../../docs/superpowers/improve/protected.txt");
+
+function protectedGlobs(file = PROTECTED_FILE) {
+  return fs.readFileSync(file, "utf8").split("\n").map((g) => g.trim()).filter((g) => g && !g.startsWith("#"));
+}
+
+// Python's fnmatch.fnmatchcase: `*` crosses "/" (so `**` does too), `?` is one character, `[seq]` a set.
+function globRe(glob) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") re += ".*";
+    else if (c === "?") re += ".";
+    else if (c === "[") {
+      let j = i + 1;
+      if (glob[j] === "!") j++;
+      if (glob[j] === "]") j++;
+      while (j < glob.length && glob[j] !== "]") j++;
+      if (j >= glob.length) { re += "\\["; continue; }
+      let set = glob.slice(i + 1, j).replace(/\\/g, "\\\\");
+      if (set[0] === "!") set = "^" + set.slice(1);
+      else if (set[0] === "^") set = "\\" + set;
+      re += `[${set}]`;
+      i = j;
+    } else re += c.replace(/[.+^${}()|\\\]]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`, "s");
+}
+
+const expandUser = (p) => (p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p);
+
+// The lines of the `improve)` case of bin/tmux-ctl, 1-based and inclusive: [label line, its `;;` line], or null.
+function improveRange(src) {
+  const lines = String(src).split("\n");
+  const lo = lines.findIndex((l) => l.trim() === "improve)");
+  if (lo < 0) return null;
+  let hi = lines.length;
+  for (let i = lo; i < lines.length; i++) if (lines[i].trimEnd().endsWith(";;")) { hi = i + 1; break; }
+  return [lo + 1, hi];
+}
+
+// The old-side line spans of a unified diff's hunks: [[first, last], ...].
+function hunksOf(patch) {
+  const out = [];
+  for (const line of String(patch || "").split("\n")) {
+    const m = /^@@ -(\d+)(?:,(\d+))? /.exec(line);
+    if (m) out.push([Number(m[1]), Number(m[1]) + Math.max(m[2] === undefined ? 1 : Number(m[2]), 1) - 1]);
+  }
+  return out;
+}
+
+// Whether a repo-relative path is in the protected set. A `path#improve` line protects the whole file when no hunks are
+// given, else only hunks that touch the `improve)` case of `src` (the file before the change).
+function isProtected(target, { hunks, src, file } = {}) {
+  for (const g of protectedGlobs(file)) {
+    const at = g.indexOf("#");
+    if (at >= 0) {
+      if (target !== g.slice(0, at) || g.slice(at + 1) !== "improve") continue;
+      if (hunks === undefined) return true;
+      const rng = improveRange(src === undefined ? "" : src);
+      if (rng && hunks.some(([a, b]) => a <= rng[1] && b >= rng[0])) return true;
+    } else if (g.startsWith("~/") ? globRe(expandUser(g)).test(expandUser(target)) : globRe(g).test(target)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const under = (dir, p) => p.startsWith(dir + path.sep);
@@ -106,4 +178,4 @@ function envFor(variants, job) {
   return env;
 }
 
-module.exports = { fetch, apply, skillCopy, overlay, routing, envFor, ids };
+module.exports = { fetch, apply, skillCopy, overlay, routing, envFor, ids, isProtected, protectedGlobs, hunksOf, improveRange };
