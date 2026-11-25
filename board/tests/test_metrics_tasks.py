@@ -129,10 +129,83 @@ def tasks_json(*specs):
     return json.dumps({"planPath": "p.md", "tasks": ts})
 
 
-def build(progress, tasks, rows, ends=None, run_end=None, plan_text=None):
+def build(progress, tasks, rows, ends=None, run_end=None, plan_text=None, spawns=None, lead_sessions=None, run_start=None):
     return metrics_tasks.build_task_lines(
         "docs/superpowers/specs/s.md", "2026-11-16-1", tasks, progress, ROUTING, rows,
-        (ends or {}).get, run_end, prices=PRICES, plan_text=plan_text)
+        (ends or {}).get, run_end, prices=PRICES, plan_text=plan_text,
+        spawns=spawns, lead_sessions=lead_sessions, run_start=run_start)
+
+
+# verbatim real dispatch lines: 2026-11-19-discord-ideas-command, 2026-11-24-pcee-engine-part-2, 2026-11-16-discord-replaces-telegram
+TIER_COMMA = "Task 1: dispatched id-core (standard, sonnet), BASE f428acb"
+TIER_SLASH = "Task 1: dispatched impl1 (standard/sonnet), BASE 83daf99"
+MODEL_FIRST = "Task 1: dispatched dc-launch (sonnet, base 22b8f60)"
+
+
+def spawn(ts, name, model, lead="L1"):
+    # real row shape of claude/hooks/spawn-record.sh
+    return {"ts": ts, "lead_session": lead, "name": name, "subagent_type": "general-purpose", "model": model,
+            "tier": None, "reason": None}
+
+
+class TestDispatchForms(unittest.TestCase):
+    def test_tier_then_model_forms(self):
+        # mutation: restore the base DISPATCH regex -> TIER_COMMA and TIER_SLASH fail
+        for line in (TIER_COMMA, TIER_SLASH, MODEL_FIRST):
+            self.assertEqual(metrics_tasks.parse_ledger(line)[1]["dispatch_models"], ["sonnet"], line)
+
+    def test_tier_alone_names_no_model(self):
+        t = metrics_tasks.parse_ledger("Task 1: dispatched w9 (standard)")[1]
+        self.assertEqual((t["owners"], t["dispatch_models"]), (["w9"], []))
+
+
+class TestModelSource(unittest.TestCase):
+    TASKS = tasks_json(("Task 1: a", "standard", ""), ("Task 2: b", "standard", ""))
+    ENDS = {"28b98dd": 1000, "0bc8efc": 2000}
+    NOMODEL = "Task 1: dispatched dc-launch, base 22b8f60\nTask 1: complete (commits 4e9d2cf..28b98dd, review clean)\n"
+
+    def first(self, progress=None, rows=(), **kw):
+        return build(progress or self.NOMODEL, self.TASKS, list(rows), ends=self.ENDS, **kw)[0]
+
+    def test_usage_wins(self):
+        t = self.first(DISCORD, [row(900, "dc-launch")], spawns=[spawn(100, "dc-launch", "haiku")], run_start=0)
+        self.assertEqual((t["model_used"], t["model_source"]), ("claude-sonnet-5", "usage"))
+
+    def test_spawn_when_no_rows(self):
+        t = self.first(DISCORD, spawns=[spawn(100, "dc-launch", "haiku")], run_start=0)
+        self.assertEqual((t["model_used"], t["model_source"]), ("haiku", "spawn"))
+
+    def test_spawn_after_task_end_ignored(self):
+        # mutation: drop the `ts <= until` bound -> spawn wins, test fails
+        t = self.first(DISCORD, spawns=[spawn(1500, "dc-launch", "haiku")], run_start=0)
+        self.assertEqual((t["model_used"], t["model_source"]), ("sonnet", "ledger"))
+
+    def test_spawn_before_run_start_ignored(self):
+        # mutation: drop the `ts >= run_start` bound -> spawn wins, test fails
+        t = self.first(DISCORD, spawns=[spawn(100, "dc-launch", "haiku")], run_start=500)
+        self.assertEqual(t["model_source"], "ledger")
+
+    def test_inherit_spawn_ignored(self):
+        # mutation: drop the family() check on spawn rows -> model_used "inherit", test fails
+        t = self.first(DISCORD, spawns=[spawn(100, "dc-launch", "inherit")], run_start=0)
+        self.assertEqual((t["model_used"], t["model_source"]), ("sonnet", "ledger"))
+
+    def test_lead_session_preferred_over_newer_row(self):
+        sp = [spawn(100, "dc-launch", "haiku", lead="L1"), spawn(200, "dc-launch", "opus", lead="OTHER")]
+        self.assertEqual(self.first(spawns=sp, run_start=0, lead_sessions={"L1"})["model_used"], "haiku")
+        self.assertEqual(self.first(spawns=sp, run_start=0)["model_used"], "opus")
+
+    def test_other_name_ignored(self):
+        t = self.first(spawns=[spawn(100, "someone-else", "haiku")], run_start=0)
+        self.assertEqual((t["model_used"], t["model_source"]), (None, "none"))
+
+    def test_ledger_when_no_spawn(self):
+        t = self.first(DISCORD)
+        self.assertEqual((t["model_used"], t["model_source"]), ("sonnet", "ledger"))
+
+    def test_none_when_all_miss(self):
+        t = self.first()
+        self.assertEqual((t["model_used"], t["model_source"]), (None, "none"))
 
 
 class TestParseLedger(unittest.TestCase):
@@ -241,7 +314,7 @@ class TestBuild(unittest.TestCase):
         for t in r:
             self.assertIsNone(t["tokens"])
             self.assertIsNone(t["usd"])
-            self.assertIsNone(t["model_used"])
+            self.assertEqual((t["model_used"], t["model_source"]), ("sonnet", "ledger"))
             self.assertTrue(t["partial"])
 
     def test_rows_present_not_partial(self):
@@ -287,7 +360,7 @@ class TestBuild(unittest.TestCase):
     def test_keys_exact(self):
         r = build(DISCORD, self.two(), [row(900, "dc-launch")])
         self.assertEqual(set(r[0]), set(
-            "spec batch task_id subject tier model_mapped model_used escalated owner started_at ended_at "
+            "spec batch task_id subject tier model_mapped model_used model_source escalated owner started_at ended_at "
             "active_s tokens usd review_tokens review_usd fix_rounds findings review_rounds outcome "
             "code_in_steps partial context_tokens missing".split()))
         self.assertEqual((r[0]["task_id"], r[0]["tier"], r[0]["owner"], r[0]["outcome"]), (1, "standard", "dc-launch", "complete"))

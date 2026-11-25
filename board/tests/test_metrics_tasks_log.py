@@ -16,7 +16,7 @@ LEDGER = "docs/superpowers/ledgers/2026-01-01-a/progress.md"
 SONNET = "claude-sonnet-5"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-")
 ABS_VALUE = re.compile(r'"/[A-Za-z]')
-KEYS = set("spec batch task_id subject tier model_mapped model_used escalated owner started_at ended_at active_s tokens usd "
+KEYS = set("spec batch task_id subject tier model_mapped model_used model_source escalated owner started_at ended_at active_s tokens usd "
            "review_tokens review_usd fix_rounds findings review_rounds outcome code_in_steps partial context_tokens missing".split())
 
 
