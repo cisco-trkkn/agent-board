@@ -32,6 +32,16 @@ class TellPaneTest(unittest.TestCase):
 
 
 class PsSampleTest(unittest.TestCase):
+    def setUp(self):
+        # build_overview reads TC_STATE (mod_records), the alerts file (thresholds), the tmux windows (window_activity)
+        # and the limits (read_limits): all isolated or stubbed, so nothing live is read
+        tmp = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, tmp)
+        for p in (mock.patch.dict(os.environ, {"TC_STATE": tmp}),
+                  mock.patch.object(server.usage, "ALERTS_PATH", Path(tmp) / "none.json"),
+                  mock.patch.object(server, "window_activity", return_value={}),
+                  mock.patch.object(server, "read_limits", return_value={})):
+            p.start(); self.addCleanup(p.stop)
+
     def test_ps_text_parses_and_holds_this_process(self):
         procs = server.overview.parse_ps(server.ps_text())
         self.assertIn(os.getpid(), procs)
