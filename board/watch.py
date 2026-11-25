@@ -28,6 +28,7 @@ DEFAULT_CAPS = {"default_s": 900, "caps": [
     {"match": "tools/tests/all.zsh", "cap_s": 1620}, {"match": "tools/tests/run-all.zsh", "cap_s": 1620}]}
 FLAT_KILL = 2
 KILL_GRACE_S = 10
+KILLED_KEEP_S = 3600   # a killed entry never outlives this, settled or not
 _caps_logged = set()
 
 
@@ -219,12 +220,17 @@ class Watch:
                 k = f"{r['window']}:{r['pid']}"
                 seen.add(k)
                 st = self.runs.get(k)
+                if st is not None and st.get("cmd") != notify.flat_cmd(r["cmd"], 200):
+                    del self.runs[k]   # the PID was reused by another command in this window: a fresh run
+                    st = None
+                    changed = True
                 if st is None:
                     caps = caps or load_caps(self.caps_file)
                     cap = cap_for(r["cmd"], caps)
                     if r["elapsed_s"] <= cap:
                         continue
                     st = self.runs[k] = {"project": project, "first_at": now, "cpu": r["cpu_s"], "flat_count": 0,
+                                         "pidset": sorted(r["pids"]),
                                          "killed_at": None, "cap_s": cap, "cmd": notify.flat_cmd(r["cmd"], 200)}
                     changed = True
                     text = notify.run_overdue_text(r["window"].removeprefix("✦ "), r["cmd"], r["elapsed_s"], cap)
@@ -233,8 +239,9 @@ class Watch:
                     continue
                 if st.get("killed_at") is not None:
                     continue
-                if r["cpu_s"] > st["cpu"]:
-                    st.update(cpu=r["cpu_s"], flat_count=0)   # slow but moving
+                if r["cpu_s"] > st["cpu"] or sorted(r["pids"]) != st.get("pidset"):
+                    # moving: CPU rose, or the subtree's PIDs changed (a worker exited, so its CPU left the sum)
+                    st.update(cpu=r["cpu_s"], flat_count=0, pidset=sorted(r["pids"]))
                 else:
                     st["flat_count"] += 1
                 changed = True
@@ -248,7 +255,8 @@ class Watch:
                 changed = True
             elif st.get("killed_at") is not None:
                 changed |= self._after_kill(rec, k, st, now, acts)
-                if k not in seen and st.get("escalated") and st.get("told") and st.get("nudged_at") is not None:
+                settled = st.get("escalated") and st.get("told") and st.get("nudged_at") is not None
+                if (k not in seen and settled) or now - st["killed_at"] > KILLED_KEEP_S:
                     del self.runs[k]
                     changed = True
         return changed
@@ -259,8 +267,10 @@ class Watch:
         except ProcessLookupError:
             del self.runs[k]   # gone before the kill: the stall clears
             return
-        except OSError as e:
-            print(f"watch: kill {r['pid']} failed: {e}", file=sys.stderr, flush=True)
+        except OSError as e:   # incl. PermissionError: not ours to kill, and no retry on every overview
+            print(f"watch: kill {r['pid']} failed: {e}; dropped", file=sys.stderr, flush=True)
+            if isinstance(e, PermissionError):
+                del self.runs[k]
             return
         for q in r["pids"][1:]:
             try:
@@ -268,7 +278,7 @@ class Watch:
             except OSError:
                 pass
         n = r["elapsed_s"] // 60
-        st.update(killed_at=now, pids=list(r["pids"]), escalated=False, told=None, nudged_at=None, min=n, window=r["window"])
+        st.update(killed_at=now, pids=list(r["pids"]), pcmds={str(q): c for q, c in zip(r["pids"], r.get("pcmds") or [])}, escalated=False, told=None, nudged_at=None, min=n, window=r["window"])
         line = {"at": iso(now), "project": project, "window": r["window"], "pid": r["pid"], "cmd": st["cmd"],
                 "elapsed_s": r["elapsed_s"], "cap_s": st["cap_s"]}
         try:
@@ -307,13 +317,23 @@ class Watch:
             except Exception as e:   # noqa: BLE001
                 print(f"watch: nudge failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         if not st.get("escalated") and now - st["killed_at"] >= KILL_GRACE_S:
+            # KILL only a PID this overview's sample shows with the command line seen at TERM time (a reused PID, or an
+            # entry from an earlier board run, must never get a signal); an old entry gets none at all.
+            cur = {}
+            if now - st["killed_at"] <= KILL_GRACE_S * 6:
+                for r in rec.get("runs") or []:
+                    if f"{r['window']}:{r['pid']}" == k:
+                        cur = dict(zip(r["pids"], r.get("pcmds") or []))
             for q in st.get("pids") or []:
+                if q not in cur or cur[q] != (st.get("pcmds") or {}).get(str(q)):
+                    continue
                 try:
                     self.kill(q, 0)
                     self.kill(q, signal.SIGKILL)
                     acts.append(("kill9", project, "run_overdue", k, str(q)))
                 except OSError:
                     pass   # gone
+            st["pids"] = []
             st["escalated"] = True
             changed = True
         return changed

@@ -79,6 +79,11 @@ class SampleTest(unittest.TestCase):
         # mutation: return [pid] for a shell with no child -> the idle zsh of ✦ fake is a run, this fails
         self.assertEqual(runs(text), [])   # 400 is the lead's `claude` window: not a ✦ pane
 
+    def test_an_idle_tool_shell_under_the_pane_root_is_not_a_run(self):
+        text = "  500     1  02:00:00  1:00.00 /x/claude/versions/2.1.331 --agent-name fake\n  600   500  00:30  0:00.01 /bin/zsh -c eval 'x'\n"
+        # mutation: return [pid] for a shell with no child -> the idle Bash-tool shell is a run, this fails
+        self.assertEqual(runs(text), [])
+
     def test_a_shell_with_one_child_stands_for_it(self):
         text = "  500     1  00:10  0:00.00 zsh\n  501   500  00:09  0:00.00 sh -c perl -e 'sleep 9999'; :\n  502   501  00:09  0:00.00 perl -e sleep 9999\n"
         self.assertEqual([r["pid"] for r in runs(text)], [502])
@@ -225,6 +230,73 @@ class RunWatchTest(Base):
         self.step(rec)
         self.assertEqual(self.terms(), [700, 701])   # killed before the restart: not killed twice
         self.assertEqual(len((self.dir / "watch" / "kills.jsonl").read_text().splitlines()), 1)
+
+
+class FixRound1Test(Base):
+    """Review fix round 1: the kill escalation, the pane root and the CPU/PID-set progress rule."""
+    def killed(self, rec):
+        self.alive = {700, 701}
+        self.step(rec); self.step(rec); self.step(rec)
+        self.assertEqual(self.terms(), [700, 701])
+
+    def kills9(self):
+        return [p for p, sg in self.kills if sg == signal.SIGKILL]
+
+    def test_escalation_skips_a_reused_pid_with_another_cmd(self):
+        rec = project(runs(ps(etime="10:00")))
+        self.killed(rec)
+        self.step(project(runs(ps(etime="10:00").replace("node --test test/", "python3 something_else"))))
+        self.assertEqual(self.kills9(), [700])   # mutation: KILL every saved pid after the probe -> 701 too, this fails
+
+    def test_escalation_skips_a_pid_missing_from_the_sample(self):
+        rec = project(runs(ps(etime="10:00")))
+        self.killed(rec)
+        gone = "\n".join(l for l in ps(etime="10:00").splitlines() if " 701 " not in l) + "\n"
+        self.step(project(runs(gone)))
+        self.assertEqual(self.kills9(), [700])
+
+    def test_no_kill_for_an_entry_older_than_the_grace_window_after_a_restart(self):
+        rec = project(runs(ps(etime="10:00")))
+        self.killed(rec)
+        self.w = self.watch()   # a board restart, then a long gap
+        self.step(rec, dt=70)
+        self.assertEqual(self.kills9(), [])
+
+    def test_pane_root_with_any_argv_is_never_a_run(self):
+        text = ("  500     1  05:00:00  0:01.00 node /x/cli.js --agent-name foo\n"
+                "  510   500  05:00:00  0:00.10 node /x/mcp-server.js\n")
+        self.assertEqual(runs(text), [])
+
+    def test_workers_exiting_is_progress_not_flat(self):
+        self.alive = {700, 701}
+        self.step(project(runs(ps(etime="10:00"))))   # first seen: pids [700, 701], cpu 6
+        fewer = "\n".join(l for l in ps(etime="10:00").splitlines() if " 701 " not in l) + "\n"
+        self.step(project(runs(fewer)))               # cpu sum drops, pid set changes: progress
+        self.step(project(runs(fewer)))               # flat 1
+        self.assertEqual(self.kills, [])              # mutation: count a CPU drop as flat -> killed here, this fails
+
+    def test_reused_pid_with_a_new_cmd_starts_afresh(self):
+        self.alive = {700, 701}
+        self.step(project(runs(ps(etime="10:00")))); self.step(project(runs(ps(etime="10:00"))))   # flat 1
+        self.step(project(runs(ps(etime="20:00", cmd="make all"))))   # same window:pid, other command
+        e = json.loads((self.dir / "watch.json").read_text())["runs"]["✦ fake:700"]
+        self.assertEqual((self.kills, e["flat_count"], e["cmd"]), ([], 0, "make all"))
+
+    def test_killed_entries_are_pruned(self):
+        rec = project(runs(ps(etime="10:00")))
+        self.killed(rec)
+        self.step(rec)   # escalated, told, nudged, but the run is still in the sample: the entry stays
+        self.assertIn("✦ fake:700", json.loads((self.dir / "watch.json").read_text())["runs"])
+        self.step(project([]))   # gone from the sample, settled: pruned
+        self.assertEqual(json.loads((self.dir / "watch.json").read_text())["runs"], {})
+
+    def test_a_killed_entry_is_pruned_one_hour_after_the_kill(self):
+        rec = project(runs(ps(etime="10:00")), lead_ready=False, mate_state="waiting")   # never told, never nudged
+        self.killed(rec)
+        self.step(rec, dt=3000)
+        self.assertIn("✦ fake:700", json.loads((self.dir / "watch.json").read_text())["runs"])
+        self.step(rec, dt=700)   # mutation: no hour limit -> the unsettled entry stays forever, this fails
+        self.assertEqual(json.loads((self.dir / "watch.json").read_text())["runs"], {})
 
 
 class TextTest(unittest.TestCase):

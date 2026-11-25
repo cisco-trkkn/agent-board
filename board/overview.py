@@ -296,15 +296,16 @@ def _is_claude(cmd):
     return a == "claude" or bool(_VERSION_RE.match(a))
 
 
-def run_roots(pid, procs, kids):
+def run_roots(pid, procs, kids, root=False):
     """The watched runs under one process (run watch spec §b). A claude process is never a run, and only its shell
     children (its Bash tool calls) are followed: its MCP servers and helpers (caffeinate) are not runs. A shell with
-    exactly one child stands for that child; a shell with no child is an idle prompt, never a run. Anything else is a run."""
+    exactly one child stands for that child; a shell with no child is an idle prompt, never a run. Anything else is a run.
+    The pane's own root process (root=True) is always the claude process, whatever its argv."""
     p = procs.get(pid)
     if not p:
         return []
     ch = kids.get(pid, [])
-    if _is_claude(p["cmd"]):
+    if root or _is_claude(p["cmd"]):
         return [r for c in ch if _is_shell(procs[c]["cmd"]) for r in run_roots(c, procs, kids)]
     if _is_shell(p["cmd"]):
         if len(ch) == 1:
@@ -339,10 +340,11 @@ def pane_runs(name, tmux, procs):
         f = line.split("\t")
         if len(f) != 3 or not f[0].startswith("✦ ") or not f[2].isdigit():
             continue
-        for r in run_roots(int(f[2]), procs, kids):
+        for r in run_roots(int(f[2]), procs, kids, root=True):
             pids = _subtree(r, kids)
             out.append({"window": f[0], "pane": f[1], "pid": r, "cmd": procs[r]["cmd"], "elapsed_s": procs[r]["elapsed_s"],
-                        "cpu_s": round(sum(procs[q]["cpu_s"] for q in pids), 2), "pids": pids})
+                        "cpu_s": round(sum(procs[q]["cpu_s"] for q in pids), 2), "pids": pids,
+                        "pcmds": [procs[q]["cmd"] for q in pids]})
     return out
 
 
