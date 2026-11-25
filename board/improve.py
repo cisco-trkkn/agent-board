@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""improve: `tmux-ctl improve list|show|propose|variants|tick|outcome status` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
+"""improve: `tmux-ctl improve list|show|propose|variants|tick|revert|outcome status` (spec 2026-11-16 §5). Protected (docs/superpowers/improve/protected.txt).
 Errors are one line `improve: <sub>: <reason>` on stderr, exit 1.
 Rule R3 (ruling A20; for any Stop gate the loop adds later): it checks `stop_hook_active` and blocks at most once per stop,
 never again for the same stop.
-Tests: tests/test_improve_store.py, tests/test_improve_eval.py."""
+Tests: tests/test_improve_store.py, tests/test_improve_eval.py, tests/test_improve_apply.py (revert, the tick's sweeps)."""
 import argparse
 import json
 import os
@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dream_paths  # noqa: E402
+import improve_apply  # noqa: E402
 import improve_class  # noqa: E402
 import improve_eval  # noqa: E402
 import improve_store  # noqa: E402
@@ -134,10 +135,21 @@ def cmd_outcome(a, store):
 
 
 def cmd_tick(a, store, project):
+    # before the tick: commits that waited for a busy checkout; after it: drafted specs for protected proposals
+    print(f"apply {json.dumps(improve_apply.sweep_apply(store))}")
     lines = metrics.read_log(improve_class.REPO)[0]
     out = improve_eval.tick(store, project, lines, load_outcomes(), configs=load_configs())
     for k, v in out.items():
         print(f"{k} {json.dumps(v)}")
+    print(f"drafts {json.dumps(improve_apply.sweep_drafts(store))}")
+
+
+def cmd_revert(a, store):
+    try:
+        sha = improve_apply.revert(store, a.id)
+    except improve_apply.ApplyError as e:
+        raise Fail(str(e))
+    print(f"reverted {a.id}: {sha}")
 
 
 def cmd_variants(a, store):
@@ -162,6 +174,7 @@ def parser():
     s.add_argument("--from-dream")
     s = sub.add_parser("variants"); s.add_argument("spec"); s.add_argument("--json", action="store_true")
     sub.add_parser("tick")
+    s = sub.add_parser("revert"); s.add_argument("id")
     s = sub.add_parser("outcome"); o = s.add_subparsers(dest="osub", required=True)
     o = o.add_parser("status"); o.add_argument("id", nargs="?")
     return p
@@ -176,7 +189,7 @@ def main(argv):
         project = project_name(a.project)
         store = improve_store.Store(project)
         {"list": lambda: cmd_list(a, store), "show": lambda: cmd_show(a, store), "propose": lambda: cmd_propose(a, store, project),
-         "outcome": lambda: cmd_outcome(a, store), "tick": lambda: cmd_tick(a, store, project), "variants": lambda: cmd_variants(a, store)}[a.sub]()
+         "outcome": lambda: cmd_outcome(a, store), "tick": lambda: cmd_tick(a, store, project), "revert": lambda: cmd_revert(a, store), "variants": lambda: cmd_variants(a, store)}[a.sub]()
     except improve_store.ImproveError as e:
         m = str(e)
         print(m if m.startswith("improve: no engine database") else f"improve: {a.sub}: {m.removeprefix('improve: ')}", file=sys.stderr)
